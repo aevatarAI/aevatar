@@ -176,6 +176,125 @@ public sealed class WorkflowDeliveryServiceTests
     }
 
     [Fact]
+    public async Task CreateConnectLinkAsync_ShouldUseBrowserBearerWithoutCallback()
+    {
+        var connectLinks = new RecordingCreateConnectLinkPort();
+        var context = new TestContext(DeliveryWithLarkSlot(), connectLinks);
+
+        var result = await context.Service.CreateConnectLinkAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            "lark",
+            "caller-bearer");
+
+        result.Status.Should().Be("pending");
+        connectLinks.BearerToken.Should().Be("caller-bearer");
+        connectLinks.Request.Should().NotBeNull();
+        connectLinks.Request!.ServiceSlug.Should().Be("api-lark");
+        connectLinks.Request.RequestedBy.Should().Be("scope-alpha");
+        connectLinks.Request.CallbackUrl.Should().BeNull();
+        context.Commands.BegunConnections.Should().ContainSingle()
+            .Which.LinkId.Should().Be("link-created");
+        context.Queries.ForScopeReads.Should().BeGreaterThanOrEqualTo(2);
+    }
+
+    [Fact]
+    public async Task CreateConnectLinkAsync_WhenAnotherLinkWinsAfterDispatch_ShouldNotReturnOrphanedLink()
+    {
+        var connectLinks = new RecordingCreateConnectLinkPort();
+        var context = new TestContext(
+            DeliveryWithLarkSlot(),
+            connectLinks,
+            beginProjection: (mutation, queries) =>
+                queries.ProjectBegin(mutation with { LinkId = "link-winner" }));
+
+        var action = () => context.Service.CreateConnectLinkAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            "lark",
+            "caller-bearer");
+
+        var exception = (await action.Should().ThrowAsync<WorkflowDeliveryException>()).Which;
+        exception.Code.Should().Be("CONNECTION_ALREADY_PENDING");
+        connectLinks.Request.Should().NotBeNull();
+        context.Commands.BegunConnections.Should().ContainSingle()
+            .Which.LinkId.Should().Be("link-created");
+        context.Queries.Snapshot.Connections.Should().ContainSingle()
+            .Which.LinkId.Should().Be("link-winner");
+    }
+
+    [Fact]
+    public async Task CreateConnectLinkAsync_WhenProjectionLagsAfterDispatch_ShouldWaitForExactCommittedLink()
+    {
+        var connectLinks = new RecordingCreateConnectLinkPort();
+        var context = new TestContext(
+            DeliveryWithLarkSlot(),
+            connectLinks,
+            beginProjection: (mutation, queries) =>
+                queries.ProjectBeginAfterReads(mutation, staleReads: 1));
+
+        var result = await context.Service.CreateConnectLinkAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            "lark",
+            "caller-bearer");
+
+        result.Status.Should().Be("pending");
+        context.Queries.ForScopeReads.Should().BeGreaterThanOrEqualTo(3);
+        context.Queries.Snapshot.Connections.Should().ContainSingle()
+            .Which.LinkId.Should().Be("link-created");
+    }
+
+    [Fact]
+    public async Task CreateConnectLinkAsync_WhenInstallationExists_ShouldRejectBeforeCallingNyxId()
+    {
+        var connectLinks = new RecordingCreateConnectLinkPort();
+        var now = DateTimeOffset.Parse("2026-08-16T01:30:00Z");
+        var context = new TestContext(
+            DeliveryWithLarkSlot() with { Installation = ProvisionedInstallation(now) },
+            connectLinks);
+
+        var action = () => context.Service.CreateConnectLinkAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            "lark",
+            "caller-bearer");
+
+        var exception = (await action.Should().ThrowAsync<WorkflowDeliveryException>()).Which;
+        exception.Code.Should().Be("CONNECTIONS_LOCKED");
+        connectLinks.Request.Should().BeNull();
+        context.Commands.BegunConnections.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateConnectLinkAsync_WhenSlotIsPending_ShouldRejectBeforeCallingNyxId()
+    {
+        var connectLinks = new RecordingCreateConnectLinkPort();
+        var now = DateTimeOffset.Parse("2026-08-16T01:30:00Z");
+        var pending = new WorkflowDeliveryConnectionSnapshot(
+            "lark",
+            "api-lark",
+            "link-alpha",
+            WorkflowDeliveryConnectionStatus.Pending,
+            null,
+            now);
+        var context = new TestContext(
+            DeliveryWithLarkSlot() with { Connections = [pending] },
+            connectLinks);
+
+        var action = () => context.Service.CreateConnectLinkAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            "lark",
+            "caller-bearer");
+
+        var exception = (await action.Should().ThrowAsync<WorkflowDeliveryException>()).Which;
+        exception.Code.Should().Be("CONNECTION_ALREADY_PENDING");
+        connectLinks.Request.Should().BeNull();
+        context.Commands.BegunConnections.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GetConnectStatusAsync_ShouldReadProjectionWithoutNyxIdOrCommandSideEffects()
     {
         var updatedAt = DateTimeOffset.Parse("2026-08-16T01:30:00Z");
@@ -245,6 +364,44 @@ public sealed class WorkflowDeliveryServiceTests
     }
 
     [Fact]
+    public async Task RefreshConnectStatusAsync_WhenInstallationExists_ShouldRejectBeforeCallingNyxId()
+    {
+        var now = DateTimeOffset.Parse("2026-08-16T01:30:00Z");
+        var connection = new WorkflowDeliveryConnectionSnapshot(
+            "lark",
+            "api-lark",
+            "link-alpha",
+            WorkflowDeliveryConnectionStatus.Pending,
+            null,
+            now);
+        var connectLinks = new RecordingConnectLinkPort(new NyxIdConnectLinkSnapshot(
+            "link-alpha",
+            NyxIdConnectLinkStatus.Completed,
+            "api-lark",
+            now.AddHours(1),
+            now.AddMinutes(15),
+            "user-service-alpha"));
+        var context = new TestContext(
+            DeliverySnapshot() with
+            {
+                Connections = [connection],
+                Installation = ProvisionedInstallation(now),
+            },
+            connectLinks);
+
+        var action = () => context.Service.RefreshConnectStatusAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            "lark",
+            "caller-bearer");
+
+        var exception = (await action.Should().ThrowAsync<WorkflowDeliveryException>()).Which;
+        exception.Code.Should().Be("CONNECTIONS_LOCKED");
+        connectLinks.GetCalls.Should().Be(0);
+        context.Commands.UpdatedConnections.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GetInstallationAsync_WhenMemberIsKnown_ShouldReturnAbsoluteConsoleUrlAndChannelRunCommand()
     {
         var now = DateTimeOffset.Parse("2026-08-16T01:00:00Z");
@@ -290,8 +447,9 @@ public sealed class WorkflowDeliveryServiceTests
 
         result.Should().NotBeNull();
         result!.ConsoleUrl.Should().Be(
-            "https://aevatar-console.aevatar.ai/scopes/scope-alpha/teams/team-alpha/members/m-alpha/workflow");
+            "https://aevatar-console.aevatar.ai/scopes/scope-alpha/teams/team-alpha/members/m-alpha/invoke");
         result.ChannelRunCommand.Should().Be("/workflow run wf-alpha");
+        result.DeliveryStateVersion.Should().Be(1);
     }
 
     [Fact]
@@ -430,15 +588,37 @@ public sealed class WorkflowDeliveryServiceTests
             now);
     }
 
+    private static WorkflowDeliverySnapshot DeliveryWithLarkSlot()
+    {
+        var snapshot = DeliverySnapshot();
+        return snapshot with
+        {
+            Package = snapshot.Package with
+            {
+                ConnectionSlots =
+                [
+                    new WorkflowDeliveryConnectionSlotDefinition(
+                        "lark",
+                        "Lark",
+                        "api-lark",
+                        true),
+                ],
+            },
+        };
+    }
+
     private sealed class TestContext
     {
         public TestContext(
             WorkflowDeliverySnapshot? snapshot = null,
             INyxIdConnectLinkPort? connectLinks = null,
-            WorkflowDeliveryOptions? options = null)
+            WorkflowDeliveryOptions? options = null,
+            Action<BeginWorkflowDeliveryConnectionMutation, StubQueryPort>? beginProjection = null)
         {
-            Commands = new RecordingCommandPort();
             Queries = new StubQueryPort(snapshot ?? DeliverySnapshot());
+            var projector = beginProjection ??
+                ((BeginWorkflowDeliveryConnectionMutation value, StubQueryPort queries) => queries.ProjectBegin(value));
+            Commands = new RecordingCommandPort(mutation => projector(mutation, Queries));
             Preview = new StubPreviewService();
             Provisioning = new RecordingProvisioningService();
             Service = new WorkflowDeliveryService(
@@ -554,7 +734,8 @@ public sealed class WorkflowDeliveryServiceTests
         }
     }
 
-    private sealed class RecordingCommandPort : IWorkflowDeliveryCommandPort
+    private sealed class RecordingCommandPort(
+        Action<BeginWorkflowDeliveryConnectionMutation>? projectBegin = null) : IWorkflowDeliveryCommandPort
     {
         public List<StartWorkflowInstallationMutation> Started { get; } = [];
 
@@ -563,6 +744,8 @@ public sealed class WorkflowDeliveryServiceTests
         public List<RecordWorkflowInstallationReadyMutation> Ready { get; } = [];
 
         public List<RecordWorkflowInstallationFailedMutation> Failed { get; } = [];
+
+        public List<BeginWorkflowDeliveryConnectionMutation> BegunConnections { get; } = [];
 
         public List<UpdateWorkflowDeliveryConnectionMutation> UpdatedConnections { get; } = [];
 
@@ -580,7 +763,12 @@ public sealed class WorkflowDeliveryServiceTests
 
         public Task<WorkflowDeliveryCommandReceipt> BeginConnectionAsync(
             BeginWorkflowDeliveryConnectionMutation mutation,
-            CancellationToken ct = default) => Accepted(mutation.DeliveryId);
+            CancellationToken ct = default)
+        {
+            BegunConnections.Add(mutation);
+            projectBegin?.Invoke(mutation);
+            return Accepted(mutation.DeliveryId);
+        }
 
         public Task<WorkflowDeliveryCommandReceipt> UpdateConnectionAsync(
             UpdateWorkflowDeliveryConnectionMutation mutation,
@@ -642,27 +830,75 @@ public sealed class WorkflowDeliveryServiceTests
 
     private sealed class StubQueryPort(WorkflowDeliverySnapshot snapshot) : IWorkflowDeliveryQueryPort
     {
+        private BeginWorkflowDeliveryConnectionMutation? _scheduledBegin;
+        private int _projectBeginAtRead = int.MaxValue;
+
+        public WorkflowDeliverySnapshot Snapshot { get; private set; } = snapshot;
+
+        public int ForScopeReads { get; private set; }
+
+        public void ProjectBegin(BeginWorkflowDeliveryConnectionMutation mutation)
+        {
+            var projected = new WorkflowDeliveryConnectionSnapshot(
+                mutation.SlotKey,
+                mutation.ServiceSlug,
+                mutation.LinkId,
+                WorkflowDeliveryConnectionStatus.Pending,
+                null,
+                mutation.RequestedAtUtc);
+            Snapshot = Snapshot with
+            {
+                Connections = Snapshot.Connections
+                    .Where(connection => !string.Equals(
+                        connection.SlotKey,
+                        mutation.SlotKey,
+                        StringComparison.Ordinal))
+                    .Append(projected)
+                    .ToArray(),
+                StateVersion = Snapshot.StateVersion + 1,
+                ProjectedAtUtc = mutation.RequestedAtUtc,
+            };
+        }
+
+        public void ProjectBeginAfterReads(
+            BeginWorkflowDeliveryConnectionMutation mutation,
+            int staleReads)
+        {
+            _scheduledBegin = mutation;
+            _projectBeginAtRead = ForScopeReads + staleReads + 1;
+        }
+
         public Task<WorkflowDeliverySnapshot?> GetAsync(
             string deliveryId,
             CancellationToken ct = default) =>
-            Task.FromResult<WorkflowDeliverySnapshot?>(snapshot);
+            Task.FromResult<WorkflowDeliverySnapshot?>(Snapshot);
 
         public Task<WorkflowDeliverySnapshot?> GetForScopeAsync(
             string deliveryId,
             string targetScopeId,
-            CancellationToken ct = default) =>
-            Task.FromResult<WorkflowDeliverySnapshot?>(snapshot);
+            CancellationToken ct = default)
+        {
+            ForScopeReads++;
+            if (_scheduledBegin != null && ForScopeReads >= _projectBeginAtRead)
+            {
+                var mutation = _scheduledBegin;
+                _scheduledBegin = null;
+                _projectBeginAtRead = int.MaxValue;
+                ProjectBegin(mutation);
+            }
+            return Task.FromResult<WorkflowDeliverySnapshot?>(Snapshot);
+        }
 
         public Task<WorkflowDeliveryListResult> ListAsync(
             WorkflowDeliveryListQuery query,
             CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowDeliveryListResult([snapshot], null));
+            Task.FromResult(new WorkflowDeliveryListResult([Snapshot], null));
 
         public Task<WorkflowDeliverySnapshot?> FindByInstallationAsync(
             string scopeId,
             string installationId,
             CancellationToken ct = default) =>
-            Task.FromResult<WorkflowDeliverySnapshot?>(snapshot);
+            Task.FromResult<WorkflowDeliverySnapshot?>(Snapshot);
     }
 
     private sealed class UnusedPackageCatalog : IWorkflowDeliveryPackageCatalog
@@ -686,6 +922,32 @@ public sealed class WorkflowDeliveryServiceTests
             NyxIdConnectLinkCreateRequest request,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<NyxIdConnectLinkSnapshot> GetAsync(
+            string bearerToken,
+            string connectLinkId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class RecordingCreateConnectLinkPort : INyxIdConnectLinkPort
+    {
+        public string? BearerToken { get; private set; }
+
+        public NyxIdConnectLinkCreateRequest? Request { get; private set; }
+
+        public Task<NyxIdConnectLinkCreated> CreateAsync(
+            string bearerToken,
+            NyxIdConnectLinkCreateRequest request,
+            CancellationToken ct = default)
+        {
+            BearerToken = bearerToken;
+            Request = request;
+            return Task.FromResult(new NyxIdConnectLinkCreated(
+                "link-created",
+                "https://nyx.example/connect/redacted",
+                DateTimeOffset.Parse("2026-08-16T03:00:00Z")));
+        }
 
         public Task<NyxIdConnectLinkSnapshot> GetAsync(
             string bearerToken,

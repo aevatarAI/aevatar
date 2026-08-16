@@ -99,9 +99,10 @@ public sealed class WorkflowDeliveryGAgent
         {
             if (string.Equals(existing.LinkId, command.LinkId, StringComparison.Ordinal))
                 return;
-            if (existing.Status == WorkflowDeliveryConnectionStatus.Pending)
-                throw new InvalidOperationException("a connection link is already pending for this slot.");
         }
+        EnsureConnectionsMutable();
+        if (existing?.Status == WorkflowDeliveryConnectionStatus.Pending)
+            throw new InvalidOperationException("a connection link is already pending for this slot.");
         await PersistDomainEventAsync(new WorkflowDeliveryConnectionBegunEvent
         {
             SlotKey = slot.Key,
@@ -130,6 +131,7 @@ public sealed class WorkflowDeliveryGAgent
         if (connection.Status == command.Status &&
             string.Equals(connection.UserServiceId, userServiceId, StringComparison.Ordinal))
             return;
+        EnsureConnectionsMutable();
         await PersistDomainEventAsync(new WorkflowDeliveryConnectionUpdatedEvent
         {
             SlotKey = connection.SlotKey,
@@ -795,6 +797,22 @@ public sealed class WorkflowDeliveryGAgent
             if (!command.ConnectionReferences.TryGetValue(required.Key, out var reference) || string.IsNullOrWhiteSpace(reference))
                 throw new InvalidOperationException($"required connection slot '{required.Key}' is unresolved.");
         }
+        var completedReferences = State.Connections
+            .Where(static connection =>
+                connection.Status == WorkflowDeliveryConnectionStatus.Completed &&
+                !string.IsNullOrWhiteSpace(connection.UserServiceId))
+            .ToDictionary(
+                static connection => connection.SlotKey,
+                static connection => connection.UserServiceId,
+                StringComparer.Ordinal);
+        if (completedReferences.Count != command.ConnectionReferences.Count ||
+            command.ConnectionReferences.Any(reference =>
+                !completedReferences.TryGetValue(reference.Key, out var completedReference) ||
+                !string.Equals(completedReference, reference.Value, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "workflow installation connection references do not match completed delivery connections.");
+        }
         foreach (var confirmation in command.Confirmations)
         {
             WorkflowDeliveryConventions.NormalizeRequired(confirmation.CallSiteId, "confirmation.call_site_id");
@@ -805,6 +823,15 @@ public sealed class WorkflowDeliveryGAgent
         if (command.Confirmations.Select(static value => value.CallSiteId.Trim())
             .Distinct(StringComparer.Ordinal).Count() != command.Confirmations.Count)
             throw new InvalidOperationException("workflow installation confirmation call-site identities must be unique.");
+    }
+
+    private void EnsureConnectionsMutable()
+    {
+        if (State.Installation != null && State.Installation.InstallationId.Length != 0)
+        {
+            throw new InvalidOperationException(
+                "workflow delivery connections cannot be changed after installation has started.");
+        }
     }
 
     private static void ValidateAuthorizationOwner(WorkflowDeliveryAuthorizationOwnerContext? context)

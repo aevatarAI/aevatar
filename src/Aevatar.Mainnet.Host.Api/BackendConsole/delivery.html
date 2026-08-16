@@ -598,6 +598,9 @@
     const REFRESH_SKEW_MS = 60000;
     const REFRESH_RETRY_MS = 30000;
     const INSTALLATION_REFRESH_MS = 4000;
+    const PROJECTION_RETRY_MS = 500;
+    const PROJECTION_RETRY_ATTEMPTS = 20;
+    const PROJECTION_GRACE_MS = 90000;
 
     const app = document.getElementById("app");
     const announcer = document.getElementById("announcer");
@@ -1885,6 +1888,11 @@
       return object(first(data, ["installation", "item"], data));
     }
 
+    function deliveryStateVersion(value) {
+      const parsed = Number(first(value, ["deliveryStateVersion", "stateVersion"], 0));
+      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+    }
+
     function customerScopeId(detail) {
       return text(first(detail, ["targetScopeId", "scopeId"], ""));
     }
@@ -1933,6 +1941,8 @@
         installationError: null,
         acceptedHttpStatus: 0,
         acceptedAtMs: 0,
+        installationProjectionBaselineVersion: 0,
+        deliveryStateVersion: deliveryStateVersion(detail),
         idempotencyKey: "",
         connectionRuntime: Object.create(null),
         connectionErrors: Object.create(null),
@@ -1956,9 +1966,24 @@
     async function loadCustomerDetail(deliveryIdValue, sequence) {
       renderCustomerDetailLoading();
       try {
-        const result = isAdminSession()
-          ? await api.getRequest(deliveryIdValue)
-          : await api.validateAccess(deliveryIdValue);
+        let result = null;
+        for (let attempt = 0; attempt < PROJECTION_RETRY_ATTEMPTS; attempt += 1) {
+          try {
+            result = isAdminSession()
+              ? await api.getRequest(deliveryIdValue)
+              : await api.validateAccess(deliveryIdValue);
+            break;
+          } catch (error) {
+            const retryableProjectionMiss = error instanceof ApiError && error.status === 404 &&
+              attempt + 1 < PROJECTION_RETRY_ATTEMPTS;
+            if (!retryableProjectionMiss) throw error;
+            await new Promise(function (resolve) { window.setTimeout(resolve, PROJECTION_RETRY_MS); });
+            if (sequence !== state.routeSequence) return;
+          }
+        }
+        if (!result) {
+          throw new ApiError(503, "交付读模型暂不可用。", {}, "delivery_projection_unavailable");
+        }
         if (sequence !== state.routeSequence) return;
         const detail = customerDetailFromResponse(result.data);
         const returnedId = deliveryId(detail);
@@ -2253,15 +2278,19 @@
 
     async function createConnection(slotKey) {
       if (!state.customer || state.customer.busy || !slotKey) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
       state.customer.busy = "connect:" + slotKey;
       delete state.customer.connectionErrors[slotKey];
       renderCustomerDetail();
       try {
         const result = await api.createConnectLink(
-          customerScopeId(state.customer.detail),
-          state.customer.deliveryId,
+          scopeId,
+          deliveryIdValue,
           slotKey
         );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const response = object(first(result.data, ["connection", "result"], result.data));
         const returnedSlot = text(first(response, ["slotKey", "key"], ""));
         if (returnedSlot && returnedSlot !== slotKey) {
@@ -2275,35 +2304,41 @@
         invalidateValidation();
         state.notice = { tone: "info", title: "连接链接已创建", message: "请在 NyxID 完成连接，然后返回这里显式检查状态。" };
       } catch (error) {
-        state.customer.connectionErrors[slotKey] = error;
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.connectionErrors[slotKey] = error;
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
+    }
+
+    function customerRouteIsCurrent(deliveryIdValue, sequence) {
+      return Boolean(state.customer) && state.routeSequence === sequence &&
+        state.customer.deliveryId === deliveryIdValue;
+    }
+
+    function connectionPollingIsTerminal(status) {
+      return ["completed", "connected", "ready", "active", "failed", "expired"].indexOf(status) >= 0;
     }
 
     async function recheckConnection(slotKey) {
       if (!state.customer || state.customer.busy || !slotKey) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
       state.customer.busy = "connection-status:" + slotKey;
       delete state.customer.connectionErrors[slotKey];
       renderCustomerDetail();
       try {
-        const scopeId = customerScopeId(state.customer.detail);
-        const projectedSnapshots = array(first(state.customer.detail, ["connections"], []));
-        const baseline = object(projectedSnapshots.find(function (candidate) {
-          return connectionSlotKey(candidate) === slotKey;
-        }));
-        const baselineVersion = [
-          connectionStatus(baseline),
-          text(first(baseline, ["userServiceId", "connectionReference"], "")),
-          text(first(baseline, ["updatedAt", "updatedAtUtc"], ""))
-        ].join("|");
-
         const accepted = await api.refreshConnectStatus(
           scopeId,
-          state.customer.deliveryId,
+          deliveryIdValue,
           slotKey
         );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const acceptedBody = object(accepted.data);
         if (accepted.status !== 202 || text(first(acceptedBody, ["status"], "")) !== "refresh_accepted") {
           throw new ApiError(502, "服务端没有返回可验证的连接刷新受理回执。", acceptedBody, "invalid_refresh_receipt");
@@ -2317,27 +2352,23 @@
         renderCustomerDetail();
 
         let response = null;
-        for (let attempt = 0; attempt < 20; attempt += 1) {
+        for (let attempt = 0; attempt < PROJECTION_RETRY_ATTEMPTS; attempt += 1) {
           if (attempt > 0) {
-            await new Promise(function (resolve) { window.setTimeout(resolve, 500); });
+            await new Promise(function (resolve) { window.setTimeout(resolve, PROJECTION_RETRY_MS); });
+            if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
           }
           const result = await api.connectStatus(
             scopeId,
-            state.customer.deliveryId,
+            deliveryIdValue,
             slotKey
           );
+          if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
           response = object(first(result.data, ["connection", "result"], result.data));
           const returnedSlot = text(first(response, ["slotKey", "key"], ""));
           if (returnedSlot && returnedSlot !== slotKey) {
             throw new ApiError(409, "服务端返回的连接 slot 与当前操作不一致。", response, "connection_slot_mismatch");
           }
-          const projectedVersion = [
-            connectionStatus(response),
-            text(first(response, ["userServiceId", "connectionReference"], "")),
-            text(first(response, ["updatedAt", "updatedAtUtc"], ""))
-          ].join("|");
-          if (projectedVersion !== baselineVersion ||
-              ["completed", "connected", "ready", "active", "failed", "expired"].indexOf(connectionStatus(response)) >= 0) {
+          if (connectionPollingIsTerminal(connectionStatus(response))) {
             break;
           }
         }
@@ -2363,10 +2394,14 @@
         }
         invalidateValidation();
       } catch (error) {
-        state.customer.connectionErrors[slotKey] = error;
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.connectionErrors[slotKey] = error;
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2685,6 +2720,9 @@
         renderCustomerDetail();
         return;
       }
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
       state.customer.busy = "validate";
       state.customer.clientError = "";
       state.customer.validationError = null;
@@ -2693,10 +2731,11 @@
       renderCustomerDetail();
       try {
         const result = await api.validateConfig(
-          customerScopeId(state.customer.detail),
-          state.customer.deliveryId,
+          scopeId,
+          deliveryIdValue,
           body
         );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const validation = object(first(result.data, ["validation", "result"], result.data));
         validation._httpStatus = result.status;
         state.customer.validation = validation;
@@ -2705,10 +2744,14 @@
         }
         announce(result.status === 202 ? "校验请求已受理" : (validation.valid === true ? "配置校验通过" : "配置校验未通过"));
       } catch (error) {
-        state.customer.validationError = error;
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.validationError = error;
+        }
       } finally {
-        state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2722,6 +2765,9 @@
         return;
       }
       const validation = object(state.customer.validation);
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
       const idempotencyKey = text(state.customer.idempotencyKey);
       if (!idempotencyKey) {
         state.customer.clientError = "服务端校验未返回稳定 idempotencyKey，发布已 fail closed。";
@@ -2741,13 +2787,15 @@
 
       state.customer.busy = "publish";
       state.customer.clientError = "";
+      const projectionBaselineVersion = state.customer.deliveryStateVersion;
       renderCustomerDetail();
       try {
         const result = await api.publish(
-          customerScopeId(state.customer.detail),
-          state.customer.deliveryId,
+          scopeId,
+          deliveryIdValue,
           body
         );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const response = object(first(result.data, ["installation", "result"], result.data));
         const installationIdValue = text(first(response, ["installationId", "id"], ""));
         if (!installationIdValue) {
@@ -2756,6 +2804,9 @@
         state.customer.installationId = installationIdValue;
         state.customer.acceptedHttpStatus = result.status;
         state.customer.acceptedAtMs = result.status === 202 ? Date.now() : 0;
+        state.customer.installationProjectionBaselineVersion = result.status === 202
+          ? projectionBaselineVersion
+          : 0;
         state.customer.installation = response;
         state.customer.consoleUrl = absoluteHttpUrl(first(response, ["consoleUrl"], ""));
         state.notice = result.status === 202
@@ -2763,17 +2814,21 @@
           : { tone: "info", title: "已获得安装记录", message: "正在读取服务端安装状态。" };
         announce(result.status === 202 ? "发布请求已受理，尚未安装成功" : "已获得安装记录");
         await loadInstallation(
-          customerScopeId(state.customer.detail),
+          scopeId,
           installationIdValue,
-          state.routeSequence,
+          sequence,
           false
         );
       } catch (error) {
-        const description = errorDescription(error);
-        state.notice = { tone: description.tone, title: description.title, message: description.message };
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          const description = errorDescription(error);
+          state.notice = { tone: description.tone, title: description.title, message: description.message };
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2783,6 +2838,23 @@
 
     function installationNeedsRefresh(status) {
       return ["accepted", "accepted_for_dispatch", "pending", "processing", "running", "publishing", "validating", "provisioning_accepted", "provisioningaccepted", "awaiting_acceptance"].indexOf(status) >= 0;
+    }
+
+    function installationObservationIsPreAcceptance(customer, observed) {
+      const observedStatus = text(first(observed, ["status"], "")).toLowerCase();
+      const observedVersion = deliveryStateVersion(observed);
+      return observedStatus !== "ready" && Boolean(customer) && customer.acceptedHttpStatus === 202 &&
+        customer.acceptedAtMs > 0 && Date.now() - customer.acceptedAtMs < PROJECTION_GRACE_MS &&
+        customer.installationProjectionBaselineVersion > 0 &&
+        (observedVersion === 0 || observedVersion <= customer.installationProjectionBaselineVersion);
+    }
+
+    function markInstallationAwaitingProjection(customer) {
+      customer.installationError = null;
+      customer.installation = Object.assign({}, object(customer.installation), {
+        status: "accepted",
+        stage: "awaiting_projection"
+      });
     }
 
     function stopInstallationRefresh() {
@@ -2807,8 +2879,26 @@
       try {
         const result = await api.installation(scopeId, installationIdValue);
         if (sequence !== state.routeSequence || !state.customer || state.customer.installationId !== installationIdValue) return;
-        state.customer.installation = normalizeInstallation(result.data);
+        const observed = normalizeInstallation(result.data);
+        if (installationObservationIsPreAcceptance(state.customer, observed)) {
+          markInstallationAwaitingProjection(state.customer);
+          renderCustomerDetail();
+          scheduleInstallationRefresh(scopeId, installationIdValue, sequence);
+          return;
+        }
+        state.customer.installation = observed;
         state.customer.installationError = null;
+        const observedVersion = deliveryStateVersion(observed);
+        if (observedVersion > 0) state.customer.deliveryStateVersion = observedVersion;
+        state.customer.installationProjectionBaselineVersion = 0;
+        const observedStatus = text(first(observed, ["status"], "")).toLowerCase();
+        if (state.customer.acceptedHttpStatus !== 202 || !installationNeedsRefresh(observedStatus)) {
+          if (state.customer.acceptedHttpStatus === 202 && !installationNeedsRefresh(observedStatus)) {
+            state.notice = null;
+          }
+          state.customer.acceptedHttpStatus = 0;
+          state.customer.acceptedAtMs = 0;
+        }
         renderCustomerDetail();
         scheduleInstallationRefresh(scopeId, installationIdValue, sequence);
       } catch (error) {
@@ -2816,13 +2906,9 @@
         const awaitingProjection = error instanceof ApiError && error.status === 404 &&
           state.customer.acceptedHttpStatus === 202 &&
           state.customer.acceptedAtMs > 0 &&
-          Date.now() - state.customer.acceptedAtMs < 90000;
+          Date.now() - state.customer.acceptedAtMs < PROJECTION_GRACE_MS;
         if (awaitingProjection) {
-          state.customer.installationError = null;
-          state.customer.installation = Object.assign({}, object(state.customer.installation), {
-            status: "accepted",
-            stage: "awaiting_projection"
-          });
+          markInstallationAwaitingProjection(state.customer);
           renderCustomerDetail();
           scheduleInstallationRefresh(scopeId, installationIdValue, sequence);
           return;
@@ -2835,27 +2921,46 @@
 
     async function retryInstallation() {
       if (!state.customer || state.customer.busy || !state.customer.installationId) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      const installationIdValue = state.customer.installationId;
       state.customer.busy = "retry";
+      const projectionBaselineVersion = state.customer.deliveryStateVersion;
       renderCustomerDetail();
       try {
-        const scopeId = customerScopeId(state.customer.detail);
-        const result = await api.retry(scopeId, state.customer.installationId);
+        const result = await api.retry(scopeId, installationIdValue);
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const response = normalizeInstallation(result.data);
         const returnedId = text(first(response, ["installationId", "id"], ""));
         if (returnedId && returnedId !== state.customer.installationId) {
           state.customer.installationId = returnedId;
         }
         state.customer.acceptedHttpStatus = result.status;
+        state.customer.acceptedAtMs = result.status === 202 ? Date.now() : 0;
+        state.customer.installationProjectionBaselineVersion = result.status === 202
+          ? projectionBaselineVersion
+          : 0;
+        state.customer.installation = result.status === 202
+          ? Object.assign({}, object(state.customer.installation), response, {
+              status: "accepted",
+              stage: "awaiting_projection"
+            })
+          : response;
         state.notice = result.status === 202
           ? { tone: "info", title: "重试请求已受理", message: "仍需等待服务端安装状态变为 ready。" }
           : { tone: "info", title: "重试已提交", message: "正在读取服务端状态。" };
-        await loadInstallation(scopeId, state.customer.installationId, state.routeSequence, false);
+        await loadInstallation(scopeId, state.customer.installationId, sequence, false);
       } catch (error) {
-        const description = errorDescription(error);
-        state.notice = { tone: description.tone, title: description.title, message: description.message };
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          const description = errorDescription(error);
+          state.notice = { tone: description.tone, title: description.title, message: description.message };
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2871,8 +2976,10 @@
       renderCustomerDetail();
       const scopeId = customerScopeId(state.customer.detail);
       const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
       try {
         const result = await api.createTeam(scopeId, displayName);
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const createdTeam = normalizeCreatedTeam(result.data, scopeId);
         const createdTeamId = teamId(createdTeam);
         state.customer.pendingTeams[createdTeamId] = createdTeam;
@@ -2882,13 +2989,17 @@
         state.notice = { tone: "success", title: "Team 已创建并选中", message: "现在可以继续配置并发布工作流。" };
         announce("Team 已创建");
         state.customer.busy = "";
-        await loadTeams(scopeId, deliveryIdValue, state.routeSequence);
+        await loadTeams(scopeId, deliveryIdValue, sequence);
       } catch (error) {
-        const description = errorDescription(error);
-        state.notice = { tone: description.tone, title: description.title, message: description.message };
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          const description = errorDescription(error);
+          state.notice = { tone: description.tone, title: description.title, message: description.message };
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2927,7 +3038,7 @@
           h("div", null,
             h("strong", { text: "在 Aevatar Console 中运行" }),
             consoleUrl
-              ? h("p", { text: "打开该 Team 成员的 workflow 页面，可查看定义、手动运行并查看运行记录。" })
+              ? h("p", { text: "打开该 Team 成员的调用工作台，可手动运行已交付工作流并查看运行记录。" })
               : h("p", { text: "服务端未配置 Aevatar:Delivery:ConsoleWebBaseUrl，无法生成 Console 链接；请联系交付管理员补充该配置。" })
           ),
           consoleUrl
@@ -2964,6 +3075,20 @@
         ),
         h("div", { className: "stage-list" }, rows)
       );
+    }
+
+    function installationStatusMessage(installation, status, acceptedHttpStatus) {
+      if (status === "ready") return "服务端 installation.status 已确认 ready。";
+      if (status === "failed") {
+        const failureCode = text(first(installation, ["errorCode", "code"], ""));
+        const failureMessage = text(first(installation, ["errorMessage", "error"], ""));
+        if (failureMessage) return failureCode ? failureCode + ": " + failureMessage : failureMessage;
+        return text(failureCode, "服务端报告安装失败。");
+      }
+      if (acceptedHttpStatus === 202) {
+        return "HTTP 202 仅表示已受理，当前仍以服务端状态为准。";
+      }
+      return text(first(installation, ["message", "nextAction"], ""), "尚未达到 ready。");
     }
 
     function renderInstallation() {
@@ -3004,11 +3129,11 @@
       const channelRunCommand = text(first(installation, ["channelRunCommand"], ""));
       const installationScopeId = text(first(installation, ["scopeId"], ""));
       const title = ready ? "安装已就绪" : (status === "failed" ? "安装失败" : "安装状态");
-      const message = ready
-        ? "服务端 installation.status 已确认 ready。"
-        : (state.customer.acceptedHttpStatus === 202
-            ? "HTTP 202 仅表示已受理，当前仍以服务端状态为准。"
-            : text(first(installation, ["message", "nextAction", "errorMessage", "error"], ""), "尚未达到 ready。"));
+      const message = installationStatusMessage(
+        installation,
+        status,
+        state.customer.acceptedHttpStatus
+      );
       const header = notice(ready ? "success" : statusTone(status), title, message);
       const body = h("div", null, header);
       body.append(

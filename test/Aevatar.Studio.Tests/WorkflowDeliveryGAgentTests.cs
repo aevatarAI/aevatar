@@ -102,6 +102,68 @@ public sealed class WorkflowDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task StartInstallation_WhenConnectionChangedAfterProjectionRead_ShouldRejectStaleReference()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        await agent.HandleBeginConnectionAsync(BeginConnectionCommand("link-a"));
+        await agent.HandleUpdateConnectionAsync(UpdateConnectionCommand(
+            "link-a",
+            WorkflowDeliveryConnectionStatus.Completed,
+            "user-service-a"));
+        await agent.HandleBeginConnectionAsync(BeginConnectionCommand("link-b"));
+        var start = StartInstallationCommand();
+        start.ConnectionReferences.Add("lark", "user-service-a");
+
+        var action = () => agent.HandleStartInstallationAsync(start);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection references do not match completed delivery connections*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(4);
+        agent.State.Installation.Should().BeNull();
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].LinkId.Should().Be("link-b");
+        agent.State.Connections[0].Status.Should().Be(WorkflowDeliveryConnectionStatus.Pending);
+    }
+
+    [Fact]
+    public async Task Connections_AfterInstallation_ShouldAllowExactReplayAndRejectMutation()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        var begin = BeginConnectionCommand("link-a");
+        var completed = UpdateConnectionCommand(
+            "link-a",
+            WorkflowDeliveryConnectionStatus.Completed,
+            "user-service-a");
+        await agent.HandleBeginConnectionAsync(begin);
+        await agent.HandleUpdateConnectionAsync(completed);
+        var start = StartInstallationCommand();
+        start.ConnectionReferences.Add("lark", "user-service-a");
+        await agent.HandleStartInstallationAsync(start);
+
+        await agent.HandleBeginConnectionAsync(begin.Clone());
+        await agent.HandleUpdateConnectionAsync(completed.Clone());
+        var replaceLink = () => agent.HandleBeginConnectionAsync(BeginConnectionCommand("link-b"));
+        var replaceReference = () => agent.HandleUpdateConnectionAsync(UpdateConnectionCommand(
+            "link-a",
+            WorkflowDeliveryConnectionStatus.Completed,
+            "user-service-b"));
+
+        await replaceLink.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connections cannot be changed after installation has started*");
+        await replaceReference.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connections cannot be changed after installation has started*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(4);
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].LinkId.Should().Be("link-a");
+        agent.State.Connections[0].Status.Should().Be(WorkflowDeliveryConnectionStatus.Completed);
+        agent.State.Connections[0].UserServiceId.Should().Be("user-service-a");
+        agent.State.Installation.ConnectionReferences.Should().ContainSingle()
+            .Which.Should().Be(new KeyValuePair<string, string>("lark", "user-service-a"));
+    }
+
+    [Fact]
     public async Task ScheduledInstallation_WhenOwnerIsNyxIdNative_ShouldAllowEmptySubjectTenant()
     {
         var agent = await CreateAgentAsync("delivery-alpha");
@@ -875,6 +937,50 @@ public sealed class WorkflowDeliveryGAgentTests
             CreatedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt),
         };
     }
+
+    private static CreateWorkflowDeliveryCommand CreateCommandWithConnectionSlot()
+    {
+        var command = CreateCommand("delivery-alpha");
+        command.Package.ConnectionSlots.Add(new WorkflowDeliveryConnectionSlotDefinition
+        {
+            Key = "lark",
+            Label = "Lark",
+            ServiceSlug = "api-lark",
+            Required = true,
+        });
+        command.Package.PackageHash = WorkflowDeliveryConventions.ComputePackageHash(command.Package);
+        command.Package.Version = command.Package.PackageHash[..16];
+        command.Package.PackageVersionId = WorkflowDeliveryConventions.BuildPackageVersionId(
+            command.Package.WorkflowName,
+            command.Package.PackageHash);
+        return command;
+    }
+
+    private static BeginWorkflowDeliveryConnectionCommand BeginConnectionCommand(string linkId) =>
+        new()
+        {
+            DeliveryId = "delivery-alpha",
+            TargetScopeId = "scope-alpha",
+            SlotKey = "lark",
+            ServiceSlug = "api-lark",
+            LinkId = linkId,
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(1)),
+        };
+
+    private static UpdateWorkflowDeliveryConnectionCommand UpdateConnectionCommand(
+        string linkId,
+        WorkflowDeliveryConnectionStatus status,
+        string userServiceId) =>
+        new()
+        {
+            DeliveryId = "delivery-alpha",
+            TargetScopeId = "scope-alpha",
+            SlotKey = "lark",
+            LinkId = linkId,
+            Status = status,
+            UserServiceId = userServiceId,
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(1)),
+        };
 
     private static StartWorkflowInstallationCommand StartInstallationCommand(
         WorkflowDeliveryTriggerIntent? triggerIntent = null) =>

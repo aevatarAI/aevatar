@@ -111,7 +111,8 @@ public sealed record WorkflowInstallationView(
     IReadOnlyList<WorkflowInstallationEvidenceView> Evidence,
     DateTimeOffset UpdatedAt,
     string? ConsoleUrl,
-    string? ChannelRunCommand);
+    string? ChannelRunCommand,
+    long DeliveryStateVersion);
 
 public sealed record WorkflowDeliveryView(
     string DeliveryId,
@@ -124,7 +125,8 @@ public sealed record WorkflowDeliveryView(
     WorkflowDeliveryPackageView Package,
     IReadOnlyList<WorkflowDeliveryConnectionView> Connections,
     IReadOnlyList<WorkflowDeliveryTriggerOptionView> AvailableTriggerIntents,
-    WorkflowInstallationView? Installation);
+    WorkflowInstallationView? Installation,
+    long StateVersion);
 
 public sealed record WorkflowDeliveryListResponse(
     IReadOnlyList<WorkflowDeliveryView> Items,
@@ -190,7 +192,7 @@ public interface IWorkflowDeliveryService
     Task<WorkflowDeliveryView?> GetCustomerAsync(string deliveryId, string scopeId, CancellationToken ct = default);
     Task<WorkflowDeliveryView> ValidateAccessAsync(string deliveryId, string scopeId, CancellationToken ct = default);
     Task RevokeAsync(string deliveryId, string principalId, CancellationToken ct = default);
-    Task<WorkflowDeliveryConnectLinkResponse> CreateConnectLinkAsync(string deliveryId, string scopeId, string slotKey, string bearerToken, Uri callbackUrl, CancellationToken ct = default);
+    Task<WorkflowDeliveryConnectLinkResponse> CreateConnectLinkAsync(string deliveryId, string scopeId, string slotKey, string bearerToken, CancellationToken ct = default);
     Task<WorkflowDeliveryConnectStatusResponse> GetConnectStatusAsync(string deliveryId, string scopeId, string slotKey, CancellationToken ct = default);
     Task<WorkflowDeliveryConnectionRefreshAcceptedResponse> RefreshConnectStatusAsync(string deliveryId, string scopeId, string slotKey, string bearerToken, CancellationToken ct = default);
     Task<WorkflowDeliveryConfigurationValidationResponse> ValidateConfigurationAsync(string deliveryId, string scopeId, WorkflowDeliveryValidateConfigurationRequest request, WorkflowCapabilityAdmissionContext capabilityContext, CancellationToken ct = default);

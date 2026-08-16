@@ -119,6 +119,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("status === \"ready\"");
             html.Should().Contain("function renderUsageSection(consoleUrl, channelRunCommand, scopeId)");
             html.Should().Contain("renderUsageSection(consoleUrl, channelRunCommand, installationScopeId)");
+            html.Should().Contain("打开该 Team 成员的调用工作台，可手动运行已交付工作流并查看运行记录。");
+            html.Should().NotContain("打开该 Team 成员的 workflow 页面");
             html.Should().Contain("pendingTeams: Object.create(null)");
             html.Should().Contain("state.customer.pendingTeams[createdTeamId] = createdTeam");
             html.Should().Contain("state.customer.selectedTeamId = createdTeamId");
@@ -198,6 +200,419 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("setInterval(");
         html.Should().NotContain("demo-installation");
         html.Should().NotContain("demo-team");
+    }
+
+    [Fact]
+    public async Task DeliveryShell_ConnectionRefresh_ShouldWaitForTerminalProjectionAndIgnoreLateRoutes()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/delivery");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function customerRouteIsCurrent(deliveryIdValue, sequence) {');
+            const end = html.indexOf('function renderConnections()', start);
+            assert.notEqual(start, -1, 'customer route guard must exist');
+            assert.notEqual(end, -1, 'connection renderer must follow refresh behavior');
+            const source = html.slice(start, end);
+
+            class ApiError extends Error {
+              constructor(status, message, body, code) {
+                super(message); this.status = status; this.body = body; this.code = code;
+              }
+            }
+            function first(value, keys, fallback) {
+              for (const key of keys) if (value && value[key] !== undefined) return value[key];
+              return fallback;
+            }
+            function text(value, fallback = '') {
+              const result = value == null ? '' : String(value).trim();
+              return result || fallback;
+            }
+            function makeContext(api) {
+              const context = {
+                ApiError, Array, Boolean, Object, Promise,
+                PROJECTION_RETRY_ATTEMPTS: 20,
+                PROJECTION_RETRY_MS: 0,
+                api,
+                first,
+                text,
+                object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; },
+                connectionStatus(value) { return text(first(value, ['status'], ''), 'needs_action').toLowerCase(); },
+                customerScopeId(value) { return text(first(value, ['targetScopeId'], '')); },
+                invalidateValidation() {},
+                renderCount: 0,
+                renderCustomerDetail() { context.renderCount += 1; },
+                state: {
+                  routeSequence: 7,
+                  notice: null,
+                  customer: {
+                    deliveryId: 'delivery-alpha', detail: {targetScopeId: 'scope-alpha'}, busy: '',
+                    connectionErrors: Object.create(null), connectionRuntime: Object.create(null)
+                  }
+                },
+                window: { setTimeout(resolve) { resolve(); return 1; } }
+              };
+              vm.createContext(context);
+              vm.runInContext(source, context);
+              return context;
+            }
+
+            (async function() {
+              let reads = 0;
+              const observations = [
+                {slotKey:'lark',status:'pending',updatedAt:'2026-08-17T00:00:00Z'},
+                {slotKey:'lark',status:'completed',userServiceId:'us-lark',updatedAt:'2026-08-17T00:00:01Z'}
+              ];
+              const terminal = makeContext({
+                async refreshConnectStatus() { return {status:202,data:{status:'refresh_accepted'}}; },
+                async connectStatus() { reads += 1; return {data:observations.shift()}; }
+              });
+              await terminal.recheckConnection('lark');
+              assert.equal(reads, 2, 'a stale pending projection must not finish the refresh');
+              assert.equal(terminal.state.customer.connectionRuntime.lark.status, 'completed');
+              assert.equal(terminal.state.customer.connectionRuntime.lark.userServiceId, 'us-lark');
+
+              let releaseRefresh;
+              const late = makeContext({
+                refreshConnectStatus() { return new Promise(resolve => { releaseRefresh = resolve; }); },
+                async connectStatus() { throw new Error('late route must not read connection state'); }
+              });
+              const pending = late.recheckConnection('lark');
+              await Promise.resolve();
+              const replacement = {
+                deliveryId:'delivery-beta',detail:{targetScopeId:'scope-beta'},busy:'replacement-busy',
+                connectionErrors:Object.create(null),connectionRuntime:Object.create(null)
+              };
+              late.state.customer = replacement;
+              late.state.routeSequence = 8;
+              releaseRefresh({status:202,data:{status:'refresh_accepted'}});
+              await pending;
+              assert.equal(late.state.customer, replacement);
+              assert.equal(replacement.busy, 'replacement-busy');
+              assert.deepEqual(Object.keys(replacement.connectionRuntime), []);
+              assert.equal(late.renderCount, 1, 'late completion must not render the replacement route');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task DeliveryShell_NewDeliveryDetail_ShouldRetryAProjectionMiss()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/delivery");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('async function loadCustomerDetail(deliveryIdValue, sequence) {');
+            const end = html.indexOf('function normalizeCreatedTeam(', start);
+            assert.notEqual(start, -1, 'customer detail loader must exist');
+            assert.notEqual(end, -1, 'created Team normalizer must follow detail loading');
+
+            class ApiError extends Error {
+              constructor(status, message, body, code) {
+                super(message); this.status = status; this.body = body; this.code = code;
+              }
+            }
+            let reads = 0, routeError = null;
+            const context = {
+              ApiError, Promise,
+              PROJECTION_RETRY_ATTEMPTS: 20,
+              PROJECTION_RETRY_MS: 0,
+              state: {routeSequence:3,customer:null},
+              api: { async getRequest() {
+                reads += 1;
+                if (reads < 3) throw new ApiError(404, 'projection pending', {}, 'not_found');
+                return {data:{deliveryId:'delivery-alpha',targetScopeId:'scope-alpha'}};
+              }},
+              isAdminSession() { return true; },
+              renderCustomerDetailLoading() {},
+              customerDetailFromResponse(value) { return value; },
+              deliveryId(value) { return value.deliveryId || ''; },
+              customerScopeId(value) { return value.targetScopeId || ''; },
+              initCustomerState(id, detail) { return {deliveryId:id,detail,installationId:''}; },
+              renderCustomerDetail() {},
+              async loadTeams() {},
+              async loadInstallation() {},
+              renderRouteError(error) { routeError = error; },
+              window: { setTimeout(resolve) { resolve(); return 1; } }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async function() {
+              await context.loadCustomerDetail('delivery-alpha', 3);
+              assert.equal(reads, 3, '404 must be retried until the committed projection appears');
+              assert.equal(routeError, null);
+              assert.equal(context.state.customer.deliveryId, 'delivery-alpha');
+              assert.equal(context.state.customer.detail.targetScopeId, 'scope-alpha');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task DeliveryShell_Retry_ShouldUseStateVersionAndClearAcceptedNoticeAtTerminalState()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/delivery");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function installationStatus() {');
+            const end = html.indexOf('async function createTeam()', start);
+            const messageStart = html.indexOf('function installationStatusMessage(');
+            const messageEnd = html.indexOf('function renderInstallation()', messageStart);
+            assert.notEqual(start, -1, 'installation refresh state machine must exist');
+            assert.notEqual(end, -1, 'Team creation must follow installation refresh behavior');
+            assert.notEqual(messageStart, -1, 'installation status message mapper must exist');
+
+            function first(value, keys, fallback) {
+              for (const key of keys) if (value && value[key] !== undefined) return value[key];
+              return fallback;
+            }
+            function text(value, fallback = '') {
+              const result = value == null ? '' : String(value).trim();
+              return result || fallback;
+            }
+            const oldFailure = {
+              installationId:'installation-alpha',status:'failed',stage:'provisioning',
+              updatedAt:'2026-08-17T00:00:00Z',errorCode:'OLD_FAILURE',errorMessage:'old attempt failed',
+              deliveryStateVersion:12
+            };
+            let observed = oldFailure, scheduled = null, nextTimer = 0;
+            const context = {
+              Array, Boolean, Date, Object, Promise,
+              INSTALLATION_REFRESH_MS: 0,
+              PROJECTION_GRACE_MS: 90000,
+              installationTimer: null,
+              first,
+              text,
+              object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; },
+              deliveryStateVersion(value) {
+                const parsed = Number(first(value, ['deliveryStateVersion', 'stateVersion'], 0));
+                return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+              },
+              normalizeInstallation(value) { return value; },
+              customerScopeId(value) { return value.targetScopeId || ''; },
+              customerRouteIsCurrent(id, sequence) {
+                return Boolean(context.state.customer) && context.state.routeSequence === sequence &&
+                  context.state.customer.deliveryId === id;
+              },
+              renderCustomerDetail() {},
+              errorDescription(error) { return {tone:'danger',title:'error',message:error.message}; },
+              state: {
+                routeSequence:11,
+                notice:null,
+                customer: {
+                  deliveryId:'delivery-alpha',detail:{targetScopeId:'scope-alpha'},busy:'',
+                  installationId:'installation-alpha',deliveryStateVersion:12,
+                  installation:oldFailure,installationError:null,acceptedHttpStatus:0,
+                  acceptedAtMs:0,installationProjectionBaselineVersion:0
+                }
+              },
+              api: {
+                async retry() { return {status:202,data:{installationId:'installation-alpha',status:'accepted'}}; },
+                async installation() { return {data:observed}; }
+              },
+              window: {
+                setTimeout(callback) { scheduled = callback; return ++nextTimer; },
+                clearTimeout() { scheduled = null; }
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+            vm.runInContext(html.slice(messageStart, messageEnd), context);
+
+            (async function() {
+              await context.retryInstallation();
+              assert.equal(context.state.customer.installation.status, 'accepted');
+              assert.equal(context.state.customer.installation.stage, 'awaiting_projection');
+              assert.equal(context.state.customer.installationProjectionBaselineVersion, 12,
+                'retry must remember the authoritative pre-acceptance state version');
+              assert.equal(typeof scheduled, 'function', 'old failed projection must keep polling');
+
+              observed = {
+                installationId:'installation-alpha',status:'ready',stage:'ready',
+                updatedAt:'2026-08-17T00:00:01Z',publishedServiceId:'svc-alpha',
+                deliveryStateVersion:13
+              };
+              await context.loadInstallation('scope-alpha', 'installation-alpha', 11, true);
+              assert.equal(context.state.customer.installation.status, 'ready');
+              assert.equal(context.state.customer.deliveryStateVersion, 13);
+              assert.equal(context.state.customer.acceptedHttpStatus, 0);
+              assert.equal(context.state.customer.installationProjectionBaselineVersion, 0);
+              assert.equal(context.state.notice, null, 'terminal ready must clear the old HTTP 202 notice');
+              assert.equal(scheduled, null, 'ready is terminal and must stop polling');
+
+              context.state.customer.installation = Object.assign({}, oldFailure, {deliveryStateVersion:20});
+              context.state.customer.deliveryStateVersion = 20;
+              observed = context.state.customer.installation;
+              await context.retryInstallation();
+              assert.equal(context.state.notice.title, '重试请求已受理');
+              observed = {
+                installationId:'installation-alpha',status:'failed',stage:'provisioning',
+                error:'binding was rejected',deliveryStateVersion:21
+              };
+              await context.loadInstallation('scope-alpha', 'installation-alpha', 11, true);
+              assert.equal(context.state.customer.installation.status, 'failed');
+              assert.equal(context.state.notice, null, 'terminal failure must clear the old HTTP 202 notice');
+              const failureText = context.installationStatusMessage(
+                context.state.customer.installation,
+                'failed',
+                context.state.customer.acceptedHttpStatus);
+              assert.equal(failureText, 'binding was rejected',
+                'terminal failure detail must outrank the stale 202 receipt');
+
+              context.state.customer.acceptedHttpStatus = 202;
+              context.state.customer.acceptedAtMs = Date.now();
+              context.state.customer.installationProjectionBaselineVersion = 30;
+              observed = {
+                installationId:'installation-alpha',status:'ready',stage:'ready',
+                publishedServiceId:'svc-alpha',deliveryStateVersion:30
+              };
+              await context.loadInstallation('scope-alpha', 'installation-alpha', 11, true);
+              assert.equal(context.state.customer.installation.status, 'ready',
+                'an idempotent ready observation must not be hidden merely because its version is unchanged');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task DeliveryShell_PublishAndRetry_ShouldIgnoreLateResponsesFromAnotherRoute()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/delivery");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const publishStart = html.indexOf('async function publishCustomerDelivery() {');
+            const publishEnd = html.indexOf('function installationStatus() {', publishStart);
+            const retryStart = html.indexOf('async function retryInstallation() {');
+            const retryEnd = html.indexOf('async function createTeam() {', retryStart);
+            assert.notEqual(publishStart, -1, 'publish action must exist');
+            assert.notEqual(publishEnd, -1, 'installation state must follow publish');
+            assert.notEqual(retryStart, -1, 'retry action must exist');
+            assert.notEqual(retryEnd, -1, 'Team creation must follow retry');
+
+            function deferred() {
+              let resolve;
+              const promise = new Promise(ok => { resolve = ok; });
+              return {promise, resolve};
+            }
+            function first(value, keys, fallback) {
+              for (const key of keys) if (value && value[key] !== undefined) return value[key];
+              return fallback;
+            }
+            function text(value, fallback = '') {
+              const result = value == null ? '' : String(value).trim();
+              return result || fallback;
+            }
+
+            const publishGate = deferred();
+            const retryGate = deferred();
+            let renderCount = 0, installationReads = 0;
+            const context = {
+              Array, Boolean, Date, Object, Promise,
+              first,
+              text,
+              object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; },
+              customerScopeId(value) { return value.targetScopeId || ''; },
+              customerRouteIsCurrent(id, sequence) {
+                return Boolean(context.state.customer) && context.state.routeSequence === sequence &&
+                  context.state.customer.deliveryId === id;
+              },
+              configurationBody() { return {teamId:'team-alpha',customerConfig:{}}; },
+              validationIsPublishable() { return true; },
+              riskConfirmations() { return []; },
+              absoluteHttpUrl() { return ''; },
+              announce() {},
+              renderCustomerDetail() { renderCount += 1; },
+              errorDescription(error) { return {tone:'danger',title:'error',message:error.message}; },
+              async loadInstallation() { installationReads += 1; },
+              state: {routeSequence:1,notice:null,customer:null},
+              api: {
+                publish() { return publishGate.promise; },
+                retry() { return retryGate.promise; }
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(publishStart, publishEnd), context);
+            vm.runInContext(html.slice(retryStart, retryEnd), context);
+
+            function publishCustomer(id) {
+              return {
+                deliveryId:id,detail:{targetScopeId:'scope-alpha'},busy:'',
+                validation:{valid:true},idempotencyKey:'publish-alpha',confirmedRisks:new Set(),
+                installation:{},installationId:'',deliveryStateVersion:7,clientError:''
+              };
+            }
+            function retryCustomer(id) {
+              return {
+                deliveryId:id,detail:{targetScopeId:'scope-alpha'},busy:'',
+                installation:{installationId:'installation-alpha',status:'failed'},
+                installationId:'installation-alpha',deliveryStateVersion:9
+              };
+            }
+
+            (async function() {
+              context.state.customer = publishCustomer('delivery-alpha');
+              const pendingPublish = context.publishCustomerDelivery();
+              await Promise.resolve();
+              const publishReplacement = {
+                deliveryId:'delivery-beta',detail:{targetScopeId:'scope-beta'},busy:'replacement-publish',
+                installation:{status:'ready'},installationId:'installation-beta'
+              };
+              context.state.customer = publishReplacement;
+              context.state.routeSequence = 2;
+              publishGate.resolve({status:202,data:{installationId:'installation-alpha',status:'accepted'}});
+              await pendingPublish;
+              assert.equal(context.state.customer, publishReplacement);
+              assert.equal(publishReplacement.busy, 'replacement-publish');
+              assert.equal(publishReplacement.installationId, 'installation-beta');
+
+              context.state.customer = retryCustomer('delivery-gamma');
+              context.state.routeSequence = 3;
+              const pendingRetry = context.retryInstallation();
+              await Promise.resolve();
+              const retryReplacement = {
+                deliveryId:'delivery-delta',detail:{targetScopeId:'scope-delta'},busy:'replacement-retry',
+                installation:{status:'ready'},installationId:'installation-delta'
+              };
+              context.state.customer = retryReplacement;
+              context.state.routeSequence = 4;
+              retryGate.resolve({status:202,data:{installationId:'installation-alpha',status:'accepted'}});
+              await pendingRetry;
+              assert.equal(context.state.customer, retryReplacement);
+              assert.equal(retryReplacement.busy, 'replacement-retry');
+              assert.equal(retryReplacement.installationId, 'installation-delta');
+              assert.equal(installationReads, 0, 'late responses must not start installation polling');
+              assert.equal(renderCount, 2, 'only the two pre-request busy renders are allowed');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

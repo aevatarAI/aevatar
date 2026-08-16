@@ -29,6 +29,9 @@ namespace Aevatar.Studio.Application.Delivery;
 
 public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
 {
+    private const int ConnectionProjectionObservationAttempts = 40;
+    private static readonly TimeSpan ConnectionProjectionObservationInterval = TimeSpan.FromMilliseconds(250);
+
     private static readonly IReadOnlyList<WorkflowDeliveryTriggerOptionView> AutomaticAcceptanceTriggerIntents =
     [
         new("one_shot", "Run once and verify"),
@@ -186,7 +189,6 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
         string scopeId,
         string slotKey,
         string bearerToken,
-        Uri callbackUrl,
         CancellationToken ct = default)
     {
         var snapshot = await GetRequiredCustomerSnapshotAsync(deliveryId, scopeId, ct);
@@ -194,14 +196,28 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
         var slot = snapshot.Package.ConnectionSlots.SingleOrDefault(x =>
             string.Equals(x.Key, slotKey?.Trim(), StringComparison.Ordinal))
             ?? throw new WorkflowDeliveryException("CONNECTION_SLOT_NOT_FOUND", "Workflow delivery connection slot was not found.");
+        if (snapshot.Installation != null && snapshot.Installation.InstallationId.Length != 0)
+        {
+            throw new WorkflowDeliveryException(
+                "CONNECTIONS_LOCKED",
+                "Workflow delivery connections cannot be changed after installation has started.");
+        }
+        if (snapshot.Connections.Any(connection =>
+            string.Equals(connection.SlotKey, slot.Key, StringComparison.Ordinal) &&
+            connection.Status == DeliveryConnectionStatus.Pending))
+        {
+            throw new WorkflowDeliveryException(
+                "CONNECTION_ALREADY_PENDING",
+                "A connection link is already pending for this slot.");
+        }
         var created = await _connectLinks.CreateAsync(
             NormalizeRequired(bearerToken, nameof(bearerToken)),
             new NyxIdConnectLinkCreateRequest(
                 slot.ServiceSlug,
                 $"{snapshot.Package.DisplayName} delivery",
                 snapshot.TargetScopeId,
-                callbackUrl,
-                900),
+                CallbackUrl: null,
+                ExpiresInSeconds: 900),
             ct);
         await _commands.BeginConnectionAsync(new BeginWorkflowDeliveryConnectionMutation(
             snapshot.DeliveryId,
@@ -210,6 +226,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             slot.ServiceSlug,
             created.ConnectLinkId,
             _timeProvider.GetUtcNow()), ct);
+        await ObserveConnectionBeginAsync(snapshot, slot.Key, created.ConnectLinkId, ct);
         return new WorkflowDeliveryConnectLinkResponse(slot.Key, "pending", created.ConnectUrl, created.ExpiresAt);
     }
 
@@ -239,6 +256,12 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
     {
         var delivery = await GetRequiredCustomerSnapshotAsync(deliveryId, scopeId, ct);
         EnsureAvailable(delivery);
+        if (delivery.Installation != null && delivery.Installation.InstallationId.Length != 0)
+        {
+            throw new WorkflowDeliveryException(
+                "CONNECTIONS_LOCKED",
+                "Workflow delivery connections cannot be changed after installation has started.");
+        }
         var connection = delivery.Connections.SingleOrDefault(x =>
             string.Equals(x.SlotKey, slotKey?.Trim(), StringComparison.Ordinal))
             ?? throw new WorkflowDeliveryException("CONNECTION_NOT_STARTED", "Connection has not been started for this slot.");
@@ -367,7 +390,9 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             NormalizeRequired(scopeId, nameof(scopeId)),
             NormalizeRequired(installationId, nameof(installationId)),
             ct);
-        return delivery?.Installation == null ? null : ToInstallationView(delivery.Installation);
+        return delivery?.Installation == null
+            ? null
+            : ToInstallationView(delivery.Installation, delivery.StateVersion);
     }
 
     public async Task<WorkflowInstallationAcceptedResponse> RetryAsync(
@@ -413,6 +438,66 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             NormalizeRequired(deliveryId, nameof(deliveryId)),
             NormalizeRequired(scopeId, nameof(scopeId)),
             ct) ?? throw new WorkflowDeliveryException("DELIVERY_NOT_FOUND", "Workflow delivery was not found for this scope.");
+
+    private async Task ObserveConnectionBeginAsync(
+        WorkflowDeliverySnapshot baseline,
+        string slotKey,
+        string connectLinkId,
+        CancellationToken ct)
+    {
+        var baselineConnection = baseline.Connections.SingleOrDefault(connection =>
+            string.Equals(connection.SlotKey, slotKey, StringComparison.Ordinal));
+        for (var attempt = 0; attempt < ConnectionProjectionObservationAttempts; attempt++)
+        {
+            var observed = await _queries.GetForScopeAsync(baseline.DeliveryId, baseline.TargetScopeId, ct);
+            if (observed != null)
+            {
+                EnsureAvailable(observed);
+                if (observed.Installation != null && observed.Installation.InstallationId.Length != 0)
+                {
+                    throw new WorkflowDeliveryException(
+                        "CONNECTIONS_LOCKED",
+                        "Workflow delivery connections cannot be changed after installation has started.");
+                }
+
+                var observedConnection = observed.Connections.SingleOrDefault(connection =>
+                    string.Equals(connection.SlotKey, slotKey, StringComparison.Ordinal));
+                if (observedConnection != null &&
+                    string.Equals(observedConnection.LinkId, connectLinkId, StringComparison.Ordinal) &&
+                    observedConnection.Status == DeliveryConnectionStatus.Pending)
+                {
+                    return;
+                }
+
+                if (!ConnectionMatchesBaseline(observedConnection, baselineConnection))
+                {
+                    throw new WorkflowDeliveryException(
+                        "CONNECTION_ALREADY_PENDING",
+                        "Another connection link became active for this slot.");
+                }
+            }
+
+            if (attempt + 1 < ConnectionProjectionObservationAttempts)
+                await Task.Delay(ConnectionProjectionObservationInterval, _timeProvider, ct);
+        }
+
+        throw new WorkflowDeliveryException(
+            "CONNECTION_OBSERVATION_TIMEOUT",
+            "The connection link was accepted for dispatch but was not observed in the delivery read model.");
+    }
+
+    private static bool ConnectionMatchesBaseline(
+        WorkflowDeliveryConnectionSnapshot? observed,
+        WorkflowDeliveryConnectionSnapshot? baseline) =>
+        observed == null
+            ? baseline == null
+            : baseline != null &&
+              string.Equals(observed.SlotKey, baseline.SlotKey, StringComparison.Ordinal) &&
+              string.Equals(observed.ServiceSlug, baseline.ServiceSlug, StringComparison.Ordinal) &&
+              string.Equals(observed.LinkId, baseline.LinkId, StringComparison.Ordinal) &&
+              observed.Status == baseline.Status &&
+              string.Equals(observed.UserServiceId, baseline.UserServiceId, StringComparison.Ordinal) &&
+              observed.UpdatedAtUtc == baseline.UpdatedAtUtc;
 
     private void EnsureAvailable(WorkflowDeliverySnapshot delivery)
     {
@@ -732,7 +817,8 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
                 item.UserServiceId,
                 item.UpdatedAtUtc)).ToArray(),
             AvailableTriggerIntentsFor(delivery.Package.AcceptancePolicy),
-            delivery.Installation == null ? null : ToInstallationView(delivery.Installation));
+            delivery.Installation == null ? null : ToInstallationView(delivery.Installation, delivery.StateVersion),
+            delivery.StateVersion);
 
     private static IReadOnlyList<WorkflowDeliveryTriggerOptionView> AvailableTriggerIntentsFor(
         ContractAcceptancePolicy policy) =>
@@ -780,7 +866,9 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             policy.Limitation);
     }
 
-    private WorkflowInstallationView ToInstallationView(WorkflowInstallationSnapshot installation) =>
+    private WorkflowInstallationView ToInstallationView(
+        WorkflowInstallationSnapshot installation,
+        long deliveryStateVersion) =>
         new(
             installation.InstallationId,
             installation.ScopeId,
@@ -804,14 +892,15 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
                     evidence.ContentDigest)).ToArray() ?? [],
             installation.UpdatedAtUtc,
             BuildConsoleUrl(installation),
-            BuildChannelRunCommand(installation));
+            BuildChannelRunCommand(installation),
+            deliveryStateVersion);
 
     /// <summary>
     /// Absolute product-console URL, or <see langword="null"/> when the console-web origin
     /// is unconfigured. Never a same-origin path: this API host does not serve the console.
     /// </summary>
     private string? BuildConsoleUrl(WorkflowInstallationSnapshot installation) =>
-        WorkflowDeliveryConsoleLink.BuildMemberWorkflowUrl(
+        WorkflowDeliveryConsoleLink.BuildMemberInvokeUrl(
             _consoleWebBaseUri,
             installation.ScopeId,
             installation.TeamId,

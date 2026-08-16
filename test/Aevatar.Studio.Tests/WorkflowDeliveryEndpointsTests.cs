@@ -14,7 +14,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -132,12 +131,10 @@ public sealed class WorkflowDeliveryEndpointsTests
     }
 
     [Fact]
-    public async Task CreateConnectLink_ShouldUseConfiguredBaseUrlInsteadOfRequestHost()
+    public async Task CreateConnectLink_ShouldForwardBrowserBearerWithoutInventingCallbackAuthority()
     {
         var service = new RecordingWorkflowDeliveryService();
         var http = CreateContext(CustomerScopeId, CustomerUserId);
-        http.Request.Scheme = "https";
-        http.Request.Host = new HostString("attacker.example");
 
         var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
             http,
@@ -145,26 +142,23 @@ public sealed class WorkflowDeliveryEndpointsTests
             DeliveryId,
             "lark",
             service,
-            Options.Create(new WorkflowDeliveryOptions
-            {
-                ConsoleBaseUrl = "https://aevatar.example/console",
-            }),
-            new TestHostEnvironment(),
             CancellationToken.None);
 
         result.Should().BeOfType<Ok<WorkflowDeliveryConnectLinkResponse>>();
-        service.ConnectLinkCallback.Should().Be(
-            new Uri("https://aevatar.example/console/delivery?deliveryId=delivery-beta"));
-        service.ConnectLinkCallback!.Fragment.Should().BeEmpty();
+        service.ConnectLinkBearer.Should().Be("delivery-runtime-token");
     }
 
-    [Fact]
-    public async Task CreateConnectLink_WhenDistributedBaseUrlIsMissing_ShouldFailClosed()
+    [Theory]
+    [InlineData("CONNECTIONS_LOCKED")]
+    [InlineData("CONNECTION_ALREADY_PENDING")]
+    public async Task CreateConnectLink_WhenConnectionMutationConflicts_ShouldReturn409(string code)
     {
-        var service = new RecordingWorkflowDeliveryService();
+        var service = new RecordingWorkflowDeliveryService
+        {
+            ConnectLinkException = new WorkflowDeliveryException(code, "connection mutation conflict"),
+        };
         var http = CreateContext(CustomerScopeId, CustomerUserId);
-        http.Request.Scheme = "https";
-        http.Request.Host = new HostString("attacker.example");
+        http.Response.Body = new MemoryStream();
 
         var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
             http,
@@ -172,23 +166,26 @@ public sealed class WorkflowDeliveryEndpointsTests
             DeliveryId,
             "lark",
             service,
-            Options.Create(new WorkflowDeliveryOptions()),
-            new TestHostEnvironment { EnvironmentName = "Distributed" },
             CancellationToken.None);
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
 
-        result.Should().BeAssignableTo<IStatusCodeHttpResult>()
-            .Which.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
-        service.InvocationCount.Should().Be(0);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.RootElement.GetProperty("code").GetString().Should().Be(code);
     }
 
     [Fact]
-    public async Task CreateConnectLink_InDevelopment_ShouldAllowLoopbackRequestFallback()
+    public async Task CreateConnectLink_WhenCommittedProjectionIsNotObserved_ShouldReturnRetryable503()
     {
-        var service = new RecordingWorkflowDeliveryService();
+        var service = new RecordingWorkflowDeliveryService
+        {
+            ConnectLinkException = new WorkflowDeliveryException(
+                "CONNECTION_OBSERVATION_TIMEOUT",
+                "connection projection was not observed"),
+        };
         var http = CreateContext(CustomerScopeId, CustomerUserId);
-        http.Request.Scheme = "http";
-        http.Request.Host = new HostString("127.0.0.1", 5100);
-        http.Request.PathBase = "/gateway";
+        http.Response.Body = new MemoryStream();
 
         var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
             http,
@@ -196,36 +193,14 @@ public sealed class WorkflowDeliveryEndpointsTests
             DeliveryId,
             "lark",
             service,
-            Options.Create(new WorkflowDeliveryOptions()),
-            new TestHostEnvironment { EnvironmentName = Environments.Development },
             CancellationToken.None);
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
 
-        result.Should().BeOfType<Ok<WorkflowDeliveryConnectLinkResponse>>();
-        service.ConnectLinkCallback.Should().Be(
-            new Uri("http://127.0.0.1:5100/gateway/delivery?deliveryId=delivery-beta"));
-    }
-
-    [Fact]
-    public async Task CreateConnectLink_InDevelopment_ShouldRejectNonLoopbackRequestFallback()
-    {
-        var service = new RecordingWorkflowDeliveryService();
-        var http = CreateContext(CustomerScopeId, CustomerUserId);
-        http.Request.Scheme = "https";
-        http.Request.Host = new HostString("attacker.example");
-
-        var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
-            http,
-            CustomerScopeId,
-            DeliveryId,
-            "lark",
-            service,
-            Options.Create(new WorkflowDeliveryOptions()),
-            new TestHostEnvironment { EnvironmentName = Environments.Development },
-            CancellationToken.None);
-
-        result.Should().BeAssignableTo<IStatusCodeHttpResult>()
-            .Which.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
-        service.InvocationCount.Should().Be(0);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.RootElement.GetProperty("code").GetString().Should().Be("CONNECTION_OBSERVATION_TIMEOUT");
+        body.RootElement.GetProperty("retryable").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
@@ -426,7 +401,8 @@ public sealed class WorkflowDeliveryEndpointsTests
         public string? PublishedDeliveryId { get; private set; }
         public string? PublishedScopeId { get; private set; }
         public WorkflowDeliveryCallerContext? PublishedCaller { get; private set; }
-        public Uri? ConnectLinkCallback { get; private set; }
+        public string? ConnectLinkBearer { get; private set; }
+        public WorkflowDeliveryException? ConnectLinkException { get; init; }
 
         public Task<WorkflowDeliveryPackageListResponse> ListPackagesAsync(
             string principalId,
@@ -481,11 +457,12 @@ public sealed class WorkflowDeliveryEndpointsTests
             string scopeId,
             string slotKey,
             string bearerToken,
-            Uri callbackUrl,
             CancellationToken ct = default)
         {
             InvocationCount++;
-            ConnectLinkCallback = callbackUrl;
+            ConnectLinkBearer = bearerToken;
+            if (ConnectLinkException != null)
+                return Task.FromException<WorkflowDeliveryConnectLinkResponse>(ConnectLinkException);
             return Task.FromResult(new WorkflowDeliveryConnectLinkResponse(
                 slotKey,
                 "pending",

@@ -15,7 +15,7 @@ namespace Aevatar.Studio.Tests;
 public sealed class NyxIdConnectLinkHttpClientTests
 {
     [Fact]
-    public async Task CreateAsync_ShouldUseAuthenticatedNyxIdContractAndRedactHostedUrlFromFormatting()
+    public async Task CreateAsync_ShouldOmitCallbackAndRedactHostedUrlFromFormatting()
     {
         const string hostedUrl = "https://nyx.example/connect?token=nyx_clk_secret";
         var handler = new RecordingHandler(_ => JsonResponse(
@@ -35,7 +35,6 @@ public sealed class NyxIdConnectLinkHttpClientTests
                 "api-lark",
                 Label: "Delivery Lark",
                 RequestedBy: "workflow-delivery",
-                CallbackUrl: new Uri("https://aevatar.example/delivery/callback"),
                 ExpiresInSeconds: 900));
 
         result.ConnectLinkId.Should().Be("link-alpha");
@@ -52,8 +51,7 @@ public sealed class NyxIdConnectLinkHttpClientTests
         payload.RootElement.GetProperty("service_slug").GetString().Should().Be("api-lark");
         payload.RootElement.GetProperty("label").GetString().Should().Be("Delivery Lark");
         payload.RootElement.GetProperty("requested_by").GetString().Should().Be("workflow-delivery");
-        payload.RootElement.GetProperty("callback_url").GetString()
-            .Should().Be("https://aevatar.example/delivery/callback");
+        payload.RootElement.TryGetProperty("callback_url", out _).Should().BeFalse();
         payload.RootElement.GetProperty("expires_in").GetInt64().Should().Be(900);
     }
 

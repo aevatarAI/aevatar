@@ -15,8 +15,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -216,27 +214,17 @@ internal static class WorkflowDeliveryEndpoints
         string deliveryId,
         string slotKey,
         [FromServices] IWorkflowDeliveryService service,
-        [FromServices] IOptions<WorkflowDeliveryOptions> options,
-        [FromServices] IHostEnvironment environment,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
         if (!TryGetBearer(http, out var bearerToken))
             return Results.Unauthorized();
-        if (!TryBuildDeliveryCallbackUri(http, deliveryId, options.Value, environment, out var callbackUri))
-        {
-            return Error(
-                StatusCodes.Status503ServiceUnavailable,
-                "DELIVERY_CALLBACK_BASE_URL_UNAVAILABLE",
-                "Workflow delivery connect callbacks are not configured for this host.");
-        }
         return await ExecuteAsync(() => service.CreateConnectLinkAsync(
             deliveryId,
             scopeId,
             slotKey,
             bearerToken,
-            callbackUri,
             ct));
     }
 
@@ -519,81 +507,6 @@ internal static class WorkflowDeliveryEndpoints
             ? ExternalCapabilityExecutionMode.Durable
             : ExternalCapabilityExecutionMode.Interactive;
 
-    private static bool TryBuildDeliveryCallbackUri(
-        HttpContext http,
-        string deliveryId,
-        WorkflowDeliveryOptions options,
-        IHostEnvironment environment,
-        out Uri callbackUri)
-    {
-        callbackUri = null!;
-        var localOrTest = IsLocalOrTestEnvironment(environment);
-        var configuredBaseUrl = options.ConsoleBaseUrl?.Trim() ?? string.Empty;
-        Uri? consoleBaseUri;
-        if (configuredBaseUrl.Length != 0)
-        {
-            if (!TryNormalizeConsoleBaseUri(configuredBaseUrl, allowHttpLoopback: localOrTest, out consoleBaseUri))
-                return false;
-        }
-        else
-        {
-            if (!localOrTest || !TryBuildLoopbackRequestBaseUri(http, out consoleBaseUri))
-                return false;
-        }
-
-        var callbackBase = consoleBaseUri.GetLeftPart(UriPartial.Path).TrimEnd('/');
-        callbackUri = new Uri(
-            $"{callbackBase}/delivery?deliveryId={Uri.EscapeDataString(deliveryId)}",
-            UriKind.Absolute);
-        return true;
-    }
-
-    private static bool TryNormalizeConsoleBaseUri(
-        string value,
-        bool allowHttpLoopback,
-        out Uri consoleBaseUri)
-    {
-        consoleBaseUri = null!;
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var candidate) ||
-            !IsHttpScheme(candidate.Scheme) ||
-            !string.IsNullOrEmpty(candidate.UserInfo) ||
-            !string.IsNullOrEmpty(candidate.Query) ||
-            !string.IsNullOrEmpty(candidate.Fragment) ||
-            (string.Equals(candidate.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
-             (!allowHttpLoopback || !candidate.IsLoopback)))
-        {
-            return false;
-        }
-
-        consoleBaseUri = candidate;
-        return true;
-    }
-
-    private static bool TryBuildLoopbackRequestBaseUri(HttpContext http, out Uri consoleBaseUri)
-    {
-        consoleBaseUri = null!;
-        if (!IsHttpScheme(http.Request.Scheme) || !http.Request.Host.HasValue)
-            return false;
-
-        var value = $"{http.Request.Scheme}://{http.Request.Host.ToUriComponent()}" +
-            http.Request.PathBase.ToUriComponent();
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var candidate) || !candidate.IsLoopback)
-            return false;
-
-        consoleBaseUri = candidate;
-        return true;
-    }
-
-    private static bool IsLocalOrTestEnvironment(IHostEnvironment environment) =>
-        environment.IsDevelopment() ||
-        environment.IsEnvironment("PersistentLocal") ||
-        environment.IsEnvironment("Test") ||
-        environment.IsEnvironment("Testing");
-
-    private static bool IsHttpScheme(string? scheme) =>
-        string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase);
-
     private static IResult NotFound() =>
         Error(StatusCodes.Status404NotFound, "DELIVERY_NOT_FOUND", "Workflow delivery was not found.");
 
@@ -708,12 +621,15 @@ internal static class WorkflowDeliveryHttpErrorMapper
             Error(StatusCodes.Status404NotFound, exception.Code, exception.Message),
         "DELIVERY_REVOKED" or "DELIVERY_EXPIRED" =>
             Error(StatusCodes.Status410Gone, exception.Code, exception.Message),
-        "PACKAGE_VERSION_CHANGED" or "CONFIRMATION_DIGEST_MISMATCH" or "CONNECTION_CONTRACT_MISMATCH" =>
+        "PACKAGE_VERSION_CHANGED" or "CONFIRMATION_DIGEST_MISMATCH" or "CONNECTION_CONTRACT_MISMATCH" or
+        "CONNECTIONS_LOCKED" or "CONNECTION_ALREADY_PENDING" =>
             Error(StatusCodes.Status409Conflict, exception.Code, exception.Message),
         "PROVISIONING_UNAUTHORIZED" =>
             Error(StatusCodes.Status401Unauthorized, exception.Code, exception.Message),
         "PROVISIONING_FAILED" =>
             Error(StatusCodes.Status503ServiceUnavailable, exception.Code, "Workflow provisioning is temporarily unavailable."),
+        "CONNECTION_OBSERVATION_TIMEOUT" =>
+            RetryableUnavailable(exception.Code, exception.Message),
         _ => Error(StatusCodes.Status422UnprocessableEntity, exception.Code, exception.Message),
     };
 
