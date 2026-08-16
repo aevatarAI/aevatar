@@ -1149,6 +1149,12 @@
       teams(scopeId) {
         return this.request("/api/scopes/" + encodeURIComponent(scopeId) + "/teams");
       }
+      refreshAuthorizationCatalog() {
+        return this.request(
+          "/api/auth/nyxid/authorization-catalog:refresh",
+          { method: "POST" }
+        );
+      }
       createTeam(scopeId, displayName) {
         return this.request(
           "/api/scopes/" + encodeURIComponent(scopeId) + "/teams",
@@ -2861,6 +2867,20 @@
       state.customer.confirmedRisks.clear();
       renderCustomerDetail();
       try {
+        const triggerKind = text(first(object(body.triggerIntent), ["kind"], "")).toLowerCase();
+        if (triggerKind === "one_shot" || triggerKind === "cron") {
+          const catalogRefresh = await api.refreshAuthorizationCatalog();
+          if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+          const catalog = object(catalogRefresh.data);
+          if (first(catalog, ["ready"], false) !== true) {
+            throw new ApiError(
+              503,
+              "NyxID 持久授权目录仍在同步，请稍后重试校验。",
+              catalog,
+              "authorization_catalog_pending"
+            );
+          }
+        }
         const result = await api.validateConfig(
           scopeId,
           deliveryIdValue,

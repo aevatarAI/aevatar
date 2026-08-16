@@ -115,7 +115,7 @@ public sealed class ProjectionWorkflowDeliveryQueryPort : IWorkflowDeliveryQuery
         if (targetScopeId != null)
             filters.Add(Equal("target_scope_id", targetScopeId));
         if (installationStatus != null)
-            filters.Add(Equal("installation.status", MapInstallationStatusStorageValue(installationStatus.Value)));
+            filters.Add(Equal("installation.status.keyword", MapInstallationStatusStorageValue(installationStatus.Value)));
         var pageSize = query.PageSize is > 0 and <= MaxPageSize
             ? query.PageSize.Value
             : MaxPageSize;

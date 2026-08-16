@@ -169,6 +169,10 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("createConnectLink(scopeId, deliveryId, slotKey)");
         html.Should().Contain("existingConnections(scopeId, deliveryId, slotKey)");
         html.Should().Contain("attachExistingConnection(scopeId, deliveryId, slotKey, userServiceId)");
+        html.Should().Contain("refreshAuthorizationCatalog()");
+        html.Should().Contain("/api/auth/nyxid/authorization-catalog:refresh");
+        html.Should().Contain("const catalogRefresh = await api.refreshAuthorizationCatalog();");
+        html.Should().Contain("NyxID 持久授权目录仍在同步，请稍后重试校验。");
         html.Should().Contain("connectStatus(scopeId, deliveryId, slotKey)");
         html.Should().Contain("const ready = status === \"ready\";");
         html.Should().Contain("HTTP 202 只表示进入处理队列");
@@ -205,6 +209,18 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("setInterval(");
         html.Should().NotContain("demo-installation");
         html.Should().NotContain("demo-team");
+
+        var validationStart = html.IndexOf("async function validateCustomerConfig()", StringComparison.Ordinal);
+        var catalogRefresh = html.IndexOf(
+            "await api.refreshAuthorizationCatalog()",
+            validationStart,
+            StringComparison.Ordinal);
+        var validationRequest = html.IndexOf(
+            "await api.validateConfig(",
+            validationStart,
+            StringComparison.Ordinal);
+        catalogRefresh.Should().BeGreaterThan(validationStart);
+        validationRequest.Should().BeGreaterThan(catalogRefresh);
     }
 
     [Fact]
