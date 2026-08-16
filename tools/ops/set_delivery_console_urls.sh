@@ -32,10 +32,15 @@ python3 - "$workdir/current.json" "$workdir/next.json" <<'PY'
 import json, os, sys
 current, target = sys.argv[1], sys.argv[2]
 cfg = json.load(open(current))
-cfg.setdefault("Aevatar", {})["Delivery"] = {
-    "ConsoleBaseUrl": os.environ["CONSOLE_BASE_URL"],
-    "ConsoleWebBaseUrl": os.environ["CONSOLE_WEB_BASE_URL"],
-}
+delivery = cfg.setdefault("Aevatar", {}).setdefault("Delivery", {})
+delivery["ConsoleBaseUrl"] = os.environ["CONSOLE_BASE_URL"]
+delivery["ConsoleWebBaseUrl"] = os.environ["CONSOLE_WEB_BASE_URL"]
+# Creating this section is itself a behaviour change: the allowlist falls back to the
+# shipped packages only while Aevatar:Delivery is ABSENT. Once the section exists it fails
+# closed unless it names an allowlist or opts in, so writing the URLs alone would remove
+# every deliverable package. Opt in explicitly, without touching a configured allowlist.
+if "AllowedWorkflowNames" not in delivery:
+    delivery["UseShippedWorkflowAllowlist"] = True
 json.dump(cfg, open(target, "w"), indent=2, ensure_ascii=False)
 PY
 
