@@ -49,6 +49,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
     private readonly IWorkflowDeliveryCommandPort _commands;
     private readonly IWorkflowDeliveryQueryPort _queries;
     private readonly INyxIdConnectLinkPort _connectLinks;
+    private readonly INyxIdUserServiceInventoryPort _connectionInventory;
     private readonly IWorkflowExplicitRequestPreviewService _preview;
     private readonly IStudioWorkflowProvisioningService _provisioning;
     private readonly IOptions<WorkflowDeliveryOptions> _options;
@@ -61,6 +62,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
         IWorkflowDeliveryCommandPort commands,
         IWorkflowDeliveryQueryPort queries,
         INyxIdConnectLinkPort connectLinks,
+        INyxIdUserServiceInventoryPort connectionInventory,
         IWorkflowExplicitRequestPreviewService preview,
         IStudioWorkflowProvisioningService provisioning,
         IOptions<WorkflowDeliveryOptions> options,
@@ -71,6 +73,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
         _commands = commands ?? throw new ArgumentNullException(nameof(commands));
         _queries = queries ?? throw new ArgumentNullException(nameof(queries));
         _connectLinks = connectLinks ?? throw new ArgumentNullException(nameof(connectLinks));
+        _connectionInventory = connectionInventory ?? throw new ArgumentNullException(nameof(connectionInventory));
         _preview = preview ?? throw new ArgumentNullException(nameof(preview));
         _provisioning = provisioning ?? throw new ArgumentNullException(nameof(provisioning));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -228,6 +231,98 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             _timeProvider.GetUtcNow()), ct);
         await ObserveConnectionBeginAsync(snapshot, slot.Key, created.ConnectLinkId, ct);
         return new WorkflowDeliveryConnectLinkResponse(slot.Key, "pending", created.ConnectUrl, created.ExpiresAt);
+    }
+
+    public async Task<WorkflowDeliveryExistingConnectionListResponse> ListExistingConnectionsAsync(
+        string deliveryId,
+        string scopeId,
+        string slotKey,
+        string bearerToken,
+        CancellationToken ct = default)
+    {
+        var delivery = await GetRequiredCustomerSnapshotAsync(deliveryId, scopeId, ct);
+        EnsureAvailable(delivery);
+        var slot = delivery.Package.ConnectionSlots.SingleOrDefault(candidate =>
+            string.Equals(candidate.Key, slotKey?.Trim(), StringComparison.Ordinal))
+            ?? throw new WorkflowDeliveryException(
+                "CONNECTION_SLOT_NOT_FOUND",
+                "Workflow delivery connection slot was not found.");
+        var inventory = await _connectionInventory.ListAsync(
+            NormalizeRequired(bearerToken, nameof(bearerToken)),
+            ct);
+        var items = inventory
+            .Where(candidate => IsEligibleExistingConnection(candidate, slot.ServiceSlug))
+            .OrderBy(static candidate => candidate.Label, StringComparer.Ordinal)
+            .ThenBy(static candidate => candidate.UserServiceId, StringComparer.Ordinal)
+            .Select(candidate => new WorkflowDeliveryExistingConnectionView(
+                candidate.UserServiceId,
+                slot.ServiceSlug,
+                NormalizeOptional(candidate.Label) ?? candidate.InstanceSlug))
+            .ToArray();
+        return new WorkflowDeliveryExistingConnectionListResponse(slot.Key, items);
+    }
+
+    public async Task<WorkflowDeliveryAttachedConnectionResponse> AttachExistingConnectionAsync(
+        string deliveryId,
+        string scopeId,
+        string slotKey,
+        WorkflowDeliveryAttachConnectionRequest request,
+        string bearerToken,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var delivery = await GetRequiredCustomerSnapshotAsync(deliveryId, scopeId, ct);
+        EnsureAvailable(delivery);
+        var slot = delivery.Package.ConnectionSlots.SingleOrDefault(candidate =>
+            string.Equals(candidate.Key, slotKey?.Trim(), StringComparison.Ordinal))
+            ?? throw new WorkflowDeliveryException(
+                "CONNECTION_SLOT_NOT_FOUND",
+                "Workflow delivery connection slot was not found.");
+        var existing = delivery.Connections.SingleOrDefault(connection =>
+            string.Equals(connection.SlotKey, slot.Key, StringComparison.Ordinal));
+        var userServiceId = NormalizeRequired(request.UserServiceId, "userServiceId");
+        var exactReplay = ConnectionMatchesAttachment(
+            existing,
+            slot.ServiceSlug,
+            userServiceId);
+        if (delivery.Installation != null && delivery.Installation.InstallationId.Length != 0 && !exactReplay)
+        {
+            throw new WorkflowDeliveryException(
+                "CONNECTIONS_LOCKED",
+                "Workflow delivery connections cannot be changed after installation has started.");
+        }
+        if (existing?.Status == DeliveryConnectionStatus.Pending)
+        {
+            throw new WorkflowDeliveryException(
+                "CONNECTION_ALREADY_PENDING",
+                "Cancel or complete the pending connection link before selecting an existing connection.");
+        }
+
+        if (exactReplay)
+            return new WorkflowDeliveryAttachedConnectionResponse(slot.Key, "completed", userServiceId);
+
+        var inventory = await _connectionInventory.ListAsync(
+            NormalizeRequired(bearerToken, nameof(bearerToken)),
+            ct);
+        var candidates = inventory.Where(candidate =>
+            string.Equals(candidate.UserServiceId, userServiceId, StringComparison.Ordinal)).ToArray();
+        if (candidates.Length != 1 || !IsEligibleExistingConnection(candidates[0], slot.ServiceSlug))
+        {
+            throw new WorkflowDeliveryException(
+                "EXISTING_CONNECTION_NOT_AVAILABLE",
+                "The selected NyxID connection is not an active personal connection for this service.");
+        }
+
+        await _commands.AttachConnectionAsync(new AttachWorkflowDeliveryConnectionMutation(
+            delivery.DeliveryId,
+            delivery.TargetScopeId,
+            slot.Key,
+            slot.ServiceSlug,
+            userServiceId,
+            _timeProvider.GetUtcNow(),
+            delivery.StateVersion), ct);
+        await ObserveConnectionAttachmentAsync(delivery, slot.Key, slot.ServiceSlug, userServiceId, ct);
+        return new WorkflowDeliveryAttachedConnectionResponse(slot.Key, "completed", userServiceId);
     }
 
     public async Task<WorkflowDeliveryConnectStatusResponse> GetConnectStatusAsync(
@@ -464,7 +559,8 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
                     string.Equals(connection.SlotKey, slotKey, StringComparison.Ordinal));
                 if (observedConnection != null &&
                     string.Equals(observedConnection.LinkId, connectLinkId, StringComparison.Ordinal) &&
-                    observedConnection.Status == DeliveryConnectionStatus.Pending)
+                    observedConnection.Status == DeliveryConnectionStatus.Pending &&
+                    observed.StateVersion > baseline.StateVersion)
                 {
                     return;
                 }
@@ -486,6 +582,69 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             "The connection link was accepted for dispatch but was not observed in the delivery read model.");
     }
 
+    private async Task ObserveConnectionAttachmentAsync(
+        WorkflowDeliverySnapshot baseline,
+        string slotKey,
+        string serviceSlug,
+        string userServiceId,
+        CancellationToken ct)
+    {
+        var baselineConnection = baseline.Connections.SingleOrDefault(connection =>
+            string.Equals(connection.SlotKey, slotKey, StringComparison.Ordinal));
+        var baselineMatches = ConnectionMatchesAttachment(
+            baselineConnection,
+            serviceSlug,
+            userServiceId);
+        for (var attempt = 0; attempt < ConnectionProjectionObservationAttempts; attempt++)
+        {
+            var observed = await _queries.GetForScopeAsync(baseline.DeliveryId, baseline.TargetScopeId, ct);
+            if (observed != null)
+            {
+                EnsureAvailable(observed);
+                var observedConnection = observed.Connections.SingleOrDefault(connection =>
+                    string.Equals(connection.SlotKey, slotKey, StringComparison.Ordinal));
+                var observedMatchesAttachment = ConnectionMatchesAttachment(
+                    observedConnection,
+                    serviceSlug,
+                    userServiceId);
+                if (observedMatchesAttachment &&
+                    (baselineMatches || observed.StateVersion > baseline.StateVersion))
+                {
+                    return;
+                }
+
+                if (observed.Installation != null && observed.Installation.InstallationId.Length != 0)
+                {
+                    throw new WorkflowDeliveryException(
+                        "CONNECTIONS_LOCKED",
+                        "Workflow delivery connections cannot be changed after installation has started.");
+                }
+
+                if (!observedMatchesAttachment && observed.StateVersion > baseline.StateVersion)
+                {
+                    throw new WorkflowDeliveryException(
+                        "CONNECTION_CHANGED",
+                        "Workflow delivery state changed before the existing connection was attached.");
+                }
+
+                if (!observedMatchesAttachment &&
+                    !ConnectionMatchesBaseline(observedConnection, baselineConnection))
+                {
+                    throw new WorkflowDeliveryException(
+                        "CONNECTION_CHANGED",
+                        "Another connection became active for this slot.");
+                }
+            }
+
+            if (attempt + 1 < ConnectionProjectionObservationAttempts)
+                await Task.Delay(ConnectionProjectionObservationInterval, _timeProvider, ct);
+        }
+
+        throw new WorkflowDeliveryException(
+            "CONNECTION_OBSERVATION_TIMEOUT",
+            "The existing connection was accepted for dispatch but was not observed in the delivery read model.");
+    }
+
     private static bool ConnectionMatchesBaseline(
         WorkflowDeliveryConnectionSnapshot? observed,
         WorkflowDeliveryConnectionSnapshot? baseline) =>
@@ -498,6 +657,26 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
               observed.Status == baseline.Status &&
               string.Equals(observed.UserServiceId, baseline.UserServiceId, StringComparison.Ordinal) &&
               observed.UpdatedAtUtc == baseline.UpdatedAtUtc;
+
+    private static bool IsEligibleExistingConnection(
+        NyxIdUserServiceInventoryItem candidate,
+        string serviceSlug) =>
+        string.Equals(candidate.CatalogServiceSlug, serviceSlug, StringComparison.Ordinal) &&
+        candidate.IsActive &&
+        candidate.CredentialSource == NyxIdInventoryCredentialSourceKind.Personal &&
+        candidate.Allowed &&
+        (candidate.NodeId is null
+            ? candidate.CredentialStatus == NyxIdInventoryCredentialStatus.Active
+            : candidate.NodeStatus == NyxIdInventoryNodeStatus.Online) &&
+        candidate.Connected;
+
+    private static bool ConnectionMatchesAttachment(
+        WorkflowDeliveryConnectionSnapshot? connection,
+        string serviceSlug,
+        string userServiceId) =>
+        connection?.Status == DeliveryConnectionStatus.Completed &&
+        string.Equals(connection.ServiceSlug, serviceSlug, StringComparison.Ordinal) &&
+        string.Equals(connection.UserServiceId, userServiceId, StringComparison.Ordinal);
 
     private void EnsureAvailable(WorkflowDeliverySnapshot delivery)
     {

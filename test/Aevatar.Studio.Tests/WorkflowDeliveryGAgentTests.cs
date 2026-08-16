@@ -127,6 +127,100 @@ public sealed class WorkflowDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task AttachConnection_ShouldCommitCompletedConnectionWithoutFabricatingLinkIdentity()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+
+        await agent.HandleAttachConnectionAsync(AttachConnectionCommand("user-service-a"));
+
+        agent.EventSourcing!.CurrentVersion.Should().Be(2);
+        agent.State.Connections.Should().ContainSingle();
+        var connection = agent.State.Connections[0];
+        connection.SlotKey.Should().Be("lark");
+        connection.ServiceSlug.Should().Be("api-lark");
+        connection.Status.Should().Be(WorkflowDeliveryConnectionStatus.Completed);
+        connection.UserServiceId.Should().Be("user-service-a");
+        connection.LinkId.Should().BeEmpty();
+        connection.UpdatedAtUtc.Should().Be(AttachConnectionCommand("user-service-a").AttachedAtUtc);
+    }
+
+    [Fact]
+    public async Task AttachConnection_WhenConnectLinkIsPending_ShouldRejectWithoutChangingConnection()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        await agent.HandleBeginConnectionAsync(BeginConnectionCommand("link-a"));
+
+        var action = () => agent.HandleAttachConnectionAsync(AttachConnectionCommand("user-service-a"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection link is already pending*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(2);
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].LinkId.Should().Be("link-a");
+        agent.State.Connections[0].Status.Should().Be(WorkflowDeliveryConnectionStatus.Pending);
+    }
+
+    [Fact]
+    public async Task AttachConnection_AfterInstallation_ShouldAllowExactReplayAndRejectReplacement()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        var attached = AttachConnectionCommand("user-service-a");
+        await agent.HandleAttachConnectionAsync(attached);
+        var start = StartInstallationCommand();
+        start.ConnectionReferences.Add("lark", "user-service-a");
+        await agent.HandleStartInstallationAsync(start);
+
+        var exactReplay = attached.Clone();
+        exactReplay.ExpectedStateVersion = 0;
+        await agent.HandleAttachConnectionAsync(exactReplay);
+        var replace = () => agent.HandleAttachConnectionAsync(AttachConnectionCommand("user-service-b"));
+
+        await replace.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connections cannot be changed after installation has started*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(3);
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].UserServiceId.Should().Be("user-service-a");
+        agent.State.Installation.ConnectionReferences.Should().ContainSingle()
+            .Which.Should().Be(new KeyValuePair<string, string>("lark", "user-service-a"));
+    }
+
+    [Fact]
+    public async Task AttachConnection_WhenExpectedStateVersionIsStale_ShouldRejectReplacement()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        await agent.HandleAttachConnectionAsync(AttachConnectionCommand("user-service-a"));
+
+        var replace = () => agent.HandleAttachConnectionAsync(
+            AttachConnectionCommand("user-service-b", expectedStateVersion: 1));
+
+        await replace.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(
+                "workflow delivery attach expected_state_version 1 does not match committed state version 2.");
+        agent.EventSourcing!.CurrentVersion.Should().Be(2);
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].UserServiceId.Should().Be("user-service-a");
+    }
+
+    [Fact]
+    public async Task AttachConnection_WhenExpectedStateVersionIsNotPositive_ShouldRejectMutation()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+
+        var attach = () => agent.HandleAttachConnectionAsync(
+            AttachConnectionCommand("user-service-a", expectedStateVersion: 0));
+
+        await attach.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("workflow delivery attach expected_state_version must be positive.");
+        agent.EventSourcing!.CurrentVersion.Should().Be(1);
+        agent.State.Connections.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Connections_AfterInstallation_ShouldAllowExactReplayAndRejectMutation()
     {
         var agent = await CreateAgentAsync("delivery-alpha");
@@ -980,6 +1074,20 @@ public sealed class WorkflowDeliveryGAgentTests
             Status = status,
             UserServiceId = userServiceId,
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(1)),
+        };
+
+    private static AttachWorkflowDeliveryConnectionCommand AttachConnectionCommand(
+        string userServiceId,
+        long expectedStateVersion = 1) =>
+        new()
+        {
+            DeliveryId = "delivery-alpha",
+            TargetScopeId = "scope-alpha",
+            SlotKey = "lark",
+            ServiceSlug = "api-lark",
+            UserServiceId = userServiceId,
+            AttachedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(1)),
+            ExpectedStateVersion = expectedStateVersion,
         };
 
     private static StartWorkflowInstallationCommand StartInstallationCommand(

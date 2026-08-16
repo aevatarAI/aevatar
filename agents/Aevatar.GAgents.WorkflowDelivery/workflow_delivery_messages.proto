@@ -343,6 +343,23 @@ message WorkflowDeliveryConnectionUpdatedEvent {
   google.protobuf.Timestamp updated_at_utc = 5;
 }
 
+message AttachWorkflowDeliveryConnectionCommand {
+  string delivery_id = 1;
+  string target_scope_id = 2;
+  string slot_key = 3;
+  string service_slug = 4;
+  string user_service_id = 5;
+  google.protobuf.Timestamp attached_at_utc = 6;
+  int64 expected_state_version = 7;
+}
+
+message WorkflowDeliveryConnectionAttachedEvent {
+  string slot_key = 1;
+  string service_slug = 2;
+  string user_service_id = 3;
+  google.protobuf.Timestamp attached_at_utc = 4;
+}
+
 message StartWorkflowInstallationCommand {
   string delivery_id = 1;
   string installation_id = 2;

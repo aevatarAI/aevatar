@@ -47,6 +47,12 @@ internal static class WorkflowDeliveryEndpoints
             "/delivery-requests/{deliveryId}/connections/{slotKey}:connect",
             CreateConnectLinkAsync);
         scoped.MapGet(
+            "/delivery-requests/{deliveryId}/connections/{slotKey}/available",
+            ListExistingConnectionsAsync);
+        scoped.MapPost(
+            "/delivery-requests/{deliveryId}/connections/{slotKey}:attach",
+            AttachExistingConnectionAsync);
+        scoped.MapGet(
             "/delivery-requests/{deliveryId}/connections/{slotKey}",
             GetConnectStatusAsync);
         scoped.MapPost(
@@ -242,6 +248,50 @@ internal static class WorkflowDeliveryEndpoints
             deliveryId,
             scopeId,
             slotKey,
+            ct));
+    }
+
+    internal static async Task<IResult> ListExistingConnectionsAsync(
+        HttpContext http,
+        string scopeId,
+        string deliveryId,
+        string slotKey,
+        [FromServices] IWorkflowDeliveryService service,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        if (!TryGetBearer(http, out var bearerToken))
+            return Results.Unauthorized();
+        return await ExecuteAsync(() => service.ListExistingConnectionsAsync(
+            deliveryId,
+            scopeId,
+            slotKey,
+            bearerToken,
+            ct));
+    }
+
+    internal static async Task<IResult> AttachExistingConnectionAsync(
+        HttpContext http,
+        string scopeId,
+        string deliveryId,
+        string slotKey,
+        WorkflowDeliveryAttachConnectionRequest? request,
+        [FromServices] IWorkflowDeliveryService service,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        if (!TryGetBearer(http, out var bearerToken))
+            return Results.Unauthorized();
+        if (request is null)
+            return Error(StatusCodes.Status422UnprocessableEntity, "INVALID_DELIVERY_REQUEST", "Request body is required.");
+        return await ExecuteAsync(() => service.AttachExistingConnectionAsync(
+            deliveryId,
+            scopeId,
+            slotKey,
+            request,
+            bearerToken,
             ct));
     }
 
@@ -549,6 +599,7 @@ internal static class WorkflowDeliveryHttpErrorMapper
             WorkflowDeliveryPackageUnavailableException unavailable =>
                 Error(StatusCodes.Status503ServiceUnavailable, "DELIVERY_PACKAGE_UNAVAILABLE", unavailable.Message),
             NyxIdConnectLinkException connectLink => MapConnectLinkError(connectLink),
+            NyxIdUserServiceInventoryException inventory => MapUserServiceInventoryError(inventory),
             // Delivery login finalization commits this binding for every trigger intent.
             // A miss here means that finalization or its projection is not ready yet.
             StudioMemberAutomationAuthorizationBindingRequiredException =>
@@ -612,6 +663,20 @@ internal static class WorkflowDeliveryHttpErrorMapper
         _ => Error(StatusCodes.Status503ServiceUnavailable, "NYXID_CONNECT_UNAVAILABLE", exception.Message),
     };
 
+    private static IResult MapUserServiceInventoryError(
+        NyxIdUserServiceInventoryException exception) => exception.Kind switch
+    {
+        NyxIdUserServiceInventoryFailureKind.AuthenticationRejected =>
+            Error(StatusCodes.Status401Unauthorized, "NYXID_CONNECTION_INVENTORY_AUTHENTICATION_REJECTED", exception.Message),
+        NyxIdUserServiceInventoryFailureKind.Forbidden =>
+            Error(StatusCodes.Status403Forbidden, "NYXID_CONNECTION_INVENTORY_FORBIDDEN", exception.Message),
+        NyxIdUserServiceInventoryFailureKind.RateLimited =>
+            Error(StatusCodes.Status429TooManyRequests, "NYXID_CONNECTION_INVENTORY_RATE_LIMITED", exception.Message),
+        NyxIdUserServiceInventoryFailureKind.ResponseInvalid =>
+            Error(StatusCodes.Status502BadGateway, "NYXID_CONNECTION_INVENTORY_RESPONSE_INVALID", exception.Message),
+        _ => Error(StatusCodes.Status503ServiceUnavailable, "NYXID_CONNECTION_INVENTORY_UNAVAILABLE", exception.Message),
+    };
+
     private static IResult RetryableUnavailable(string code, string message) =>
         Results.Json(new { code, message, retryable = true }, statusCode: StatusCodes.Status503ServiceUnavailable);
 
@@ -622,7 +687,8 @@ internal static class WorkflowDeliveryHttpErrorMapper
         "DELIVERY_REVOKED" or "DELIVERY_EXPIRED" =>
             Error(StatusCodes.Status410Gone, exception.Code, exception.Message),
         "PACKAGE_VERSION_CHANGED" or "CONFIRMATION_DIGEST_MISMATCH" or "CONNECTION_CONTRACT_MISMATCH" or
-        "CONNECTIONS_LOCKED" or "CONNECTION_ALREADY_PENDING" =>
+        "CONNECTIONS_LOCKED" or "CONNECTION_ALREADY_PENDING" or "CONNECTION_CHANGED" or
+        "EXISTING_CONNECTION_NOT_AVAILABLE" =>
             Error(StatusCodes.Status409Conflict, exception.Code, exception.Message),
         "PROVISIONING_UNAUTHORIZED" =>
             Error(StatusCodes.Status401Unauthorized, exception.Code, exception.Message),

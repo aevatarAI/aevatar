@@ -104,6 +104,31 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
         return DispatchAsync(mutation.DeliveryId, command, "update-connection", command.ToByteArray(), ct);
     }
 
+    public Task<DeliveryApplication.WorkflowDeliveryCommandReceipt> AttachConnectionAsync(
+        DeliveryApplication.AttachWorkflowDeliveryConnectionMutation mutation,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        var command = new AttachWorkflowDeliveryConnectionCommand
+        {
+            DeliveryId = mutation.DeliveryId,
+            TargetScopeId = mutation.TargetScopeId,
+            SlotKey = mutation.SlotKey,
+            ServiceSlug = mutation.ServiceSlug,
+            UserServiceId = mutation.UserServiceId,
+            AttachedAtUtc = Timestamp.FromDateTimeOffset(mutation.AttachedAtUtc),
+            ExpectedStateVersion = mutation.ExpectedStateVersion,
+        };
+        var stableCommand = command.Clone();
+        stableCommand.AttachedAtUtc = null;
+        return DispatchAsync(
+            mutation.DeliveryId,
+            command,
+            "attach-connection",
+            stableCommand.ToByteArray(),
+            ct);
+    }
+
     public Task<DeliveryApplication.WorkflowDeliveryCommandReceipt> StartInstallationAsync(
         DeliveryApplication.StartWorkflowInstallationMutation mutation,
         CancellationToken ct = default)

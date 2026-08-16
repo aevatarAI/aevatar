@@ -116,6 +116,9 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain(":retry");
             html.Should().Contain("/connections/");
             html.Should().Contain(":connect");
+            html.Should().Contain("/available");
+            html.Should().Contain(":attach");
+            html.Should().Contain("使用已有连接");
             html.Should().Contain("status === \"ready\"");
             html.Should().Contain("function renderUsageSection(consoleUrl, channelRunCommand, scopeId)");
             html.Should().Contain("renderUsageSection(consoleUrl, channelRunCommand, installationScopeId)");
@@ -164,6 +167,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("async function revokeDeliveryRequest(id)");
         html.Should().Contain("HTTP 202 不是完成状态；请刷新列表观察服务端提交结果。");
         html.Should().Contain("createConnectLink(scopeId, deliveryId, slotKey)");
+        html.Should().Contain("existingConnections(scopeId, deliveryId, slotKey)");
+        html.Should().Contain("attachExistingConnection(scopeId, deliveryId, slotKey, userServiceId)");
         html.Should().Contain("connectStatus(scopeId, deliveryId, slotKey)");
         html.Should().Contain("const ready = status === \"ready\";");
         html.Should().Contain("HTTP 202 只表示进入处理队列");
@@ -341,6 +346,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               initCustomerState(id, detail) { return {deliveryId:id,detail,installationId:''}; },
               renderCustomerDetail() {},
               async loadTeams() {},
+              async loadExistingConnections() {},
               async loadInstallation() {},
               renderRouteError(error) { routeError = error; },
               window: { setTimeout(resolve) { resolve(); return 1; } }

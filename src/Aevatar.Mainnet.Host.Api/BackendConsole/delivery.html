@@ -1133,6 +1133,19 @@
           { method: "POST" }
         );
       }
+      existingConnections(scopeId, deliveryId, slotKey) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + "/connections/" + encodeURIComponent(slotKey) + "/available"
+        );
+      }
+      attachExistingConnection(scopeId, deliveryId, slotKey, userServiceId) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + "/connections/" + encodeURIComponent(slotKey) + ":attach",
+          { method: "POST", body: JSON.stringify({ userServiceId: userServiceId }) }
+        );
+      }
       teams(scopeId) {
         return this.request("/api/scopes/" + encodeURIComponent(scopeId) + "/teams");
       }
@@ -1946,6 +1959,10 @@
         idempotencyKey: "",
         connectionRuntime: Object.create(null),
         connectionErrors: Object.create(null),
+        existingConnections: Object.create(null),
+        existingConnectionErrors: Object.create(null),
+        existingConnectionLoading: Object.create(null),
+        selectedExistingConnectionIds: Object.create(null),
         consoleUrl: absoluteHttpUrl(first(detail, ["consoleUrl"], "")),
         newTeamName: "",
         busy: "",
@@ -1995,7 +2012,10 @@
         state.customer = initCustomerState(deliveryIdValue, detail);
         renderCustomerDetail();
 
-        const tasks = [loadTeams(scopeId, deliveryIdValue, sequence)];
+        const tasks = [
+          loadTeams(scopeId, deliveryIdValue, sequence),
+          loadExistingConnections(scopeId, deliveryIdValue, sequence)
+        ];
         if (state.customer.installationId) {
           tasks.push(loadInstallation(scopeId, state.customer.installationId, sequence, true));
         }
@@ -2315,6 +2335,87 @@
       }
     }
 
+    async function loadExistingConnections(scopeId, deliveryIdValue, sequence) {
+      const slotKeys = connectionSlots().map(connectionSlotKey).filter(Boolean);
+      await Promise.all(slotKeys.map(async function (slotKey) {
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        state.customer.existingConnectionLoading[slotKey] = true;
+        delete state.customer.existingConnectionErrors[slotKey];
+        try {
+          const result = await api.existingConnections(scopeId, deliveryIdValue, slotKey);
+          if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+          const response = object(result.data);
+          const returnedSlot = text(first(response, ["slotKey", "key"], ""));
+          if (returnedSlot && returnedSlot !== slotKey) {
+            throw new ApiError(409, "服务端返回的已有连接 slot 与当前交付不一致。", response, "connection_slot_mismatch");
+          }
+          const candidates = items(response, ["items", "connections"]);
+          state.customer.existingConnections[slotKey] = candidates;
+          const selected = text(state.customer.selectedExistingConnectionIds[slotKey]);
+          if (!candidates.some(function (candidate) {
+            return text(first(candidate, ["userServiceId", "id"], "")) === selected;
+          })) {
+            state.customer.selectedExistingConnectionIds[slotKey] = candidates.length
+              ? text(first(candidates[0], ["userServiceId", "id"], ""))
+              : "";
+          }
+        } catch (error) {
+          if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+            state.customer.existingConnectionErrors[slotKey] = error;
+          }
+        } finally {
+          if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+            state.customer.existingConnectionLoading[slotKey] = false;
+            renderCustomerDetail();
+          }
+        }
+      }));
+    }
+
+    async function attachExistingConnection(slotKey) {
+      if (!state.customer || state.customer.busy || !slotKey) return;
+      const userServiceId = text(state.customer.selectedExistingConnectionIds[slotKey]);
+      if (!userServiceId) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      state.customer.busy = "attach:" + slotKey;
+      delete state.customer.connectionErrors[slotKey];
+      renderCustomerDetail();
+      try {
+        const result = await api.attachExistingConnection(
+          scopeId,
+          deliveryIdValue,
+          slotKey,
+          userServiceId
+        );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const response = object(first(result.data, ["connection", "result"], result.data));
+        const returnedSlot = text(first(response, ["slotKey", "key"], ""));
+        const returnedUserServiceId = text(first(response, ["userServiceId", "id"], ""));
+        if (returnedSlot !== slotKey || returnedUserServiceId !== userServiceId ||
+            connectionStatus(response) !== "completed") {
+          throw new ApiError(502, "服务端没有确认所选的 NyxID 连接。", response, "invalid_attach_receipt");
+        }
+        state.customer.connectionRuntime[slotKey] = response;
+        invalidateValidation();
+        state.notice = {
+          tone: "success",
+          title: "已使用现有 NyxID 连接",
+          message: "所选 UserService 已绑定到当前交付，可以继续校验并发布。"
+        };
+      } catch (error) {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.connectionErrors[slotKey] = error;
+        }
+      } finally {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
+      }
+    }
+
     function customerRouteIsCurrent(deliveryIdValue, sequence) {
       return Boolean(state.customer) && state.routeSequence === sequence &&
         state.customer.deliveryId === deliveryIdValue;
@@ -2427,7 +2528,34 @@
         const honestStatus = connected ? "connected" : (pending ? "pending" : "needs_action");
         const busy = state.customer.busy.endsWith(":" + slotKey);
         const error = state.customer.connectionErrors[slotKey];
+        const inventoryError = state.customer.existingConnectionErrors[slotKey];
+        const inventoryLoading = state.customer.existingConnectionLoading[slotKey] === true;
+        const existing = array(state.customer.existingConnections[slotKey]);
+        const selectedExistingId = text(state.customer.selectedExistingConnectionIds[slotKey]);
         const actions = [];
+        if (!connected && !pending && existing.length) {
+          actions.push(h("select", {
+            className: "select",
+            "aria-label": label + " 已有 NyxID 连接",
+            value: selectedExistingId,
+            disabled: busy,
+            style: { width: "min(260px, 100%)" },
+            onChange: function (event) {
+              state.customer.selectedExistingConnectionIds[slotKey] = event.target.value;
+            }
+          }, existing.map(function (candidate) {
+            const id = text(first(candidate, ["userServiceId", "id"], ""));
+            const candidateLabel = text(first(candidate, ["label", "displayName"], ""), id);
+            return h("option", { value: id, selected: id === selectedExistingId, text: candidateLabel + " · " + id });
+          })));
+          actions.push(h("button", {
+            className: "button secondary",
+            type: "button",
+            disabled: busy || !selectedExistingId,
+            onClick: function () { attachExistingConnection(slotKey); },
+            text: busy ? "正在验证..." : "使用已有连接"
+          }));
+        }
         if (!connected && url) {
           actions.push(h("a", {
             className: "button secondary",
@@ -2461,9 +2589,12 @@
             h("p", {
               text: connected
                 ? (reference ? "连接引用 " + reference : "服务端已确认连接")
-                : (url ? "请在 NyxID 完成个人连接后显式检查状态。" : "needs_action：尚未创建可用的 NyxID 连接。")
+                : (url ? "请在 NyxID 完成个人连接后显式检查状态。" :
+                  (existing.length ? "可复用当前 NyxID 账号下已验证的个人连接。" :
+                    (inventoryLoading ? "正在检查已有 NyxID 连接。" : "needs_action：尚未创建可用的 NyxID 连接。")))
             }),
-            error ? h("div", { className: "field-error", text: errorDescription(error).message }) : null
+            error ? h("div", { className: "field-error", text: errorDescription(error).message }) : null,
+            inventoryError ? h("div", { className: "field-error", text: errorDescription(inventoryError).message }) : null
           ),
           h("div", { className: "inline-actions" }, badge(honestStatus), actions)
         );

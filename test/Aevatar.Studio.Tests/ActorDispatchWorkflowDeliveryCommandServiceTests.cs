@@ -118,6 +118,38 @@ public sealed class ActorDispatchWorkflowDeliveryCommandServiceTests
     }
 
     [Fact]
+    public async Task AttachConnectionAsync_RetryClockDrift_ShouldMapExactIdentityAndKeepStableDispatchIdentity()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchWorkflowDeliveryCommandService(
+            new RecordingBootstrap(),
+            CreateCommandDispatch(dispatch));
+        var original = new AttachWorkflowDeliveryConnectionMutation(
+            "delivery-alpha",
+            "scope-alpha",
+            "mail",
+            "api-lark-bot",
+            "user-service-alpha",
+            CreatedAt.AddMinutes(1),
+            17);
+        var uncertainRetry = original with { AttachedAtUtc = CreatedAt.AddMinutes(2) };
+
+        await service.AttachConnectionAsync(original);
+        await service.AttachConnectionAsync(uncertainRetry);
+
+        dispatch.Envelopes.Should().HaveCount(2);
+        dispatch.Envelopes.Select(static envelope => envelope.Id).Distinct().Should().ContainSingle();
+        var command = dispatch.Envelopes[0].Payload.Unpack<AttachWorkflowDeliveryConnectionCommand>();
+        command.DeliveryId.Should().Be("delivery-alpha");
+        command.TargetScopeId.Should().Be("scope-alpha");
+        command.SlotKey.Should().Be("mail");
+        command.ServiceSlug.Should().Be("api-lark-bot");
+        command.UserServiceId.Should().Be("user-service-alpha");
+        command.AttachedAtUtc.ToDateTimeOffset().Should().Be(original.AttachedAtUtc);
+        command.ExpectedStateVersion.Should().Be(17);
+    }
+
+    [Fact]
     public async Task StartInstallationAsync_ChangedSemanticInput_ShouldChangeDispatchIdentity()
     {
         var dispatch = new RecordingDispatchPort();

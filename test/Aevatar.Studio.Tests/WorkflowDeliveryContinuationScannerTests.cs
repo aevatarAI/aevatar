@@ -793,6 +793,8 @@ public sealed class WorkflowDeliveryContinuationScannerTests
             throw new NotSupportedException();
         public Task<WorkflowDeliveryCommandReceipt> UpdateConnectionAsync(UpdateWorkflowDeliveryConnectionMutation mutation, CancellationToken ct = default) =>
             throw new NotSupportedException();
+        public Task<WorkflowDeliveryCommandReceipt> AttachConnectionAsync(AttachWorkflowDeliveryConnectionMutation mutation, CancellationToken ct = default) =>
+            throw new NotSupportedException();
         public Task<WorkflowDeliveryCommandReceipt> StartInstallationAsync(StartWorkflowInstallationMutation mutation, CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task<WorkflowDeliveryCommandReceipt> RetryInstallationAsync(RetryWorkflowInstallationMutation mutation, CancellationToken ct = default) =>

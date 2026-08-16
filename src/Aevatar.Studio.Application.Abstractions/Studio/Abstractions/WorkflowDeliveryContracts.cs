@@ -308,6 +308,15 @@ public sealed record UpdateWorkflowDeliveryConnectionMutation(
     string? UserServiceId,
     DateTimeOffset UpdatedAtUtc);
 
+public sealed record AttachWorkflowDeliveryConnectionMutation(
+    string DeliveryId,
+    string TargetScopeId,
+    string SlotKey,
+    string ServiceSlug,
+    string UserServiceId,
+    DateTimeOffset AttachedAtUtc,
+    long ExpectedStateVersion);
+
 public sealed record StartWorkflowInstallationMutation(
     string DeliveryId,
     string InstallationId,
@@ -402,6 +411,10 @@ public interface IWorkflowDeliveryCommandPort
 
     Task<WorkflowDeliveryCommandReceipt> UpdateConnectionAsync(
         UpdateWorkflowDeliveryConnectionMutation mutation,
+        CancellationToken ct = default);
+
+    Task<WorkflowDeliveryCommandReceipt> AttachConnectionAsync(
+        AttachWorkflowDeliveryConnectionMutation mutation,
         CancellationToken ct = default);
 
     Task<WorkflowDeliveryCommandReceipt> StartInstallationAsync(

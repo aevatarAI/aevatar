@@ -164,6 +164,23 @@ public sealed record WorkflowDeliveryConnectLinkResponse(
     string ConnectUrl,
     DateTimeOffset ExpiresAt);
 
+public sealed record WorkflowDeliveryExistingConnectionView(
+    string UserServiceId,
+    string ServiceSlug,
+    string Label);
+
+public sealed record WorkflowDeliveryExistingConnectionListResponse(
+    string SlotKey,
+    IReadOnlyList<WorkflowDeliveryExistingConnectionView> Items);
+
+public sealed record WorkflowDeliveryAttachConnectionRequest(
+    string UserServiceId);
+
+public sealed record WorkflowDeliveryAttachedConnectionResponse(
+    string SlotKey,
+    string Status,
+    string UserServiceId);
+
 public sealed record WorkflowDeliveryConnectStatusResponse(
     string SlotKey,
     string Status,
@@ -193,6 +210,8 @@ public interface IWorkflowDeliveryService
     Task<WorkflowDeliveryView> ValidateAccessAsync(string deliveryId, string scopeId, CancellationToken ct = default);
     Task RevokeAsync(string deliveryId, string principalId, CancellationToken ct = default);
     Task<WorkflowDeliveryConnectLinkResponse> CreateConnectLinkAsync(string deliveryId, string scopeId, string slotKey, string bearerToken, CancellationToken ct = default);
+    Task<WorkflowDeliveryExistingConnectionListResponse> ListExistingConnectionsAsync(string deliveryId, string scopeId, string slotKey, string bearerToken, CancellationToken ct = default);
+    Task<WorkflowDeliveryAttachedConnectionResponse> AttachExistingConnectionAsync(string deliveryId, string scopeId, string slotKey, WorkflowDeliveryAttachConnectionRequest request, string bearerToken, CancellationToken ct = default);
     Task<WorkflowDeliveryConnectStatusResponse> GetConnectStatusAsync(string deliveryId, string scopeId, string slotKey, CancellationToken ct = default);
     Task<WorkflowDeliveryConnectionRefreshAcceptedResponse> RefreshConnectStatusAsync(string deliveryId, string scopeId, string slotKey, string bearerToken, CancellationToken ct = default);
     Task<WorkflowDeliveryConfigurationValidationResponse> ValidateConfigurationAsync(string deliveryId, string scopeId, WorkflowDeliveryValidateConfigurationRequest request, WorkflowCapabilityAdmissionContext capabilityContext, CancellationToken ct = default);

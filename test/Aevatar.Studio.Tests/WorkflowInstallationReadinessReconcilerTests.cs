@@ -981,6 +981,10 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             UpdateWorkflowDeliveryConnectionMutation mutation,
             CancellationToken ct = default) => throw new NotSupportedException();
 
+        public Task<WorkflowDeliveryCommandReceipt> AttachConnectionAsync(
+            AttachWorkflowDeliveryConnectionMutation mutation,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
         public Task<WorkflowDeliveryCommandReceipt> StartInstallationAsync(
             StartWorkflowInstallationMutation mutation,
             CancellationToken ct = default) => throw new NotSupportedException();

@@ -142,6 +142,58 @@ public sealed class WorkflowDeliveryGAgent
         });
     }
 
+    [EventHandler(EndpointName = "attachWorkflowDeliveryConnection")]
+    public async Task HandleAttachConnectionAsync(AttachWorkflowDeliveryConnectionCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureDelivery(command.DeliveryId);
+        EnsureTargetScope(command.TargetScopeId);
+        EnsureAvailable(command.AttachedAtUtc);
+        var slot = FindSlot(command.SlotKey, command.ServiceSlug);
+        var userServiceId = WorkflowDeliveryConventions.NormalizeRequired(
+            command.UserServiceId,
+            "user_service_id");
+        var existing = State.Connections.SingleOrDefault(connection =>
+            string.Equals(connection.SlotKey, slot.Key, StringComparison.Ordinal));
+        if (existing?.Status == WorkflowDeliveryConnectionStatus.Completed &&
+            string.Equals(existing.ServiceSlug, slot.ServiceSlug, StringComparison.Ordinal) &&
+            string.Equals(existing.UserServiceId, userServiceId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        EnsureConnectionsMutable();
+        if (existing?.Status == WorkflowDeliveryConnectionStatus.Pending)
+            throw new InvalidOperationException("a connection link is already pending for this slot.");
+        EnsureAttachExpectedStateVersion(command.ExpectedStateVersion);
+
+        await PersistDomainEventAsync(new WorkflowDeliveryConnectionAttachedEvent
+        {
+            SlotKey = slot.Key,
+            ServiceSlug = slot.ServiceSlug,
+            UserServiceId = userServiceId,
+            AttachedAtUtc = RequireTimestamp(command.AttachedAtUtc, "attached_at_utc").Clone(),
+        });
+    }
+
+    private void EnsureAttachExpectedStateVersion(long expectedStateVersion)
+    {
+        if (expectedStateVersion <= 0)
+        {
+            throw new InvalidOperationException(
+                "workflow delivery attach expected_state_version must be positive.");
+        }
+
+        var currentVersion = EventSourcing?.CurrentVersion
+            ?? throw new InvalidOperationException("workflow delivery event sourcing is unavailable.");
+        if (expectedStateVersion != currentVersion)
+        {
+            throw new InvalidOperationException(
+                $"workflow delivery attach expected_state_version {expectedStateVersion} " +
+                $"does not match committed state version {currentVersion}.");
+        }
+    }
+
     [EventHandler(EndpointName = "startWorkflowInstallation")]
     public async Task HandleStartInstallationAsync(StartWorkflowInstallationCommand command)
     {
@@ -405,6 +457,7 @@ public sealed class WorkflowDeliveryGAgent
             .On<WorkflowDeliveryRevokedEvent>(ApplyRevoked)
             .On<WorkflowDeliveryConnectionBegunEvent>(ApplyConnectionBegun)
             .On<WorkflowDeliveryConnectionUpdatedEvent>(ApplyConnectionUpdated)
+            .On<WorkflowDeliveryConnectionAttachedEvent>(ApplyConnectionAttached)
             .On<WorkflowInstallationStartedEvent>(ApplyInstallationStarted)
             .On<WorkflowInstallationRetryRequestedEvent>(ApplyInstallationRetry)
             .On<WorkflowInstallationContinuationClaimedEvent>(ApplyInstallationContinuationClaimed)
@@ -467,6 +520,25 @@ public sealed class WorkflowDeliveryGAgent
         connection.Status = evt.Status;
         connection.UserServiceId = evt.UserServiceId;
         connection.UpdatedAtUtc = evt.UpdatedAtUtc.Clone();
+        return updated;
+    }
+
+    internal static WorkflowDeliveryState ApplyConnectionAttached(
+        WorkflowDeliveryState state,
+        WorkflowDeliveryConnectionAttachedEvent evt)
+    {
+        var updated = state.Clone();
+        var previous = updated.Connections.SingleOrDefault(connection => connection.SlotKey == evt.SlotKey);
+        if (previous != null)
+            updated.Connections.Remove(previous);
+        updated.Connections.Add(new WorkflowDeliveryConnectionState
+        {
+            SlotKey = evt.SlotKey,
+            ServiceSlug = evt.ServiceSlug,
+            Status = WorkflowDeliveryConnectionStatus.Completed,
+            UserServiceId = evt.UserServiceId,
+            UpdatedAtUtc = evt.AttachedAtUtc.Clone(),
+        });
         return updated;
     }
 
