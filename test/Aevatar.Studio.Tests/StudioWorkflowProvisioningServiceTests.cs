@@ -988,6 +988,129 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindRequest.Should().NotBeNull();
     }
 
+    [Fact]
+    public async Task ProvisionAsync_WithExistingPlanAndExpiredDurableCatalog_ShouldRefreshAndContinue()
+    {
+        var catalogReady = true;
+        var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService(
+            durableCatalogReady: () => catalogReady);
+        var identity = ProvisionIdentity("scope-studio-alpha", "team-alpha", "Monitor");
+        var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
+            new ExternalWorkflowCapabilityAccessContext(
+                "scope-studio-alpha",
+                StudioExplicitRequestAdmissionTestKit.CallerId,
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    StudioExplicitRequestAdmissionTestKit.CallerBearer),
+                StudioExplicitRequestAdmissionTestKit.OrganizationBearer),
+            StudioExplicitRequestAdmissionTestKit.WorkflowYaml,
+            new Dictionary<string, string>(),
+            "test_prepare_plan",
+            ExternalCapabilityExecutionMode.Durable,
+            [StudioExplicitRequestAdmissionTestKit.MatchingConfirmation(
+                identity.WorkflowId,
+                identity.RevisionId)],
+            workflowId: identity.WorkflowId,
+            revisionId: identity.RevisionId));
+        catalogReady = false;
+        admission.Requests.Clear();
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31))
+        {
+            OnRefresh = () => catalogReady = true,
+        };
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        await sut.ProvisionAsync(
+            "scope-studio-alpha",
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = "team-alpha",
+                AuthenticatedOwner = TestAuthenticatedOwner(
+                    ownerSubject: StudioExplicitRequestAdmissionTestKit.CallerId),
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    existingPlan: plan,
+                    executionMode: ExternalCapabilityExecutionMode.Durable),
+            });
+
+        admission.RefreshRequests.Should().HaveCount(2);
+        refresh.Owner.Should().BeEquivalentTo(TestAuthenticatedOwner(
+            ownerSubject: StudioExplicitRequestAdmissionTestKit.CallerId).Owner);
+        refresh.BearerToken.Should().Be("runtime-caller-credential");
+        refresh.Request!.RequiredServices.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("usvc-alpha");
+        visibility.RequiredStateVersion.Should().Be(31);
+        member.BindRequest.Should().NotBeNull();
+        member.BindRequest!.RevisionId.Should().Be(identity.RevisionId);
+        schedule.Ensured.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WithExistingPlanAndMixedCatalogBlockers_ShouldFailClosedWithoutRefresh()
+    {
+        var capability = DurableExplicitRequestCapability("usvc-alpha");
+        var existingPlan = CapabilityPlan(capability);
+        var admission = new StudioWorkflowCapabilityAdmissionTestService
+        {
+            OnRefresh = _ => throw DurableAuthorizationUnavailable(
+                capability,
+                includeAdditionalBlocker: true),
+        };
+        var refresh = new RecordingCatalogRefreshPort(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(31));
+        var visibility = new RecordingCatalogVisibilityPort(new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Ready,
+            31,
+            31,
+            string.Empty));
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            new RecordingBindingPort(member, WorkflowId, RevisionId),
+            ImmediateScheduleCommand(schedule),
+            admission,
+            refresh,
+            visibility);
+
+        var action = () => sut.ProvisionAsync(
+            "scope-studio-alpha",
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", StudioExplicitRequestAdmissionTestKit.WorkflowYaml)
+            {
+                TeamId = "team-alpha",
+                AuthenticatedOwner = TestAuthenticatedOwner(
+                    ownerSubject: StudioExplicitRequestAdmissionTestKit.CallerId),
+                ProvisioningBearerToken = "runtime-caller-credential",
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    existingPlan: existingPlan,
+                    executionMode: ExternalCapabilityExecutionMode.Durable),
+            });
+
+        await action.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        admission.RefreshRequests.Should().ContainSingle();
+        refresh.Request.Should().BeNull();
+        visibility.RequiredStateVersion.Should().Be(0);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

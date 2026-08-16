@@ -5,6 +5,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -104,6 +105,41 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         failed.ContinuationClaimantId.Should().Be("worker-alpha");
         failed.ErrorMessage.Should().Be("Workflow provisioning failed.");
         failed.ErrorMessage.Should().NotContain("token-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAdmissionFails_ShouldPersistSafeBlockerEvidence()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                    Code = "DURABLE_AUTHORIZATION_UNAVAILABLE",
+                    SafeMessage = "The durable authorization catalog is unavailable.",
+                },
+            },
+        };
+        var provisioning = new RecordingProvisioningService
+        {
+            Failure = new WorkflowExternalCapabilityAdmissionException(readiness),
+        };
+        var commands = new RecordingCommandPort();
+        var executor = NewExecutor(provisioning, commands, new RecordingAccessTokenProvider());
+
+        var result = await executor.ExecuteAsync(
+            Delivery(WorkflowInstallationStatus.Accepted),
+            "worker-alpha");
+
+        result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.Failed);
+        result.ErrorCode.Should().Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+        var failed = commands.Failed.Should().ContainSingle().Which;
+        failed.ErrorCode.Should().Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+        failed.ErrorMessage.Should().Be("The durable authorization catalog is unavailable.");
     }
 
     [Fact]

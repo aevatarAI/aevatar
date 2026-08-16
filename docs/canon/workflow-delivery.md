@@ -74,7 +74,7 @@ NyxID does not currently accept an idempotency key when creating a hosted connec
 
 ## Installation Status
 
-Installation identity is deterministic for `deliveryId + targetScopeId`, and the customer publish idempotency key is persisted. The initial HTTP operation validates and persists a secret-free provisioning plan, then returns an accepted receipt. A background continuation resumes accepted installations from the durable read model and invokes the existing idempotent Studio provisioning application service outside the HTTP request lifetime.
+Installation identity is deterministic for `deliveryId + targetScopeId`, and the customer publish idempotency key is persisted. The initial HTTP operation validates and persists a secret-free provisioning plan, then returns an accepted receipt. A background continuation resumes accepted installations from the durable read model and invokes the existing idempotent Studio provisioning application service outside the HTTP request lifetime. When live revalidation of that integrity-checked plan fails only because its durable NyxID authorization-catalog evidence expired, the continuation refreshes the exact admitted UserService grants, observes the refreshed catalog, and retries the same persisted-plan validation; every other admission blocker remains fail-closed.
 
 The continuation query matches the Protobuf JSON installation enum through its non-analyzed Elasticsearch exact-value field. A worker must not filter the analyzed enum text field: doing so makes committed `accepted` installations invisible to the scanner and leaves them permanently accepted without a claim.
 

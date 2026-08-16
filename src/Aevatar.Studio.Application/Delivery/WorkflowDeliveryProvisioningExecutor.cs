@@ -306,8 +306,8 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
     private static (string Code, string SafeMessage) MapFailure(Exception exception) => exception switch
     {
         WorkflowDeliveryException delivery => (delivery.Code, delivery.Message),
-        WorkflowExternalCapabilityAdmissionException =>
-            ("CAPABILITY_ADMISSION_FAILED", "The persisted workflow capability admission could not be revalidated."),
+        WorkflowExternalCapabilityAdmissionException admission =>
+            (admission.SafeBlockerCode, admission.SafeMessage),
         UnauthorizedAccessException =>
             ("PROVISIONING_UNAUTHORIZED", "The persisted NyxID provisioning authority could not be revalidated."),
         _ => ("PROVISIONING_FAILED", "Workflow provisioning failed."),
