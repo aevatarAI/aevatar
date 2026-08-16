@@ -3,6 +3,7 @@ package aevatar.gagents.workflow_delivery;
 option csharp_namespace = "Aevatar.GAgents.WorkflowDelivery";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 import "scheduled_invocation_authorization_evidence.proto";
 import "workflow_capability_admission.proto";
 
@@ -202,6 +203,16 @@ message WorkflowInstallationReadinessEvidence {
   repeated WorkflowInstallationArtifactEvidence artifacts = 5;
 }
 
+message WorkflowInstallationContinuationClaim {
+  string claim_id = 1;
+  string claimant_id = 2;
+  WorkflowInstallationStatus expected_status = 3;
+  int32 attempt = 4;
+  string operation_id = 5;
+  google.protobuf.Timestamp claimed_at_utc = 6;
+  google.protobuf.Timestamp expires_at_utc = 7;
+}
+
 message WorkflowInstallationState {
   string installation_id = 1;
   string idempotency_key = 2;
@@ -235,6 +246,7 @@ message WorkflowInstallationState {
   aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 30;
   WorkflowDeliveryAuthorizationOwnerContext authenticated_owner = 31;
   WorkflowInstallationStatus failure_origin_status = 32;
+  WorkflowInstallationContinuationClaim continuation_claim = 33;
 }
 
 message WorkflowDeliveryState {
@@ -367,6 +379,21 @@ message WorkflowInstallationRetryRequestedEvent {
   string operation_id = 2;
 }
 
+message ClaimWorkflowInstallationContinuationCommand {
+  string delivery_id = 1;
+  string installation_id = 2;
+  WorkflowInstallationStatus expected_status = 3;
+  int32 attempt = 4;
+  string operation_id = 5;
+  string claim_id = 6;
+  string claimant_id = 7;
+  google.protobuf.Duration requested_duration = 8;
+}
+
+message WorkflowInstallationContinuationClaimedEvent {
+  WorkflowInstallationContinuationClaim claim = 1;
+}
+
 message RecordWorkflowProvisioningAcceptedCommand {
   string delivery_id = 1;
   string installation_id = 2;
@@ -381,6 +408,8 @@ message RecordWorkflowProvisioningAcceptedCommand {
   google.protobuf.Timestamp accepted_at_utc = 11;
   int32 attempt = 12;
   string operation_id = 13;
+  string continuation_claim_id = 14;
+  string continuation_claimant_id = 15;
 }
 
 message WorkflowProvisioningAcceptedEvent {
@@ -395,6 +424,8 @@ message WorkflowProvisioningAcceptedEvent {
   google.protobuf.Timestamp accepted_at_utc = 9;
   int32 attempt = 10;
   string operation_id = 11;
+  string continuation_claim_id = 12;
+  string continuation_claimant_id = 13;
 }
 
 message RecordWorkflowInstallationReadyCommand {
@@ -404,6 +435,8 @@ message RecordWorkflowInstallationReadyCommand {
   google.protobuf.Timestamp ready_at_utc = 4;
   int32 attempt = 5;
   string operation_id = 6;
+  string continuation_claim_id = 7;
+  string continuation_claimant_id = 8;
 }
 
 message WorkflowInstallationReadyEvent {
@@ -411,6 +444,8 @@ message WorkflowInstallationReadyEvent {
   google.protobuf.Timestamp ready_at_utc = 2;
   int32 attempt = 3;
   string operation_id = 4;
+  string continuation_claim_id = 5;
+  string continuation_claimant_id = 6;
 }
 
 message RecordWorkflowInstallationFailedCommand {
@@ -422,6 +457,8 @@ message RecordWorkflowInstallationFailedCommand {
   int32 attempt = 6;
   string operation_id = 7;
   WorkflowInstallationStatus expected_status = 8;
+  string continuation_claim_id = 9;
+  string continuation_claimant_id = 10;
 }
 
 message WorkflowInstallationFailedEvent {
@@ -431,4 +468,6 @@ message WorkflowInstallationFailedEvent {
   int32 attempt = 4;
   string operation_id = 5;
   WorkflowInstallationStatus failed_from_status = 6;
+  string continuation_claim_id = 7;
+  string continuation_claimant_id = 8;
 }

@@ -304,8 +304,24 @@ public sealed class ProjectionWorkflowDeliveryQueryPort : IWorkflowDeliveryQuery
             MapReadinessEvidence(value.ReadinessEvidence),
             value.Attempt,
             RequiredDateTime(value.CreatedAtUtc, "installation.created_at_utc"),
-            RequiredDateTime(value.UpdatedAtUtc, "installation.updated_at_utc"));
+            RequiredDateTime(value.UpdatedAtUtc, "installation.updated_at_utc"))
+        {
+            ContinuationClaim = MapContinuationClaim(value.ContinuationClaim),
+        };
     }
+
+    private static WorkflowInstallationContinuationClaimSnapshot? MapContinuationClaim(
+        WorkflowInstallationContinuationClaim? value) =>
+        value == null
+            ? null
+            : new WorkflowInstallationContinuationClaimSnapshot(
+                NormalizeRequired(value.ClaimId, "projected continuation claim_id"),
+                NormalizeRequired(value.ClaimantId, "projected continuation claimant_id"),
+                MapInstallationStatus(value.ExpectedStatus),
+                value.Attempt,
+                NormalizeRequired(value.OperationId, "projected continuation operation_id"),
+                RequiredDateTime(value.ClaimedAtUtc, "continuation.claimed_at_utc"),
+                RequiredDateTime(value.ExpiresAtUtc, "continuation.expires_at_utc"));
 
     private static ApplicationInstallationReadinessEvidence? MapReadinessEvidence(
         Aevatar.GAgents.WorkflowDelivery.WorkflowInstallationReadinessEvidence? value)

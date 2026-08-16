@@ -141,6 +141,37 @@ public sealed class ActorDispatchWorkflowDeliveryCommandServiceTests
     }
 
     [Fact]
+    public async Task ClaimInstallationContinuationAsync_ShouldDispatchTypedActorOwnedFence()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchWorkflowDeliveryCommandService(
+            new RecordingBootstrap(),
+            CreateCommandDispatch(dispatch));
+        var mutation = new ClaimWorkflowInstallationContinuationMutation(
+            "delivery-alpha",
+            "installation-alpha",
+            DeliveryApplication.WorkflowInstallationStatus.Accepted,
+            2,
+            "installation-alpha:provision:a2",
+            "claim-alpha",
+            "worker-alpha",
+            TimeSpan.FromMinutes(2));
+
+        await service.ClaimInstallationContinuationAsync(mutation);
+
+        var envelope = dispatch.Envelopes.Should().ContainSingle().Subject;
+        var command = envelope.Payload.Unpack<ClaimWorkflowInstallationContinuationCommand>();
+        command.InstallationId.Should().Be("installation-alpha");
+        command.ExpectedStatus.Should().Be(
+            Aevatar.GAgents.WorkflowDelivery.WorkflowInstallationStatus.Accepted);
+        command.Attempt.Should().Be(2);
+        command.OperationId.Should().Be("installation-alpha:provision:a2");
+        command.ClaimId.Should().Be("claim-alpha");
+        command.ClaimantId.Should().Be("worker-alpha");
+        command.RequestedDuration.ToTimeSpan().Should().Be(mutation.RequestedDuration);
+    }
+
+    [Fact]
     public async Task RecordInstallationReadyAsync_RetryingSameEvidence_ShouldKeepStableDispatchIdentity()
     {
         var dispatch = new RecordingDispatchPort();
@@ -206,7 +237,9 @@ public sealed class ActorDispatchWorkflowDeliveryCommandServiceTests
             DeliveryApplication.WorkflowInstallationStatus.Accepted,
             1,
             "installation-alpha:provision:a1",
-            CreatedAt.AddMinutes(3));
+            CreatedAt.AddMinutes(3),
+            "claim-accepted-a1",
+            "worker-alpha");
         var uncertainRetry = provisioningFailure with { FailedAtUtc = CreatedAt.AddMinutes(4) };
         var readinessFailure = provisioningFailure with
         {
@@ -312,7 +345,9 @@ public sealed class ActorDispatchWorkflowDeliveryCommandServiceTests
                 ]),
             1,
             "installation-alpha:provision:a1",
-            readyAt);
+            readyAt,
+            "claim-readiness-a1",
+            "worker-alpha");
 
     private static StudioProjectionActorCommandDispatch CreateCommandDispatch(
         IActorDispatchPort dispatchPort) =>

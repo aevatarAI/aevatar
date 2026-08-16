@@ -44,6 +44,9 @@ public sealed class WorkflowDeliveryCurrentStateProjectorTests
         document.Connections[0].UserServiceId.Should().Be("user-service-alpha");
         document.Installation.InstallationId.Should().Be("installation-alpha");
         document.Installation.Status.Should().Be(WorkflowInstallationStatus.Ready);
+        document.Installation.ContinuationClaim.Should().NotBeNull();
+        document.Installation.ContinuationClaim.ClaimId.Should().Be("claim-readiness-a1");
+        document.Installation.ContinuationClaim.Should().NotBeSameAs(state.Installation.ContinuationClaim);
         document.Installation.ReadinessEvidence.Should().NotBeNull();
         document.Installation.ReadinessEvidence.Should().NotBeSameAs(state.Installation.ReadinessEvidence);
         document.Installation.ReadinessEvidence.AcceptanceRun.AcceptanceRunId.Should()
@@ -94,6 +97,16 @@ public sealed class WorkflowDeliveryCurrentStateProjectorTests
                 Attempt = 1,
                 CreatedAtUtc = At(1),
                 UpdatedAtUtc = At(1),
+                ContinuationClaim = new WorkflowInstallationContinuationClaim
+                {
+                    ClaimId = "claim-readiness-a1",
+                    ClaimantId = "worker-alpha",
+                    ExpectedStatus = WorkflowInstallationStatus.ProvisioningAccepted,
+                    Attempt = 1,
+                    OperationId = "installation-alpha:provision:a1",
+                    ClaimedAtUtc = At(1),
+                    ExpiresAtUtc = At(2),
+                },
             },
         };
         state.Connections.Add(new WorkflowDeliveryConnectionState

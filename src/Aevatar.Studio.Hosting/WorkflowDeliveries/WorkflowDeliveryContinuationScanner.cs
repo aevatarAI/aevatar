@@ -7,6 +7,8 @@ namespace Aevatar.Studio.Hosting.WorkflowDeliveries;
 
 public sealed class WorkflowDeliveryContinuationScanner
 {
+    private static readonly TimeSpan ExecutionDeadlineSafetyMargin = TimeSpan.FromSeconds(1);
+
     private readonly IWorkflowDeliveryQueryPort _queries;
     private readonly IWorkflowDeliveryProvisioningExecutor _provisioning;
     private readonly IWorkflowAcceptanceArtifactMaterializer _artifactMaterializer;
@@ -15,6 +17,8 @@ public sealed class WorkflowDeliveryContinuationScanner
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WorkflowDeliveryContinuationScanner> _logger;
     private readonly int _pageSize;
+    private readonly TimeSpan _claimDuration;
+    private readonly string _claimantId;
 
     public WorkflowDeliveryContinuationScanner(
         IWorkflowDeliveryQueryPort queries,
@@ -35,6 +39,10 @@ public sealed class WorkflowDeliveryContinuationScanner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         ArgumentNullException.ThrowIfNull(options);
         _pageSize = Math.Clamp(options.Value.PageSize, 1, 200);
+        _claimDuration = options.Value.ClaimDuration;
+        _claimantId = string.IsNullOrWhiteSpace(options.Value.ClaimantId)
+            ? throw new InvalidOperationException("Workflow delivery continuation claimant identity is required.")
+            : options.Value.ClaimantId.Trim();
     }
 
     public async Task ScanOnceAsync(CancellationToken ct = default)
@@ -43,14 +51,17 @@ public sealed class WorkflowDeliveryContinuationScanner
             WorkflowInstallationStatus.Accepted,
             async (delivery, cancellationToken) =>
             {
-                _ = await _provisioning.ExecuteAsync(delivery, cancellationToken);
+                _ = await _provisioning.ExecuteAsync(delivery, _claimantId, cancellationToken);
             },
             ct);
         await ScanStatusAsync(
             WorkflowInstallationStatus.ProvisioningAccepted,
             async (delivery, cancellationToken) =>
             {
-                var materialization = await _artifactMaterializer.MaterializeAsync(delivery, cancellationToken);
+                var materialization = await _artifactMaterializer.MaterializeAsync(
+                    delivery,
+                    _claimantId,
+                    cancellationToken);
                 if (materialization.Status == WorkflowAcceptanceArtifactMaterializationStatus.TerminalFailure)
                 {
                     await RecordFailureAsync(
@@ -60,7 +71,7 @@ public sealed class WorkflowDeliveryContinuationScanner
                         cancellationToken);
                     return;
                 }
-                var result = await _readiness.ReconcileAsync(delivery, cancellationToken);
+                var result = await _readiness.ReconcileAsync(delivery, _claimantId, cancellationToken);
                 if (result.Status != WorkflowInstallationReadinessReconciliationStatus.TerminalFailure)
                     return;
                 await RecordFailureAsync(delivery, result.Code, result.Message, cancellationToken);
@@ -75,7 +86,8 @@ public sealed class WorkflowDeliveryContinuationScanner
         CancellationToken ct)
     {
         var installation = delivery.Installation;
-        if (installation == null)
+        var claim = installation?.ContinuationClaim;
+        if (installation == null || claim == null)
             return;
         await _commands.RecordInstallationFailedAsync(
             new RecordWorkflowInstallationFailedMutation(
@@ -86,7 +98,9 @@ public sealed class WorkflowDeliveryContinuationScanner
                 WorkflowInstallationStatus.ProvisioningAccepted,
                 installation.Attempt,
                 installation.OperationId,
-                _timeProvider.GetUtcNow()),
+                _timeProvider.GetUtcNow(),
+                claim.ClaimId,
+                claim.ClaimantId),
             ct);
     }
 
@@ -108,20 +122,9 @@ public sealed class WorkflowDeliveryContinuationScanner
             {
                 if (delivery.Installation?.Status != status)
                     continue;
-                // Revoking or expiring a delivery withdraws the administrator's authority to
-                // keep provisioning into the customer's scope. The actor guards the customer's
-                // own mutations, but every continuation here runs off the read model with no
-                // request to reject, so the withdrawal has to be honoured before resuming.
-                if (!IsDeliveryAvailable(delivery))
-                {
-                    _logger.LogInformation(
-                        "Skipping workflow delivery continuation for delivery {DeliveryId}: the delivery is no longer available.",
-                        delivery.DeliveryId);
-                    continue;
-                }
                 try
                 {
-                    await continueAsync(delivery, ct);
+                    await ContinueDeliveryAsync(delivery, status, continueAsync, ct);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -145,9 +148,100 @@ public sealed class WorkflowDeliveryContinuationScanner
         while (cursor != null);
     }
 
-    private bool IsDeliveryAvailable(WorkflowDeliverySnapshot delivery) =>
+    private async Task ContinueDeliveryAsync(
+        WorkflowDeliverySnapshot delivery,
+        WorkflowInstallationStatus status,
+        Func<WorkflowDeliverySnapshot, CancellationToken, Task> continueAsync,
+        CancellationToken ct)
+    {
+        var installation = delivery.Installation;
+        if (installation == null)
+            return;
+        var now = _timeProvider.GetUtcNow();
+        var claim = installation.ContinuationClaim;
+        if (!ClaimMatchesActiveStage(claim, installation, status) ||
+            claim!.ExpiresAtUtc <= now)
+        {
+            if (!IsDeliveryAvailable(delivery, now))
+            {
+                _logger.LogInformation(
+                    "Skipping workflow delivery continuation for delivery {DeliveryId}: no active claim preceded delivery withdrawal.",
+                    delivery.DeliveryId);
+                return;
+            }
+            await ClaimAsync(delivery, status, ct);
+            return;
+        }
+        if (!string.Equals(claim.ClaimantId, _claimantId, StringComparison.Ordinal))
+        {
+            _logger.LogDebug(
+                "Skipping workflow delivery continuation for delivery {DeliveryId}: active claim {ClaimId} belongs to another worker.",
+                delivery.DeliveryId,
+                claim.ClaimId);
+            return;
+        }
+
+        var deadlineAtUtc = claim.ExpiresAtUtc.Subtract(ExecutionDeadlineSafetyMargin);
+        var deadlineDelay = deadlineAtUtc - _timeProvider.GetUtcNow();
+        if (deadlineDelay <= TimeSpan.Zero)
+        {
+            _logger.LogDebug(
+                "Skipping workflow delivery continuation for delivery {DeliveryId}: claim {ClaimId} has no safe execution budget remaining.",
+                delivery.DeliveryId,
+                claim.ClaimId);
+            return;
+        }
+
+        using var deadline = new CancellationTokenSource(deadlineDelay, _timeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+        try
+        {
+            await continueAsync(delivery, linked.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Workflow delivery continuation for delivery {DeliveryId} reached claim {ClaimId} execution deadline.",
+                delivery.DeliveryId,
+                claim.ClaimId);
+        }
+    }
+
+    private static bool IsDeliveryAvailable(
+        WorkflowDeliverySnapshot delivery,
+        DateTimeOffset now) =>
         delivery.LifecycleStatus != WorkflowDeliveryLifecycleStatus.Revoked &&
-        delivery.ExpiresAtUtc > _timeProvider.GetUtcNow();
+        delivery.ExpiresAtUtc > now;
+
+    private async Task ClaimAsync(
+        WorkflowDeliverySnapshot delivery,
+        WorkflowInstallationStatus status,
+        CancellationToken ct)
+    {
+        var installation = delivery.Installation;
+        if (installation == null)
+            return;
+        await _commands.ClaimInstallationContinuationAsync(
+            new ClaimWorkflowInstallationContinuationMutation(
+                delivery.DeliveryId,
+                installation.InstallationId,
+                status,
+                installation.Attempt,
+                installation.OperationId,
+                $"claim-{Guid.NewGuid():N}",
+                _claimantId,
+                _claimDuration),
+            ct);
+    }
+
+    private static bool ClaimMatchesActiveStage(
+        WorkflowInstallationContinuationClaimSnapshot? claim,
+        WorkflowInstallationSnapshot installation,
+        WorkflowInstallationStatus status) =>
+        claim != null &&
+        claim.ExpectedStatus == status &&
+        claim.Attempt == installation.Attempt &&
+        string.Equals(claim.OperationId, installation.OperationId, StringComparison.Ordinal);
 
     private static string? NormalizeCursor(string? cursor) =>
         string.IsNullOrWhiteSpace(cursor) ? null : cursor.Trim();

@@ -117,6 +117,13 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("/connections/");
             html.Should().Contain(":connect");
             html.Should().Contain("status === \"ready\"");
+            html.Should().Contain("function renderUsageSection(consoleUrl, channelRunCommand, scopeId)");
+            html.Should().Contain("renderUsageSection(consoleUrl, channelRunCommand, installationScopeId)");
+            html.Should().Contain("pendingTeams: Object.create(null)");
+            html.Should().Contain("state.customer.pendingTeams[createdTeamId] = createdTeam");
+            html.Should().Contain("state.customer.selectedTeamId = createdTeamId");
+            html.Should().Contain("NyxID 授权绑定尚未就绪");
+            html.Should().NotContain("需要先在 Aevatar Console 完成一次 NyxID 登录");
             html.Should().NotContain("demoMode");
             html.Should().NotContain("MutationObserver");
         }
@@ -191,6 +198,110 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("setInterval(");
         html.Should().NotContain("demo-installation");
         html.Should().NotContain("demo-team");
+    }
+
+    [Fact]
+    public async Task DeliveryShell_TeamRoster_ShouldKeepCreatedTeamUntilProjectionCatchesUp()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/delivery");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function mergeTeamRoster(authoritativeTeams, pendingTeams) {');
+            const end = html.indexOf('async function loadTeams(', start);
+            assert.notEqual(start, -1, 'team roster merger must exist');
+            assert.notEqual(end, -1, 'team loader must follow roster merger');
+
+            const context = {
+              array(value){ return Array.isArray(value) ? value : []; },
+              object(value){ return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; },
+              teamId(team){ return String(team && team.teamId || '').trim(); },
+              Set, Object
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            const pending = Object.create(null);
+            pending['t-new'] = {teamId:'t-new',scopeId:'scope-alpha',displayName:'New Team'};
+            const lagging = context.mergeTeamRoster([], pending);
+            assert.equal(lagging.length, 1);
+            assert.equal(lagging[0].teamId, 't-new');
+            assert.ok(pending['t-new'], 'pending summary remains until the read model sees it');
+
+            const projected = context.mergeTeamRoster(
+              [{teamId:'t-new',scopeId:'scope-alpha',displayName:'Projected Team'}],
+              pending
+            );
+            assert.equal(projected.length, 1);
+            assert.equal(projected[0].displayName, 'Projected Team');
+            assert.equal(pending['t-new'], undefined, 'authoritative roster replaces the pending summary');
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task DeliveryShell_CreatedTeam_ShouldRequireTheAuthoritativeScopeIdentity()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/delivery");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function normalizeCreatedTeam(data, expectedScopeId) {');
+            const end = html.indexOf('function mergeTeamRoster(', start);
+            assert.notEqual(start, -1, 'created Team normalizer must exist');
+            assert.notEqual(end, -1, 'team roster merger must follow the normalizer');
+
+            class ApiError extends Error {
+              constructor(status, message, body, code) {
+                super(message);
+                this.status = status;
+                this.body = body;
+                this.code = code;
+              }
+            }
+            const context = {
+              ApiError,
+              object(value){ return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; },
+              first(value, names, fallback){
+                for (const name of names) {
+                  if (value && value[name] !== undefined && value[name] !== null) return value[name];
+                }
+                return fallback;
+              },
+              teamId(team){ return String(team && team.teamId || '').trim(); },
+              text(value){ return String(value || '').trim(); }
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            assert.throws(
+              () => context.normalizeCreatedTeam({teamId:'t-new'}, 'scope-alpha'),
+              error => error.code === 'missing_team_scope'
+            );
+            assert.throws(
+              () => context.normalizeCreatedTeam({teamId:'t-new',scopeId:'scope-beta'}, 'scope-alpha'),
+              error => error.code === 'team_scope_mismatch'
+            );
+            const created = context.normalizeCreatedTeam(
+              {teamId:'t-new',scopeId:'scope-alpha',displayName:'New Team'},
+              'scope-alpha'
+            );
+            assert.equal(created.teamId, 't-new');
+            assert.equal(created.scopeId, 'scope-alpha');
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

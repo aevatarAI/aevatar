@@ -29,6 +29,7 @@ public interface IWorkflowDeliveryProvisioningExecutor
 {
     Task<WorkflowDeliveryProvisioningExecutionResult> ExecuteAsync(
         WorkflowDeliverySnapshot delivery,
+        string continuationClaimantId,
         CancellationToken ct = default);
 }
 
@@ -63,9 +64,12 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
 
     public async Task<WorkflowDeliveryProvisioningExecutionResult> ExecuteAsync(
         WorkflowDeliverySnapshot delivery,
+        string continuationClaimantId,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(delivery);
+        var claimantId = WorkflowDeliveryContinuationClaimPolicy.NormalizeClaimantId(
+            continuationClaimantId);
         var installation = delivery.Installation;
         if (installation == null || installation.Status != WorkflowInstallationStatus.Accepted)
         {
@@ -74,6 +78,21 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
                 installation?.InstallationId ?? string.Empty,
                 installation?.Attempt ?? 0,
                 installation?.OperationId ?? string.Empty);
+        }
+        var claim = installation.ContinuationClaim;
+        var now = _timeProvider.GetUtcNow();
+        if (!WorkflowDeliveryContinuationClaimPolicy.IsActiveFor(
+                installation,
+                claim,
+                WorkflowInstallationStatus.Accepted,
+                claimantId,
+                now))
+        {
+            return new WorkflowDeliveryProvisioningExecutionResult(
+                WorkflowDeliveryProvisioningExecutionStatus.Skipped,
+                installation.InstallationId,
+                installation.Attempt,
+                installation.OperationId);
         }
 
         ProvisionWorkflowResponse response;
@@ -159,7 +178,9 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
                     WorkflowInstallationStatus.Accepted,
                     installation.Attempt,
                     installation.OperationId,
-                    _timeProvider.GetUtcNow()),
+                    _timeProvider.GetUtcNow(),
+                    claim!.ClaimId,
+                    claim.ClaimantId),
                 ct);
             return new WorkflowDeliveryProvisioningExecutionResult(
                 WorkflowDeliveryProvisioningExecutionStatus.Failed,
@@ -185,7 +206,9 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
                     response.ScheduleProvisioningStatus,
                     installation.Attempt,
                     installation.OperationId,
-                    _timeProvider.GetUtcNow()),
+                    _timeProvider.GetUtcNow(),
+                    claim!.ClaimId,
+                    claim.ClaimantId),
                 ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

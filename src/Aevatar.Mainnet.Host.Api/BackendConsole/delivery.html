@@ -1304,14 +1304,13 @@
       if (!(error instanceof ApiError)) {
         return { tone: "danger", title: "页面载入失败", message: error && error.message ? error.message : String(error) };
       }
-      // Publish resolves a NyxID automation authority that only the product console's login
-      // commits. A customer who reached this page from a delivery link alone has no such
-      // binding, and the server's raw message does not say where to get one.
+      // Ordinary Delivery login finalizes the NyxID binding server-side. A missing binding
+      // here therefore means that finalization or its committed projection is not ready yet.
       if (error.code === "DELIVERY_AUTHORIZATION_BINDING_REQUIRED") {
         return {
           tone: "warning",
-          title: "需要先在 Aevatar Console 完成一次 NyxID 登录",
-          message: "发布需要一条由 Aevatar Console 登录流程写入的 NyxID 授权绑定，当前账号还没有。请先用同一个 NyxID 账号登录 Aevatar Console，然后回到本页重试发布。"
+          title: "NyxID 授权绑定尚未就绪",
+          message: "请稍后重试发布；若持续出现，请退出后使用同一个 NyxID 账号重新登录 Delivery Center。"
         };
       }
       const states = {
@@ -1918,6 +1917,7 @@
         deliveryId: deliveryIdValue,
         detail: detail,
         teams: [],
+        pendingTeams: Object.create(null),
         teamsError: null,
         fields: fields,
         values: schemaDefaults(fields, existing),
@@ -1981,15 +1981,52 @@
       }
     }
 
+    function normalizeCreatedTeam(data, expectedScopeId) {
+      const createdTeam = object(first(data, ["team", "item"], data));
+      const createdTeamId = teamId(createdTeam);
+      const createdScopeId = text(first(createdTeam, ["scopeId"], ""));
+      if (!createdTeamId) {
+        throw new ApiError(503, "创建 Team 的响应缺少 teamId，无法继续发布。", createdTeam, "missing_team_id");
+      }
+      if (!createdScopeId) {
+        throw new ApiError(503, "创建 Team 的响应缺少 scopeId，无法确认归属。", createdTeam, "missing_team_scope");
+      }
+      if (createdScopeId !== expectedScopeId) {
+        throw new ApiError(409, "创建 Team 的响应 scope 与当前交付不一致。", createdTeam, "team_scope_mismatch");
+      }
+      return createdTeam;
+    }
+
+    function mergeTeamRoster(authoritativeTeams, pendingTeams) {
+      const teams = array(authoritativeTeams).slice();
+      const seenTeamIds = new Set(teams.map(teamId).filter(Boolean));
+      Object.keys(object(pendingTeams)).forEach(function (id) {
+        if (seenTeamIds.has(id)) {
+          delete pendingTeams[id];
+          return;
+        }
+        teams.push(pendingTeams[id]);
+      });
+      return teams;
+    }
+
     async function loadTeams(scopeId, deliveryIdValue, sequence) {
       try {
         const result = await api.teams(scopeId);
         if (sequence !== state.routeSequence || !state.customer || state.customer.deliveryId !== deliveryIdValue) return;
-        state.customer.teams = items(result.data, ["items", "teams"]);
+        state.customer.teams = mergeTeamRoster(
+          items(result.data, ["items", "teams"]),
+          state.customer.pendingTeams
+        );
         state.customer.teamsError = null;
         renderCustomerDetail();
       } catch (error) {
         if (sequence !== state.routeSequence || !state.customer) return;
+        if (Object.keys(state.customer.pendingTeams).length && state.customer.teams.length) {
+          state.customer.teamsError = null;
+          renderCustomerDetail();
+          return;
+        }
         state.customer.teamsError = error;
         renderCustomerDetail();
       }
@@ -2835,9 +2872,14 @@
       const scopeId = customerScopeId(state.customer.detail);
       const deliveryIdValue = state.customer.deliveryId;
       try {
-        await api.createTeam(scopeId, displayName);
+        const result = await api.createTeam(scopeId, displayName);
+        const createdTeam = normalizeCreatedTeam(result.data, scopeId);
+        const createdTeamId = teamId(createdTeam);
+        state.customer.pendingTeams[createdTeamId] = createdTeam;
+        state.customer.teams = mergeTeamRoster(state.customer.teams, state.customer.pendingTeams);
+        state.customer.selectedTeamId = createdTeamId;
         state.customer.newTeamName = "";
-        state.notice = { tone: "success", title: "Team 已创建", message: "现在可以选择该 Team 并继续配置。" };
+        state.notice = { tone: "success", title: "Team 已创建并选中", message: "现在可以继续配置并发布工作流。" };
         announce("Team 已创建");
         state.customer.busy = "";
         await loadTeams(scopeId, deliveryIdValue, state.routeSequence);
@@ -2877,7 +2919,7 @@
     // actually uses it (the product console and a bound messaging channel) are separate
     // surfaces this page cannot reach. Both entry points are therefore stated explicitly,
     // and each is omitted rather than guessed when the server did not return it.
-    function renderUsageSection(consoleUrl, channelRunCommand, workflowId) {
+    function renderUsageSection(consoleUrl, channelRunCommand, scopeId) {
       const rows = [];
       rows.push(
         h("div", { className: "stage-row" },
@@ -2905,7 +2947,7 @@
             h("span", { className: "stage-index", text: "2" }),
             h("div", null,
               h("strong", { text: "在已绑定的 Lark / 消息渠道中运行" }),
-              h("p", { text: "该指令在机器人注册所在的 scope 内解析 workflow，因此机器人必须注册在本次交付的目标 scope（" + text(first(installation, ["scopeId"], ""), "本 scope") + "）下，否则会提示未找到 workflow。" }),
+              h("p", { text: "该指令在机器人注册所在的 scope 内解析 workflow，因此机器人必须注册在本次交付的目标 scope（" + text(scopeId, "本 scope") + "）下，否则会提示未找到 workflow。" }),
               h("p", { className: "mono", text: channelRunCommand }),
               h("p", { text: "在会话中发送 /workflow list 可列出该 scope 的 workflow 及其运行指令。" })
             ),
@@ -2960,7 +3002,7 @@
       const consoleUrl = absoluteHttpUrl(first(installation, ["consoleUrl"], "")) ||
         state.customer.consoleUrl;
       const channelRunCommand = text(first(installation, ["channelRunCommand"], ""));
-      const workflowId = text(first(installation, ["workflowId"], ""));
+      const installationScopeId = text(first(installation, ["scopeId"], ""));
       const title = ready ? "安装已就绪" : (status === "failed" ? "安装失败" : "安装状态");
       const message = ready
         ? "服务端 installation.status 已确认 ready。"
@@ -2978,7 +3020,7 @@
         )
       );
       if (ready) {
-        body.append(renderUsageSection(consoleUrl, channelRunCommand, workflowId));
+        body.append(renderUsageSection(consoleUrl, channelRunCommand, installationScopeId));
       }
       if (stages.length) {
         body.append(

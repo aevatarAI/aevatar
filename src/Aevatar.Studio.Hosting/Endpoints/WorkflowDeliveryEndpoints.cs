@@ -636,14 +636,13 @@ internal static class WorkflowDeliveryHttpErrorMapper
             WorkflowDeliveryPackageUnavailableException unavailable =>
                 Error(StatusCodes.Status503ServiceUnavailable, "DELIVERY_PACKAGE_UNAVAILABLE", unavailable.Message),
             NyxIdConnectLinkException connectLink => MapConnectLinkError(connectLink),
-            // Publish resolves this authority for every trigger intent, not only scheduled
-            // ones, and the binding is committed by the product console's login rather than
-            // by this page — so the remedy has to name that, not just say "reconnect".
+            // Delivery login finalization commits this binding for every trigger intent.
+            // A miss here means that finalization or its projection is not ready yet.
             StudioMemberAutomationAuthorizationBindingRequiredException =>
                 Error(
                     StatusCodes.Status409Conflict,
                     "DELIVERY_AUTHORIZATION_BINDING_REQUIRED",
-                    "Sign in to the Aevatar console once with this NyxID account to establish its authorization binding, then retry publishing."),
+                    "Retry publishing shortly. If the binding remains unavailable, sign out and sign back in to Delivery Center with the same NyxID account."),
             StudioTeamNotFoundException missingTeam =>
                 Error(StatusCodes.Status404NotFound, "STUDIO_TEAM_NOT_FOUND", missingTeam.Message),
             StudioMemberAutomationProjectionPendingException pending =>

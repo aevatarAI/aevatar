@@ -25,6 +25,7 @@ public interface IWorkflowInstallationReadinessReconciler
 {
     Task<WorkflowInstallationReadinessReconciliationResult> ReconcileAsync(
         WorkflowDeliverySnapshot delivery,
+        string continuationClaimantId,
         CancellationToken ct = default);
 }
 
@@ -65,9 +66,12 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
 
     public async Task<WorkflowInstallationReadinessReconciliationResult> ReconcileAsync(
         WorkflowDeliverySnapshot delivery,
+        string continuationClaimantId,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(delivery);
+        var claimantId = WorkflowDeliveryContinuationClaimPolicy.NormalizeClaimantId(
+            continuationClaimantId);
         var installation = delivery.Installation;
         if (installation == null)
             return Pending("installation_missing", "The delivery installation is not visible yet.");
@@ -90,6 +94,18 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
             return Pending(
                 "provisioning_acceptance_pending",
                 "The installation has not reached provisioning acceptance.");
+        }
+        var claim = installation.ContinuationClaim;
+        if (!WorkflowDeliveryContinuationClaimPolicy.IsActiveFor(
+                installation,
+                claim,
+                WorkflowInstallationStatus.ProvisioningAccepted,
+                claimantId,
+                _timeProvider.GetUtcNow()))
+        {
+            return Pending(
+                "continuation_claim_pending",
+                "The provisioning-accepted installation is waiting for an actor-owned continuation claim.");
         }
 
         var identityFailure = ValidateInstallationIdentity(delivery, installation);
@@ -150,7 +166,9 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
                 evidence,
                 installation.Attempt,
                 installation.OperationId,
-                _timeProvider.GetUtcNow()),
+                _timeProvider.GetUtcNow(),
+                claim!.ClaimId,
+                claim.ClaimantId),
             ct);
         return new WorkflowInstallationReadinessReconciliationResult(
             WorkflowInstallationReadinessReconciliationStatus.Ready,
@@ -284,7 +302,9 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
                     installation.ScheduleProvisioningStatus,
                     installation.Attempt,
                     installation.OperationId,
-                    _timeProvider.GetUtcNow()),
+                    _timeProvider.GetUtcNow(),
+                    installation.ContinuationClaim!.ClaimId,
+                    installation.ContinuationClaim.ClaimantId),
                 ct);
             return TriggerResolution.FromResult(new WorkflowInstallationReadinessReconciliationResult(
                 WorkflowInstallationReadinessReconciliationStatus.Pending,

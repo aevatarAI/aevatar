@@ -309,6 +309,25 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         options.ConsoleWebBaseUrl.Should().Be("https://console.example.com");
     }
 
+    [Fact]
+    public void MainnetDistributedDeliveryConfiguration_ShouldKeepTheShippedAllowlistWithConsoleUrls()
+    {
+        using var stream = File.OpenRead(Path.Combine(
+            Aevatar.Configuration.AevatarPaths.RepoRoot,
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "appsettings.Distributed.json"));
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(stream)
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
+        options.ConsoleBaseUrl.Should().Be("https://aevatar-console-backend-api.aevatar.ai");
+        options.ConsoleWebBaseUrl.Should().Be("https://aevatar-console.aevatar.ai");
+    }
+
     private static IConfiguration DeliveryConfiguration(string key, string value) =>
         new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>

@@ -187,6 +187,15 @@ public sealed record WorkflowInstallationReadinessEvidence(
     WorkflowAcceptanceRunReadinessEvidence AcceptanceRun,
     IReadOnlyList<WorkflowInstallationArtifactEvidence> Artifacts);
 
+public sealed record WorkflowInstallationContinuationClaimSnapshot(
+    string ClaimId,
+    string ClaimantId,
+    WorkflowInstallationStatus ExpectedStatus,
+    int Attempt,
+    string OperationId,
+    DateTimeOffset ClaimedAtUtc,
+    DateTimeOffset ExpiresAtUtc);
+
 public sealed record WorkflowInstallationSnapshot(
     string InstallationId,
     string IdempotencyKey,
@@ -219,6 +228,8 @@ public sealed record WorkflowInstallationSnapshot(
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc)
 {
+    public WorkflowInstallationContinuationClaimSnapshot? ContinuationClaim { get; init; }
+
     public string? AcceptanceRunId => ReadinessEvidence?.AcceptanceRun.AcceptanceRunId;
 
     public IReadOnlyList<string> ArtifactEvidence =>
@@ -322,6 +333,16 @@ public sealed record RetryWorkflowInstallationMutation(
     string OperationId,
     DateTimeOffset RequestedAtUtc);
 
+public sealed record ClaimWorkflowInstallationContinuationMutation(
+    string DeliveryId,
+    string InstallationId,
+    WorkflowInstallationStatus ExpectedStatus,
+    int Attempt,
+    string OperationId,
+    string ClaimId,
+    string ClaimantId,
+    TimeSpan RequestedDuration);
+
 public sealed record RecordWorkflowProvisioningAcceptedMutation(
     string DeliveryId,
     string InstallationId,
@@ -335,7 +356,9 @@ public sealed record RecordWorkflowProvisioningAcceptedMutation(
     string? ScheduleProvisioningStatus,
     int Attempt,
     string OperationId,
-    DateTimeOffset AcceptedAtUtc);
+    DateTimeOffset AcceptedAtUtc,
+    string ContinuationClaimId,
+    string ContinuationClaimantId);
 
 public sealed record RecordWorkflowInstallationReadyMutation(
     string DeliveryId,
@@ -343,7 +366,9 @@ public sealed record RecordWorkflowInstallationReadyMutation(
     WorkflowInstallationReadinessEvidence Evidence,
     int Attempt,
     string OperationId,
-    DateTimeOffset ReadyAtUtc);
+    DateTimeOffset ReadyAtUtc,
+    string ContinuationClaimId,
+    string ContinuationClaimantId);
 
 public sealed record RecordWorkflowInstallationFailedMutation(
     string DeliveryId,
@@ -353,7 +378,9 @@ public sealed record RecordWorkflowInstallationFailedMutation(
     WorkflowInstallationStatus ExpectedStatus,
     int Attempt,
     string OperationId,
-    DateTimeOffset FailedAtUtc);
+    DateTimeOffset FailedAtUtc,
+    string ContinuationClaimId,
+    string ContinuationClaimantId);
 
 public interface IWorkflowDeliveryCommandPort
 {
@@ -383,6 +410,10 @@ public interface IWorkflowDeliveryCommandPort
 
     Task<WorkflowDeliveryCommandReceipt> RetryInstallationAsync(
         RetryWorkflowInstallationMutation mutation,
+        CancellationToken ct = default);
+
+    Task<WorkflowDeliveryCommandReceipt> ClaimInstallationContinuationAsync(
+        ClaimWorkflowInstallationContinuationMutation mutation,
         CancellationToken ct = default);
 
     Task<WorkflowDeliveryCommandReceipt> RecordProvisioningAcceptedAsync(

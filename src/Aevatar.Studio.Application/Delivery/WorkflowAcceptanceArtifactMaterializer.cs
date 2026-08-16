@@ -23,6 +23,7 @@ public interface IWorkflowAcceptanceArtifactMaterializer
 {
     Task<WorkflowAcceptanceArtifactMaterializationResult> MaterializeAsync(
         WorkflowDeliverySnapshot delivery,
+        string continuationClaimantId,
         CancellationToken ct = default);
 }
 
@@ -37,25 +38,42 @@ public sealed class WorkflowAcceptanceArtifactMaterializer : IWorkflowAcceptance
     private readonly IServiceRunQueryPort _serviceRuns;
     private readonly IContentArtifactQueryPort _contentArtifacts;
     private readonly IContentArtifactService _artifactService;
+    private readonly TimeProvider _timeProvider;
 
     public WorkflowAcceptanceArtifactMaterializer(
         IServiceRunQueryPort serviceRuns,
         IContentArtifactQueryPort contentArtifacts,
-        IContentArtifactService artifactService)
+        IContentArtifactService artifactService,
+        TimeProvider timeProvider)
     {
         _serviceRuns = serviceRuns ?? throw new ArgumentNullException(nameof(serviceRuns));
         _contentArtifacts = contentArtifacts ?? throw new ArgumentNullException(nameof(contentArtifacts));
         _artifactService = artifactService ?? throw new ArgumentNullException(nameof(artifactService));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public async Task<WorkflowAcceptanceArtifactMaterializationResult> MaterializeAsync(
         WorkflowDeliverySnapshot delivery,
+        string continuationClaimantId,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(delivery);
+        var claimantId = WorkflowDeliveryContinuationClaimPolicy.NormalizeClaimantId(
+            continuationClaimantId);
         var installation = delivery.Installation;
         if (installation == null || installation.Status != WorkflowInstallationStatus.ProvisioningAccepted)
             return Satisfied("materialization_not_applicable", "Acceptance artifact materialization is not applicable.");
+        if (!WorkflowDeliveryContinuationClaimPolicy.IsActiveFor(
+                installation,
+                installation.ContinuationClaim,
+                WorkflowInstallationStatus.ProvisioningAccepted,
+                claimantId,
+                _timeProvider.GetUtcNow()))
+        {
+            return Pending(
+                "continuation_claim_pending",
+                "Acceptance artifact materialization is waiting for its actor-owned continuation claim.");
+        }
 
         if (NormalizeOptional(installation.PublishedServiceId) is not { } serviceId ||
             NormalizeOptional(installation.RevisionId) is not { } revisionId ||

@@ -602,6 +602,10 @@ public sealed class WorkflowDeliveryServiceTests
             RetryWorkflowInstallationMutation mutation,
             CancellationToken ct = default) => Accepted(mutation.DeliveryId);
 
+        public Task<WorkflowDeliveryCommandReceipt> ClaimInstallationContinuationAsync(
+            ClaimWorkflowInstallationContinuationMutation mutation,
+            CancellationToken ct = default) => Accepted(mutation.DeliveryId);
+
         public Task<WorkflowDeliveryCommandReceipt> RecordProvisioningAcceptedAsync(
             RecordWorkflowProvisioningAcceptedMutation mutation,
             CancellationToken ct = default)

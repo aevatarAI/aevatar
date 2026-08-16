@@ -1,8 +1,10 @@
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
@@ -305,6 +307,28 @@ public sealed class WorkflowDeliveryEndpointsTests
         service.PublishedCaller.AuthenticatedOwner!.VerifiedBindingId.Should().Be("binding-kappa");
         service.PublishedCaller.AuthenticatedOwner.SubjectPlatform.Should().Be("nyxid");
         service.PublishedCaller.AuthenticatedOwner.SubjectTenant.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BindingRequired_ShouldDirectApiClientsBackToDeliveryLoginFinalization()
+    {
+        WorkflowDeliveryHttpErrorMapper.TryMap(
+                new StudioMemberAutomationAuthorizationBindingRequiredException(),
+                out var result)
+            .Should().BeTrue();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Response.Body = new MemoryStream();
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.RootElement.GetProperty("code").GetString().Should()
+            .Be("DELIVERY_AUTHORIZATION_BINDING_REQUIRED");
+        var message = body.RootElement.GetProperty("message").GetString();
+        message.Should().Contain("Delivery Center");
+        message.Should().NotContain("Aevatar console");
     }
 
     private static WorkflowDeliveryPublishRequest CreatePublishRequest() =>
