@@ -134,7 +134,15 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<NyxIdApiAccessRegistrationMarker>();
         }
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
-        services.TryAddSingleton<INyxIdActionEvidenceReadPort, NyxIdActionEvidenceReadPort>();
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<NyxIdMcpOperationCatalogReader>();
+        services.TryAddSingleton<INyxIdActionEvidenceReadPort>(provider =>
+            new NyxIdActionEvidenceReadPort(
+                provider.GetRequiredService<INyxIdApiClientFactory>(),
+                provider.GetRequiredService<NyxIdMcpOperationCatalogReader>()));
+        services.TryAddSingleton<INyxIdActionContinuationCredentialVisibilityPort>(provider =>
+            new NyxIdActionContinuationCredentialVisibilityPort(
+                provider.GetRequiredService<NyxIdMcpOperationCatalogReader>()));
         return services;
     }
 

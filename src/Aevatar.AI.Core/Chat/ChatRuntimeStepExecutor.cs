@@ -98,8 +98,29 @@ public sealed class ChatRuntimeStepExecutor
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(recoveryMessages);
         if (!TryPlanSkillRecoveryToolCall(request, recoveryMessages, finalContent, out _))
+        {
             return null;
+        }
 
+        var authorized = await TryAuthorizePlannedToolCallAsync(
+                request,
+                authorizedRequest => TryPlanSkillRecoveryToolCall(
+                    authorizedRequest,
+                    recoveryMessages,
+                    finalContent,
+                    out var plannedToolCall)
+                        ? plannedToolCall
+                        : null,
+                ct)
+            .ConfigureAwait(false);
+        return authorized;
+    }
+
+    private async Task<ChatRuntimeStepRecoveryToolCall?> TryAuthorizePlannedToolCallAsync(
+        LLMRequest request,
+        Func<LLMRequest, ToolCall?> resolveToolCall,
+        CancellationToken ct)
+    {
         var authorizationFence = ChatRuntimeRequestBuilder.CaptureAuthorizationFence(request);
         var context = new LLMCallContext
         {
@@ -122,13 +143,9 @@ public sealed class ChatRuntimeStepExecutor
             return null;
 
         var authorizedRequest = authorizationFence.Apply(context.Request);
-        if (!TryPlanSkillRecoveryToolCall(
-                authorizedRequest,
-                recoveryMessages,
-                finalContent,
-                out var toolCall))
+        var toolCall = resolveToolCall(authorizedRequest);
+        if (toolCall is null)
             return null;
-
         var authorizedTools = authorizedRequest.Tools?
             .Where(tool => string.Equals(tool.Name, toolCall.Name, StringComparison.Ordinal))
             .ToArray() ?? [];
@@ -136,7 +153,12 @@ public sealed class ChatRuntimeStepExecutor
             return null;
 
         return new ChatRuntimeStepRecoveryToolCall(
-            toolCall,
+            new ToolCall
+            {
+                Id = toolCall.Id,
+                Name = toolCall.Name,
+                ArgumentsJson = toolCall.ArgumentsJson,
+            },
             authorizedTools,
             AgentToolExecutionContextMapper.FromRequest(authorizedRequest));
     }

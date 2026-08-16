@@ -2219,7 +2219,6 @@ summary:focus-visible {
 
 .actor-plan-revision,
 .actor-plan-id,
-.actor-plan-gate,
 .actor-added-by,
 .actor-estimate,
 .actor-dependencies {
@@ -2233,35 +2232,6 @@ summary:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.actor-plan-gate {
-  border-left: 2px solid var(--success);
-  padding-left: 6px;
-}
-
-.actor-plan-gate.confirm {
-  border-left-color: #f59e0b;
-  color: #9a5b00;
-}
-
-/* A confirm gate is only amber while it is genuinely undecided. Once the actor commits the
-   decision the badge stops asking for attention it no longer needs. */
-.actor-plan-gate.confirm.satisfied {
-  border-left-color: var(--success);
-  color: var(--muted);
-}
-
-.actor-plan-gate.confirm.rejected {
-  border-left-color: var(--error);
-  color: var(--error);
-}
-
-.actor-plan-gate-reason {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.45;
 }
 
 .actor-step[data-step-kind="postcondition"] {
@@ -2305,24 +2275,6 @@ summary:focus-visible {
 
 .needs-you-panel.danger {
   box-shadow: inset 3px 0 0 var(--error);
-}
-
-.needs-you-panel.plan-gate-required {
-  box-shadow: inset 3px 0 0 #f59e0b;
-}
-
-.actor-plan-admission {
-  margin-top: 4px;
-  color: var(--text-soft);
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-
-.needs-you-hint {
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
 }
 
 .needs-you-heading,
@@ -4805,12 +4757,11 @@ body:has(.settings-dialog[open]) #servicesButton,
 .actor-task-eyebrow,
 .actor-task-status,
 .actor-step-copy small,
-.actor-step-facts,
-.actor-action small,
-.actor-plan-revision,
-.actor-plan-id,
-.actor-plan-gate,
-.actor-added-by,
+  .actor-step-facts,
+  .actor-action small,
+  .actor-plan-revision,
+  .actor-plan-id,
+  .actor-added-by,
 .actor-estimate,
 .actor-dependencies,
 .actor-substep,
@@ -4822,11 +4773,10 @@ body:has(.settings-dialog[open]) #servicesButton,
 .authorization-callout-copy span,
 .authorization-service-copy strong,
 .tool-copy small,
-.tool-duration,
-.actor-task-current,
-.actor-task-progress,
-.actor-plan-gate-reason,
-.needs-you-option-copy small,
+  .tool-duration,
+  .actor-task-current,
+  .actor-task-progress,
+  .needs-you-option-copy small,
 .actor-recovery-item small {
   font-size: 11px;
 }

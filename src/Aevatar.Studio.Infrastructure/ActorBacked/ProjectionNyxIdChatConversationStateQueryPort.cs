@@ -196,15 +196,24 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             : new NyxIdChatCanaryEffectFaultSnapshot(
                 fault.ArmId,
                 fault.Status,
-                fault.TurnId,
-                fault.TaskId,
-                fault.StepId,
-                fault.OperationId,
-                fault.OperationGeneration,
+                ToCanaryOperation(fault.SourceOperation),
+                fault.TargetOperation is null
+                    ? null
+                    : ToCanaryOperation(fault.TargetOperation),
                 ToDateTimeOffset(fault.ExpiresAt),
                 ToDateTimeOffset(fault.ArmedAt),
                 ToDateTimeOffset(fault.ForwardedAt),
                 ToDateTimeOffset(fault.ConsumedAt));
+
+    private static NyxIdChatCanaryOperationSnapshot ToCanaryOperation(
+        NyxIdChatConversationCanaryOperationDocument operation) =>
+        new(
+            operation.ConversationActorId,
+            operation.TurnId,
+            operation.TaskId,
+            operation.StepId,
+            operation.OperationId,
+            operation.OperationGeneration);
 
     private static NyxIdChatConversationTurnSnapshot? ToTurn(
         NyxIdChatConversationTurnDocument? turn) =>
@@ -240,31 +249,6 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                 NullIfEmpty(task.PlanId),
                 task.PlanRevision,
                 NullIfEmpty(task.Title),
-                task.Gate == null
-                    ? null
-                    : new NyxIdChatConversationPlanGateSnapshot(
-                        task.Gate.Mode,
-                        NullIfEmpty(task.Gate.Reason),
-                        task.Gate.Status,
-                        NullIfEmpty(task.Gate.RequestId),
-                        NullIfEmpty(task.Gate.TaskId),
-                        task.Gate.PlanRevision,
-                        ToDateTimeOffset(task.Gate.DecidedAt),
-                        NullIfEmpty(task.Gate.PlanId),
-                        task.Gate.Admissions.Select(static admission =>
-                            new NyxIdChatConversationPlanOperationAdmissionSnapshot(
-                                NullIfEmpty(admission.ConversationActorId),
-                                NullIfEmpty(admission.TurnId),
-                                NullIfEmpty(admission.TaskId),
-                                NullIfEmpty(admission.StepId),
-                                NullIfEmpty(admission.OperationId),
-                                admission.OperationGeneration,
-                                NullIfEmpty(admission.ToolCallId),
-                                NullIfEmpty(admission.ToolName),
-                                admission.ArgumentsSha256.ToByteArray(),
-                                NullIfEmpty(admission.ActionRequestId),
-                                NullIfEmpty(admission.Action),
-                                admission.ActionParamsSha256.ToByteArray())).ToArray()),
                 task.PlanRevisions.Select(static revision =>
                     new NyxIdChatConversationPlanRevisionSnapshot(
                         revision.PlanRevision,
@@ -678,6 +662,12 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
             NyxIdChatConversationActionParamsDocument.ParamsOneofCase.KeyRotate =>
                 new NyxIdChatActionParamsSnapshot(
                     KeyId: request.Params.KeyRotate.KeyId),
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.ServiceAccessReview =>
+                new NyxIdChatActionParamsSnapshot(
+                    ServiceAccessReview: new NyxIdChatServiceAccessReviewSnapshot(
+                        request.Params.ServiceAccessReview.UserServiceId,
+                        request.Params.ServiceAccessReview.ServiceSlug,
+                        request.Params.ServiceAccessReview.ResourceUri)),
             _ => null,
         };
         return parameters is null

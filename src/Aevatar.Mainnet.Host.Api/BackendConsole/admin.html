@@ -1387,6 +1387,7 @@ function employeeById(detail,eid){ return null; }
 var OIDC={ authority:BACKEND_CONSOLE_CONFIG.authority||'', clientId:BACKEND_CONSOLE_CONFIG.clientId||'',
   scope:BACKEND_CONSOLE_CONFIG.scope||'', resources:Array.isArray(BACKEND_CONSOLE_CONFIG.resources)?BACKEND_CONSOLE_CONFIG.resources:[], redirectUri:location.origin+'/auto/callback', storageKey:BACKEND_CONSOLE_CONFIG.storageKey||'' };
 var VOICE_TOKEN_PURPOSE='voice-realtime';
+var SERVICE_ACCESS_REVIEW_FLOW='service-access-review';
 var TOKEN_KEY=OIDC.storageKey+':token', VOICE_TOKEN_KEY=OIDC.storageKey+':voice-realtime:token', PKCE_KEY=OIDC.storageKey+':pkce';
 var TOKEN_REFRESH_PROMISE=null,TOKEN_REFRESH_TIMER=null,TOKEN_REFRESH_SKEW_MS=60000,TOKEN_REFRESH_RETRY_MS=30000;
 function getToken(){ try{ var t=JSON.parse(localStorage.getItem(TOKEN_KEY)||'null'); return (t&&t.access_token)?t:null; }catch(e){ return null; } }
@@ -1508,19 +1509,22 @@ function logout(){ showLoginGate('已登出 NyxID，请重新登录。'); }
 function _b64url(buf){ var s=btoa(String.fromCharCode.apply(null,new Uint8Array(buf))); return s.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function _rand(n){ var a=new Uint8Array(n); crypto.getRandomValues(a); var s=''; for(var i=0;i<a.length;i++){ s+=('0'+(a[i]&0xff).toString(16)).slice(-2); } return s.slice(0,n); }
 async function _sha256(s){ return _b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))); }
-async function beginLogin(requestedResources,tokenPurpose){
+async function beginLogin(requestedResources,tokenPurpose,authFlow){
   if(!OIDC.authority||!OIDC.clientId){ alert('BackendConsole OIDC 配置缺失。'); return; }
-  var purpose=tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:'';
+  var flow=authFlow===SERVICE_ACCESS_REVIEW_FLOW?SERVICE_ACCESS_REVIEW_FLOW:'';
+  var purpose=!flow&&tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:'';
   /* ADR-0018：会话登录不发送显式 resource——NyxID 会按 RFC 8707 把授权收窄成该列表，
      导致 token 无法访问其他已同意的服务（如部署默认 LLM 路由）。授权集合由 NyxID
-     Consent 页决定。仅 voice-realtime 专用 token 保留有意收窄。 */
-  var resources=purpose===VOICE_TOKEN_PURPOSE?loginResources(requestedResources):[];
+     Consent 页决定。voice-realtime 专用 token 保留有意收窄；service-access-review
+     则使用完整资源并强制重新展示 consent。 */
+  var resources=purpose===VOICE_TOKEN_PURPOSE||flow===SERVICE_ACCESS_REVIEW_FLOW?loginResources(requestedResources):[];
   var verifier=_rand(64), state=_rand(32), challenge=await _sha256(verifier);
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({verifier:verifier,state:state,returnTo:loginReturnTo(),resources:resources,tokenPurpose:purpose}));
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({verifier:verifier,state:state,returnTo:loginReturnTo(),resources:resources,tokenPurpose:purpose,authFlow:flow}));
   var u=new URL(OIDC.authority.replace(/\/+$/,'')+'/oauth/authorize');
   u.searchParams.set('response_type','code'); u.searchParams.set('client_id',OIDC.clientId);
   u.searchParams.set('redirect_uri',OIDC.redirectUri); u.searchParams.set('scope',OIDC.scope);
   resources.forEach(function(resource){ u.searchParams.append('resource',resource); });
+  if(flow===SERVICE_ACCESS_REVIEW_FLOW) u.searchParams.set('prompt','consent');
   u.searchParams.set('state',state); u.searchParams.set('code_challenge',challenge); u.searchParams.set('code_challenge_method','S256');
   location.assign(u.toString());
 }
@@ -4382,7 +4386,7 @@ function bindEvents(){
     if(!msg || msg.source!=='aevatar-backend-console-suite') return;
     if(msg.type==='auth-refresh-request'){ handleEmbeddedAuthRefresh(ev,msg); return; }
     if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。',msg.rejectedAccessToken||''); return; }
-    if(msg.type==='login-request'){ beginLogin(msg.resources,msg.tokenPurpose); }
+    if(msg.type==='login-request'){ beginLogin(msg.resources,msg.tokenPurpose,msg.authFlow); }
     if(msg.type==='observatory-route'){ syncObservatoryHash(msg.query||{}); }
     if(msg.type==='observatory-immersive'){ setAdminImmersive(msg.enabled); }
     if(msg.type==='navigate'&&['cqrs','audit'].indexOf(msg.module)>=0){ navigate([msg.module],msg.query||{}); }

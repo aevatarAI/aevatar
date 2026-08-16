@@ -530,33 +530,6 @@ message NyxIdChatConversationStepDocument {
   NyxIdChatConversationStepGuardDocument guard = 25;
 }
 
-message NyxIdChatConversationPlanGateDocument {
-  string mode = 1;
-  string reason = 2;
-  string status = 3;
-  string request_id = 4;
-  string task_id = 5;
-  int32 plan_revision = 6;
-  google.protobuf.Timestamp decided_at = 7;
-  repeated NyxIdChatConversationPlanOperationAdmissionDocument admissions = 8;
-  string plan_id = 9;
-}
-
-message NyxIdChatConversationPlanOperationAdmissionDocument {
-  string conversation_actor_id = 1;
-  string turn_id = 2;
-  string task_id = 3;
-  string step_id = 4;
-  string operation_id = 5;
-  int64 operation_generation = 6;
-  string tool_call_id = 7;
-  string tool_name = 8;
-  bytes arguments_sha256 = 9;
-  string action_request_id = 10;
-  string action = 11;
-  bytes action_params_sha256 = 12;
-}
-
 message NyxIdChatConversationPlanRevisionDocument {
   int32 plan_revision = 1;
   string revision_cause = 2;
@@ -658,6 +631,8 @@ message NyxIdChatVerifiedArtifactDocument {
 }
 
 message NyxIdChatConversationTaskDocument {
+  reserved 16;
+  reserved "gate";
   string task_id = 1;
   string turn_id = 2;
   string status = 3;
@@ -673,7 +648,6 @@ message NyxIdChatConversationTaskDocument {
   string plan_id = 13;
   int32 plan_revision = 14;
   string title = 15;
-  NyxIdChatConversationPlanGateDocument gate = 16;
   repeated NyxIdChatConversationPlanRevisionDocument plan_revisions = 17;
   int32 plan_revision_history_start = 18;
   NyxIdChatTaskDomainDocument domain = 19;
@@ -859,6 +833,7 @@ message NyxIdChatConversationActionParamsDocument {
     NyxIdChatConversationCustomServiceConnectDocument custom_service = 2;
     NyxIdChatConversationKeyCreateDocument key_create = 3;
     NyxIdChatConversationKeyRotateDocument key_rotate = 4;
+    NyxIdChatConversationServiceAccessReviewDocument service_access_review = 5;
   }
 }
 
@@ -886,6 +861,12 @@ message NyxIdChatConversationKeyCreateDocument {
 
 message NyxIdChatConversationKeyRotateDocument {
   string key_id = 1;
+}
+
+message NyxIdChatConversationServiceAccessReviewDocument {
+  string user_service_id = 1;
+  string service_slug = 2;
+  string resource_uri = 3;
 }
 
 message NyxIdChatConversationCurrentStateDocument {
@@ -925,15 +906,23 @@ message NyxIdChatConversationCurrentStateDocument {
 message NyxIdChatConversationCanaryEffectFaultDocument {
   string arm_id = 1;
   string status = 2;
-  string turn_id = 3;
-  string task_id = 4;
-  string step_id = 5;
-  string operation_id = 6;
-  int64 operation_generation = 7;
+  reserved 3, 4, 5, 6, 7;
+  reserved "turn_id", "task_id", "step_id", "operation_id", "operation_generation";
   google.protobuf.Timestamp expires_at = 8;
   google.protobuf.Timestamp consumed_at = 9;
   google.protobuf.Timestamp forwarded_at = 10;
   google.protobuf.Timestamp armed_at = 11;
+  NyxIdChatConversationCanaryOperationDocument source_operation = 12;
+  NyxIdChatConversationCanaryOperationDocument target_operation = 13;
+}
+
+message NyxIdChatConversationCanaryOperationDocument {
+  string conversation_actor_id = 1;
+  string turn_id = 2;
+  string task_id = 3;
+  string step_id = 4;
+  string operation_id = 5;
+  int64 operation_generation = 6;
 }
 
 // ─── Chat History Create Recovery Current State ReadModel ───

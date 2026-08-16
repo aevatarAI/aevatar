@@ -74,6 +74,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -149,6 +150,13 @@ public static class MainnetHostBuilderExtensions
             // Secrets must come from AEVATAR_-prefixed environment variables;
             // Set/Remove on the secrets store will throw at the call site.
             options.AllowLocalFileSecretsStore = false;
+        });
+        builder.Services.PostConfigure<WorkflowDefinitionFileSourceOptions>(options =>
+        {
+            if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+            {
+                options.SkipSourceCredentialRequiredDefinitionsOnStartup = true;
+            }
         });
         builder.AddAevatarHostObservability("Aevatar.Mainnet.Host.Api");
         builder.AddMainnetDistributedOrleansHost();

@@ -16,12 +16,19 @@ public sealed record LLMControlContext(
     public AgentToolExecutionContext ToToolContext(AgentToolExecutionContext? baseContext = null)
     {
         var context = baseContext ?? AgentToolExecutionContext.Empty;
+        var toolContextOwnsNyxIdCredential =
+            context.Credentials.NyxIdCredentialAuthority ==
+            AgentToolNyxIdCredentialAuthority.ToolExecutionContext;
         return context with
         {
             Credentials = context.Credentials with
             {
-                NyxIdAccessToken = Normalize(NyxIdAccessToken) ?? context.Credentials.NyxIdAccessToken,
-                NyxIdOrgToken = Normalize(NyxIdOrgToken) ?? context.Credentials.NyxIdOrgToken,
+                NyxIdAccessToken = toolContextOwnsNyxIdCredential
+                    ? Normalize(context.Credentials.NyxIdAccessToken) ?? Normalize(NyxIdAccessToken)
+                    : Normalize(NyxIdAccessToken) ?? context.Credentials.NyxIdAccessToken,
+                NyxIdOrgToken = toolContextOwnsNyxIdCredential
+                    ? Normalize(context.Credentials.NyxIdOrgToken) ?? Normalize(NyxIdOrgToken)
+                    : Normalize(NyxIdOrgToken) ?? context.Credentials.NyxIdOrgToken,
                 SenderNyxIdAccessToken = Normalize(SenderNyxIdAccessToken) ?? context.Credentials.SenderNyxIdAccessToken,
             },
             Routing = context.Routing with

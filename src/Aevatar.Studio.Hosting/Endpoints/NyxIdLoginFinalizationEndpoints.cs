@@ -10,6 +10,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -85,12 +86,38 @@ public static class NyxIdLoginFinalizationEndpoints
 
         try
         {
-            var result = await catalogRefresh
-                .RefreshPersonalAsync(subject.Trim(), bearerToken, ct)
-                .ConfigureAwait(false);
             var owner = PersonalCatalogOwner(subject);
+            var targetedRequest = await ReadCatalogRefreshRequestAsync(http.Request, ct)
+                .ConfigureAwait(false);
+            var requiredServices = targetedRequest == null
+                ? null
+                : (targetedRequest.RequiredUserServiceIds ?? [])
+                    .Select(static userServiceId => new NyxIdUserServiceCapabilityRef
+                    {
+                        UserServiceId = userServiceId,
+                    })
+                    .ToArray();
+            var result = targetedRequest == null
+                ? await catalogRefresh
+                    .RefreshPersonalAsync(subject.Trim(), bearerToken, ct)
+                    .ConfigureAwait(false)
+                : await catalogRefresh
+                    .RefreshAsync(
+                        owner,
+                        bearerToken,
+                        new NyxIdAuthorizationCatalogRefreshRequest(
+                            requiredServices!,
+                            LLMTarget: null),
+                        ct)
+                    .ConfigureAwait(false);
             var visibility = result.Success
-                ? await catalogVisibilityPort.ResolveAsync(owner, result.StateVersion, ct).ConfigureAwait(false)
+                ? requiredServices == null
+                    ? await catalogVisibilityPort
+                        .ResolveAsync(owner, result.StateVersion, ct)
+                        .ConfigureAwait(false)
+                    : await catalogVisibilityPort
+                        .ResolveRequiredServicesAsync(owner, result.StateVersion, requiredServices, ct)
+                        .ConfigureAwait(false)
                 : new NyxIdAuthorizationCatalogVisibilityResult(
                     NyxIdAuthorizationCatalogVisibilityStatus.Unspecified,
                     0,
@@ -141,6 +168,17 @@ public static class NyxIdLoginFinalizationEndpoints
                     VisibleStateVersion: 0),
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    private static async Task<NyxIdAuthorizationCatalogRefreshHttpRequest?> ReadCatalogRefreshRequestAsync(
+        HttpRequest request,
+        CancellationToken ct)
+    {
+        if (request.ContentLength is null or 0)
+            return null;
+
+        return await request.ReadFromJsonAsync<NyxIdAuthorizationCatalogRefreshHttpRequest>(ct)
+            .ConfigureAwait(false);
     }
 
     internal static async Task<IResult> HandleConfigAsync(
@@ -878,6 +916,9 @@ public sealed record NyxIdAuthorizationCatalogRefreshResponse(
     string VisibilityFailureCode,
     long RequiredStateVersion = 0,
     long VisibleStateVersion = 0);
+
+public sealed record NyxIdAuthorizationCatalogRefreshHttpRequest(
+    IReadOnlyList<string>? RequiredUserServiceIds);
 
 public sealed record NyxIdLoginFinalizationRequest
 {

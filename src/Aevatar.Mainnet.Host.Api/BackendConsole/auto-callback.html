@@ -37,8 +37,10 @@
   var REDIRECT_URI = location.origin + "/auto/callback";
   var STORAGE_KEY = BACKEND_CONSOLE_CONFIG.storageKey || "";
   var VOICE_TOKEN_PURPOSE = "voice-realtime";
+  var SERVICE_ACCESS_REVIEW_FLOW = "service-access-review";
   var TOKEN_KEY = STORAGE_KEY + ":token";
   var VOICE_TOKEN_KEY = STORAGE_KEY + ":voice-realtime:token";
+  var SERVICE_ACCESS_REVIEW_TOKEN_KEY = STORAGE_KEY + ":service-access-review:token";
   var PKCE_KEY  = STORAGE_KEY + ":pkce";
   var DEFAULT_RETURN = safePath(BACKEND_CONSOLE_CONFIG.defaultReturnPath, "/admin");
 
@@ -84,6 +86,10 @@
   var rawTokenPurpose = pending && typeof pending.tokenPurpose === "string" ? pending.tokenPurpose : "";
   if(rawTokenPurpose && rawTokenPurpose !== VOICE_TOKEN_PURPOSE){ show("登录状态包含未知的令牌用途，请返回重试。"); offerBack(returnTo); return; }
   var tokenPurpose = rawTokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_PURPOSE : "";
+  var rawAuthFlow = pending && typeof pending.authFlow === "string" ? pending.authFlow : "";
+  if(rawAuthFlow && rawAuthFlow !== SERVICE_ACCESS_REVIEW_FLOW){ show("登录状态包含未知的授权流程，请返回重试。"); offerBack(returnTo); return; }
+  var authFlow = rawAuthFlow === SERVICE_ACCESS_REVIEW_FLOW ? SERVICE_ACCESS_REVIEW_FLOW : "";
+  if(authFlow && tokenPurpose){ show("登录状态包含冲突的授权用途，请返回重试。"); offerBack(returnTo); return; }
 
   if(oauthError){ show("登录失败：" + oauthError); offerBack(returnTo); return; }
   if(!code){ location.replace(returnTo); return; }
@@ -110,7 +116,10 @@
       }
       token.obtained_at = Date.now();
       token.oauth_resources = requestedResources;
-      localStorage.setItem(tokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_KEY : TOKEN_KEY, JSON.stringify(token));
+      var tokenKey = authFlow === SERVICE_ACCESS_REVIEW_FLOW
+        ? SERVICE_ACCESS_REVIEW_TOKEN_KEY
+        : tokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_KEY : TOKEN_KEY;
+      localStorage.setItem(tokenKey, JSON.stringify(token));
       location.replace(returnTo);
     })
     .catch(function(e){ show("登录出错：" + (e && e.message ? e.message : e)); offerBack(returnTo); });

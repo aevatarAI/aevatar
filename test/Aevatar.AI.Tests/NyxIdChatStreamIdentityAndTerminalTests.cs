@@ -1,9 +1,11 @@
 using Aevatar.AGUI.Contracts;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Tests;
@@ -468,11 +470,31 @@ public partial class NyxIdChatEndpointsCoverageTests
     private static DefaultHttpContext CreateActionContinuationStreamContext()
     {
         var context = CreateAuthorizedStreamContext();
+        context.RequestServices = new ServiceCollection()
+            .AddSingleton<INyxIdActionContinuationCredentialVisibilityPort>(
+                new VisibleActionContinuationCredentialVisibilityPort())
+            .BuildServiceProvider();
         context.User = new System.Security.Claims.ClaimsPrincipal(
             new System.Security.Claims.ClaimsIdentity(
                 [new System.Security.Claims.Claim("sub", "owner-alpha")],
                 authenticationType: "test"));
         return context;
+    }
+
+    private sealed class VisibleActionContinuationCredentialVisibilityPort
+        : INyxIdActionContinuationCredentialVisibilityPort
+    {
+        public Task<NyxIdActionContinuationCredentialVisibilityResult> InspectUserServiceAsync(
+            string bearerToken,
+            string userServiceId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new NyxIdActionContinuationCredentialVisibilityResult(
+                NyxIdActionContinuationCredentialVisibilityStatus.Visible,
+                userServiceId,
+                "visible"));
+        }
     }
 
     private static NyxIdChatEndpoints.NyxIdChatStreamRequest

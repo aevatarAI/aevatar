@@ -1295,6 +1295,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 SourceReadableNyxIdAccessToken = NormalizeOptional(
                                                      requestCredentials.SourceReadableNyxIdAccessToken) ??
                                                  planToolContext.Credentials.SourceReadableNyxIdAccessToken,
+                NyxIdCredentialAuthority = requestCredentials.NyxIdCredentialAuthority ==
+                                           AgentToolNyxIdCredentialAuthority.Unspecified
+                    ? planToolContext.Credentials.NyxIdCredentialAuthority
+                    : requestCredentials.NyxIdCredentialAuthority,
             },
         };
         var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
@@ -1314,6 +1318,30 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                                      stepControl.SenderNyxIdAccessToken,
         };
         var toolContext = control.ToToolContext(planToolContext);
+        var activityUserToken = NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        var requestToolContextOwnsCredential = requestCredentials.NyxIdCredentialAuthority ==
+                                               AgentToolNyxIdCredentialAuthority.ToolExecutionContext;
+        var executionAccessToken = activityUserToken ??
+                                   (requestToolContextOwnsCredential
+                                       ? NormalizeOptional(requestCredentials.NyxIdAccessToken)
+                                       : null);
+        var executionOrgToken = activityUserToken ??
+                                (requestToolContextOwnsCredential
+                                    ? NormalizeOptional(requestCredentials.NyxIdOrgToken)
+                                    : null);
+        if (executionAccessToken is not null || executionOrgToken is not null)
+        {
+            // LlmControl owns model routing. Explicit request credentials own tool execution,
+            // while a current Activity user token remains the highest-priority user authority.
+            toolContext = toolContext with
+            {
+                Credentials = toolContext.Credentials with
+                {
+                    NyxIdAccessToken = executionAccessToken ?? toolContext.Credentials.NyxIdAccessToken,
+                    NyxIdOrgToken = executionOrgToken ?? toolContext.Credentials.NyxIdOrgToken,
+                },
+            };
+        }
         return (control, toolContext);
     }
 

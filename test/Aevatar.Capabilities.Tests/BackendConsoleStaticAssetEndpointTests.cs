@@ -56,7 +56,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
             // ADR-0018: only the deliberately narrowed voice-realtime purpose keeps
             // explicit resources; the session login sends none.
-            html.Should().Contain("var resources=purpose===VOICE_TOKEN_PURPOSE?loginResources(requestedResources):[];");
+            html.Should().Contain(
+                "var resources=purpose===VOICE_TOKEN_PURPOSE||flow===SERVICE_ACCESS_REVIEW_FLOW?loginResources(requestedResources):[];");
             html.Should().Contain("if(claims && claims.allow_all_services!==false) return true;");
             html.Should().Contain("function observatoryFrameSource()");
             html.Should().Contain("'/admin/workflow-observatory'");
@@ -74,8 +75,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
-            html.Should().Contain("app.js?v=20260808-m42-card-scale-tighten");
-            html.Should().Contain("styles.css?v=20260808-m42-card-scale-tighten");
+            html.Should().Contain("app.js?v=20260814-m54-plan-readonly");
+            html.Should().Contain("styles.css?v=20260814-m54-plan-readonly");
             html.Should().NotContain("class=\"brand-mark\"");
             html.Should().NotContain("Aevatar Studio · 工作流实录");
             html.Should().NotContain("从意图到交付的真实对话");
@@ -107,6 +108,159 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("requestAdminShellTokenRefresh(");
             html.Should().Contain("rejectedAccessToken");
         }
+    }
+
+    [Fact]
+    public async Task AdminShell_ServiceAccessReview_ShouldRequestResourceUnionWithFreshConsent()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+        const string script = """
+            (async () => {
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function loginResources(requested){');
+            const end = source.indexOf('\nfunction decodeJwt(', start);
+            assert.notEqual(start, -1, 'loginResources must exist');
+            assert.notEqual(end, -1, 'decodeJwt must follow beginLogin');
+
+            const assignments = [];
+            const pending = [];
+            const context = {
+              OIDC:{
+                authority:'https://id.example.test', clientId:'client-example',
+                redirectUri:'http://127.0.0.1:5080/auto/callback', scope:'openid profile',
+                resources:[
+                  'https://id.example.test/api/v1/proxy/s/aevatar',
+                  'https://id.example.test/api/v1/proxy/s/ornn-api',
+                ],
+              },
+              VOICE_TOKEN_PURPOSE:'voice-realtime',
+              SERVICE_ACCESS_REVIEW_FLOW:'service-access-review',
+              PKCE_KEY:'console:pkce',
+              sessionStorage:{setItem:(key,value) => pending.push({key,value:JSON.parse(value)})},
+              location:{
+                pathname:'/admin', hash:'#/studio',
+                assign:(value) => assignments.push(value),
+              },
+              crypto:{getRandomValues:(bytes) => bytes.fill(7),subtle:{}},
+              TextEncoder,
+              URL,
+              URLSearchParams,
+              Uint8Array,
+              btoa:(value) => Buffer.from(value,'binary').toString('base64'),
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+            context._rand = () => 'random-alpha';
+            context._sha256 = async () => 'challenge-alpha';
+
+            await context.beginLogin();
+            const normal = new URL(assignments[0]);
+            assert.deepEqual(normal.searchParams.getAll('resource'), []);
+            assert.equal(normal.searchParams.has('prompt'), false);
+            assert.deepEqual(pending[0].value.resources, []);
+
+            await context.beginLogin([
+              'https://id.example.test/api/v1/proxy/s/llm-openai',
+              'https://id.example.test/api/v1/proxy/s/api-github',
+            ], '', 'service-access-review');
+            const review = new URL(assignments[1]);
+            assert.deepEqual(review.searchParams.getAll('resource'), [
+              'https://id.example.test/api/v1/proxy/s/aevatar',
+              'https://id.example.test/api/v1/proxy/s/ornn-api',
+              'https://id.example.test/api/v1/proxy/s/llm-openai',
+              'https://id.example.test/api/v1/proxy/s/api-github',
+            ]);
+            assert.equal(review.searchParams.get('prompt'), 'consent');
+            assert.equal(pending[1].value.authFlow, 'service-access-review');
+            assert.deepEqual(pending[1].value.resources, review.searchParams.getAll('resource'));
+            })().catch((error) => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        html.Should().Contain("msg.authFlow");
+    }
+
+    [Fact]
+    public async Task AutoCallback_ServiceAccessReview_ShouldPreserveSessionTokenAndStoreReviewTokenSeparately()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/auto/callback");
+        const string script = """
+            (async () => {
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('(function(){');
+            const end = source.lastIndexOf('})();');
+            assert.notEqual(start, -1);
+            assert.notEqual(end, -1);
+
+            const records = new Map();
+            records.set('console:test:token', JSON.stringify({access_token:'session-bearer'}));
+            const pending = {
+              verifier:'verifier-alpha', state:'state-alpha', returnTo:'/admin#/studio',
+              resources:['https://api.example.test/api/v1/proxy/s/api-github'],
+              tokenPurpose:'', authFlow:'service-access-review',
+            };
+            const elements = new Map();
+            const context = {
+              URLSearchParams,
+              TextDecoder,
+              Uint8Array,
+              atob:(value) => Buffer.from(value, 'base64').toString('binary'),
+              document:{getElementById:(id) => {
+                if (!elements.has(id)) elements.set(id, {style:{},textContent:'',innerHTML:''});
+                return elements.get(id);
+              }},
+              location:{
+                origin:'http://127.0.0.1:5080',
+                search:'?code=code-alpha&state=state-alpha',
+                replace:(value) => { context.replaced = value; },
+              },
+              sessionStorage:{
+                getItem:(key) => key === 'console:test:pkce' ? JSON.stringify(pending) : null,
+                removeItem:() => {},
+              },
+              localStorage:{
+                getItem:(key) => records.get(key) || null,
+                setItem:(key, value) => records.set(key, value),
+                removeItem:(key) => records.delete(key),
+              },
+              fetch:async () => ({
+                ok:true,
+                json:async () => ({
+                  access_token:'review-bearer',
+                  resource:['https://api.example.test/api/v1/proxy/s/api-github'],
+                }),
+              }),
+              Date,
+              JSON,
+              Map,
+              console,
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end + 5), context);
+            await new Promise((resolve) => setImmediate(resolve));
+
+            assert.equal(
+              JSON.parse(records.get('console:test:token')).access_token,
+              'session-bearer',
+              'service access review must not replace the LLM-capable session bearer');
+            assert.equal(
+              JSON.parse(records.get('console:test:service-access-review:token')).access_token,
+              'review-bearer');
+            assert.equal(context.replaced, '/admin#/studio');
+            })().catch((error) => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

@@ -240,11 +240,6 @@ public class NyxIdChatAguiSseEventWriterTests
             PlanId = "plan-alpha",
             PlanRevision = 2,
             Title = "Update the repository safely",
-            Gate = new NyxIdChatPlanGate
-            {
-                Mode = NyxIdChatPlanGateMode.Confirm,
-                Reason = "The plan contains an effect-capable operation.",
-            },
             Steps =
             {
                 taskStep,
@@ -307,7 +302,7 @@ public class NyxIdChatAguiSseEventWriterTests
         payload.GetProperty("status").GetString().Should().Be("active");
         payload.GetProperty("planId").GetString().Should().Be("plan-alpha");
         payload.GetProperty("planRevision").GetInt32().Should().Be(2);
-        payload.GetProperty("gate").GetProperty("mode").GetString().Should().Be("confirm");
+        payload.TryGetProperty("gate", out _).Should().BeFalse();
         var step = payload.GetProperty("steps")[0];
         step.GetProperty("kind").GetString().Should().Be("tool");
         step.GetProperty("status").GetString().Should().Be("failed");
@@ -452,10 +447,6 @@ public class NyxIdChatAguiSseEventWriterTests
             ActiveTurn = committed.OriginTurn.Clone(),
         };
         committed.State.PendingActions.Add(committed.Request.Clone());
-        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
-            committed.State,
-            committed.Request);
-        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",
@@ -542,10 +533,6 @@ public class NyxIdChatAguiSseEventWriterTests
             ActiveTurn = committed.OriginTurn.Clone(),
         };
         committed.State.PendingActions.Add(committed.Request.Clone());
-        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
-            committed.State,
-            committed.Request);
-        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",
@@ -631,10 +618,6 @@ public class NyxIdChatAguiSseEventWriterTests
             ActiveTurn = committed.OriginTurn.Clone(),
         };
         committed.State.PendingActions.Add(committed.Request.Clone());
-        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
-            committed.State,
-            committed.Request);
-        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",
@@ -720,10 +703,6 @@ public class NyxIdChatAguiSseEventWriterTests
             ActiveTurn = committed.OriginTurn.Clone(),
         };
         committed.State.PendingActions.Add(committed.Request.Clone());
-        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
-            committed.State,
-            committed.Request);
-        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",

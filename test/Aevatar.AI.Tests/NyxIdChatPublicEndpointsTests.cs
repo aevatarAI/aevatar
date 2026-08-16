@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AGUI.Contracts;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -365,6 +366,8 @@ public sealed class NyxIdChatPublicEndpointsTests
         var context = CreateContext("scope-alpha", services => services
             .AddSingleton<ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(new RecordingInteraction<NyxIdChatCommand>())
             .AddSingleton<ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>(action)
+            .AddSingleton<INyxIdActionContinuationCredentialVisibilityPort>(
+                new VisibleActionContinuationCredentialVisibilityPort())
             .AddSingleton<IScopeResourceAdmissionPort>(admission));
         context.Request.Headers.Authorization = "Bearer delegated-token";
         context.Response.Body = new MemoryStream();
@@ -528,49 +531,6 @@ public sealed class NyxIdChatPublicEndpointsTests
         command.Approved.Should().BeTrue();
         command.Reason.Should().Be("Proceed");
         command.ExpectedStateVersion.Should().Be(17);
-        context.Response.Headers.Location.ToString().Should().Be(
-            "/api/chat/conversations/conversation-alpha/state");
-    }
-
-    [Fact]
-    public async Task PlanResolve_ShouldDispatchTypedAcceptedOnlyCommandWithFreshCredential()
-    {
-        var dispatch = new RecordingDispatchPort();
-        var context = CreateContext("scope-alpha", services => services
-            .AddSingleton<IScopeResourceAdmissionPort>(new RecordingAdmissionPort())
-            .AddSingleton<IActorDispatchPort>(dispatch)
-            .AddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>());
-        context.Request.Path = "/api/chat";
-        context.Request.Headers.Authorization = "Bearer delegated-token";
-        context.Request.Headers["Idempotency-Key"] = "header-plan-confirm";
-        context.Response.Body = new MemoryStream();
-
-        await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
-            {
-              "type": "plan.resolve",
-              "conversationId": "conversation-alpha",
-              "taskId": "task-alpha",
-              "requestId": "plan-gate-alpha",
-              "planId": "plan-alpha",
-              "planRevision": 3,
-              "confirmed": true,
-              "expectedStateVersion": 23
-            }
-            """));
-
-        context.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        var command = dispatch.Dispatches.Should().ContainSingle().Which.Envelope.Payload
-            .Unpack<NyxIdChatPlanResolveCommand>();
-        command.ScopeId.Should().Be("scope-alpha");
-        command.ConversationActorId.Should().Be("conversation-alpha");
-        command.TaskId.Should().Be("task-alpha");
-        command.PlanId.Should().Be("plan-alpha");
-        command.RequestId.Should().Be("plan-gate-alpha");
-        command.PlanRevision.Should().Be(3);
-        command.ClientRequestId.Should().Be("header-plan-confirm");
-        command.Confirmed.Should().BeTrue();
-        command.ExpectedStateVersion.Should().Be(23);
-        command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("delegated-token");
         context.Response.Headers.Location.ToString().Should().Be(
             "/api/chat/conversations/conversation-alpha/state");
     }
@@ -996,6 +956,22 @@ public sealed class NyxIdChatPublicEndpointsTests
         {
             Targets.Add(target);
             return Task.FromResult(ScopeResourceAdmissionResult.Allowed());
+        }
+    }
+
+    private sealed class VisibleActionContinuationCredentialVisibilityPort
+        : INyxIdActionContinuationCredentialVisibilityPort
+    {
+        public Task<NyxIdActionContinuationCredentialVisibilityResult> InspectUserServiceAsync(
+            string bearerToken,
+            string userServiceId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new NyxIdActionContinuationCredentialVisibilityResult(
+                NyxIdActionContinuationCredentialVisibilityStatus.Visible,
+                userServiceId,
+                "visible"));
         }
     }
 

@@ -2187,6 +2187,13 @@ public sealed class StudioWorkflowProvisioningServiceTests
             RequiredStateVersion = requiredStateVersion;
             return Task.FromResult(result);
         }
+
+        public Task<NyxIdAuthorizationCatalogVisibilityResult> ResolveRequiredServicesAsync(
+            AuthorizationOwnerIdentity owner,
+            long requiredStateVersion,
+            IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+            CancellationToken ct = default) =>
+            ResolveAsync(owner, requiredStateVersion, ct);
     }
 
     private sealed class RecordingWorkflowSchedulePort : IStudioMemberWorkflowSchedulePort
