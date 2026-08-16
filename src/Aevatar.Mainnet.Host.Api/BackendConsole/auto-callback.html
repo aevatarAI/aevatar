@@ -89,6 +89,17 @@
   if(!code){ location.replace(returnTo); return; }
   if(!pending || pending.state !== params.get("state")){ show("登录状态校验失败，请返回重试。"); offerBack(returnTo); return; }
 
+  // Ordinary console login finalizes server-side. That is what commits the NyxID
+  // ExternalIdentityBinding the Studio/Delivery publish path requires; a browser-side
+  // token exchange leaves the account with no binding and publish answers 409. It also
+  // keeps exchange free of `resource`, which ADR-0018 requires — repeating resource here
+  // narrows the grant per RFC 8707 and that narrowing is inherited by the binding.
+  // The purpose-scoped voice token is deliberately not a login and keeps its own exchange.
+  if(tokenPurpose !== VOICE_TOKEN_PURPOSE){
+    finalizeLogin();
+    return;
+  }
+
   var form = new URLSearchParams();
   form.set("grant_type", "authorization_code");
   form.set("code", code);
@@ -110,10 +121,69 @@
       }
       token.obtained_at = Date.now();
       token.oauth_resources = requestedResources;
-      localStorage.setItem(tokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_KEY : TOKEN_KEY, JSON.stringify(token));
+      localStorage.setItem(VOICE_TOKEN_KEY, JSON.stringify(token));
       location.replace(returnTo);
     })
     .catch(function(e){ show("登录出错：" + (e && e.message ? e.message : e)); offerBack(returnTo); });
+
+  function pick(record, names){
+    for(var i=0;i<names.length;i++){
+      var value = record ? record[names[i]] : undefined;
+      if(value !== undefined && value !== null && value !== "") return value;
+    }
+    return undefined;
+  }
+
+  function finalizationErrorMessage(status, body){
+    var errorCode = String(pick(body, ["error"]) || "");
+    if(errorCode === "required_service_access_missing"){
+      return "NyxID 授权缺少必需服务，请返回重新登录并保留授权页默认勾选的服务。";
+    }
+    if(errorCode === "authorization_code_rejected"){
+      return "NyxID 拒绝了本次授权码，请返回重新登录。";
+    }
+    if(errorCode === "broker_capability_disabled"){
+      return "NyxID 未为本客户端返回绑定标识，请联系管理员检查 OAuth 客户端配置。";
+    }
+    var detail = pick(body, ["detail", "title", "message"]);
+    return "登录finalize失败（" + status + "）" + (detail ? "：" + detail : "。");
+  }
+
+  function finalizeLogin(){
+    fetch("/api/auth/nyxid/finalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ code: code, codeVerifier: pending.verifier, redirectUri: REDIRECT_URI })
+    })
+      .then(function(res){
+        try { sessionStorage.removeItem(PKCE_KEY); } catch(e){}
+        return res.json().catch(function(){ return {}; }).then(function(body){
+          return { ok: res.ok, status: res.status, body: body };
+        });
+      })
+      .then(function(result){
+        if(!result.ok){ show(finalizationErrorMessage(result.status, result.body)); offerBack(returnTo); return; }
+        var tokens = result.body ? result.body.tokens : null;
+        var accessToken = pick(tokens, ["accessToken", "access_token"]);
+        if(!accessToken){ show("登录响应缺少 access_token，请返回重试。"); offerBack(returnTo); return; }
+        var expiresIn = Number(pick(tokens, ["expiresIn", "expires_in"]));
+        var token = {
+          access_token: accessToken,
+          refresh_token: pick(tokens, ["refreshToken", "refresh_token"]) || "",
+          token_type: pick(tokens, ["tokenType", "token_type"]) || "Bearer",
+          expires_in: Number.isFinite(expiresIn) ? expiresIn : 0,
+          id_token: pick(tokens, ["idToken", "id_token"]) || "",
+          scope: pick(tokens, ["scope"]) || "",
+          obtained_at: Date.now(),
+          // Finalize deliberately omits `resource`; the grant is whatever the user
+          // confirmed at consent, so no narrowed set is recorded here.
+          oauth_resources: []
+        };
+        localStorage.setItem(TOKEN_KEY, JSON.stringify(token));
+        location.replace(returnTo);
+      })
+      .catch(function(e){ show("登录出错：" + (e && e.message ? e.message : e)); offerBack(returnTo); });
+  }
 })();
 </script>
 </body>

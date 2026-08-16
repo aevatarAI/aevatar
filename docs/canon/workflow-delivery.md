@@ -103,12 +103,18 @@ The channel entry point is `WorkflowInstallationView.ChannelRunCommand`, the exa
 
 Delivery creates no channel registration, bot binding, agent profile, tool policy, or console entitlement, and no channel-runtime code reads delivery state. Making a delivered workflow reachable from a Lark chat remains a separate, customer-performed registration.
 
+## Customer Onboarding Prerequisites
+
+Publish has two prerequisites that a delivery link alone used to be unable to satisfy. Both are now owned by the delivery flow itself, so the link is self-sufficient for a first-time customer.
+
+`PublishAsync` resolves a `StudioMemberAutomationHttpAuthority` for every trigger intent, including `none`, and fails with `409 DELIVERY_AUTHORIZATION_BINDING_REQUIRED` when the account has no NyxID `ExternalIdentityBinding`. That binding is committed by `POST /api/auth/nyxid/finalize`. The shared Backend Console callback therefore finalizes ordinary console logins server-side instead of exchanging the authorization code in the browser. Finalize also omits `resource`, which ADR-0018 requires: repeating it narrows the grant per RFC 8707 and the binding inherits that narrowing. The purpose-scoped `voice-realtime` token is not a login and keeps its own browser exchange with its intentional narrowing.
+
+Publish also requires a Studio Team, and a new scope has none. The `/delivery` Team step creates one in the target scope through the existing `POST /api/scopes/{scopeId}/teams` contract rather than sending the customer to another product.
+
 ## Known Gaps
 
 These are verified, currently-true limitations. They are recorded here so the surfaces above are not read as more complete than they are.
 
-- **Publish requires a pre-existing NyxID authorization binding.** `PublishAsync` resolves a `StudioMemberAutomationHttpAuthority` for every trigger intent, including `none`, and fails with `409 DELIVERY_AUTHORIZATION_BINDING_REQUIRED` when no `ExternalIdentityBinding` exists. That binding is committed only by `POST /api/auth/nyxid/finalize`, which the product console's login calls; the shared Backend Console callback performs its own authorization-code exchange and does not. A customer holding only a delivery link therefore cannot publish until they have signed in once to the product console with the same NyxID account. Wiring the Backend Console login through `finalize` would also change `/admin` login and drop the resource narrowing that callback currently requests, so it is a separate change requiring live NyxID verification.
-- **Publish requires an existing Studio Team.** `/delivery` lists Teams but cannot create one, so a scope with no Team dead-ends until a Team is created in the product console.
 - **Package schema, acceptance policy, and acceptance input are keyed by literal workflow name.** `WorkflowDeliveryPackageCatalog`, `WorkflowDeliveryAcceptancePolicies.Resolve`, and `WorkflowDeliveryProvisioningExecutor.BuildAcceptancePrompt` all branch on the five shipped names, and the default branch throws `UNSUPPORTED_DELIVERY_PACKAGE`. Allowlisting a sixth package therefore fails provisioning rather than delivering it. This is the hardcoded-template-name pattern the top-level architecture constraints forbid and is tracked as a refactor, not a supported extension point.
 - **Package defaults are the author's own production identifiers.** Only a subset of each package's config keys is exposed as a customer variable; the rest keep the shipped defaults. Every declared variable is required and the renderer now fails closed with `CONFIGURATION_FIELD_REQUIRED` when one is omitted, but an unexposed key still installs the shipped value.
 - **A `cron` installation replays the acceptance payload.** The provisioning prompt is stored verbatim in the schedule intent, so every fire repeats the acceptance input — including its preview-mode flag and the dates frozen at publish. A recurring installation is Ready without performing the recurring work it exists to perform.

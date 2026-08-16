@@ -1133,6 +1133,12 @@
       teams(scopeId) {
         return this.request("/api/scopes/" + encodeURIComponent(scopeId) + "/teams");
       }
+      createTeam(scopeId, displayName) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/teams",
+          { method: "POST", body: JSON.stringify({ displayName: displayName }) }
+        );
+      }
       validateConfig(scopeId, deliveryId, body) {
         return this.request(
           "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
@@ -1523,6 +1529,22 @@
         placeholder: "NyxID user/scope ID",
         onInput: function (event) { setAdminDraft("targetScopeId", event.target.value); }
       });
+      // Delivering to one's own scope is the normal way to rehearse a package end to end,
+      // and the scope id is otherwise only visible in the header. Written straight into the
+      // live input so the surrounding form is not re-rendered mid-edit.
+      const ownScopeId = text(first(state.session, ["scopeId", "currentScopeId", "targetScopeId"], ""));
+      const useOwnScopeButton = ownScopeId
+        ? h("button", {
+            className: "button secondary",
+            type: "button",
+            onClick: function () {
+              scopeInput.value = ownScopeId;
+              setAdminDraft("targetScopeId", ownScopeId);
+              announce("已填入当前账号的 scope");
+            },
+            text: "交付给我自己"
+          })
+        : null;
       const expiresInput = h("input", {
         className: "input",
         id: "expiresAt",
@@ -1577,6 +1599,9 @@
             h("div", { className: "field full" },
               h("label", { htmlFor: "targetScopeId" }, "目标 Scope ", h("span", { className: "required", text: "*" })),
               scopeInput,
+              useOwnScopeButton
+                ? h("div", { className: "inline-actions", style: { marginTop: "8px" } }, useOwnScopeButton)
+                : null,
               h("small", { text: "必须是服务端可验证的 NyxID user/scope ID；交付链接本身不授予权限。" })
             ),
             h("div", { className: "field full" },
@@ -1912,6 +1937,7 @@
         connectionRuntime: Object.create(null),
         connectionErrors: Object.create(null),
         consoleUrl: absoluteHttpUrl(first(detail, ["consoleUrl"], "")),
+        newTeamName: "",
         busy: "",
         clientError: ""
       };
@@ -2090,11 +2116,36 @@
         return notice(description.tone, description.title, description.message);
       }
       if (!state.customer.teams.length) {
-        // Publish requires an existing Team, and this page cannot create one. A brand-new
-        // scope therefore dead-ends here unless the customer is told where Teams are created.
+        // Publish requires an existing Team, and a brand-new scope has none. Without a way
+        // to create one here the delivery link is not self-sufficient, so the empty state
+        // owns the bootstrap instead of sending the customer to another product.
         return emptyBlock(
           "没有可发布的 Team",
-          "当前 scope 未返回具备发布权限的 Team。请先在 Aevatar Console 创建 Team，然后回到本页刷新。");
+          "当前 scope 还没有 Team。Workflow 会安装到 Team 下，请先创建一个。",
+          h("div", { className: "form-grid", style: { marginTop: "12px", textAlign: "left" } },
+            h("div", { className: "field" },
+              h("label", { className: "label", htmlFor: "delivery-new-team-name", text: "Team 名称" }),
+              h("input", {
+                className: "input",
+                id: "delivery-new-team-name",
+                type: "text",
+                value: state.customer.newTeamName,
+                placeholder: "例如：HR 自动化",
+                disabled: state.customer.busy === "create-team",
+                onInput: function (event) { state.customer.newTeamName = event.currentTarget.value; }
+              })
+            ),
+            // Not disabled on empty input: every render replaces the whole document, so
+            // re-rendering per keystroke to recompute `disabled` would destroy focus
+            // mid-typing. The name is validated on submit instead.
+            h("button", {
+              className: "button primary",
+              type: "button",
+              disabled: state.customer.busy === "create-team",
+              onClick: createTeam,
+              text: state.customer.busy === "create-team" ? "正在创建..." : "创建 Team"
+            })
+          ));
       }
       return h("div", { className: "team-list" }, state.customer.teams.map(function (team) {
         const id = teamId(team);
@@ -2762,6 +2813,34 @@
           ? { tone: "info", title: "重试请求已受理", message: "仍需等待服务端安装状态变为 ready。" }
           : { tone: "info", title: "重试已提交", message: "正在读取服务端状态。" };
         await loadInstallation(scopeId, state.customer.installationId, state.routeSequence, false);
+      } catch (error) {
+        const description = errorDescription(error);
+        state.notice = { tone: description.tone, title: description.title, message: description.message };
+      } finally {
+        if (state.customer) state.customer.busy = "";
+        renderCustomerDetail();
+      }
+    }
+
+    async function createTeam() {
+      if (!state.customer || state.customer.busy) return;
+      const displayName = text(state.customer.newTeamName);
+      if (!displayName) {
+        state.notice = { tone: "warning", title: "请填写 Team 名称", message: "Team 名称不能为空。" };
+        renderCustomerDetail();
+        return;
+      }
+      state.customer.busy = "create-team";
+      renderCustomerDetail();
+      const scopeId = customerScopeId(state.customer.detail);
+      const deliveryIdValue = state.customer.deliveryId;
+      try {
+        await api.createTeam(scopeId, displayName);
+        state.customer.newTeamName = "";
+        state.notice = { tone: "success", title: "Team 已创建", message: "现在可以选择该 Team 并继续配置。" };
+        announce("Team 已创建");
+        state.customer.busy = "";
+        await loadTeams(scopeId, deliveryIdValue, state.routeSequence);
       } catch (error) {
         const description = errorDescription(error);
         state.notice = { tone: description.tone, title: description.title, message: description.message };
