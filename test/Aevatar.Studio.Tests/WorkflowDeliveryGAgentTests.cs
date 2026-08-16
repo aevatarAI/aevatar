@@ -31,7 +31,7 @@ public sealed class WorkflowDeliveryGAgentTests
         agent.EventSourcing!.CurrentVersion.Should().Be(1);
         agent.State.DeliveryId.Should().Be("delivery-alpha");
         agent.State.TargetScopeId.Should().Be("scope-alpha");
-        agent.State.Package.SourceYaml.Should().Be("name: workflow-alpha\n");
+        agent.State.Package.SourceYaml.Should().Be(MultiLineSourceYaml);
         agent.State.Package.SourceHash.Should().Be("sha256-alpha");
         agent.State.LifecycleStatus.Should().Be(WorkflowDeliveryLifecycleStatus.Active);
     }
@@ -600,6 +600,63 @@ public sealed class WorkflowDeliveryGAgentTests
             .WithMessage("*unknown binding run*");
     }
 
+    // A real workflow document is multi-line. A single-line fixture hides identifier-shaped
+    // validation of YAML fields, because Trim() removes the only line break it has.
+    private const string MultiLineSourceYaml =
+        "name: workflow-alpha\ndescription: |\n  first line\n  second line\nsteps:\n  - id: config\n    parameters:\n      value: '{\"a\":1}'\n";
+
+    [Fact]
+    public async Task Create_WhenPackageYamlIsMultiLine_ShouldCommitItVerbatim()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var command = CommandWithSourceYaml("delivery-alpha", MultiLineSourceYaml);
+
+        await agent.HandleCreateAsync(command);
+
+        agent.State.Package.SourceYaml.Should().Be(MultiLineSourceYaml);
+        agent.State.Package.SourceYaml.Should().Contain("\n  second line");
+    }
+
+    [Fact]
+    public async Task StartInstallation_WhenResolvedYamlIsMultiLine_ShouldAcceptIt()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        var command = StartInstallationCommand();
+        command.ResolvedYaml = MultiLineSourceYaml;
+
+        await agent.HandleStartInstallationAsync(command);
+
+        agent.State.Installation.ResolvedYaml.Should().Be(MultiLineSourceYaml);
+    }
+
+    [Theory]
+    [InlineData("name: a\u0000b\nsteps: []\n")]
+    [InlineData("name: a\u0007b\nsteps: []\n")]
+    public async Task Create_WhenPackageYamlCarriesNonTextControlCharacters_ShouldReject(string yaml)
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var command = CommandWithSourceYaml("delivery-alpha", yaml);
+
+        var action = () => agent.HandleCreateAsync(command);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*source_yaml*control characters*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(0);
+    }
+
+    private static CreateWorkflowDeliveryCommand CommandWithSourceYaml(string deliveryId, string sourceYaml)
+    {
+        var command = CreateCommand(deliveryId);
+        command.Package.SourceYaml = sourceYaml;
+        command.Package.PackageHash = WorkflowDeliveryConventions.ComputePackageHash(command.Package);
+        command.Package.Version = command.Package.PackageHash[..16];
+        command.Package.PackageVersionId = WorkflowDeliveryConventions.BuildPackageVersionId(
+            command.Package.WorkflowName,
+            command.Package.PackageHash);
+        return command;
+    }
+
     private static CreateWorkflowDeliveryCommand CreateCommand(string deliveryId)
     {
         var package = new WorkflowPackageVersionSnapshot
@@ -607,7 +664,7 @@ public sealed class WorkflowDeliveryGAgentTests
             PackageId = "package-alpha",
             WorkflowName = "workflow-alpha",
             DisplayName = "Workflow Alpha",
-            SourceYaml = "name: workflow-alpha\n",
+            SourceYaml = MultiLineSourceYaml,
             SourceHash = "sha256-alpha",
             AcceptancePolicy = new WorkflowDeliveryAcceptancePolicy
             {

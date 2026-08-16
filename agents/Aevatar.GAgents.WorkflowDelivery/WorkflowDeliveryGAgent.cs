@@ -550,7 +550,7 @@ public sealed class WorkflowDeliveryGAgent
         WorkflowDeliveryConventions.NormalizeRequired(package.PackageVersionId, "package_version_id");
         WorkflowDeliveryConventions.NormalizeRequired(package.WorkflowName, "workflow_name");
         WorkflowDeliveryConventions.NormalizeRequired(package.Version, "version");
-        WorkflowDeliveryConventions.NormalizeRequired(package.SourceYaml, "source_yaml");
+        WorkflowDeliveryConventions.NormalizeRequiredDocument(package.SourceYaml, "source_yaml");
         WorkflowDeliveryConventions.NormalizeRequired(package.SourceHash, "source_hash");
         WorkflowDeliveryConventions.NormalizeRequired(package.PackageHash, "package_hash");
         WorkflowDeliveryConventions.NormalizeRequired(package.CreatedBy, "package.created_by");
@@ -581,7 +581,7 @@ public sealed class WorkflowDeliveryGAgent
         WorkflowDeliveryConventions.NormalizeRequired(command.InstallationId, "installation_id");
         WorkflowDeliveryConventions.NormalizeRequired(command.IdempotencyKey, "idempotency_key");
         WorkflowDeliveryConventions.NormalizeRequired(command.TeamId, "team_id");
-        WorkflowDeliveryConventions.NormalizeRequired(command.ResolvedYaml, "resolved_yaml");
+        WorkflowDeliveryConventions.NormalizeRequiredDocument(command.ResolvedYaml, "resolved_yaml");
         WorkflowDeliveryConventions.NormalizeRequired(command.ResolvedHash, "resolved_hash");
         WorkflowDeliveryConventions.NormalizeRequired(command.OperationId, "operation_id");
         ArgumentNullException.ThrowIfNull(command.CapabilityAdmissionPlan);
