@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
@@ -121,6 +122,17 @@ function createEndpointContract(overrides?: Record<string, unknown>) {
     responseContentType: "text/event-stream",
     responseTypeUrl: "type.googleapis.com/aevatar.ai.ChatResponseEvent",
     revisionId: "rev-alpha",
+    invocationReadiness: {
+      canInvoke: true,
+      deploymentId: "dep-alpha",
+      message: "Member endpoint is ready for invocation.",
+      observedAtUtc: "2026-08-17T04:57:08Z",
+      reasonCode: "ready",
+      revisionId: "rev-alpha",
+      status: "ready",
+    },
+    publishedServiceStateVersion: 2,
+    boundRevisionStateVersion: 3,
     sampleRequestJson: null,
     scopeId: "scope-1",
     serviceId: "",
@@ -348,6 +360,150 @@ describe("TeamMemberInvokePage", () => {
     );
   });
 
+  it("refetches the member endpoint contract instead of reusing a fresh cached identity", async () => {
+    const currentServiceId = "svc-current";
+    let resolveEndpointContract: ((value: unknown) => void) | undefined;
+    const endpointContractRequest = new Promise((resolve) => {
+      resolveEndpointContract = resolve;
+    });
+    (studioApi.getMember as jest.Mock).mockResolvedValueOnce(
+      createWorkflowMember({ publishedServiceId: currentServiceId }),
+    );
+    (studioApi.getMemberBinding as jest.Mock).mockResolvedValueOnce(
+      createBinding({ publishedServiceId: currentServiceId }),
+    );
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockReturnValueOnce(endpointContractRequest);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          gcTime: Infinity,
+          retry: false,
+          staleTime: 30_000,
+        },
+      },
+    });
+    queryClient.setQueryData(
+      [
+        "team-member-invoke",
+        "endpoint-contract",
+        "scope-1",
+        "member-alpha",
+        "chat",
+      ],
+      createEndpointContract({ publishedServiceId: "svc-stale" }),
+    );
+
+    renderWithQueryClient(
+      React.createElement(TeamMemberInvokePage),
+      queryClient,
+    );
+
+    await waitFor(() => {
+      expect(scopeRuntimeApi.getMemberEndpointContract).toHaveBeenCalledWith(
+        "scope-1",
+        "member-alpha",
+        "chat",
+      );
+    });
+    expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    expect(screen.getByText("Loading invoke context...")).toBeTruthy();
+
+    resolveEndpointContract?.(
+      createEndpointContract({ publishedServiceId: currentServiceId }),
+    );
+
+    expect(await screen.findByTestId("member-invoke-panel")).toHaveTextContent(
+      `service:${currentServiceId}`,
+    );
+  });
+
+  it("fails closed when the endpoint contract omits its published service identity", async () => {
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockResolvedValueOnce(
+      createEndpointContract({ publishedServiceId: "" }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(
+      await screen.findByText("No callable endpoint is available."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+  });
+
+  it("shows the committed readiness reason instead of enabling an unavailable endpoint", async () => {
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockResolvedValueOnce(
+      createEndpointContract({
+        invocationReadiness: {
+          canInvoke: false,
+          deploymentId: "dep-alpha",
+          message: "Invocation catalog has not observed the serving revision.",
+          observedAtUtc: "2026-08-17T04:57:08Z",
+          reasonCode: "invocation_catalog_not_ready",
+          revisionId: "rev-alpha",
+          status: "invocation_catalog_not_ready",
+        },
+      }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(await screen.findByText("Member endpoint is not ready.")).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        "Invocation catalog has not observed the serving revision.",
+      ),
+    ).toHaveLength(2);
+    expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
+
+    expect(await screen.findByTestId("member-invoke-panel")).toHaveTextContent(
+      "service:svc-alpha",
+    );
+    expect(scopeRuntimeApi.getMemberEndpointContract).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat a non-stream endpoint contract as the chat stream", async () => {
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockResolvedValueOnce(createEndpointContract({ supportsSse: false }));
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(
+      await screen.findByText("No callable endpoint is available."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+  });
+
+  it("waits for committed service and revision source versions", async () => {
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockResolvedValueOnce(
+      createEndpointContract({ boundRevisionStateVersion: 0 }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(await screen.findByText("Member endpoint is not ready.")).toBeTruthy();
+    expect(
+      screen.getAllByText(
+        "Committed service and revision source versions are not visible yet.",
+      ),
+    ).toHaveLength(2);
+    expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+  });
+
   it("does not read removed legacy Team member invoke links", async () => {
     window.history.replaceState(
       {},
@@ -488,7 +644,30 @@ describe("TeamMemberInvokePage", () => {
       currentBindingRun: null,
       lastBinding: null,
     });
-    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          gcTime: Infinity,
+          retry: false,
+          staleTime: 30_000,
+        },
+      },
+    });
+    queryClient.setQueryData(
+      [
+        "team-member-invoke",
+        "endpoint-contract",
+        "scope-1",
+        "member-alpha",
+        "chat",
+      ],
+      createEndpointContract(),
+    );
+
+    renderWithQueryClient(
+      React.createElement(TeamMemberInvokePage),
+      queryClient,
+    );
 
     expect(
       await screen.findByText("This workflow member is not bound yet."),
@@ -511,5 +690,6 @@ describe("TeamMemberInvokePage", () => {
       await screen.findByText("No callable endpoint is available."),
     ).toBeTruthy();
     expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
+    expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
   });
 });

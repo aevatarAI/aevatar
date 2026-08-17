@@ -15,7 +15,10 @@ import {
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
-import type { ScopeServiceEndpointContract } from '@/shared/models/runtime/scopeServices';
+import type {
+  ScopeMemberEndpointContract,
+  ScopeServiceEndpointContract,
+} from '@/shared/models/runtime/scopeServices';
 import { isAutoEncodableTextPayloadTypeUrl } from '@/shared/runs/protobufPayload';
 import {
   createNyxIdChatBindingInput,
@@ -52,7 +55,10 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 type StudioMemberInvokePanelProps = {
-  readonly authoritativeEndpointContract?: ScopeServiceEndpointContract | null;
+  readonly authoritativeEndpointContract?:
+    | ScopeMemberEndpointContract
+    | ScopeServiceEndpointContract
+    | null;
   readonly enableFileAttachments?: boolean;
   readonly scopeId: string;
   readonly memberId?: string;
@@ -693,7 +699,9 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const [payloadTypeUrl, setPayloadTypeUrl] = useState('');
   const [payloadBase64, setPayloadBase64] = useState('');
   const [loadedEndpointContract, setLoadedEndpointContract] =
-    useState<ScopeServiceEndpointContract | null>(null);
+    useState<
+      ScopeMemberEndpointContract | ScopeServiceEndpointContract | null
+    >(null);
   const [invokeResult, setInvokeResult] = useState<InvokeResultState>(
     createIdleResult(),
   );
