@@ -28,8 +28,12 @@ Use the sources in this order:
    schedule collection, graph node, draft property, or Run property.
 4. The user-path specification is the normative end-to-end journey, decision,
    recovery, and completion-evidence contract.
-5. The PNG files are viewport references for individual states.
-6. `prototype.html` is an interaction demonstration only.
+5. The PNG files are viewport references for individual states. Schedule
+   review starts with `prototype-schedule.png` and the complete
+   `aevatar-workflow-schedule-design.png` overview.
+6. `prototype.html` is an interaction demonstration only;
+   `prototype-schedule.html` opens its published Workflow Schedule state
+   directly.
 7. `aevatar-workflow-activity-vnext.gen.py` and
    `aevatar-workflow-schedule-design.gen.py` are source generators for these
    reference artifacts; they are not application runtime code.
@@ -116,7 +120,7 @@ Contract specification:
 Schedule design, when Schedule is in scope:
   aevatar-workflow-schedule-design.excalidraw
 Schedule design SHA-256:
-  c9735e39ede65a7cb265c07c66e7530bbb186139fcff38327ee6f8f221224f6d
+  d1838c0e292b77af646a386cffe7da4590f9ac33da3510526f19fe38b4395084
 Schedule supplement, when Schedule is in scope:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-11-workflow-schedule-design.md
@@ -145,9 +149,13 @@ failures rather than undocumented implementation choices.
 - `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity 与 Settings，共 17 个 frame。
 - `aevatar-workflow-schedule-design.excalidraw`：根据用户提供的 schedule wireframe 重绘的独立 Excalidraw，只包含从 Workflows 进入排程、配置周期、授权、Activity 观察、详情恢复、修改和组件状态，共 9 个 frame。
 - `aevatar-workflow-schedule-design.gen.py`：上述 Schedule 画板的确定性生成器。
+- `aevatar-workflow-schedule-design.png`：9 个 Schedule frame 的 4800×3200 完整评审总览图。
+- `render-schedule-png.py`：从 Schedule Excalidraw 确定性渲染页面图和总览图的 Pillow 脚本。
 - `aevatar-workflow-activity-vnext.gen.py`：画板生成器，内含画框边界、ID 唯一性和废弃术语检查。
 - `verify-baseline.py`：仓库内校验器，验证主画板和 Schedule 画板 SHA-256、两个生成器的确定性输出、17 个主画板 frame 和 9 个 Schedule frame 的精确清单。
 - `prototype.html`：可直接在浏览器打开的交互原型，不需要安装依赖或启动服务。
+- `prototype-schedule.html`：打开后直接进入已发布 Workflow 的新建 Schedule 配置，不需要先从 Draft 列表寻找入口。
+- `prototype-schedule.png`：Schedule 配置首屏的 1440×900 PNG，实现时优先对照此图。
 - `prototype-workflows.png`：Workflows 桌面视图截图。
 - `prototype-activity.png`：Activity 桌面视图截图。
 - `prototype-mobile.png`：Activity 移动视图截图。
@@ -253,7 +261,7 @@ Workflows
 以下步骤只用于操作独立原型。步骤中的 `localStorage`、计时器、示例用户和
 示例记录不是 API 行为，也不是生产实现要求。
 
-1. 打开 `prototype.html`，默认进入 Workflows。
+1. 打开 `prototype.html`，默认进入 Workflows；已发布 Workflow 行直接提供 `Schedule` 操作。只评审 Schedule 时可直接打开 `prototype-schedule.html`。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
 3. 在画布点击节点，右侧打开 Node configuration；`Add node` 从左侧打开 Node library；`Edit YAML` 从右侧打开 YAML 面板。
 4. 打开一个已发布 Team member Workflow，点击 `Schedule` 检查右侧 Member automations 面板，再点击 `View scheduled runs` 检查当前 Workflow 的通用 `Source: Schedule` Activity 筛选；未发布 Workflow 或缺少权威 `teamId/memberId/publishedServiceId` 的同一动作保持禁用，并显示 `Publish this workflow before scheduling it.` 或 `Open the Team member workflow before scheduling it.`。面板中的 automation 数据是演示数据，不能视为 API 行为；生产实现读取 `/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations`。

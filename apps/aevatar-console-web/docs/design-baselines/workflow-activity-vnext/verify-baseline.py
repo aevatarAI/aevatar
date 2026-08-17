@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
+import zlib
 from pathlib import Path
 
 
@@ -16,9 +19,15 @@ BOARD_NAME = "aevatar-workflow-activity-vnext.excalidraw"
 SCHEDULE_BOARD_NAME = "aevatar-workflow-schedule-design.excalidraw"
 GENERATOR_NAME = "aevatar-workflow-activity-vnext.gen.py"
 SCHEDULE_GENERATOR_NAME = "aevatar-workflow-schedule-design.gen.py"
+SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
+SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
+SCHEDULE_PAGE_PNG_NAME = "prototype-schedule.png"
+SCHEDULE_BOARD_PNG_NAME = "aevatar-workflow-schedule-design.png"
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "c9735e39ede65a7cb265c07c66e7530bbb186139fcff38327ee6f8f221224f6d"
+EXPECTED_SCHEDULE_SHA256 = "d1838c0e292b77af646a386cffe7da4590f9ac33da3510526f19fe38b4395084"
+EXPECTED_SCHEDULE_PAGE_PNG_SHA256 = "3fc54bb81f4065147013e00279c329f147b9a0c69e7d97ae0f986651a8bddc11"
+EXPECTED_SCHEDULE_BOARD_PNG_SHA256 = "ff7b4cbfffa0c592e58ee07f54e8c9126cb8c50820f44c9ecd99d8ba3279c781"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -51,12 +60,122 @@ EXPECTED_SCHEDULE_FRAMES = (
 )
 
 
+def png_chunks(data: bytes) -> list[tuple[bytes, bytes]]:
+    chunks: list[tuple[bytes, bytes]] = []
+    offset = 8
+    while offset + 12 <= len(data):
+        length = int.from_bytes(data[offset:offset + 4], "big")
+        chunk_type = data[offset + 4:offset + 8]
+        chunk_data = data[offset + 8:offset + 8 + length]
+        chunks.append((chunk_type, chunk_data))
+        offset += length + 12
+        if chunk_type == b"IEND":
+            break
+    return chunks
+
+
+def paeth(left: int, above: int, upper_left: int) -> int:
+    prediction = left + above - upper_left
+    left_distance = abs(prediction - left)
+    above_distance = abs(prediction - above)
+    upper_left_distance = abs(prediction - upper_left)
+    if left_distance <= above_distance and left_distance <= upper_left_distance:
+        return left
+    if above_distance <= upper_left_distance:
+        return above
+    return upper_left
+
+
+def sampled_png_colors(chunks: list[tuple[bytes, bytes]]) -> set[tuple[int, int, int]]:
+    ihdr = next(chunk for chunk_type, chunk in chunks if chunk_type == b"IHDR")
+    width = int.from_bytes(ihdr[0:4], "big")
+    height = int.from_bytes(ihdr[4:8], "big")
+    if ihdr[8:13] != bytes((8, 2, 0, 0, 0)):
+        raise SystemExit("Schedule PNG must be non-interlaced 8-bit RGB")
+    encoded = b"".join(chunk for chunk_type, chunk in chunks if chunk_type == b"IDAT")
+    decoded = zlib.decompress(encoded)
+    bytes_per_pixel = 3
+    stride = width * bytes_per_pixel
+    previous = bytearray(stride)
+    offset = 0
+    colors: set[tuple[int, int, int]] = set()
+    sample_x = max(1, width // 240)
+    sample_y = max(1, height // 160)
+
+    for row_index in range(height):
+        filter_type = decoded[offset]
+        offset += 1
+        row = bytearray(decoded[offset:offset + stride])
+        offset += stride
+        for byte_index in range(stride):
+            left = row[byte_index - bytes_per_pixel] if byte_index >= bytes_per_pixel else 0
+            above = previous[byte_index]
+            upper_left = previous[byte_index - bytes_per_pixel] if byte_index >= bytes_per_pixel else 0
+            if filter_type == 1:
+                row[byte_index] = (row[byte_index] + left) & 0xFF
+            elif filter_type == 2:
+                row[byte_index] = (row[byte_index] + above) & 0xFF
+            elif filter_type == 3:
+                row[byte_index] = (row[byte_index] + ((left + above) // 2)) & 0xFF
+            elif filter_type == 4:
+                row[byte_index] = (row[byte_index] + paeth(left, above, upper_left)) & 0xFF
+            elif filter_type != 0:
+                raise SystemExit(f"unsupported PNG filter: {filter_type}")
+        if row_index % sample_y == 0:
+            for column in range(0, width, sample_x):
+                start = column * bytes_per_pixel
+                colors.add(tuple(row[start:start + bytes_per_pixel]))
+        previous = row
+
+    return colors
+
+
+def verify_png(
+    path: Path,
+    expected_size: tuple[int, int],
+    expected_sha256: str,
+    expected_source_sha256: str,
+    expected_renderer_sha256: str,
+) -> None:
+    data = path.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise SystemExit(f"not a PNG file: {path.name}")
+    actual_size = (
+        int.from_bytes(data[16:20], "big"),
+        int.from_bytes(data[20:24], "big"),
+    )
+    if actual_size != expected_size:
+        raise SystemExit(
+            f"{path.name} size mismatch: expected {expected_size}, got {actual_size}"
+        )
+    actual_sha256 = hashlib.sha256(data).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise SystemExit(
+            f"{path.name} SHA-256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+        )
+    chunks = png_chunks(data)
+    metadata = {
+        value.split(b"\0", 1)[0].decode("latin-1"): value.split(b"\0", 1)[1].decode("latin-1")
+        for chunk_type, value in chunks
+        if chunk_type == b"tEXt" and b"\0" in value
+    }
+    if metadata.get("Source-SHA256") != expected_source_sha256:
+        raise SystemExit(f"{path.name} is not linked to the current Schedule Excalidraw")
+    if metadata.get("Renderer-SHA256") != expected_renderer_sha256:
+        raise SystemExit(f"{path.name} is not linked to the current PNG renderer")
+    colors = sampled_png_colors(chunks)
+    if len(colors) < 16:
+        raise SystemExit(f"{path.name} does not contain a non-blank rendered design")
+
+
 def main() -> None:
     board_path = BASELINE_DIR / BOARD_NAME
     schedule_board_path = BASELINE_DIR / SCHEDULE_BOARD_NAME
     generator_path = BASELINE_DIR / GENERATOR_NAME
     schedule_generator_path = BASELINE_DIR / SCHEDULE_GENERATOR_NAME
+    schedule_renderer_path = BASELINE_DIR / SCHEDULE_RENDERER_NAME
     prototype_path = BASELINE_DIR / PROTOTYPE_NAME
+    schedule_prototype_path = BASELINE_DIR / SCHEDULE_PROTOTYPE_NAME
     board_bytes = board_path.read_bytes()
     schedule_board_bytes = schedule_board_path.read_bytes()
 
@@ -72,6 +191,7 @@ def main() -> None:
             "schedule design SHA-256 mismatch: "
             f"expected {EXPECTED_SCHEDULE_SHA256}, got {actual_schedule_sha256}"
         )
+    actual_renderer_sha256 = hashlib.sha256(schedule_renderer_path.read_bytes()).hexdigest()
 
     document = json.loads(board_bytes)
     schedule_document = json.loads(schedule_board_bytes)
@@ -113,6 +233,10 @@ def main() -> None:
     prototype_text = prototype_path.read_text(encoding="utf-8")
     if 'id="editor-schedule"' not in prototype_text:
         raise SystemExit("prototype schedule action is missing from the editor")
+    if 'data-schedule-workflow="${item.id}"' not in prototype_text:
+        raise SystemExit("prototype does not expose Schedule from published Workflow rows")
+    if 'window.location.hash === "#schedule"' not in prototype_text:
+        raise SystemExit("prototype does not expose a directly addressable Schedule state")
     if 'class="studio-schedule-panel"' not in prototype_text:
         raise SystemExit("prototype schedule panel is missing from the editor")
     if "Publish this workflow before scheduling it." not in prototype_text:
@@ -169,6 +293,24 @@ def main() -> None:
     if 'schedule.enabled ? schedule.preview : ["No upcoming runs"]' not in prototype_text:
         raise SystemExit("prototype promises upcoming runs for a paused Schedule")
 
+    schedule_prototype_text = schedule_prototype_path.read_text(encoding="utf-8")
+    if "prototype.html#schedule" not in schedule_prototype_text:
+        raise SystemExit("dedicated Schedule prototype does not open the visible Schedule state")
+    verify_png(
+        BASELINE_DIR / SCHEDULE_PAGE_PNG_NAME,
+        (1440, 900),
+        EXPECTED_SCHEDULE_PAGE_PNG_SHA256,
+        actual_schedule_sha256,
+        actual_renderer_sha256,
+    )
+    verify_png(
+        BASELINE_DIR / SCHEDULE_BOARD_PNG_NAME,
+        (4800, 3200),
+        EXPECTED_SCHEDULE_BOARD_PNG_SHA256,
+        actual_schedule_sha256,
+        actual_renderer_sha256,
+    )
+
     frame_names = tuple(
         element["name"]
         for element in document["elements"]
@@ -192,6 +334,16 @@ def main() -> None:
         subprocess.run(["python3", str(generated_schedule_script)], check=True, capture_output=True)
         generated_schedule_bytes = (generated_dir / SCHEDULE_BOARD_NAME).read_bytes()
 
+        if importlib.util.find_spec("PIL") is not None:
+            subprocess.run(
+                [sys.executable, str(schedule_renderer_path), "--output-dir", str(generated_dir)],
+                check=True,
+                capture_output=True,
+            )
+            for png_name in (SCHEDULE_PAGE_PNG_NAME, SCHEDULE_BOARD_PNG_NAME):
+                if (generated_dir / png_name).read_bytes() != (BASELINE_DIR / png_name).read_bytes():
+                    raise SystemExit(f"schedule renderer output does not match {png_name}")
+
     if generated_bytes != board_bytes:
         raise SystemExit("generator output does not match the committed Excalidraw")
     if generated_schedule_bytes != schedule_board_bytes:
@@ -201,6 +353,9 @@ def main() -> None:
     print(f"frames: {len(frame_names)}/{len(EXPECTED_FRAMES)}")
     print(f"schedule design SHA-256: {actual_schedule_sha256}")
     print(f"schedule frames: {len(schedule_frame_names)}/{len(EXPECTED_SCHEDULE_FRAMES)}")
+    print("schedule PNGs: 1440x900 page + 4800x3200 overview")
+    print("schedule PNG pixels: non-blank and source-linked")
+    print("schedule HTML: direct entry available")
     print("generators output: byte-identical")
     print("workflow activity vNext baseline: PASS")
 

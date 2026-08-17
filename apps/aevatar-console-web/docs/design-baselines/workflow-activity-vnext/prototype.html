@@ -1220,6 +1220,12 @@ steps:
       window.scrollTo({ top: 0, behavior: "instant" });
     }
 
+    function canScheduleWorkflow(workflow) {
+      return workflow.state === "Published"
+        && Boolean(workflow.scopeId && workflow.teamId && workflow.memberId
+          && workflow.publishedServiceId && workflow.activeRevisionId);
+    }
+
     function renderWorkflows() {
       const query = document.querySelector("#workflow-search").value.trim().toLowerCase();
       const filtered = workflows.filter(item => {
@@ -1244,11 +1250,11 @@ steps:
           <td><span class="mono">${escapeHtml(item.revision)}</span></td>
           <td><span class="status ${statusClass(item.lastStatus === "Never" ? "Draft" : item.lastStatus)}">${escapeHtml(item.lastStatus)}</span><span class="sub">${escapeHtml(item.last)}</span></td>
           <td><span class="status ${statusClass(item.state)}">${escapeHtml(item.state)}</span></td>
-          <td><div class="row-actions"><button type="button" class="button small" data-run-workflow="${item.id}" ${item.steps.length ? "" : 'disabled title="Add a step before running"'}>Run</button><button type="button" class="button small" data-open-workflow="${item.id}">Open</button></div></td>
+          <td><div class="row-actions"><button type="button" class="button small" data-run-workflow="${item.id}" ${item.steps.length ? "" : 'disabled title="Add a step before running"'}>Run</button><button type="button" class="button small" data-schedule-workflow="${item.id}" ${canScheduleWorkflow(item) ? "" : 'disabled title="Publish this Team member workflow before scheduling it"'}>Schedule</button><button type="button" class="button small" data-open-workflow="${item.id}">Open</button></div></td>
         </tr>`).join("");
       wrap.innerHTML = `
-        <div class="desktop-table"><table class="data-table"><colgroup><col style="width:34%"><col style="width:19%"><col style="width:19%"><col style="width:13%"><col style="width:15%"></colgroup><thead><tr><th>Workflow</th><th>Version</th><th>Last Run</th><th>State</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>
-        <div class="mobile-runs">${filtered.map(item => `<article class="mobile-run"><div class="mobile-run-top"><span class="status ${statusClass(item.state)}">${escapeHtml(item.state)}</span><span class="mono muted">${escapeHtml(item.revision)}</span></div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.description)}</p><div class="row-actions" style="margin-top:14px"><button type="button" class="button small" data-run-workflow="${item.id}" ${item.steps.length ? "" : 'disabled title="Add a step before running"'}>Run</button><button type="button" class="button small" data-open-workflow="${item.id}">Open</button></div></article>`).join("")}</div>
+        <div class="desktop-table"><table class="data-table"><colgroup><col style="width:31%"><col style="width:17%"><col style="width:18%"><col style="width:12%"><col style="width:22%"></colgroup><thead><tr><th>Workflow</th><th>Version</th><th>Last Run</th><th>State</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="mobile-runs">${filtered.map(item => `<article class="mobile-run"><div class="mobile-run-top"><span class="status ${statusClass(item.state)}">${escapeHtml(item.state)}</span><span class="mono muted">${escapeHtml(item.revision)}</span></div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.description)}</p><div class="row-actions" style="margin-top:14px"><button type="button" class="button small" data-run-workflow="${item.id}" ${item.steps.length ? "" : 'disabled title="Add a step before running"'}>Run</button><button type="button" class="button small" data-schedule-workflow="${item.id}" ${canScheduleWorkflow(item) ? "" : 'disabled title="Publish this Team member workflow before scheduling it"'}>Schedule</button><button type="button" class="button small" data-open-workflow="${item.id}">Open</button></div></article>`).join("")}</div>
         <p class="table-foot">${filtered.length} workflows · Every Run, including a draft revision, is retained in Activity.</p>`;
       bindWorkflowRows();
     }
@@ -1260,6 +1266,25 @@ steps:
       document.querySelectorAll("[data-run-workflow]").forEach(button => {
         button.onclick = () => openRunModal(workflows.find(item => item.id === button.dataset.runWorkflow));
       });
+      document.querySelectorAll("[data-schedule-workflow]").forEach(button => {
+        button.onclick = () => openSchedulePrototype(button.dataset.scheduleWorkflow);
+      });
+    }
+
+    function openSchedulePrototype(id = "wf-feedback") {
+      const publishedWorkflow = workflows.find(item => item.id === id && canScheduleWorkflow(item))
+        || workflows.find(canScheduleWorkflow)
+        || structuredClone(seedWorkflows.find(canScheduleWorkflow));
+      if (!publishedWorkflow) return;
+      currentWorkflow = publishedWorkflow;
+      selectedStep = -1;
+      schedulePanelOpen = true;
+      schedulePanelMode = "new";
+      selectedScheduleId = null;
+      canvasZoom = null;
+      document.querySelector("#yaml-panel").hidden = true;
+      renderEditor();
+      showView("editor");
     }
 
     function openWorkflow(id) {
@@ -2152,6 +2177,7 @@ steps:
     renderEditor();
     renderActivity();
     renderSettings();
+    if (window.location.hash === "#schedule") openSchedulePrototype();
   </script>
 </body>
 </html>

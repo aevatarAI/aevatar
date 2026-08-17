@@ -263,26 +263,27 @@ def schedule_summary(x: float, y: float, width: float) -> None:
 
 def schedule_fields(x: float, y: float, width: float) -> None:
     field(x, y, width, "Automation name", "Morning feedback digest")
-    text(x, y + 86, "HOW OFTEN", FS_SMALL, MUTED, font=FONT_MONO)
+    text(x, y + 76, "HOW OFTEN", FS_SMALL, MUTED, font=FONT_MONO)
     cursor = x
-    cursor = chip(cursor, y + 108, "Every weekday", selected=True, width=142)
-    cursor = chip(cursor, y + 108, "Every week", width=124)
-    chip(cursor, y + 108, "Custom cron", width=122)
-    field(x, y + 164, width * 0.54, "Repeat", "Mon  Tue  Wed  Thu  Fri")
-    field(x + width * 0.57, y + 164, width * 0.43, "At", "09:00")
-    field(x, y + 252, width, "Time zone", "Asia/Singapore")
-    field(x, y + 340, width, "Cron expression", "0 9 * * 1-5", mono=True)
-    text(x, y + 430, "NEXT FIVE FIRES", FS_SMALL, MUTED, font=FONT_MONO)
-    rect(x, y + 452, width, 86, bg=SUBTLE, stroke=LINE)
-    text(x + 14, y + 466,
-         "Mon 24 Aug 09:00   ·   Tue 25 Aug 09:00   ·   Wed 26 Aug 09:00\n"
-         "Thu 27 Aug 09:00   ·   Fri 28 Aug 09:00",
+    cursor = chip(cursor, y + 98, "Every weekday", selected=True, width=142)
+    cursor = chip(cursor, y + 98, "Every week", width=124)
+    chip(cursor, y + 98, "Custom cron", width=122)
+    field(x, y + 146, width * 0.54, "Repeat", "Mon  Tue  Wed  Thu  Fri")
+    field(x + width * 0.57, y + 146, width * 0.43, "At", "09:00")
+    field(x, y + 224, width, "Time zone", "Asia/Singapore")
+    field(x, y + 302, width, "Cron expression", "0 9 * * 1-5", mono=True)
+    text(x, y + 380, "NEXT FIVE FIRES", FS_SMALL, MUTED, font=FONT_MONO)
+    rect(x, y + 402, width, 70, bg=SUBTLE, stroke=LINE)
+    text(x + 14, y + 414,
+         "Mon 24 Aug 09:00   ·   Tue 25 Aug 09:00\n"
+         "Wed 26 Aug 09:00   ·   Thu 27 Aug 09:00\n"
+         "Fri 28 Aug 09:00",
          FS_SMALL, INK, font=FONT_MONO, width=width - 28)
-    text(x, y + 556, "PROMPT (OPTIONAL)", FS_SMALL, MUTED, font=FONT_MONO)
-    rect(x, y + 578, width, 68, bg=SURFACE, stroke=LINE)
-    text(x + 12, y + 590, "Summarize new feedback and post one concise update.",
+    text(x, y + 484, "PROMPT (OPTIONAL)", FS_SMALL, MUTED, font=FONT_MONO)
+    rect(x, y + 506, width, 54, bg=SURFACE, stroke=LINE)
+    text(x + 12, y + 520, "Summarize new feedback and post one concise update.",
          FS_SMALL, INK, width=width - 24)
-    text(x, y + 670,
+    text(x, y + 574,
          "The server computes the preview. The selected IANA timezone and exact\n"
          "cron expression are the values sent with the automation command.",
          FS_SMALL, MUTED, width=width)
@@ -322,8 +323,8 @@ def frame_workflows_list(index: int) -> None:
         text(cx + 488, y + 34, last, FS_SMALL, MUTED, width=150)
         text(cx + 678, y + 34, starts, FS_SMALL, INK, font=FONT_MONO, width=220)
         badge(cx + 948, y + 31, state, "ok" if state == "Published" else "muted")
-        button(cx + 1130, y + 28, 72, "Run")
-        button(cx + 1210, y + 28, 76, "Open", color=BLUE, bg=BLUE_BG)
+        button(cx + 1140, y + 28, 80, "Schedule", color=BLUE, bg=BLUE_BG)
+        button(cx + 1228, y + 28, 62, "Open")
     annotation(fx + FRAME_W + 42, fy + 160, "1", "One entry point",
                 "Schedule is a secondary summary on the published Workflow row; the editor owns configuration.")
     end_frame()
@@ -338,7 +339,7 @@ def frame_schedule_setup(index: int) -> None:
     button(cx + cw - 344, fy + 18, 94, "Add node", color=INK)
     button(cx + cw - 242, fy + 18, 88, "Save", color=INK)
     button(cx + cw - 146, fy + 18, 116, "Publish", color=INK)
-    rect(cx + 20, cy + 18, 700, 818, bg="#f7f9fc", stroke=LINE)
+    rect(cx + 20, cy + 18, 700, 898, bg="#f7f9fc", stroke=LINE)
     text(cx + 48, cy + 52, "Workflow canvas remains visible", FS_HEAD, INK, width=420)
     text(cx + 48, cy + 92,
          "The schedule is an owner-aware automation beside the canvas, not a graph node.",
@@ -353,14 +354,14 @@ def frame_schedule_setup(index: int) -> None:
         text(x + 18, cy + 232, label, FS_SMALL, INK, width=144)
         text(x + 18, cy + 262, detail, FS_SMALL, MUTED, width=144)
         badge(x + 18, cy + 288, "Ready", "ok")
-    rect(cx + 748, cy + 18, 548, 818, bg=SURFACE, stroke=LINE)
+    rect(cx + 748, cy + 18, 548, 898, bg=SURFACE, stroke=LINE)
     text(cx + 776, cy + 46, "Schedule", FS_HEAD, INK, width=300)
     text(cx + 776, cy + 78, "1  Configure   ·   2  Authorize   ·   3  Observe", FS_SMALL, MUTED,
          font=FONT_MONO, width=490)
     schedule_summary(cx + 776, cy + 112, 492)
     schedule_fields(cx + 776, cy + 206, 492)
-    button(cx + 776, cy + 776, 178, "Review and create", primary=True, color=BLUE)
-    button(cx + 966, cy + 776, 92, "Cancel", color=MUTED)
+    button(cx + 776, cy + 836, 178, "Review and create", primary=True, color=BLUE)
+    button(cx + 966, cy + 836, 92, "Cancel", color=MUTED)
     annotation(fx + FRAME_W + 42, fy + 220, "2", "Only recurring work",
                 "The public contract accepts a five-field cron and an IANA timezone; the preview comes from the server.")
     end_frame()
