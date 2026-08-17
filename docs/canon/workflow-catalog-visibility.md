@@ -63,19 +63,20 @@ Console Chat 的默认资源语义已经确定，不能再把公共模板目录�
 
 Console Workflow Activity vNext uses the scope-owned catalogue endpoint:
 
-`GET /api/scopes/{scopeId}/workflow-catalogue?view=all|drafts&query={text}&cursor={cursor}&take={take}`
+`GET /api/scopes/{scopeId}/workflow-catalogue?view=all|drafts|archived&query={text}&cursor={cursor}&take={take}`
 
 Contract:
 
-- `view=all` returns the scope catalogue keyed by exact `workflowId`, preserving `hasDraftSource` and `hasCommittedSource` when draft and published service facts converge on the same workflow row.
-- `view=drafts` returns only rows with an authoritative draft source, while still returning published service facts and capabilities when the same `workflowId` also has an active published service source.
+- `view=all` is the compatibility default and returns the non-archived scope catalogue keyed by exact `workflowId`, preserving `hasDraftSource` and `hasCommittedSource` when draft and published service facts converge on the same workflow row.
+- `view=drafts` returns only non-archived rows with an authoritative draft source, while still returning published service facts and capabilities when the same `workflowId` also has an active published service source.
+- `view=archived` returns only rows whose committed deployment status is `Deactivated`; archived rows keep their committed facts in the row payload, including deployment identity and status.
 - The backend applies scope authorization, then reads the materialized `ScopeWorkflowCatalogueRowDocument` read model. The request path must not read Studio workspace drafts, Studio members, service catalogues, deployment catalogues, workflow actor bindings, event store, or write-model state to reconstruct catalogue rows.
 - The aggregate row is keyed as `{scopeId}:workflow:{workflowId}`. Draft and published workflow service sources merge by exact `workflowId`; Team and Member state are not inputs to this catalogue surface.
 - `ScopeWorkflowCatalogueSourceDocument` is an internal materialization input with two authority kinds only: `draft` from Studio workspace committed state and `service` from service/deployment committed state. Service facts carry committed actor, active revision, deployment ID, deployment status, and service identity.
 - Source documents use deterministic source IDs (`{scopeId}:{workflowId}:draft`, `{scopeId}:{workflowId}:service`) and deterministic materialized actor IDs, because the same workflow-keyed source can be refreshed from different underlying workspace or service actors over time.
 - Existing current-state read models are backfilled by host startup composition into draft/service source documents and refreshed aggregate rows before request-path reads rely on the catalogue. Backfill uses exact upserts/tombstones; it must not use search-based cleanup of just-written documents.
 - Row materialization composes the latest draft source and latest service source: draft name/description wins for editable display, service facts drive Activity/run capability, `updatedAtUtc` is the maximum source update time, and the row is deleted only after both source documents are absent.
-- View filtering, search, deterministic ordering, and cursor pagination are owned by the catalogue query port in that order. Clients must not join draft/committed lists or filter an unbounded catalogue in memory.
+- View filtering happens before search and cursor pagination. The catalogue query port owns view filtering, search, deterministic ordering, and cursor pagination in that order. Clients must not join draft/committed lists or filter an unbounded catalogue in memory.
 - Deterministic ordering is `updatedAtUtc DESC`, then `workflowId ASC` using ordinal comparison. `nextPageToken` is an opaque cursor token returned by the previous response.
 - Search trims and normalizes the query with Unicode FormKC. Empty, omitted, or whitespace-only `query` values are equivalent to no search filter and do not create a separate freshness domain.
 - Searchable fields are `name`, `description`, and `workflowId`. `name` and `description` use ordinal case-insensitive substring matching; `workflowId` supports exact or prefix matching only. Chinese and English text are both matched after the same normalization.
@@ -99,3 +100,5 @@ Workflow Activity presents one destructive list action according to the dominant
 - draft-only rows expose `Delete draft`;
 - published rows expose `Archive`, whether or not a draft source also exists;
 - archived rows expose neither Archive nor Delete draft.
+
+Archived rows are removed from the default `all` and `drafts` catalogue views, but their committed facts remain available in the archived view for audit and lifecycle inspection.

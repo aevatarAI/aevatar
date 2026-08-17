@@ -118,6 +118,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         serviceSource.PublishedServiceId.Should().Be("published-service-1");
         serviceSource.Name.Should().Be("Published Workflow");
         serviceSource.DeploymentId.Should().Be("dep-1");
+        serviceSource.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
         serviceSource.CommittedActorId.Should().Be("workflow-actor-live");
 
         var draftSource = sourceWriter.Upserts.Single(static source => source.SourceKind == ScopeWorkflowCatalogueSourceDocument.DraftSourceKind);
@@ -197,6 +198,94 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         command.WorkflowId.Should().Be("published-service-1");
         command.ServiceSource.Should().NotBeNull();
         command.ServiceSource!.PublishedServiceId.Should().Be("published-service-1");
+    }
+
+    [Fact]
+    public async Task RunBackfillOnceAsync_ShouldBackfillServiceSourceFromLatestDeactivatedDeployment_WhenNoActiveDeployment()
+    {
+        var serviceCatalog = new ServiceCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-definition:scope-1:published-service-1",
+            StateVersion = 3,
+            LastEventId = "evt-service-catalog",
+            TenantId = "scope-1",
+            AppId = "workflow-app",
+            Namespace = "user",
+            ServiceId = "published-service-1",
+            DisplayName = "Published Service",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-04T00:00:00Z"),
+        };
+        var deploymentCatalog = new ServiceDeploymentCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-deployment:scope-1:published-service-1",
+            StateVersion = 8,
+            LastEventId = "evt-deployment",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-05T00:00:00Z"),
+            Deployments =
+            [
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-old-archived",
+                    RevisionId = "rev-old-archived",
+                    PrimaryActorId = "workflow-actor-old",
+                    Status = ServiceDeploymentStatus.Deactivated.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-05T01:00:00Z"),
+                },
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-latest-archived",
+                    RevisionId = "rev-archived",
+                    PrimaryActorId = "workflow-actor-archived",
+                    Status = ServiceDeploymentStatus.Deactivated.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-05T02:00:00Z"),
+                },
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-failed-newer",
+                    RevisionId = "rev-failed",
+                    PrimaryActorId = "workflow-actor-failed",
+                    Status = ServiceDeploymentStatus.Failed.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-05T03:00:00Z"),
+                },
+            ],
+        };
+        var revisionCatalog = WorkflowRevisionCatalog("svc-key", "rev-archived", "wf-archived", "Archived Workflow");
+        var existingArchivedSource = ExistingServiceSource("scope-1", "wf-archived", "published-service-1");
+        existingArchivedSource.DeploymentStatus = ServiceDeploymentStatus.Deactivated.ToString();
+        var staleServiceSource = ExistingServiceSource("scope-1", "wf-stale", "published-service-1");
+        var existingSources = new[] { existingArchivedSource, staleServiceSource };
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader(existingSources, sourceWriter);
+        var service = CreateService(
+            [serviceCatalog],
+            [deploymentCatalog],
+            [revisionCatalog],
+            [],
+            existingSources,
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        await service.RunBackfillOnceAsync(CancellationToken.None);
+
+        var serviceSource = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        serviceSource.Id.Should().Be("scope-1:wf-archived:service");
+        serviceSource.WorkflowId.Should().Be("wf-archived");
+        serviceSource.DeploymentId.Should().Be("dep-latest-archived");
+        serviceSource.ActiveRevisionId.Should().Be("rev-archived");
+        serviceSource.CommittedActorId.Should().Be("workflow-actor-archived");
+        serviceSource.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Deactivated.ToString());
+        serviceSource.PublishedServiceId.Should().Be("published-service-1");
+        sourceWriter.DeleteMarkers.Select(static marker => marker.Id)
+            .Should().Contain("scope-1:wf-stale:service")
+            .And.NotContain("scope-1:wf-archived:service");
+        rowWriter.Commands.Should().Contain(command =>
+            command.WorkflowId == "wf-archived" &&
+            command.ServiceSource != null &&
+            command.ServiceSource.DeploymentStatus == ServiceDeploymentStatus.Deactivated.ToString());
     }
 
     [Fact]
@@ -419,6 +508,161 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
+    public async Task RunBackfillOnceAsync_ShouldPreserveExistingActiveServiceSource_WhenDeactivatedSourceForDifferentServiceArrivesLater()
+    {
+        var existingActiveSource = ExistingServiceSource("scope-1", "wf-shared", "published-service-a");
+        existingActiveSource.SourceUpdatedAtUtc = DateTimeOffset.Parse("2026-08-03T00:00:00Z");
+        var serviceCatalog = new ServiceCatalogReadModel
+        {
+            Id = "svc-key-b",
+            ActorId = "service-definition:scope-1:published-service-b",
+            StateVersion = 4,
+            LastEventId = "evt-service-catalog-b",
+            TenantId = "scope-1",
+            AppId = "workflow-app",
+            Namespace = "user",
+            ServiceId = "published-service-b",
+            DisplayName = "Published Service B",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-06T00:00:00Z"),
+        };
+        var deploymentCatalog = new ServiceDeploymentCatalogReadModel
+        {
+            Id = "svc-key-b",
+            ActorId = "service-deployment:scope-1:published-service-b",
+            StateVersion = 9,
+            LastEventId = "evt-deployment-b",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-06T01:00:00Z"),
+            Deployments =
+            [
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-deactivated-b",
+                    RevisionId = "rev-shared",
+                    PrimaryActorId = "workflow-actor-b",
+                    Status = ServiceDeploymentStatus.Deactivated.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-06T02:00:00Z"),
+                },
+            ],
+        };
+        var revisionCatalog = WorkflowRevisionCatalog("svc-key-b", "rev-shared", "wf-shared", "Shared Workflow");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([existingActiveSource], sourceWriter);
+        var service = CreateService(
+            [serviceCatalog],
+            [deploymentCatalog],
+            [revisionCatalog],
+            [],
+            [existingActiveSource],
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        await service.RunBackfillOnceAsync(CancellationToken.None);
+
+        sourceWriter.Upserts.Should().BeEmpty();
+        sourceWriter.DeleteMarkers.Should().BeEmpty();
+        rowWriter.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunBackfillOnceAsync_ShouldBumpActiveServiceSourceVersion_WhenRestoringOverCrossServiceDeactivatedSource()
+    {
+        var existingDeactivatedSource = ExistingServiceSource("scope-1", "wf-shared", "published-service-b");
+        existingDeactivatedSource.DeploymentStatus = ServiceDeploymentStatus.Deactivated.ToString();
+        existingDeactivatedSource.StateVersion = WatermarkStateVersion("2026-08-08T00:00:00Z");
+        existingDeactivatedSource.SourceUpdatedAtUtc = DateTimeOffset.Parse("2026-08-08T00:00:00Z");
+        var serviceCatalog = new ServiceCatalogReadModel
+        {
+            Id = "svc-key-a",
+            ActorId = "service-definition:scope-1:published-service-a",
+            StateVersion = 4,
+            LastEventId = "evt-service-catalog-a",
+            TenantId = "scope-1",
+            AppId = "workflow-app",
+            Namespace = "user",
+            ServiceId = "published-service-a",
+            DisplayName = "Published Service A",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-05T00:00:00Z"),
+        };
+        var deploymentCatalog = new ServiceDeploymentCatalogReadModel
+        {
+            Id = "svc-key-a",
+            ActorId = "service-deployment:scope-1:published-service-a",
+            StateVersion = 9,
+            LastEventId = "evt-deployment-a",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-05T01:00:00Z"),
+            Deployments =
+            [
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-active-a",
+                    RevisionId = "rev-shared",
+                    PrimaryActorId = "workflow-actor-a",
+                    Status = ServiceDeploymentStatus.Active.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-05T02:00:00Z"),
+                },
+            ],
+        };
+        var revisionCatalog = WorkflowRevisionCatalog("svc-key-a", "rev-shared", "wf-shared", "Shared Workflow");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([existingDeactivatedSource], sourceWriter);
+        var service = CreateService(
+            [serviceCatalog],
+            [deploymentCatalog],
+            [revisionCatalog],
+            [],
+            [existingDeactivatedSource],
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        await service.RunBackfillOnceAsync(CancellationToken.None);
+
+        var source = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        source.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
+        source.PublishedServiceId.Should().Be("published-service-a");
+        source.StateVersion.Should().Be(existingDeactivatedSource.StateVersion + 1);
+        source.StateVersion.Should().BeGreaterThan(WatermarkStateVersion("2026-08-05T02:00:00Z"));
+        rowWriter.Commands.Should().ContainSingle(command =>
+            command.WorkflowId == "wf-shared" &&
+            command.ServiceSource != null &&
+            command.ServiceSource.PublishedServiceId == "published-service-a");
+    }
+
+    [Fact]
+    public async Task RunBackfillOnceAsync_ShouldSkipStaleServiceSourceDelete_WhenLatestActiveSourceIsOwnedByAnotherService()
+    {
+        var staleSnapshot = ExistingServiceSource("scope-1", "wf-shared", "published-service-b");
+        staleSnapshot.DeploymentStatus = ServiceDeploymentStatus.Deactivated.ToString();
+        staleSnapshot.StateVersion = WatermarkStateVersion("2026-08-04T00:00:00Z");
+        var latestActiveSource = ExistingServiceSource("scope-1", "wf-shared", "published-service-a");
+        latestActiveSource.StateVersion = WatermarkStateVersion("2026-08-07T00:00:00Z");
+        latestActiveSource.SourceUpdatedAtUtc = DateTimeOffset.Parse("2026-08-07T00:00:00Z");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([latestActiveSource], sourceWriter);
+        var service = CreateService(
+            [],
+            [],
+            [],
+            [],
+            [staleSnapshot],
+            sourceWriter,
+            rowWriter,
+            sourceReader,
+            new StubProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument>(
+                [staleSnapshot],
+                [latestActiveSource]));
+
+        await service.RunBackfillOnceAsync(CancellationToken.None);
+
+        sourceWriter.DeleteMarkers.Should().BeEmpty();
+        rowWriter.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunBackfillOnceAsync_ShouldSkipMalformedWorkflowServiceRevisionWithoutFailingBackfill()
     {
         var sourceWriter = new RecordingCatalogueSourceDispatcher();
@@ -563,6 +807,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
             new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([]),
             new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([deploymentCatalog]),
+            sourceReader,
             sourceWriter,
             new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
             new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T02:00:00Z")));
@@ -630,6 +875,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
             new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([revisionCatalog]),
             new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceReader,
             sourceWriter,
             new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
             new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T02:00:00Z")));
@@ -710,6 +956,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([serviceCatalog]),
             new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([revisionCatalog]),
             new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceReader,
             sourceWriter,
             new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
             new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T02:00:00Z")));
@@ -741,6 +988,264 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         command.WorkflowId.Should().Be("wf-active");
         command.ServiceSource.Should().NotBeNull();
         command.ServiceSource!.DeploymentId.Should().Be("dep-active");
+    }
+
+    [Fact]
+    public async Task ServiceSourceProjector_ShouldMaterializeLatestDeactivatedDeployment_WhenNoActiveDeployment()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");
+        var serviceKey = ServiceKeys.Build(identity);
+        var revisionCatalog = WorkflowRevisionCatalog(serviceKey, "rev-archived", "wf-archived", "Archived Workflow");
+        revisionCatalog.Revisions.Add(WorkflowRevisionCatalog(serviceKey, "rev-other", "wf-other", "Other Workflow").Revisions[0]);
+        var oldDeactivated = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-old-archived",
+            RevisionId = "rev-old-archived",
+            PrimaryActorId = "workflow-actor-old",
+            Status = ServiceDeploymentStatus.Deactivated,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T01:00:00Z")),
+        };
+        var latestDeactivated = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-latest-archived",
+            RevisionId = "rev-archived",
+            PrimaryActorId = "workflow-actor-archived",
+            Status = ServiceDeploymentStatus.Deactivated,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T02:00:00Z")),
+        };
+        var failedNewer = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-failed-newer",
+            RevisionId = "rev-other",
+            PrimaryActorId = "workflow-actor-failed",
+            Status = ServiceDeploymentStatus.Failed,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T03:00:00Z")),
+        };
+        var deploymentState = new ServiceDeploymentState
+        {
+            Identity = identity.Clone(),
+        };
+        deploymentState.Deployments[oldDeactivated.DeploymentId] = oldDeactivated;
+        deploymentState.Deployments[latestDeactivated.DeploymentId] = latestDeactivated;
+        deploymentState.Deployments[failedNewer.DeploymentId] = failedNewer;
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader(
+            [ExistingServiceSource("scope-1", "wf-other", "published-service-1")],
+            sourceWriter);
+        var projector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([revisionCatalog]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceReader,
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T04:00:00Z")));
+
+        await projector.ProjectAsync(
+            new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = "service-deployment:svc-key",
+                ProjectionKind = "service-deployments",
+            },
+            BuildDeploymentEnvelope(
+                new ServiceDeploymentDeactivatedEvent
+                {
+                    Identity = identity.Clone(),
+                    DeploymentId = "dep-latest-archived",
+                    RevisionId = "rev-archived",
+                    DeactivatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T02:00:00Z")),
+                },
+                deploymentState,
+                "evt-deployment-archived"));
+
+        var source = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        source.Id.Should().Be("scope-1:wf-archived:service");
+        source.WorkflowId.Should().Be("wf-archived");
+        source.DeploymentId.Should().Be("dep-latest-archived");
+        source.ActiveRevisionId.Should().Be("rev-archived");
+        source.CommittedActorId.Should().Be("workflow-actor-archived");
+        source.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Deactivated.ToString());
+        source.PublishedServiceId.Should().Be("published-service-1");
+        sourceWriter.DeleteMarkers.Select(static marker => marker.Id)
+            .Should().Contain("scope-1:wf-other:service")
+            .And.NotContain("scope-1:wf-archived:service");
+        rowWriter.Commands.Should().Contain(command =>
+            command.WorkflowId == "wf-archived" &&
+            command.ServiceSource != null &&
+            command.ServiceSource.DeploymentStatus == ServiceDeploymentStatus.Deactivated.ToString());
+    }
+
+    [Fact]
+    public async Task ServiceSourceProjector_ShouldPreserveExistingActiveServiceSource_WhenDeactivatedSourceForDifferentServiceArrivesLater()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-b");
+        var serviceKey = ServiceKeys.Build(identity);
+        var revisionCatalog = WorkflowRevisionCatalog(serviceKey, "rev-shared", "wf-shared", "Shared Workflow");
+        var deploymentState = new ServiceDeploymentState
+        {
+            Identity = identity.Clone(),
+        };
+        deploymentState.Deployments["dep-deactivated-b"] = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-deactivated-b",
+            RevisionId = "rev-shared",
+            PrimaryActorId = "workflow-actor-b",
+            Status = ServiceDeploymentStatus.Deactivated,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T02:00:00Z")),
+        };
+        var existingActiveSource = ExistingServiceSource("scope-1", "wf-shared", "published-service-a");
+        existingActiveSource.SourceUpdatedAtUtc = DateTimeOffset.Parse("2026-08-03T00:00:00Z");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([existingActiveSource], sourceWriter);
+        var projector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([revisionCatalog]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceReader,
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-06T03:00:00Z")));
+
+        await projector.ProjectAsync(
+            new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = "service-deployment:svc-key-b",
+                ProjectionKind = "service-deployments",
+            },
+            BuildDeploymentEnvelope(
+                new ServiceDeploymentDeactivatedEvent
+                {
+                    Identity = identity.Clone(),
+                    DeploymentId = "dep-deactivated-b",
+                    RevisionId = "rev-shared",
+                    DeactivatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T02:00:00Z")),
+                },
+                deploymentState,
+                "evt-deployment-b"));
+
+        sourceWriter.Upserts.Should().BeEmpty();
+        sourceWriter.DeleteMarkers.Should().BeEmpty();
+        rowWriter.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ServiceSourceProjector_ShouldBumpActiveSourceVersion_WhenRestoringOverCrossServiceDeactivatedSource()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-a");
+        var serviceKey = ServiceKeys.Build(identity);
+        var revisionCatalog = WorkflowRevisionCatalog(serviceKey, "rev-shared", "wf-shared", "Shared Workflow");
+        var deploymentState = new ServiceDeploymentState
+        {
+            Identity = identity.Clone(),
+        };
+        deploymentState.Deployments["dep-active-a"] = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-active-a",
+            RevisionId = "rev-shared",
+            PrimaryActorId = "workflow-actor-a",
+            Status = ServiceDeploymentStatus.Active,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T02:00:00Z")),
+        };
+        var existingDeactivatedSource = ExistingServiceSource("scope-1", "wf-shared", "published-service-b");
+        existingDeactivatedSource.DeploymentStatus = ServiceDeploymentStatus.Deactivated.ToString();
+        existingDeactivatedSource.StateVersion = WatermarkStateVersion("2026-08-08T00:00:00Z");
+        existingDeactivatedSource.SourceUpdatedAtUtc = DateTimeOffset.Parse("2026-08-08T00:00:00Z");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([existingDeactivatedSource], sourceWriter);
+        var projector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([revisionCatalog]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceReader,
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-09T00:00:00Z")));
+
+        await projector.ProjectAsync(
+            new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = "service-deployment:svc-key-a",
+                ProjectionKind = "service-deployments",
+            },
+            BuildDeploymentEnvelope(
+                new ServiceDeploymentActivatedEvent
+                {
+                    Identity = identity.Clone(),
+                    DeploymentId = "dep-active-a",
+                    RevisionId = "rev-shared",
+                    PrimaryActorId = "workflow-actor-a",
+                },
+                deploymentState,
+                "evt-deployment-a"));
+
+        var source = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        source.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
+        source.PublishedServiceId.Should().Be("published-service-a");
+        source.StateVersion.Should().Be(existingDeactivatedSource.StateVersion + 1);
+        source.StateVersion.Should().BeGreaterThan(WatermarkStateVersion("2026-08-05T02:00:00Z"));
+        rowWriter.Commands.Should().ContainSingle(command =>
+            command.WorkflowId == "wf-shared" &&
+            command.ServiceSource != null &&
+            command.ServiceSource.PublishedServiceId == "published-service-a");
+    }
+
+    [Fact]
+    public async Task ServiceSourceProjector_ShouldSkipNonVisibleCleanup_WhenExistingActiveSourceIsOwnedByAnotherService()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-b");
+        var serviceKey = ServiceKeys.Build(identity);
+        var revisionCatalog = WorkflowRevisionCatalog(serviceKey, "rev-current", "wf-current", "Current Workflow");
+        revisionCatalog.Revisions.Add(WorkflowRevisionCatalog(serviceKey, "rev-shared", "wf-shared", "Shared Workflow").Revisions[0]);
+        var deploymentState = new ServiceDeploymentState
+        {
+            Identity = identity.Clone(),
+        };
+        deploymentState.Deployments["dep-current-b"] = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-current-b",
+            RevisionId = "rev-current",
+            PrimaryActorId = "workflow-actor-b",
+            Status = ServiceDeploymentStatus.Active,
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T02:00:00Z")),
+        };
+        var existingActiveSource = ExistingServiceSource("scope-1", "wf-shared", "published-service-a");
+        existingActiveSource.StateVersion = WatermarkStateVersion("2026-08-07T00:00:00Z");
+        existingActiveSource.SourceUpdatedAtUtc = DateTimeOffset.Parse("2026-08-07T00:00:00Z");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([existingActiveSource], sourceWriter);
+        var projector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([revisionCatalog]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceReader,
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-06T03:00:00Z")));
+
+        await projector.ProjectAsync(
+            new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = "service-deployment:svc-key-b",
+                ProjectionKind = "service-deployments",
+            },
+            BuildDeploymentEnvelope(
+                new ServiceDeploymentActivatedEvent
+                {
+                    Identity = identity.Clone(),
+                    DeploymentId = "dep-current-b",
+                    RevisionId = "rev-current",
+                    PrimaryActorId = "workflow-actor-b",
+                },
+                deploymentState,
+                "evt-deployment-b"));
+
+        sourceWriter.Upserts.Should().ContainSingle(source => source.Id == "scope-1:wf-current:service");
+        sourceWriter.DeleteMarkers.Should().BeEmpty();
+        rowWriter.Commands.Should().ContainSingle(command => command.WorkflowId == "wf-current");
     }
 
     [Fact]
@@ -905,13 +1410,14 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         IReadOnlyList<ScopeWorkflowCatalogueSourceDocument> existingSources,
         RecordingCatalogueSourceDispatcher sourceWriter,
         IScopeWorkflowCatalogueRowCommandPort rowWriter,
-        RecordingCatalogueSourceReader sourceReader) =>
+        RecordingCatalogueSourceReader sourceReader,
+        IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string>? catalogueSourceReader = null) =>
         new(
             new StubProjectionDocumentReader<ServiceCatalogReadModel>(serviceCatalogs),
             new StubProjectionDocumentReader<ServiceDeploymentCatalogReadModel>(deploymentCatalogs),
             new StubProjectionDocumentReader<ServiceRevisionCatalogReadModel>(revisionCatalogs),
             new StubProjectionDocumentReader<StudioWorkspaceCurrentStateDocument>(workspaces),
-            new StubProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument>(existingSources),
+            catalogueSourceReader ?? new StubProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument>(existingSources),
             sourceWriter,
             new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
             new StubWorkflowYamlDocumentService(),
@@ -1138,12 +1644,15 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             });
     }
 
-    private sealed class StubProjectionDocumentReader<TReadModel>(IReadOnlyList<TReadModel> documents)
+    private sealed class StubProjectionDocumentReader<TReadModel>(
+        IReadOnlyList<TReadModel> documents,
+        IReadOnlyList<TReadModel>? getDocuments = null)
         : IProjectionDocumentReader<TReadModel, string>
         where TReadModel : class, IProjectionReadModel
     {
         public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult(default(TReadModel));
+            Task.FromResult((getDocuments ?? documents).LastOrDefault(document =>
+                string.Equals(document.Id, key, StringComparison.Ordinal)));
 
         public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
             ProjectionDocumentQuery query,

@@ -62,20 +62,65 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
     }
 
     [Fact]
-    public async Task QueryAsync_WithDraftView_ShouldReturnDraftSubsetWithPublishedFacts()
+    public async Task QueryAsync_ShouldHideArchivedRowsFromDefaultCatalogueView()
     {
         var port = CreatePort(
-            Row("wf-alpha", "Draft Alpha", "draft alpha description", true, false, DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-            Row("wf-beta", "Published Beta", "", false, true, DateTimeOffset.Parse("2026-08-02T00:00:00Z")),
-            Row("wf-overlap", "Draft Overlap", "draft overlap description", true, true, DateTimeOffset.Parse("2026-08-03T00:00:00Z")));
+            Row("wf-archived", "Archived Workflow", "archived workflow", true, true, DateTimeOffset.Parse("2026-08-05T00:00:00Z"), "published-service-archived", "Deactivated"),
+            Row("wf-active", "Active Workflow", "active workflow", false, true, DateTimeOffset.Parse("2026-08-04T00:00:00Z"), "published-service-active"),
+            Row("wf-draft", "Draft Workflow", "draft workflow", true, false, DateTimeOffset.Parse("2026-08-03T00:00:00Z")));
+
+        var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(
+            ScopeId,
+            Take: 1));
+
+        response.Items.Should().ContainSingle().Which.WorkflowId.Should().Be("wf-active");
+        response.Items.Select(static item => item.WorkflowId).Should().NotContain("wf-archived");
+        response.NextPageToken.Should().Be("1");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WithDraftView_ShouldExcludeArchivedRowsEvenIfTheyHaveDraftSource()
+    {
+        var port = CreatePort(
+            Row("wf-archived", "Archived Draft", "archived draft description", true, true, DateTimeOffset.Parse("2026-08-03T00:00:00Z"), "published-service-archived", "Deactivated"),
+            Row("wf-draft", "Draft Alpha", "draft alpha description", true, false, DateTimeOffset.Parse("2026-08-02T00:00:00Z")));
 
         var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(
             ScopeId,
             ScopeWorkflowCatalogueView.Drafts));
 
-        response.Items.Select(static item => item.WorkflowId).Should().Equal("wf-overlap", "wf-alpha");
-        response.Items[0].HasCommittedSource.Should().BeTrue();
-        response.Items[0].Capabilities.Activity.Available.Should().BeTrue();
+        response.Items.Select(static item => item.WorkflowId).Should().Equal("wf-draft");
+        response.Items[0].HasCommittedSource.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task QueryAsync_WithArchivedView_ShouldReturnOnlyArchivedRowsWithCommittedFacts()
+    {
+        var port = CreatePort(
+            Row("wf-archived", "Archived Draft", "archived draft description", true, true, DateTimeOffset.Parse("2026-08-03T00:00:00Z"), "published-service-archived", "Deactivated"),
+            Row("wf-active", "Active Beta", "", false, true, DateTimeOffset.Parse("2026-08-02T00:00:00Z"), "published-service-active"),
+            Row("wf-draft", "Draft Alpha", "draft alpha description", true, false, DateTimeOffset.Parse("2026-08-01T00:00:00Z")));
+
+        var response = await port.QueryAsync(new ScopeWorkflowCatalogueQuery(
+            ScopeId,
+            ScopeWorkflowCatalogueView.Archived));
+
+        var row = response.Items.Should().ContainSingle().Subject;
+        row.WorkflowId.Should().Be("wf-archived");
+        row.HasDraftSource.Should().BeTrue();
+        row.HasCommittedSource.Should().BeTrue();
+        row.Committed.Should().NotBeNull();
+        row.Committed!.ServiceKey.Should().Be("service-key:wf-archived");
+        row.Committed.WorkflowName.Should().Be("wf-archived");
+        row.Committed.ActorId.Should().Be("actor-wf-archived");
+        row.Committed.ActiveRevisionId.Should().Be("active-wf-archived");
+        row.Committed.DeploymentId.Should().Be("dep-wf-archived");
+        row.Committed.ServiceAppId.Should().Be("studio");
+        row.Committed.ServiceNamespace.Should().Be("default");
+        row.Committed!.DeploymentStatus.Should().Be("Deactivated");
+        row.PublishedServiceId.Should().Be("published-service-archived");
+        row.Capabilities.Delete.Available.Should().BeFalse();
+        row.Capabilities.Delete.UnavailableReason.Should().Be("workflow_archived");
     }
 
     [Fact]
@@ -193,7 +238,8 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
         bool hasDraftSource,
         bool hasPublishedSource,
         DateTimeOffset updatedAtUtc,
-        string? publishedServiceId = null) =>
+        string? publishedServiceId = null,
+        string? deploymentStatus = null) =>
         new()
         {
             Id = $"{ScopeId}:workflow:{workflowId}",
@@ -217,7 +263,7 @@ public sealed class AppScopedWorkflowCatalogueServiceTests
             CommittedActorId = hasPublishedSource ? $"actor-{workflowId}" : string.Empty,
             ActiveRevisionId = hasPublishedSource ? $"active-{workflowId}" : string.Empty,
             DeploymentId = hasPublishedSource ? $"dep-{workflowId}" : string.Empty,
-            DeploymentStatus = hasPublishedSource ? "Active" : string.Empty,
+            DeploymentStatus = hasPublishedSource ? deploymentStatus ?? "Active" : string.Empty,
             ServiceAppId = hasPublishedSource ? "studio" : string.Empty,
             ServiceNamespace = hasPublishedSource ? "default" : string.Empty,
             PublishedServiceId = hasPublishedSource ? publishedServiceId ?? workflowId : string.Empty,

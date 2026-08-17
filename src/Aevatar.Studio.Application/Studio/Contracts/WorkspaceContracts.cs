@@ -81,6 +81,7 @@ public enum ScopeWorkflowCatalogueView
 {
     All = 0,
     Drafts = 1,
+    Archived = 2,
 }
 
 public sealed record ScopeWorkflowCatalogueResponse(
