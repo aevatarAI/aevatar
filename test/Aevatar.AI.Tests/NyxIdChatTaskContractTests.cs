@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Google.Protobuf;
@@ -62,11 +63,6 @@ public sealed class NyxIdChatTaskContractTests
                 PlanRevision = 2,
                 PlanRevisionHistoryStart = 1,
                 Title = "Update GitHub safely",
-                Gate = new NyxIdChatPlanGate
-                {
-                    Mode = NyxIdChatPlanGateMode.Confirm,
-                    Reason = "The plan contains an effect-capable operation.",
-                },
                 PlanRevisions =
                 {
                     new NyxIdChatPlanRevisionRecord
@@ -183,7 +179,6 @@ public sealed class NyxIdChatTaskContractTests
         roundTripped.ActiveTask.PlanId.Should().Be("plan-alpha");
         roundTripped.ActiveTask.PlanRevision.Should().Be(2);
         roundTripped.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
-        roundTripped.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
         roundTripped.ActiveTask.Steps.Single().AddedBy.Should().Be(NyxIdChatStepAddedBy.Replan);
         roundTripped.ActiveTask.Steps.Single().AddedInPlanRevision.Should().Be(2);
         roundTripped.ActiveTask.PlanRevisions.Select(static revision =>
@@ -239,10 +234,6 @@ public sealed class NyxIdChatTaskContractTests
             NyxIdChatActionDisposition.Failed,
             NyxIdChatActionDisposition.Cancelled,
             NyxIdChatActionDisposition.Expired);
-        Enum.GetValues<NyxIdChatPlanGateMode>().Should().Equal(
-            NyxIdChatPlanGateMode.Unspecified,
-            NyxIdChatPlanGateMode.Auto,
-            NyxIdChatPlanGateMode.Confirm);
         Enum.GetValues<NyxIdChatStepAddedBy>().Should().Equal(
             NyxIdChatStepAddedBy.Unspecified,
             NyxIdChatStepAddedBy.Initial,
@@ -259,7 +250,6 @@ public sealed class NyxIdChatTaskContractTests
         AssertEnumField<NyxIdChatTaskState>("status", nameof(NyxIdChatTaskStatus));
         AssertEnumField<NyxIdChatTaskStepState>("status", nameof(NyxIdChatStepStatus));
         AssertEnumField<NyxIdChatTaskStepState>("external_effect", nameof(NyxIdChatEffectEvidence));
-        AssertEnumField<NyxIdChatPlanGate>("mode", nameof(NyxIdChatPlanGateMode));
         AssertEnumField<NyxIdChatTaskStepState>("added_by", nameof(NyxIdChatStepAddedBy));
         AssertEnumField<NyxIdChatPlanRevisionRecord>(
             "revision_cause",
@@ -270,6 +260,54 @@ public sealed class NyxIdChatTaskContractTests
             "change_kind",
             nameof(NyxIdChatStepChangeKind));
         AssertEnumField<NyxIdChatActionReport>("disposition", nameof(NyxIdChatActionDisposition));
+    }
+
+    [Fact]
+    public void VerifiedAuthorizationContinuation_ShouldBeAClosedCredentialFreeContract()
+    {
+        var continuationField = NyxIdChatLLMOperationInput.Descriptor
+            .FindFieldByName("verified_authorization_continuation");
+
+        continuationField.Should().NotBeNull();
+        continuationField!.MessageType.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().Equal(
+                "action_request_id",
+                "origin_turn_id",
+                "source_tool_step_id",
+                "postcondition_step_id",
+                "verified_resource",
+                "service_slug",
+                "verified_at",
+                "resume_requirement",
+                "authorization_readiness");
+        continuationField.MessageType.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().NotContain(name =>
+                name.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("credential", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("metadata", StringComparison.OrdinalIgnoreCase));
+
+        var readinessField = continuationField.MessageType.Fields
+            .InFieldNumberOrder()
+            .Single(field => field.Name == "authorization_readiness");
+        readinessField.MessageType.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().Equal("tool_name", "params");
+        readinessField.MessageType.Fields.InFieldNumberOrder()
+            .Single(field => field.Name == "params")
+            .MessageType.Fields.InFieldNumberOrder()
+            .Select(static field => field.Name)
+            .Should().Equal(
+                "service_slug",
+                "requested_scopes",
+                "service_label",
+                "resource_uri");
+
+        var stepRequirement = NyxIdChatLLMStepSource.Descriptor
+            .FindFieldByName("resume_requirement");
+        stepRequirement.Should().NotBeNull();
+        stepRequirement!.FieldType.Should().Be(FieldType.Enum);
     }
 
     [Fact]
@@ -328,13 +366,18 @@ public sealed class NyxIdChatTaskContractTests
     }
 
     [Fact]
-    public void FormatterOutput_ShouldIncludeDecoderRequiredStepBooleansWhenFalse()
+    public void FormatterOutput_ShouldIncludeWireRequiredBooleansWhenFalse()
     {
         var step = new NyxIdChatTaskPlanStep
         {
             StepId = "step-optional-read",
             Required = false,
             MayChangeExternalState = false,
+            Operation = new NyxIdChatTaskPlanOperation
+            {
+                OperationId = "operation-read",
+                MayChangeExternalState = false,
+            },
         };
         var plan = new NyxIdChatTaskPlan();
         plan.Steps.Add(step);
@@ -343,11 +386,54 @@ public sealed class NyxIdChatTaskContractTests
             .FormatTaskPlan(plan)["steps"]![0]!;
         planStep["required"]!.GetValue<bool>().Should().BeFalse();
         planStep["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
+        planStep["operation"]!["mayChangeExternalState"]!
+            .GetValue<bool>().Should().BeFalse();
 
         var changedStep = NyxIdChatTaskPlanJsonFormatter
             .FormatTaskPlan(new NyxIdChatTaskPlanStepChanged { Step = step })["step"]!;
         changedStep["required"]!.GetValue<bool>().Should().BeFalse();
         changedStep["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
+        changedStep["operation"]!["mayChangeExternalState"]!
+            .GetValue<bool>().Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(ToolPresentationKind.Generic, "generic")]
+    [InlineData(ToolPresentationKind.BuiltIn, "builtIn")]
+    [InlineData(ToolPresentationKind.NyxIdOperation, "nyxIdOperation")]
+    [InlineData(ToolPresentationKind.Mcp, "mcp")]
+    [InlineData(ToolPresentationKind.Skill, "skill")]
+    public void FormatterOutput_ShouldUseCanonicalToolPresentationKind(
+        ToolPresentationKind kind,
+        string expected)
+    {
+        var presentation = new ToolPresentationDescriptor
+        {
+            Kind = kind,
+            Availability = ToolAvailability.Available,
+        };
+
+        var node = NyxIdChatTaskPlanJsonFormatter.FormatProtobuf(presentation);
+
+        node["kind"]!.GetValue<string>().Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(ToolAvailability.Available, "available")]
+    [InlineData(ToolAvailability.Unavailable, "unavailable")]
+    public void FormatterOutput_ShouldUseCanonicalToolAvailability(
+        ToolAvailability availability,
+        string expected)
+    {
+        var presentation = new ToolPresentationDescriptor
+        {
+            Kind = ToolPresentationKind.Generic,
+            Availability = availability,
+        };
+
+        var node = NyxIdChatTaskPlanJsonFormatter.FormatProtobuf(presentation);
+
+        node["availability"]!.GetValue<string>().Should().Be(expected);
     }
 
     [Fact]

@@ -73,20 +73,12 @@ public sealed class ServiceCommandApplicationServiceTests
         {
             Identity = identity.Clone(),
         });
-        var defaultReceipt = await service.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
-        {
-            Identity = identity.Clone(),
-            RevisionId = "rev-1",
-        });
-
         createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         updateReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         reconcileExposureReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         retireExposureReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
-        defaultReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
-        defaultReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rev-1");
-        provisioner.DefinitionRequests.Should().HaveCount(5);
-        provisioner.InvocationCatalogRequests.Should().HaveCount(5);
+        provisioner.DefinitionRequests.Should().HaveCount(4);
+        provisioner.InvocationCatalogRequests.Should().HaveCount(4);
         provisioner.InvocationCatalogRequests.Should().OnlyContain(x =>
             ServiceKeys.Build(x) == ServiceKeys.Build(identity));
         dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
@@ -94,7 +86,6 @@ public sealed class ServiceCommandApplicationServiceTests
             AnyTypeUrl<UpdateServiceDefinitionCommand>(),
             AnyTypeUrl<ReconcileExternalExposureCommand>(),
             AnyTypeUrl<RetireExternalExposureCommand>(),
-            AnyTypeUrl<SetDefaultServingRevisionCommand>(),
         ]);
     }
 

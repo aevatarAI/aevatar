@@ -8,6 +8,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Configuration;
 using Aevatar.Configuration.BackendConsole;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
@@ -268,16 +269,12 @@ public static class IdentityServiceCollectionExtensions
         {
             services.Configure<NyxIdBrokerOptions>(options =>
             {
-                var internalApiBaseUrl =
-                    configuration[NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey];
-                options.TransportBaseUrl =
-                    (!string.IsNullOrWhiteSpace(internalApiBaseUrl)
-                        ? internalApiBaseUrl
-                        : configuration[NyxIdBrokerOptions.ApiBaseUrlConfigurationKey] ?? string.Empty)
-                    .Trim()
-                    .TrimEnd('/');
+                var publicApiBaseUrl =
+                    configuration[NyxIdBrokerOptions.ApiBaseUrlConfigurationKey];
+                var normalizedPublicApiBaseUrl = publicApiBaseUrl?.Trim().TrimEnd('/');
+                options.PublicApiBaseUrl = normalizedPublicApiBaseUrl ?? string.Empty;
                 options.ResourceServerBaseUrl =
-                    (configuration[NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] ?? string.Empty)
+                    (normalizedPublicApiBaseUrl ?? string.Empty)
                     .Trim()
                     .TrimEnd('/');
             });
@@ -285,7 +282,12 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<NyxIdBrokerOptions>, NyxIdBrokerOptionsValidator>());
         services.TryAddSingleton<StateTokenCodec>();
-        services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
+        services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(static () => new HttpClientHandler
+            {
+                // Broker control-plane requests must not silently cross origins through redirects.
+                AllowAutoRedirect = false,
+            });
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdConnectedServiceInventoryCapabilityIssuer>(sp =>

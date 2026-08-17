@@ -1,13 +1,16 @@
 using Aevatar.Capabilities;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ProtoWorkflowCallerNyxIdAuthority = Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority;
 
@@ -182,6 +185,16 @@ internal static class WorkflowWebhookBindingEndpoints
             unattendedAuthorization = authorization.Authorization;
         }
 
+        string? forwardedAgentKey = null;
+        string? credentialSubject = null;
+        if (request.EnableUnattendedEffects &&
+            TryGetForwardedAgentKey(http, out var capturedAgentKey) &&
+            AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var capturedSubject))
+        {
+            forwardedAgentKey = capturedAgentKey;
+            credentialSubject = capturedSubject;
+        }
+
         var hmacSecret = request.HmacSecret?.Trim();
         if (hmacSecret == null || Encoding.UTF8.GetByteCount(hmacSecret) < 32)
             return BadRequest(
@@ -233,6 +246,39 @@ internal static class WorkflowWebhookBindingEndpoints
             return BadRequest("WEBHOOK_TIME_ZONE_INVALID", "timeZoneId is invalid.");
         }
 
+        DurableCallerCredentialRef? durableCredential = null;
+        ISecretVault? credentialVault = null;
+        if (forwardedAgentKey != null)
+        {
+            credentialVault = http.RequestServices.GetService<ISecretVault>();
+            if (credentialVault == null)
+            {
+                return Results.Json(
+                    new
+                    {
+                        code = "WEBHOOK_CALLER_CREDENTIAL_VAULT_UNAVAILABLE",
+                        message = "Webhook caller credential vault is unavailable.",
+                    },
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var stored = await credentialVault.PutAsync(new StoreSecretRequest(
+                CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                scopeId,
+                credentialSubject!,
+                forwardedAgentKey,
+                "workflow-webhook-binding-agent-key"), ct);
+            durableCredential = new DurableCallerCredentialRef
+            {
+                Ref = stored.Reference.Ref,
+                Purpose = stored.Reference.Purpose,
+                OwnerScopeKey = stored.Reference.OwnerScopeKey,
+                SubjectId = credentialSubject,
+                SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+                SecretReference = stored.Reference.Clone(),
+            };
+        }
+
         var record = new WorkflowWebhookBindingRecord(
             RouteKey: normalizedRoute,
             ScopeId: scopeId,
@@ -254,13 +300,45 @@ internal static class WorkflowWebhookBindingEndpoints
             TargetRevisionId: targetRevisionId,
             PreviousHmacSecret: previousHmacSecret,
             CallerAuthority: callerAuthority,
-            UnattendedEffectAuthorization: unattendedAuthorization);
-        if (!await bindingStore.TryPutOwnedAsync(record, ct))
+            UnattendedEffectAuthorization: unattendedAuthorization,
+            CallerDurableCredential: durableCredential);
+        WorkflowWebhookBindingPutResult put;
+        try
         {
+            put = await bindingStore.PutOwnedAsync(record, ct);
+        }
+        catch
+        {
+            await RevokeBindingCredentialAsync(
+                credentialVault,
+                durableCredential,
+                "workflow-webhook-binding-write-failed",
+                logger: null,
+                CancellationToken.None);
+            throw;
+        }
+
+        if (!put.Succeeded)
+        {
+            await RevokeBindingCredentialAsync(
+                credentialVault,
+                durableCredential,
+                "workflow-webhook-binding-write-rejected",
+                logger: null,
+                CancellationToken.None);
             return Results.Json(
                 new { code = "WEBHOOK_ROUTE_OWNED_BY_OTHER_SCOPE", message = "Route key is owned by another scope." },
                 statusCode: StatusCodes.Status409Conflict);
         }
+
+        var cleanupLogger = http.RequestServices.GetService<ILoggerFactory>()?
+            .CreateLogger("Aevatar.Workflow.WebhookBinding");
+        await RevokeBindingCredentialAsync(
+            http.RequestServices.GetService<ISecretVault>(),
+            put.PreviousRecord?.CallerDurableCredential,
+            "workflow-webhook-binding-replaced",
+            cleanupLogger,
+            CancellationToken.None);
 
         return Results.Ok(ToView(record));
     }
@@ -300,8 +378,31 @@ internal static class WorkflowWebhookBindingEndpoints
         if (normalizedRoute == null)
             return BadRequest("WEBHOOK_ROUTE_REQUIRED", "Route key is required.");
 
-        if (!await bindingStore.TryDeleteOwnedAsync(normalizedRoute, scopeId, ct))
+        var existing = await bindingStore.GetAsync(normalizedRoute, ct);
+        if (existing?.CallerDurableCredential != null &&
+            http.RequestServices.GetService<ISecretVault>() == null)
+        {
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_CALLER_CREDENTIAL_VAULT_UNAVAILABLE",
+                    message = "Webhook caller credential vault is unavailable.",
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        var deleted = await bindingStore.DeleteOwnedAsync(normalizedRoute, scopeId, ct);
+        if (!deleted.Succeeded)
             return Results.NotFound();
+
+        var logger = http.RequestServices.GetService<ILoggerFactory>()?
+            .CreateLogger("Aevatar.Workflow.WebhookBinding");
+        await RevokeBindingCredentialAsync(
+            http.RequestServices.GetService<ISecretVault>(),
+            deleted.RemovedRecord?.CallerDurableCredential,
+            "workflow-webhook-binding-deleted",
+            logger,
+            CancellationToken.None);
 
         return Results.NoContent();
     }
@@ -323,6 +424,7 @@ internal static class WorkflowWebhookBindingEndpoints
         hmacSecretSet = !string.IsNullOrWhiteSpace(record.HmacSecret),
         previousHmacSecretSet = !string.IsNullOrWhiteSpace(record.PreviousHmacSecret),
         callerCredentialSet = record.CallerAuthority is not null,
+        durableCallerCredentialSet = record.CallerDurableCredential is not null,
         unattendedEffectsEnabled = record.CallerAuthority is not null &&
                                    record.UnattendedEffectAuthorization is not null,
         hmacSignatureHeader = record.HmacSignatureHeader,
@@ -364,16 +466,6 @@ internal static class WorkflowWebhookBindingEndpoints
                 statusCode: StatusCodes.Status409Conflict));
         }
 
-        var extracted = WorkflowCallerCredentialExtractor.Extract(http);
-        if (!extracted.Succeeded ||
-            extracted.Credential?.NyxIdAuthority is not { } extractedAuthority ||
-            extracted.NyxIdCredentialSelection?.CanManageUserServices != true ||
-            !AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var subject) ||
-            !string.Equals(subject, extractedAuthority.ExternalUserId, StringComparison.Ordinal))
-        {
-            return UnattendedAuthorizationResolution.Failure(Results.Unauthorized());
-        }
-
         var bindingQuery = http.RequestServices.GetService<IExternalIdentityBindingQueryPort>();
         if (bindingQuery is null)
         {
@@ -384,6 +476,25 @@ internal static class WorkflowWebhookBindingEndpoints
                     message = "Caller NyxID binding lookup is unavailable.",
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable));
+        }
+
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var subject))
+            return UnattendedAuthorizationResolution.Failure(Results.Unauthorized());
+
+        var logger = http.RequestServices
+            .GetService<ILoggerFactory>()?
+            .CreateLogger("Aevatar.Workflow.WebhookBinding");
+        var extracted = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            bindingQuery,
+            callerAccessTokenProvider: null,
+            logger: logger,
+            ct: ct);
+        if (!extracted.Succeeded ||
+            extracted.Credential?.NyxIdAuthority is not { } extractedAuthority ||
+            !string.Equals(subject, extractedAuthority.ExternalUserId, StringComparison.Ordinal))
+        {
+            return UnattendedAuthorizationResolution.Failure(Results.Unauthorized());
         }
 
         BindingId? bindingId;
@@ -424,14 +535,48 @@ internal static class WorkflowWebhookBindingEndpoints
                 statusCode: StatusCodes.Status409Conflict));
         }
 
+        var exactBindingId = bindingId.Value.Trim();
+        var canManageWithDirectHumanBearer =
+            extracted.NyxIdCredentialSelection?.CanManageUserServices == true;
         var callerAuthority = new ProtoWorkflowCallerNyxIdAuthority
         {
             Platform = extractedAuthority.Platform,
             Tenant = extractedAuthority.Tenant,
             ExternalUserId = subject,
             Scope = extractedAuthority.Scope,
-            BindingId = bindingId.Value.Trim(),
+            BindingId = exactBindingId,
         };
+        var canManageWithBoundProxyDelegation = false;
+        if (
+            extracted.Credential.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
+            !string.IsNullOrWhiteSpace(extractedAuthority.BindingId) &&
+            string.Equals(extractedAuthority.BindingId, exactBindingId, StringComparison.Ordinal) &&
+            http.RequestServices.GetService<IWorkflowCallerAccessTokenProvider>() is { } tokenProvider)
+        {
+            try
+            {
+                var issuedToken = await tokenProvider.IssueAsync(callerAuthority, ct);
+                canManageWithBoundProxyDelegation =
+                    WorkflowCallerCredentialTokens.ParseOptional(issuedToken).IsValid;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Caller NyxID source-readable token exchange failed while managing webhook binding.");
+            }
+        }
+
+        var canManageWithForwardedAgentKey = TryGetForwardedAgentKey(http, out _);
+        if (!canManageWithDirectHumanBearer &&
+            !canManageWithBoundProxyDelegation &&
+            !canManageWithForwardedAgentKey)
+            return UnattendedAuthorizationResolution.Failure(Results.Unauthorized());
+
         try
         {
             var authorization = WorkflowUnattendedEffectAuthorizationIntegrity.Create(
@@ -476,6 +621,83 @@ internal static class WorkflowWebhookBindingEndpoints
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         return store;
+    }
+
+    private static bool TryGetForwardedAgentKey(HttpContext http, out string agentKey)
+    {
+        agentKey = string.Empty;
+        if (http.User.Identity?.IsAuthenticated != true ||
+            !AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out _) ||
+            !http.Request.Headers.TryGetValue("Authorization", out var values) ||
+            values.Count != 1)
+        {
+            return false;
+        }
+
+        var authorization = values[0]?.Trim();
+        const string prefix = "Bearer ";
+        if (authorization?.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) != true)
+            return false;
+
+        var candidate = authorization[prefix.Length..].Trim();
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(candidate);
+        if (!parsed.IsValid ||
+            parsed.NormalizedBearerToken?.StartsWith("nyxid_ag_", StringComparison.Ordinal) != true)
+        {
+            return false;
+        }
+
+        agentKey = parsed.NormalizedBearerToken;
+        return true;
+    }
+
+    private static async Task<bool> RevokeBindingCredentialAsync(
+        ISecretVault? vault,
+        DurableCallerCredentialRef? reference,
+        string auditReason,
+        ILogger? logger,
+        CancellationToken ct)
+    {
+        if (reference == null)
+            return true;
+        if (vault == null ||
+            reference.SourceKind != DurableCallerCredentialSourceKind.WebhookBinding ||
+            !string.Equals(
+                reference.Purpose,
+                CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(reference.Ref) ||
+            string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
+            string.IsNullOrWhiteSpace(reference.SubjectId))
+        {
+            return false;
+        }
+
+        try
+        {
+            var result = await vault.RevokeAsync(new RevokeSecretRequest(
+                reference.Ref,
+                reference.Purpose,
+                reference.OwnerScopeKey,
+                reference.SubjectId,
+                auditReason), ct);
+            if (!result.Revoked)
+            {
+                logger?.LogError(
+                    "Webhook binding caller credential cleanup was not committed. credentialRef={CredentialRef} reason={AuditReason}",
+                    reference.Ref,
+                    auditReason);
+            }
+            return result.Revoked;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(
+                ex,
+                "Webhook binding caller credential cleanup failed. credentialRef={CredentialRef}",
+                reference.Ref);
+            return false;
+        }
     }
 
     private static IResult? RequireCallerScope(HttpContext http, string scopeId)

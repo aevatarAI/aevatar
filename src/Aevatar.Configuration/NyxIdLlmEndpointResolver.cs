@@ -15,9 +15,6 @@ public sealed record NyxIdLlmEndpointSpec(
 public static class NyxIdLlmEndpointResolver
 {
     private const string GatewayPath = "/api/v1/llm/gateway/v1";
-    private const string CliAuthorityKey = "Cli:App:NyxId:Authority";
-    private const string AppAuthorityKey = "Aevatar:NyxId:Authority";
-    private const string AuthAuthorityKey = "Aevatar:Authentication:Authority";
     private const string CliEndpointKindKey = "Cli:App:NyxId:LlmEndpoint:Kind";
     private const string AppEndpointKindKey = "Aevatar:NyxId:LlmEndpoint:Kind";
     private const string CliRelativePathKey = "Cli:App:NyxId:LlmEndpoint:RelativePath";
@@ -27,10 +24,9 @@ public static class NyxIdLlmEndpointResolver
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
-        var authority = configuration[CliAuthorityKey]
-            ?? configuration[AppAuthorityKey]
-            ?? configuration[AuthAuthorityKey];
-        return ResolveEndpoint(authority, ResolveSpec(configuration));
+        return ResolveEndpoint(
+            NyxIdEndpointResolver.ResolvePublicApiBaseUrl(configuration),
+            ResolveSpec(configuration));
     }
 
     public static string? ResolveEndpoint(string? authority, NyxIdLlmEndpointSpec? spec)

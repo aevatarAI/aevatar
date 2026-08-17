@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.ChatRouting.Abstractions;
@@ -34,10 +35,26 @@ public sealed class ResponsesCallerScopeUnavailableException : Exception
 
 public interface IResponsesRouteResolver
 {
-    Task<string?> ResolveRouteValueAsync(
-        string slug,
-        string bearerToken,
+    Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+        string serviceSlug,
+        string upstreamModelId,
+        ResponsesCallerScope callerScope,
         CancellationToken ct);
+}
+
+public sealed class ResponsesRouteUnavailableException : Exception
+{
+    public ResponsesRouteUnavailableException(string message, Exception? innerException = null)
+        : base(message, innerException)
+    {
+    }
+}
+
+public sealed class ResponsesModelNotFoundException : Exception
+{
+    public ResponsesModelNotFoundException(string message) : base(message)
+    {
+    }
 }
 
 public sealed record ResponsesChatRouteDecisionRequest(

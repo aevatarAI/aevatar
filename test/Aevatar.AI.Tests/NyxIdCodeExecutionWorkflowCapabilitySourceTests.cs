@@ -115,14 +115,20 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
     }
 
     [Fact]
-    public async Task InspectAsync_PolicyMismatch_NamesTheUnsatisfiedSettingAndLocatesTheService()
+    public async Task InspectAsync_PolicyMismatch_UsesPublicApiForTrustedLocator()
     {
-        var source = CreateSource(Inventory(Service(
-            "us-code-alpha",
-            "personal",
-            allowed: true,
-            injectDelegationToken: true,
-            scope: "llm:proxy")));
+        var source = CreateSource(
+            new InventoryHandler(Inventory(Service(
+                "us-code-alpha",
+                "personal",
+                allowed: true,
+                injectDelegationToken: true,
+                scope: "llm:proxy"))),
+            new NyxIdToolOptions
+            {
+                BaseUrl = "http://nyxid.internal:3001",
+                ApiBaseUrl = "https://nyx.example/",
+            });
 
         var readiness = await source.InspectAsync(
             Access(),
@@ -280,9 +286,11 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
     private static NyxIdCodeExecutionWorkflowCapabilitySource CreateSource(string inventory) =>
         CreateSource(new InventoryHandler(inventory));
 
-    private static NyxIdCodeExecutionWorkflowCapabilitySource CreateSource(InventoryHandler handler)
+    private static NyxIdCodeExecutionWorkflowCapabilitySource CreateSource(
+        InventoryHandler handler,
+        NyxIdToolOptions? configuredOptions = null)
     {
-        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var options = configuredOptions ?? new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
         var client = new NyxIdApiClient(options, new HttpClient(handler));
         return new NyxIdCodeExecutionWorkflowCapabilitySource(
             new TestClientFactory(client),

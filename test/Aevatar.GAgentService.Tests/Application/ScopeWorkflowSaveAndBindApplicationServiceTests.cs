@@ -71,6 +71,32 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
     }
 
     [Fact]
+    public async Task SaveAndBindAsync_ShouldReplayWorkflowRevisionDuringBinding()
+    {
+        const string revisionId = "rev-explicit";
+        var workflowPort = new RecordingScopeWorkflowCommandPort();
+        var bindingPort = new RecordingScopeBindingCommandPort();
+        var service = new ScopeWorkflowSaveAndBindApplicationService(
+            workflowPort,
+            bindingPort,
+            new RecordingAdmissionService());
+
+        var result = await service.SaveAndBindAsync(new ScopeWorkflowSaveAndBindRequest(
+            "scope-a",
+            "wf-alpha",
+            "name: main\nsteps: []\n",
+            RevisionId: revisionId));
+
+        result.RevisionId.Should().Be(revisionId);
+        workflowPort.Request!.RevisionId.Should().Be(revisionId);
+        bindingPort.Request!.RevisionId.Should().Be(revisionId);
+        bindingPort.Request.AllowExistingRevisionReplay.Should().BeTrue();
+        bindingPort.Request.ReplayRevisionId.Should().Be(revisionId);
+        bindingPort.Request.AcceptedRevisionCreation.Should().Be(
+            new ScopeBindingAcceptedRevisionCreation(workflowPort.Result!.ServiceKey, revisionId));
+    }
+
+    [Fact]
     public async Task SaveAndBindAsync_ShouldRejectRevisionMismatch()
     {
         var workflowPort = new RecordingScopeWorkflowCommandPort();
@@ -269,13 +295,15 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
     {
         public ScopeWorkflowUpsertRequest? Request { get; private set; }
 
+        public ScopeWorkflowUpsertResult? Result { get; private set; }
+
         public Task<ScopeWorkflowUpsertResult> UpsertAsync(
             ScopeWorkflowUpsertRequest request,
             CancellationToken ct = default)
         {
             Request = request;
             var revisionId = request.RevisionId ?? string.Empty;
-            return Task.FromResult(new ScopeWorkflowUpsertResult(
+            Result = new ScopeWorkflowUpsertResult(
                 request.ScopeId,
                 request.WorkflowId,
                 $"scope:{request.ScopeId}:workflow:{request.WorkflowId}",
@@ -287,7 +315,8 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
                 [],
                 $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}",
                 DisplayName: request.DisplayName ?? string.Empty,
-                WorkflowName: request.WorkflowName ?? string.Empty));
+                WorkflowName: request.WorkflowName ?? string.Empty);
+            return Task.FromResult(Result);
         }
     }
 

@@ -708,7 +708,8 @@ public sealed record ScheduledServiceInvocationDispatchRequest(
     bool ProjectNyxIdAccessTokenToWorkflowCallerCredential = false,
     string? ScheduleId = null,
     ScheduledInvocationAuthorizationFact? AuthorizationFact = null,
-    ScheduledDispatchFireContext? FireContext = null);
+    ScheduledDispatchFireContext? FireContext = null,
+    string? ScheduleOperationId = null);
 
 public interface IScheduledServiceInvocationDispatchPort
 {

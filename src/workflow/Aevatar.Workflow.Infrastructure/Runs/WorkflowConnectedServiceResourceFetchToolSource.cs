@@ -33,6 +33,9 @@ public sealed class WorkflowConnectedServiceResourceFetchToolSource(
 
         public string Name => "workflow_connected_service_resource_fetch";
 
+        public WorkflowToolRecoverySafety RecoverySafety =>
+            WorkflowToolRecoverySafety.EffectfulNonReplayable;
+
         public async Task<WorkflowToolExecutionResult> ExecuteAsync(
             WorkflowToolExecutionRequest request,
             CancellationToken ct = default)

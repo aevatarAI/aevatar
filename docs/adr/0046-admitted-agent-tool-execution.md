@@ -133,6 +133,62 @@ The public outcome is one of `Executed`, `ExecutedAuditIncomplete`, `ApprovalReq
 `Denied`, or `Failed`, with an explicit failure stage, `TerminalInvoked`, `Retryable`, and
 `AuditCompleted`. These fields prevent callers from guessing whether a side effect happened.
 
+Workflow direct `tool_call` execution is an actor-owned asynchronous continuation. The
+workflow actor never awaits provider I/O in its turn. Before an off-turn dispatch, it freezes
+the exact request as `ToolCallProtectedMaterial`, stores that Protobuf payload behind an
+owner-bound runtime-secret reference, and persists only the reference, deterministic SHA-256
+digest, call/execution identities, authored deadline, continuation id, attempt, callback
+leases, and a typed execution phase. Raw arguments, input, file references, external invocation
+specification, and idempotency key are absent from newly written actor state, committed state
+events, projections, started events, and logs. Every approval resume, retry, or activation
+recovery must resolve the same reference and verify its schema, owner, digest, and exact call
+identity before dispatch. Missing, corrupt, mismatched, or unavailable protected material fails
+closed before the terminal.
+
+The pending phases have one control meaning each:
+
+- `APPROVAL_PENDING`: the exact call awaits its actor-owned grant; execution is forbidden.
+- `EXECUTION_PENDING`: the exact terminal may be running or may have crossed its start-once
+  boundary; a deadline here yields `OUTCOME_UNCERTAIN`.
+- `RETRY_PENDING`: a typed `TerminalInvoked=false, Retryable=true` result was accepted and no
+  terminal is in flight; expiry here is a confirmed pre-terminal failure, not uncertainty.
+
+`UNSPECIFIED` never authorizes dispatch. Phase is mutable actor control state and is deliberately
+excluded from protected material and its digest, so approval, execution, and retry transitions
+reuse one immutable request reference. A new execution follows `protect -> persist
+EXECUTION_PENDING -> install and persist the authored-deadline watchdog -> dispatch`. Activation
+recovers the watchdog and any retry callback from actor state. An `EXECUTION_PENDING` recovery
+may redispatch only with the same call id, execution id, protected material, idempotency key, and
+`ActorRecovery` attempt kind. It never mints a new physical identity; the admitted start-once
+ledger remains the authority for whether the raw terminal may run.
+
+Internal retry is bounded to the same call identity and is permitted only for the complete typed
+classification `TerminalInvoked=false, Retryable=true`. The authored deadline is computed once
+and is rechecked immediately before every initial, approval, retry, and activation dispatch; no
+recovery extends it. Retry exhaustion publishes a terminal step failure with outer retry
+forbidden, preventing the workflow kernel from bypassing admission with a new call id.
+
+Provider completion returns as a typed self continuation. The actor accepts it only when the
+self publisher, delivery operation id, run/step/call/execution identities, attempt, and
+continuation id all match durable pending state. Publication first tries the actor inbox,
+then a durable self callback. If neither transport accepts the result, a fixed small number of
+immediate yield-and-retry attempts may run within the authored deadline; module-local delay and
+backoff are forbidden. If those attempts also fail, the already-installed authored-deadline
+watchdog remains authoritative and terminates the pending execution as outcome unknown instead
+of polling actor state outside Runtime.Callbacks. The accepted result is saved to the existing
+completion outbox before tool and step completion events are published. A timeout and completion
+race is therefore decided by the first matching actor transition; stale and late signals cannot
+overwrite it. A process-local cancellation registry may stop duplicate local
+dispatch and propagates cancellation to the provider on timeout, terminal cleanup, deactivation,
+or module replacement, but it is never authoritative state and cancellation alone never proves
+that a remote side effect did not occur.
+
+Every terminal path removes the actor reference and requests protected-material revocation;
+the bounded secret TTL is cleanup defense, not execution authority. Completion publication and
+the durable completion outbox contain only the admitted result/safe failure, never the protected
+request material. The complete state machine and recovery races are specified in
+[Workflow ToolCall Async Continuation Design](../superpowers/specs/2026-08-14-workflow-tool-call-async-continuation-design.md).
+
 MCP connectors preserve those admitted outcome fields through `ConnectorResponse` and the
 Protobuf workflow attempt-completion event. A workflow may physically retry an explicitly
 classified failure only when `Retryable=true` and `TerminalInvoked=false`; it must never mint a
@@ -195,3 +251,4 @@ Related references:
 - [NyxID Connected-Service LLM Tools](../canon/nyxid-connected-service-tools.md)
 - [NyxID Responses Direct](../canon/nyxid-responses-direct.md)
 - [Workflow Primitives](../canon/workflow-primitives.md)
+- [Workflow ToolCall Async Continuation Design](../superpowers/specs/2026-08-14-workflow-tool-call-async-continuation-design.md)

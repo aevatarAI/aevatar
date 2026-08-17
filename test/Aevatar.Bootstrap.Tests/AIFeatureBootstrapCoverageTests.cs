@@ -69,7 +69,7 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
-    public void ReadConfiguredProviders_WhenNyxIdAuthorityConfigured_ShouldResolveGatewayEndpoint()
+    public void ReadConfiguredProviders_WhenNyxIdEndpointRolesDiffer_ShouldUsePublicApiGateway()
     {
         var options = new AevatarAIFeatureOptions
         {
@@ -85,7 +85,9 @@ public class AIFeatureBootstrapCoverageTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.com",
+                ["Cli:App:NyxId:Authority"] = "https://nyx-issuer.example.com",
             })
             .Build();
 
@@ -94,7 +96,7 @@ public class AIFeatureBootstrapCoverageTests
         configuredProviders.Should().ContainSingle();
         var provider = configuredProviders[0];
         ReadConfiguredProviderString(provider, "ProviderType").Should().Be("nyxid");
-        ReadConfiguredProviderString(provider, "Endpoint").Should().Be("https://nyx.example.com/api/v1/llm/gateway/v1");
+        ReadConfiguredProviderString(provider, "Endpoint").Should().Be("https://nyx-api.example.com/api/v1/llm/gateway/v1");
     }
 
     [Fact]

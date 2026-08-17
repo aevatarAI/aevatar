@@ -1009,6 +1009,21 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public void AddWorkflowCapabilityServices_ShouldKeepStartupSourceCredentialSkippingDisabledByDefault()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
+
+        options.SkipSourceCredentialRequiredDefinitionsOnStartup.Should().BeFalse();
+    }
+
+    [Fact]
     public void AddWorkflowCapabilityServices_ShouldNotLoadRemovedRepositoryExamplesIntoGenericHost()
     {
         var services = new ServiceCollection();

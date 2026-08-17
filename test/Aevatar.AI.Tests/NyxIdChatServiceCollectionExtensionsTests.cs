@@ -55,7 +55,7 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddNyxIdChat_WhenAssistantActionsEnabled_ShouldRegisterStrictStartupFetcher()
+    public void AddNyxIdChat_WhenAssistantActionsEnabled_ShouldRegisterStartupFetcher()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -71,41 +71,6 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType ==
             typeof(NyxIdAssistantActionRegistryStartupService));
-    }
-
-    [Fact]
-    public void AddNyxIdChat_ShouldBindPlanGateConfirmationThreshold()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Aevatar:NyxId:PlanGate:ConfirmationThresholdSeconds"] = "900",
-            })
-            .Build();
-        var services = new ServiceCollection();
-
-        services.AddNyxIdChat(configuration);
-        using var provider = services.BuildServiceProvider();
-
-        provider.GetRequiredService<NyxIdChatPlanGateOptions>()
-            .ConfirmationThresholdSeconds.Should().Be(900);
-    }
-
-    [Fact]
-    public void AddNyxIdChat_ShouldRejectNonPositivePlanGateThreshold()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Aevatar:NyxId:PlanGate:ConfirmationThresholdSeconds"] = "0",
-            })
-            .Build();
-        var services = new ServiceCollection();
-
-        Action add = () => services.AddNyxIdChat(configuration);
-
-        add.Should().Throw<InvalidOperationException>()
-            .WithMessage("*ConfirmationThresholdSeconds must be positive*");
     }
 
     [Fact]

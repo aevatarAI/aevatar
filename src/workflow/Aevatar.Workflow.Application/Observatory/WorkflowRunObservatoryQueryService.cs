@@ -291,6 +291,7 @@ public sealed class WorkflowRunObservatoryQueryService
                     ExecutionPath = ToSectionVersion(graph),
                 },
                 Timeline = [],
+                Operations = [],
                 Diagnostics = BuildDiagnostics(snapshot, report: null, steps: [], viewEvents: []),
                 UsageTotals = new ObservatoryUsageTotals(),
                 ExecutionPath = graph,
@@ -337,6 +338,14 @@ public sealed class WorkflowRunObservatoryQueryService
             Diagnostics = BuildDiagnostics(snapshot, report, steps, viewEvents),
             Steps = steps,
             Timeline = viewEvents,
+            Operations = report.Operations
+                .OrderBy(operation => operation.ProgressSequence > 0 ? 0 : 1)
+                .ThenBy(operation => operation.ProgressSequence > 0 ? operation.ProgressSequence : 0)
+                .ThenBy(operation => operation.StartedAt ?? operation.CompletedAt ?? DateTimeOffset.MaxValue)
+                .ThenBy(operation => operation.SessionId, StringComparer.Ordinal)
+                .ThenBy(operation => operation.OperationId, StringComparer.Ordinal)
+                .Select(ToOperationDetail)
+                .ToList(),
             ExecutionPath = graph,
             Statistics = ToStatistics(report.Summary),
             UsageTotals = WorkflowRunObservatoryTimelineMapper.ToUsageTotals(report.Usage),
@@ -344,6 +353,39 @@ public sealed class WorkflowRunObservatoryQueryService
             Lineage = CloneLineage(snapshot),
         };
     }
+
+    private static ObservatoryOperationDetail ToOperationDetail(WorkflowRunOperation operation) =>
+        new()
+        {
+            SessionId = operation.SessionId,
+            OperationId = operation.OperationId,
+            ProgressSequence = operation.ProgressSequence,
+            Round = operation.Round,
+            Kind = operation.Kind switch
+            {
+                WorkflowRuntimeOperationKind.Model => "model",
+                WorkflowRuntimeOperationKind.Tool => "tool",
+                _ => "unknown",
+            },
+            StartedAtUtc = operation.StartedAt,
+            CompletedAtUtc = operation.CompletedAt,
+            RoleActorId = operation.RoleActorId,
+            Model = operation.Model,
+            Provider = operation.Provider,
+            InputSummary = operation.InputSummary,
+            AvailableToolNames = operation.AvailableToolNames,
+            Output = operation.Output,
+            ReasoningContent = operation.ReasoningContent,
+            FinishReason = operation.FinishReason,
+            Usage = WorkflowRunObservatoryTimelineMapper.ToUsageTotals(operation.Usage),
+            Success = operation.Success,
+            Error = operation.Error,
+            ToolCallId = operation.ToolCallId,
+            ToolName = operation.ToolName,
+            ArgumentsJson = operation.ArgumentsJson,
+            ResultJson = operation.ResultJson,
+            DurationMs = operation.DurationMs,
+        };
 
     // role.reply timeline events carry the role id (e.g. "writer") in Message; the response text lives in the
     // committed role-reply artifact. Dequeue the next reply for that role in commit order.

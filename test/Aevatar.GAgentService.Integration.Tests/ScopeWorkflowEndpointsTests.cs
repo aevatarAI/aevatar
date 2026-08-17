@@ -1839,7 +1839,8 @@ public sealed class ScopeWorkflowEndpointsTests
                 ServiceNamespace = "default",
                 DefinitionActorIdPrefix = "scope-workflow",
             }),
-            new PassthroughWorkflowCapabilityAdmissionService());
+            new PassthroughWorkflowCapabilityAdmissionService(),
+            new TestWorkflowDefinitionParser());
     }
 
     private static IScopeWorkflowQueryPort BuildQueryPort(
@@ -2211,7 +2212,6 @@ public sealed class ScopeWorkflowEndpointsTests
         public Task<ServiceCommandAcceptedReceipt> PrepareRevisionAsync(PrepareServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> PublishRevisionAsync(PublishServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(DeactivateServiceDeploymentCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> ReplaceServiceServingTargetsAsync(ReplaceServiceServingTargetsCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
@@ -2509,6 +2509,34 @@ public sealed class ScopeWorkflowEndpointsTests
             RefreshPersistedWorkflowCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(request.Persisted.Plan.Clone());
+    }
+
+    private sealed class TestWorkflowDefinitionParser : IWorkflowDefinitionParser
+    {
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var name = (workflowYaml ?? string.Empty)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(static line => line.StartsWith("name:", StringComparison.OrdinalIgnoreCase))?
+                ["name:".Length..]
+                .Trim();
+            return Task.FromResult(string.IsNullOrWhiteSpace(name)
+                ? WorkflowYamlParseResult.Invalid("Workflow YAML is invalid.")
+                : WorkflowYamlParseResult.Success(
+                    name,
+                    new WorkflowAuthorizationDependencies
+                    {
+                        ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+                    }));
+        }
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            Task.FromResult(WorkflowInlineYamlBundleParseResult.Invalid("Not used by this test."));
     }
 
     private sealed class NoOpServiceGovernanceCommandPort : IServiceGovernanceCommandPort

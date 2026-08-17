@@ -543,8 +543,9 @@ public sealed class NyxIdChatTurnOperationDispatchPort
 
         var frozenCommand = command.Clone();
         var canaryEffectFaultEligible = NyxIdChatCanaryEffectFaultDecisions.MatchesTurnDispatch(
-            frozenCommand.PlanGateContinuation?.CanaryEffectFault,
+            frozenCommand.Tool?.CanaryEffectFault,
             frozenCommand,
+            session.Request?.ToolContext ?? session.StepState?.ToolContext,
             Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
         _ = Task.Run(
             () => ExecuteAndSignalAsync(
@@ -627,7 +628,7 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                 {
                     await DispatchCanaryEffectFaultAsync(
                             turnActorId,
-                            command.PlanGateContinuation.CanaryEffectFault,
+                            command.Tool.CanaryEffectFault,
                             result,
                             correlationId)
                         .ConfigureAwait(false);
@@ -730,19 +731,19 @@ public sealed class NyxIdChatTurnOperationDispatchPort
         NyxIdChatOperationDispatchCommand? command,
         NyxIdChatOperationResultSignal? result)
     {
-        var continuation = command?.PlanGateContinuation;
-        var admission = continuation?.OperationAdmission;
+        var input = command?.Tool;
+        var admission = input?.OperationAdmission;
         var tool = result?.Tool;
         var receipt = tool?.Receipt;
         return command?.Key is not null &&
                result?.Key is not null &&
                command.Key.Equals(result.Key) &&
-               continuation?.CanaryEffectFault?.Key?.Equals(command.Key) == true &&
-               !string.IsNullOrWhiteSpace(continuation.ToolCallId) &&
-               !string.IsNullOrWhiteSpace(continuation.ToolName) &&
+               input?.CanaryEffectFault?.Key?.Equals(command.Key) == true &&
+               !string.IsNullOrWhiteSpace(input.CallId) &&
+               !string.IsNullOrWhiteSpace(input.ToolName) &&
                !string.IsNullOrWhiteSpace(admission?.ServiceInstanceId) &&
                string.Equals(
-                   continuation.CanaryEffectFault.ServiceInstanceId,
+                   input.CanaryEffectFault.ServiceInstanceId,
                    admission.ServiceInstanceId,
                    StringComparison.Ordinal) &&
                tool?.ExternalEffect == NyxIdChatEffectEvidence.NotApplied &&
@@ -760,8 +761,8 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                    NyxIdApprovalFailedCode,
                    StringComparison.Ordinal) &&
                !string.IsNullOrWhiteSpace(receipt.ApprovalRequestId) &&
-               string.Equals(receipt.CallId, continuation.ToolCallId, StringComparison.Ordinal) &&
-               string.Equals(receipt.ToolName, continuation.ToolName, StringComparison.Ordinal) &&
+               string.Equals(receipt.CallId, input.CallId, StringComparison.Ordinal) &&
+               string.Equals(receipt.ToolName, input.ToolName, StringComparison.Ordinal) &&
                string.Equals(receipt.SubjectKind, "nyxid.user-service", StringComparison.Ordinal) &&
                string.Equals(
                    receipt.SubjectId,
@@ -863,8 +864,7 @@ public sealed class NyxIdChatTurnOperationDispatchPort
          {
              Approved: true,
              MayChangeExternalState: true,
-         }) ||
-        command.PlanGateContinuation?.MayChangeExternalState == true;
+         });
 
     private sealed class Session(NyxIdChatTurnOperationDispatchPort owner)
         : INyxIdChatTurnOperationDispatchSession

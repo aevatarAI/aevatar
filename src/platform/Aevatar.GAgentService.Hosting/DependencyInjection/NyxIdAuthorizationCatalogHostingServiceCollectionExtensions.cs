@@ -3,9 +3,11 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Schedules.Authorization;
+using Aevatar.GAgentService.Infrastructure.Credentials;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -31,6 +33,12 @@ public static class NyxIdAuthorizationCatalogHostingServiceCollectionExtensions
             builder.Register<NyxIdAuthorizationCatalogGAgent>());
         services.AddScheduledInvocationAuthorization();
         services.AddNyxIdApiAccess(configuration);
+        services.TryAddSingleton<
+            IWorkflowCallerAccessTokenProvider,
+            NyxIdWorkflowCallerAccessTokenProvider>();
+        services.Replace(ServiceDescriptor.Singleton<
+            INyxIdScheduledOperationAuthorizationPort,
+            NyxIdApprovalPolicyScheduledOperationAuthorizationPort>());
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
             NyxIdExternalWorkflowCapabilitySource>());

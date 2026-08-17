@@ -61,7 +61,7 @@
 
 - service 定义
 - revision 创建
-- prepare / publish / default-serving / activate
+- prepare / publish / activate（先提交 serving targets，再提交 default-serving revision）
 - invoke dispatch
 
 见：
@@ -73,7 +73,7 @@
 
 workflow scope 能力并不是一个编辑器，而是把 scope 下 workflow 作为正式 service revision 管理：
 
-- `ScopeWorkflowCommandApplicationService` 会创建 service definition、创建 revision、prepare、publish、set default serving、activate。
+- `ScopeWorkflowCommandApplicationService` 会创建 service definition、创建 revision、prepare、publish、activate；activation actor 依次提交 serving targets 和 default-serving revision。
 
 script scope 能力也不是一个 IDE，而是正式 definition/catalog/promotion 主链：
 
@@ -1198,7 +1198,7 @@ workflow、script、static gagent 不再是三个对外入口协议，它们只�
 
 - `create revision`
 - `publish revision`
-- `set default serving revision`
+- `activate revision`（依次提交 serving targets 与 default-serving revision）
 - `rollback to prior revision`
 - `retire revision`
 - `query revision catalog watermark`
@@ -1441,8 +1441,7 @@ AI 只需要理解：
 4. 调用 `CreateRevision(implementationKind = workflow)`
 5. `PrepareRevision`
 6. `PublishRevision`
-7. `SetDefaultServingRevision`
-8. `ActivateServiceRevision`
+7. `ActivateServiceRevision`（先提交 serving targets，再提交 default-serving revision）
 
 结果：
 

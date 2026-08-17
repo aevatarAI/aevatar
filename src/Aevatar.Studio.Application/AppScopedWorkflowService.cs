@@ -124,7 +124,9 @@ public sealed class AppScopedWorkflowService
         if (!parsed.Succeeded)
             throw new InvalidOperationException(parsed.Error);
 
-        var workflowName = NormalizeRequired(request.WorkflowName, nameof(request.WorkflowName));
+        var workflowName = string.IsNullOrWhiteSpace(request.WorkflowName)
+            ? NormalizeRequired(parsed.WorkflowName, nameof(request.WorkflowName))
+            : request.WorkflowName.Trim();
         normalizedYaml = AlignWorkflowYamlName(normalizedYaml, workflowName);
         var workspaceQueryPort = _workspaceQueryPort
             ?? throw new InvalidOperationException("Scoped workflow workspace query port is not configured.");
@@ -328,13 +330,13 @@ public sealed class AppScopedWorkflowService
         StudioWorkflowDraftRecord draft,
         WorkflowParseResult parseResult)
     {
-        var parsedName = parseResult.Document?.Name?.Trim();
-        if (!string.IsNullOrWhiteSpace(parsedName))
-            return parsedName;
-
         var storedName = draft.Name?.Trim();
         if (!string.IsNullOrWhiteSpace(storedName))
             return storedName;
+
+        var parsedName = parseResult.Document?.Name?.Trim();
+        if (!string.IsNullOrWhiteSpace(parsedName))
+            return parsedName;
 
         return draft.WorkflowId;
     }

@@ -344,7 +344,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
     private static string ResolveCurrentStateStatus(WorkflowRunState state)
     {
         var status = state.Status ?? string.Empty;
-        if (status is "completed" or "failed" or "stopped")
+        if (status is "completed" or "timed_out" or "failed" or "stopped")
             return status;
 
         foreach (var executionState in state.ExecutionStates.Values)
@@ -400,6 +400,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
         return (status ?? string.Empty).Trim() switch
         {
             "completed" => true,
+            "timed_out" => false,
             "failed" => false,
             _ => null,
         };

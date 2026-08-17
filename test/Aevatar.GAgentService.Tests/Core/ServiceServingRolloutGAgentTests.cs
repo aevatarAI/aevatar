@@ -613,6 +613,227 @@ public sealed class ServiceServingRolloutGAgentTests
     }
 
     [Fact]
+    public async Task ServiceServingSetManager_ShouldCommitResolvedOperationBeforeAckAndReAckExactDuplicate()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var actorId = ServiceActorIds.ServingSet(identity);
+        var agent = CreateServingSetAgent(eventStore, actorId, dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        var command = new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Reason = "deployment activation",
+            ActivationAttemptId = "attempt-1",
+            OperationId = "operation-1",
+            ReplyActorId = "deployment-manager-1",
+            Targets =
+            {
+                CreateTarget("dep-1", "rev-1", "actor-1", 100, "chat"),
+            },
+        };
+
+        await agent.HandleReplaceResolvedAsync(command);
+
+        agent.State.Generation.Should().Be(1);
+        agent.State.LastAppliedEventVersion.Should().Be(1);
+        agent.State.LastResolvedOperationId.Should().Be("operation-1");
+        dispatchPort.Calls.Should().HaveCount(2);
+        dispatchPort.Calls.Select(x => x.Envelope.Route.PublisherActorId)
+            .Should().OnlyContain(x => x == actorId);
+        dispatchPort.Calls[0].ActorId.Should().Be(ServiceActorIds.InvocationCatalog(identity));
+        dispatchPort.Calls[1].ActorId.Should().Be("deployment-manager-1");
+        var firstAck = dispatchPort.Calls[1].Envelope.Payload.Unpack<ServiceServingTargetsAppliedAck>();
+        firstAck.Identity.Should().BeEquivalentTo(identity);
+        firstAck.RevisionId.Should().Be("rev-1");
+        firstAck.DeploymentId.Should().Be("dep-1");
+        firstAck.ActivationAttemptId.Should().Be("attempt-1");
+        firstAck.OperationId.Should().Be("operation-1");
+        firstAck.ServingGeneration.Should().Be(agent.State.Generation);
+        firstAck.AppliedAt.Should().Be(agent.State.LastResolvedAppliedAt);
+        (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle();
+
+        await agent.HandleReplaceResolvedAsync(command.Clone());
+
+        agent.State.Generation.Should().Be(1);
+        agent.State.LastAppliedEventVersion.Should().Be(1);
+        (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle();
+        dispatchPort.Calls.Should().HaveCount(4);
+        dispatchPort.Calls[2].ActorId.Should().Be(ServiceActorIds.InvocationCatalog(identity));
+        dispatchPort.Calls[2].Envelope.Id.Should().Be(dispatchPort.Calls[0].Envelope.Id);
+        dispatchPort.Calls[3].ActorId.Should().Be("deployment-manager-1");
+        var duplicateAck = dispatchPort.Calls[3].Envelope.Payload.Unpack<ServiceServingTargetsAppliedAck>();
+        duplicateAck.Should().BeEquivalentTo(firstAck);
+        dispatchPort.Calls[3].Envelope.Id.Should().Be(dispatchPort.Calls[1].Envelope.Id);
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldWithholdAckUntilObservationAdmissionAndConvergeOnDuplicate()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var invocationCatalog = GAgentServiceTestKit.CreateStatefulAgent<
+            ServiceInvocationCatalogGAgent,
+            ServiceInvocationCatalogState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.InvocationCatalog(identity),
+            static () => new ServiceInvocationCatalogGAgent(new ServiceInvokeReadinessEvaluator()));
+        await invocationCatalog.ActivateAsync();
+        var dispatchPort = new RejectFirstObservationDispatchPort(invocationCatalog);
+        var actorId = ServiceActorIds.ServingSet(identity);
+        var agent = CreateServingSetAgent(eventStore, actorId, dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        var command = CreateResolvedActivationCommand(
+            identity,
+            "attempt-1",
+            "operation-1",
+            "dep-1",
+            "rev-1",
+            "actor-1");
+
+        await FluentActions.Invoking(() => agent.HandleReplaceResolvedAsync(command))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*observation was not admitted*");
+
+        agent.State.Generation.Should().Be(1);
+        agent.State.ResolvedOperations.Should().ContainKey("operation-1");
+        (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle();
+        dispatchPort.Calls.Should().ContainSingle();
+        dispatchPort.Calls.Should().NotContain(x =>
+            x.Envelope.Payload.Is(ServiceServingTargetsAppliedAck.Descriptor));
+
+        await agent.HandleReplaceResolvedAsync(command.Clone());
+
+        agent.State.Generation.Should().Be(1);
+        (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle();
+        dispatchPort.Calls.Should().HaveCount(3);
+        dispatchPort.Calls[1].Envelope.Id.Should().Be(dispatchPort.Calls[0].Envelope.Id);
+        var observation = dispatchPort.Calls[1].Envelope.Payload.Unpack<ObserveServiceInvocationServingCommand>();
+        observation.SourceServingVersion.Should().Be(1);
+        invocationCatalog.State.SourceServingVersion.Should().Be(1);
+        invocationCatalog.State.ServingTargets.Should().ContainSingle(x =>
+            x.DeploymentId == "dep-1" && x.RevisionId == "rev-1");
+        var ack = dispatchPort.Calls[2].Envelope.Payload.Unpack<ServiceServingTargetsAppliedAck>();
+        ack.OperationId.Should().Be("operation-1");
+        ack.ServingGeneration.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldRejectOperationReusedByDifferentAttempt()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        var command = new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            ActivationAttemptId = "attempt-1",
+            OperationId = "operation-1",
+            ReplyActorId = "deployment-manager-1",
+            Targets =
+            {
+                CreateTarget("dep-1", "rev-1", "actor-1", 100, "chat"),
+            },
+        };
+        await agent.HandleReplaceResolvedAsync(command);
+        var version = agent.State.LastAppliedEventVersion;
+
+        var conflicting = command.Clone();
+        conflicting.ActivationAttemptId = "attempt-2";
+        await FluentActions.Invoking(() => agent.HandleReplaceResolvedAsync(conflicting))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to different serving update facts*");
+
+        agent.State.Generation.Should().Be(1);
+        agent.State.LastAppliedEventVersion.Should().Be(version);
+        dispatchPort.Calls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldReAckOlderOperationWithoutRollingBackNewerTargets()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var actorId = ServiceActorIds.ServingSet(identity);
+        var agent = CreateServingSetAgent(eventStore, actorId, dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        var operation1 = CreateResolvedActivationCommand(
+            identity,
+            "attempt-1",
+            "operation-1",
+            "dep-1",
+            "rev-1",
+            "actor-1");
+        var operation2 = CreateResolvedActivationCommand(
+            identity,
+            "attempt-2",
+            "operation-2",
+            "dep-2",
+            "rev-2",
+            "actor-2");
+
+        await agent.HandleReplaceResolvedAsync(operation1);
+        await agent.HandleReplaceResolvedAsync(operation2);
+        await agent.HandleReplaceResolvedAsync(operation1.Clone());
+
+        agent.State.Generation.Should().Be(2);
+        agent.State.LastAppliedEventVersion.Should().Be(2);
+        agent.State.Targets.Single().DeploymentId.Should().Be("dep-2");
+        agent.State.ResolvedOperations.Keys.Should().BeEquivalentTo("operation-1", "operation-2");
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(2);
+        dispatchPort.Calls.Should().HaveCount(6);
+        var delayedAck = dispatchPort.Calls[^1].Envelope.Payload.Unpack<ServiceServingTargetsAppliedAck>();
+        delayedAck.OperationId.Should().Be("operation-1");
+        delayedAck.ServingGeneration.Should().Be(1);
+        delayedAck.DeploymentId.Should().Be("dep-1");
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldReAckOperationAcrossLegacyNoOperationUpdate()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var actorId = ServiceActorIds.ServingSet(identity);
+        var agent = CreateServingSetAgent(eventStore, actorId, dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        var operation = CreateResolvedActivationCommand(
+            identity,
+            "attempt-1",
+            "operation-1",
+            "dep-1",
+            "rev-1",
+            "actor-1");
+        await agent.HandleReplaceResolvedAsync(operation);
+        await agent.HandleReplaceResolvedAsync(new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Reason = "legacy resolved update",
+            Targets =
+            {
+                CreateTarget("dep-legacy", "rev-legacy", "actor-legacy", 100, "run"),
+            },
+        });
+
+        await agent.HandleReplaceResolvedAsync(operation.Clone());
+
+        agent.State.Generation.Should().Be(2);
+        agent.State.LastAppliedEventVersion.Should().Be(2);
+        agent.State.Targets.Single().DeploymentId.Should().Be("dep-legacy");
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(2);
+        dispatchPort.Calls.Should().HaveCount(5);
+        var delayedAck = dispatchPort.Calls[^1].Envelope.Payload.Unpack<ServiceServingTargetsAppliedAck>();
+        delayedAck.OperationId.Should().Be("operation-1");
+        delayedAck.ServingGeneration.Should().Be(1);
+    }
+
+    [Fact]
     public async Task ServiceServingSetManager_ShouldRejectMissingResolutionFacts()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
@@ -1152,6 +1373,26 @@ public sealed class ServiceServingRolloutGAgentTests
                 targetResolver ?? new PassthroughServingTargetResolver()));
     }
 
+    private static ReplaceResolvedServiceServingTargetsCommand CreateResolvedActivationCommand(
+        ServiceIdentity identity,
+        string activationAttemptId,
+        string operationId,
+        string deploymentId,
+        string revisionId,
+        string primaryActorId) =>
+        new()
+        {
+            Identity = identity.Clone(),
+            Reason = "deployment activation",
+            ActivationAttemptId = activationAttemptId,
+            OperationId = operationId,
+            ReplyActorId = "deployment-manager-1",
+            Targets =
+            {
+                CreateTarget(deploymentId, revisionId, primaryActorId, 100, "chat"),
+            },
+        };
+
     private static ServiceRolloutPlanSpec CreateRolloutPlan(string rolloutId, params ServiceRolloutStageSpec[] stages)
     {
         var plan = new ServiceRolloutPlanSpec
@@ -1209,6 +1450,37 @@ public sealed class ServiceServingRolloutGAgentTests
 
             Commands.Add((actorId, envelope.Payload.Unpack<ReplaceServiceServingTargetsCommand>()));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class RejectFirstObservationDispatchPort(
+        ServiceInvocationCatalogGAgent invocationCatalog) : IActorDispatchPort
+    {
+        private bool _observationRejected;
+
+        public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
+
+        public async Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            Calls.Add((actorId, envelope.Clone()));
+            var admission = DispatchAdmissionFactory.Create(actorId, envelope);
+            if (!_observationRejected &&
+                envelope.Payload.Is(ObserveServiceInvocationServingCommand.Descriptor))
+            {
+                _observationRejected = true;
+                return admission with { Accepted = false };
+            }
+
+            if (envelope.Payload.Is(ObserveServiceInvocationServingCommand.Descriptor))
+            {
+                await invocationCatalog.HandleServingObservationAsync(
+                    envelope.Payload.Unpack<ObserveServiceInvocationServingCommand>());
+            }
+
+            return admission;
         }
     }
 

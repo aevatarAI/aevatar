@@ -42,7 +42,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
         //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
         //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl))
         {
             _logger.LogDebug("NyxID base URL not configured, skipping NyxID tools");
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
@@ -92,7 +92,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         _logger.LogInformation(
             "NyxID tools registered ({Count} tools, base URL: {BaseUrl}, ssh_exec={SshEnabled}, managed_codex_exec={ManagedCodexEnabled}, code_execute={CodeExecuteRegistered}, codex_exec={CodexExecRegistered})",
             tools.Count,
-            _options.BaseUrl,
+            _options.EffectiveTransportBaseUrl,
             _options.EnableSshExecTool,
             _options.EnableManagedCodexExecTool,
             tools.Any(static tool => tool is NyxIdCodeExecuteTool),

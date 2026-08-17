@@ -1,0 +1,348 @@
+# =============================================================================
+# HR-02 月度考勤审批
+#
+# 用途：读取 Lark Base 考勤表，统计当月出勤情况，生成并提交「月度考勤」Lark 审批，
+#       提交成功后给指定负责人发送 Lark 卡片通知。
+# 输入（JSON）：
+#   {"period_label":"2026年8月","run_date":"2026-08-31","submit":false}
+#   月末 schedule 另传 "month_end_only":true；非月末会在读取 Base 前返回 typed skip。
+# 模式：
+#   submit=false（默认）→ 只输出统计结果和将要提交的审批内容
+#   submit=true          → 创建审批 + 回读验证 + 发送通知卡片
+#
+# 说明：
+#   - 引擎没有时钟；月末 schedule 使用 28-31 日 Cron，并传 month_end_only=true，
+#     workflow 根据 run_date 做最后一天守卫。手工 preview 不传该字段，可随时运行。
+#   - 所有统计为确定性计算（transform template），不经过 LLM；
+#     应出勤天数取当月各行的最大值（与行序无关，离职者折算天数不会干扰）。
+#   - 考勤表超过 page_size 时 preview 输出 truncated=true，submit 会直接拒绝执行。
+#   - 审批创建成功后通知发送失败不判整体失败，结果里看 notify_sent/notify_message_id。
+#   - 审批表单控件类型（textarea/input）写在 build_request 模板里，换不同控件类型的
+#     审批表单时需一并修改该模板。
+#
+# ★ 交接替换清单：config 步骤内的 JSON + 各 capability.nyxid_request.user_service_id。
+#   字段名（月份/应出勤天数/事假(天）/病假（天）/人员情况/离职）均在 config 中，
+#   与你们真实考勤表的列名对齐即可（如「事假(天）」这类带括号的列名直接原样填入）。
+# =============================================================================
+name: hr_monthly_attendance_approval
+description: 月度考勤审批：读取考勤 Base 表，确定性统计出勤/离职/事假/病假，preview 输出统计与审批内容，submit 创建审批、回读验证并发送 Lark 通知卡片。
+roles:
+  - id: operator
+    name: HR Operator
+steps:
+  - id: capture_request
+    type: assign
+    parameters:
+      target: raw_request
+      value: "$input"
+    next: config
+
+  # ★★★ 部署参数 ★★★
+  - id: config
+    type: assign
+    parameters:
+      target: deploy_config
+      value: >-
+        {"attendance_app_token":"MwIRb3h5hauYvcsA28kl8FGfgjg",
+         "attendance_table_id":"tblTDqjSDKffQ7cm",
+         "page_size":"500",
+         "field_month":"月份",
+         "field_expected_days":"应出勤天数",
+         "field_leave_days":"事假(天）",
+         "field_sick_days":"病假（天）",
+         "field_status":"人员情况",
+         "status_resigned":"离职",
+         "schedule_note":"（单休）",
+         "approval_code":"3F02FB04-3919-4089-B42B-B1B557820EB5",
+         "submitter_user_id":"ee689459",
+         "widget_detail_id":"widget17195537488110001",
+         "widget_link_id":"widget17174729080890001",
+         "doc_url":"https://aelfblockchain.sg.larksuite.com/base/MwIRb3h5hauYvcsA28kl8FGfgjg?table=tblTDqjSDKffQ7cm&view=vewfR8fiQS",
+         "notify_user_id":"831cg5af"}
+    next: determine_calendar_route
+
+  # legacy Cron 会在 28-31 日触发；schedule 模式只允许真实月末继续，其他日期零外部调用。
+  - id: determine_calendar_route
+    type: tool_call
+    parameters:
+      tool: code_execute
+      arguments: >-
+        {"language":"javascript","code":"let req = ${json(steps.capture_request.output)}; const fail = code => { throw new Error(code); }; if (typeof req === 'string') { try { req = JSON.parse(req); } catch (e) { fail('HR02_REQUEST_INVALID'); } } if (!req || typeof req !== 'object' || Array.isArray(req)) fail('HR02_REQUEST_INVALID'); const guarded = req.month_end_only === true || req.month_end_only === 'true'; const runDate = String(req.run_date || '').trim(); let isLastDay = false; if (guarded) { const m = runDate.match(/^(\\d{4})-(\\d{2})-(\\d{2})$/); if (!m) fail('HR02_RUN_DATE_REQUIRED_FOR_MONTH_END_GUARD'); const y = Number(m[1]); const mo = Number(m[2]); const d = Number(m[3]); const date = new Date(Date.UTC(y, mo - 1, d)); if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) fail('HR02_RUN_DATE_INVALID'); const tomorrow = new Date(date.getTime() + 24 * 60 * 60 * 1000); isLastDay = tomorrow.getUTCDate() === 1; } console.log(JSON.stringify({ route: !guarded || isLastDay ? 'RUN' : 'SKIP', period: String(req.period_label || ''), run_date: runDate, month_end_guard: guarded, is_last_day: isLastDay }));"}
+    next: parse_calendar_route
+
+  - id: parse_calendar_route
+    type: transform
+    parameters:
+      op: json_parse
+      path: output.stdout
+    next: route_calendar
+
+  - id: route_calendar
+    type: switch
+    parameters:
+      on: "${steps.parse_calendar_route.json.route}"
+      branch.RUN: read_attendance
+      branch.SKIP: month_end_skip
+      branch._default: calendar_route_invalid
+    branches:
+      RUN: read_attendance
+      SKIP: month_end_skip
+      _default: calendar_route_invalid
+
+  - id: month_end_skip
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{ json({ workflow: 'hr_monthly_attendance_approval', mode: 'skipped',
+                  period: data.period, run_date: data.run_date,
+                  reason: 'not_month_end', side_effects: false }) }}
+    next: done
+
+  - id: calendar_route_invalid
+    type: transform
+    parameters:
+      op: template
+      template: "{{ number('invalid HR-02 calendar route') }}"
+    next: done
+
+  - id: read_attendance
+    type: tool_call
+    capability:
+      nyxid_request:
+        user_service_id: 77d19bda-d635-4af5-bfba-cfcccfd6ba0b
+        method: GET
+        path_template: /open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records
+        query_parameters:
+          - page_size
+        header_parameters: []
+        body_mode: none
+        response_mode: text
+    parameters:
+      tool: nyxid_proxy
+      arguments: >-
+        {"path_params":{"app_token":"${steps.config.json.attendance_app_token}","table_id":"${steps.config.json.attendance_table_id}"},"query":{"page_size":"${steps.config.json.page_size}"}}
+    next: merge_context
+
+  - id: merge_context
+    type: assign
+    parameters:
+      target: run_context
+      value: >-
+        {"config":${deploy_config},"request":${raw_request},"records":${steps.read_attendance.output}}
+    next: aggregate
+
+  # 确定性统计：不经过 LLM
+  - id: aggregate
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{~ if data.records.code != 0; number('attendance table read failed'); end ~}}
+        {{~ config = data.config; period = get(data.request, 'period_label', '') ~}}
+        {{~ if period == ''; number('period_label is required'); end ~}}
+        {{~ sub = get(data.request, 'submit', false); mode = 'PREVIEW'; if sub == true || sub == 'true'; mode = 'SUBMIT'; end ~}}
+        {{~ items = data.records.data.items ~}}
+        {{~ headcount = 0; workdays = 0; resign_count = 0; leave_count = 0; sick_count = 0 ~}}
+        {{~ for item in items ~}}
+        {{~ f = item.fields ~}}
+        {{~ if get(f, config.field_month, '') == period ~}}
+        {{~ headcount = headcount + 1 ~}}
+        {{~ expected = number(get(f, config.field_expected_days, 0)) ~}}
+        {{~ if expected > workdays; workdays = expected; end ~}}
+        {{~ status = get(f, config.field_status, []) ~}}
+        {{~ if status.size > 0 && status[0].text == config.status_resigned; resign_count = resign_count + 1; end ~}}
+        {{~ if number(get(f, config.field_leave_days, 0)) > 0; leave_count = leave_count + 1; end ~}}
+        {{~ if number(get(f, config.field_sick_days, 0)) > 0; sick_count = sick_count + 1; end ~}}
+        {{~ end ~}}
+        {{~ end ~}}
+        {{~ if headcount == 0; number('no attendance rows matched the period_label'); end ~}}
+        {{~ truncated = get(data.records.data, 'has_more', false) ~}}
+        {{~ if mode == 'SUBMIT' && truncated == true; number('attendance table exceeds page_size - refuse to submit from partial data'); end ~}}
+        {{~ if mode == 'SUBMIT' && workdays == 0; number('resolved workdays is 0 - refuse to submit'); end ~}}
+        {{ json({ mode: mode, period: period,
+                  run_date: get(data.request, 'run_date', ''),
+                  stats: { headcount: headcount, workdays: workdays,
+                           resign_count: resign_count, leave_count: leave_count, sick_count: sick_count },
+                  truncated: truncated }) }}
+    next: build_context
+
+  - id: build_context
+    type: assign
+    parameters:
+      target: approval_context
+      value: >-
+        {"config":${deploy_config},"agg":${steps.aggregate.output}}
+    next: build_request
+
+  - id: build_request
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{~ config = data.config; agg = data.agg; s = agg.stats ~}}
+        {{~ description = agg.period + '出勤天数：' + s.workdays + '天 ' + config.schedule_note + '\n\n离职人员：' + s.resign_count + ' 人\n\n事假：' + s.leave_count + ' 人\n\n病假：' + s.sick_count + ' 人\n\n【由 aevatar workflow 自动生成】' ~}}
+        {{~ form = json([
+              { id: config.widget_detail_id, type: 'textarea', value: description },
+              { id: config.widget_link_id, type: 'input', value: config.doc_url } ]) ~}}
+        {{ json({ mode: agg.mode, period: agg.period, stats: s, truncated: agg.truncated,
+                  description: description,
+                  approval_request: { query: { user_id_type: 'user_id' },
+                                      body: { approval_code: config.approval_code,
+                                              user_id: config.submitter_user_id,
+                                              form: form } } }) }}
+    next: route_mode
+
+  - id: route_mode
+    type: switch
+    parameters:
+      on: "${steps.build_request.json.mode}"
+      branch.SUBMIT: extract_approval_request
+      branch.PREVIEW: preview_summary
+      branch._default: preview_summary
+    branches:
+      SUBMIT: extract_approval_request
+      PREVIEW: preview_summary
+      _default: preview_summary
+
+  # ---- preview 分支 ----
+  - id: preview_summary
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{ json({ workflow: 'hr_monthly_attendance_approval', mode: 'preview',
+                  period: data.period, stats: data.stats, truncated: data.truncated,
+                  approval_description_preview: data.description,
+                  side_effects: false }) }}
+    next: done
+
+  # ---- submit 分支 ----
+  - id: extract_approval_request
+    type: transform
+    parameters:
+      op: json_extract
+      path: approval_request
+    next: create_approval
+
+  - id: create_approval
+    type: tool_call
+    capability:
+      nyxid_request:
+        user_service_id: 77d19bda-d635-4af5-bfba-cfcccfd6ba0b
+        method: POST
+        path_template: /open-apis/approval/v4/instances
+        query_parameters:
+          - user_id_type
+        header_parameters: []
+        body_mode: json
+        body_required: true
+        response_mode: text
+    parameters:
+      tool: nyxid_proxy
+    next: build_verify_request
+
+  - id: build_verify_request
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{~ if data.code != 0 || get(data.data, 'instance_code', '') == ''; number('approval instance was not created'); end ~}}
+        {{ json({ path_params: { instance_code: data.data.instance_code }, query: { user_id_type: 'user_id' } }) }}
+    next: verify_approval
+
+  - id: verify_approval
+    type: tool_call
+    capability:
+      nyxid_request:
+        user_service_id: 77d19bda-d635-4af5-bfba-cfcccfd6ba0b
+        method: GET
+        path_template: /open-apis/approval/v4/instances/{instance_code}
+        query_parameters:
+          - user_id_type
+        header_parameters: []
+        body_mode: none
+        response_mode: text
+    parameters:
+      tool: nyxid_proxy
+    next: build_notify_context
+
+  # ---- 通知卡片 ----
+  - id: build_notify_context
+    type: assign
+    parameters:
+      target: notify_context
+      value: >-
+        {"config":${deploy_config},"built":${steps.build_request.output},"created":${steps.create_approval.output},"verified":${steps.verify_approval.output}}
+    next: build_notify_request
+
+  - id: build_notify_request
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{~ cfg = data.config; s = data.built.stats ~}}
+        {{~ if data.created.code != 0 || data.verified.code != 0; number('created approval could not be verified'); end ~}}
+        {{~ note_text = '审批编号: ' + data.created.data.instance_code + ' | 由 aevatar workflow 自动提交' ~}}
+        {{~ card = json({
+              config: { wide_screen_mode: true },
+              header: { title: { tag: 'plain_text', content: '✅ ' + data.built.period + ' 考勤审批已提交' }, template: 'blue' },
+              elements: [
+                { tag: 'div', fields: [
+                  { is_short: true, text: { tag: 'lark_md', content: '**出勤天数**\n' + s.workdays + ' 天 ' + cfg.schedule_note } },
+                  { is_short: true, text: { tag: 'lark_md', content: '**离职人员**\n' + s.resign_count + ' 人' } },
+                  { is_short: true, text: { tag: 'lark_md', content: '**事假**\n' + s.leave_count + ' 人' } },
+                  { is_short: true, text: { tag: 'lark_md', content: '**病假**\n' + s.sick_count + ' 人' } } ] },
+                { tag: 'hr' },
+                { tag: 'action', actions: [ { tag: 'button', text: { tag: 'plain_text', content: '查看考勤表' }, type: 'primary', url: cfg.doc_url } ] },
+                { tag: 'note', elements: [ { tag: 'plain_text', content: note_text } ] } ] }) ~}}
+        {{ json({ query: { receive_id_type: 'user_id' },
+                  body: { receive_id: cfg.notify_user_id, msg_type: 'interactive', content: card } }) }}
+    next: send_notify
+
+  - id: send_notify
+    type: tool_call
+    capability:
+      nyxid_request:
+        user_service_id: 77d19bda-d635-4af5-bfba-cfcccfd6ba0b
+        method: POST
+        path_template: /open-apis/im/v1/messages
+        query_parameters:
+          - receive_id_type
+        header_parameters: []
+        body_mode: json
+        body_required: true
+        response_mode: text
+    parameters:
+      tool: nyxid_proxy
+    next: merge_submit_results
+
+  - id: merge_submit_results
+    type: assign
+    parameters:
+      target: submit_results
+      value: >-
+        {"built":${steps.build_request.output},"created":${steps.create_approval.output},"verified":${steps.verify_approval.output},"notified":${steps.send_notify.output}}
+    next: summarize_submit
+
+  - id: summarize_submit
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{~ if data.created.code != 0 || data.verified.code != 0; number('created approval could not be verified'); end ~}}
+        {{ json({ workflow: 'hr_monthly_attendance_approval', mode: 'submit',
+                  period: data.built.period, stats: data.built.stats,
+                  instance_code: data.created.data.instance_code,
+                  approval_status: get(data.verified.data, 'status', 'UNKNOWN'),
+                  notify_sent: data.notified.code == 0,
+                  notify_message_id: get(data.notified.data, 'message_id', ''),
+                  truncated: data.built.truncated,
+                  side_effects: true }) }}
+    next: done
+
+  - id: done
+    type: assign
+    parameters:
+      target: final
+      value: "$input"

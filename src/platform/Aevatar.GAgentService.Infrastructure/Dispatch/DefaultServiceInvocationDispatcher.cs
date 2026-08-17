@@ -678,6 +678,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             DeploymentId = target.Service.DeploymentId ?? string.Empty,
             Status = ServiceRunStatus.Accepted,
             ScheduleId = request.ScheduleId ?? string.Empty,
+            ScheduleOperationId = request.ScheduleOperationId ?? string.Empty,
             Identity = request.Identity?.Clone(),
         };
         if (request.ServiceRunCompletionNotificationTarget != null)

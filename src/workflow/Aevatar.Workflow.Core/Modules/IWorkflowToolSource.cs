@@ -2,9 +2,23 @@ using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Core.Modules;
 
+/// <summary>
+/// Declares whether an uncertain actor recovery may redispatch the same logical tool call.
+/// The default is fail-closed: tools must opt in to a recovery strategy explicitly.
+/// </summary>
+public enum WorkflowToolRecoverySafety
+{
+    Unspecified = 0,
+    ReplayableReadOnly = 1,
+    DurableStartOnceRedispatch = 2,
+    EffectfulNonReplayable = 3,
+}
+
 public interface IWorkflowTool
 {
     string Name { get; }
+
+    WorkflowToolRecoverySafety RecoverySafety => WorkflowToolRecoverySafety.Unspecified;
 
     Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default);
 }

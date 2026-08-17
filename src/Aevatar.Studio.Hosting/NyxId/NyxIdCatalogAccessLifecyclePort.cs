@@ -12,7 +12,7 @@ internal sealed class NyxIdCatalogAccessLifecyclePort(
 {
     public Task InvalidateAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(NyxIdAuthorityResolver.ResolveNyxIdAuthorityBase(configuration)) ||
+        if (string.IsNullOrWhiteSpace(NyxIdApiEndpointResolver.ResolvePublicApiBaseUrl(configuration)) ||
             !string.Equals(subject.Platform, Aevatar.Foundation.Abstractions.OwnerScope.NyxIdPlatform, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(subject.ExternalUserId))
             return Task.CompletedTask;

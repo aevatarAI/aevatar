@@ -31,6 +31,9 @@ public sealed class LLMRequest
     /// <summary>Typed NyxID/model/route controls for this LLM call.</summary>
     public LLMControlContext? LlmControl { get; init; }
 
+    /// <summary>Exact NyxID service target resolved from an authoritative policy.</summary>
+    public LLMRouteTarget? RouteTarget { get; init; }
+
     /// <summary>Optional list of tools available for the LLM to invoke.</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }
 

@@ -217,10 +217,14 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
             await dispatchPort.DispatchAsync(actorId, envelope, CancellationToken.None);
             await logProbe.WaitForRuntimeRetryScheduledAsync(TimeSpan.FromSeconds(20));
+            await RetryAwareDirectDispatchAgent.WaitForDeactivationAsync(TimeSpan.FromSeconds(20));
             var successfulEnvelope =
                 await RetryAwareDirectDispatchAgent.WaitForSuccessAsync(envelope.Id, TimeSpan.FromSeconds(20));
 
             RuntimeEnvelopeDeliveryIdentity.GetAttempt(successfulEnvelope).Should().Be(1);
+            RetryAwareDirectDispatchAgent.ActivationCount.Should().Be(2,
+                "an OCC retry must rehydrate from committed state on a fresh activation");
+            RetryAwareDirectDispatchAgent.DeactivationCount.Should().Be(1);
             RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
         }
         finally
@@ -315,6 +319,117 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
             RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2,
                 "provider redelivery must always reach the authoritative actor");
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_WhenRequiredRedeliveryRetryIsExhausted_ShouldPropagateAndReactivate()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        using var metricProbe = new RuntimeTerminalFailureMetricProbe();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "1",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+            RetryAwareDirectDispatchAgent.ActivationCount.Should().Be(1);
+
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateEnvelope("runtime-retryable-exhausted");
+            envelope.Runtime = new EnvelopeRuntime
+            {
+                Retry = new EnvelopeRetryContext { Attempt = 1 },
+            };
+
+            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowAsync<Exception>()
+                .WithMessage("*runtime-retryable-exhausted*");
+            await RetryAwareDirectDispatchAgent.WaitForDeactivationAsync(TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.DeactivationCount.Should().Be(1);
+            metricProbe.Measurements.Should().Contain(measurement =>
+                measurement.Reason == AgentMetrics.FailureReasonHandlerRetryExhausted &&
+                measurement.Disposition == AgentMetrics.FailureDispositionPropagated);
+
+            await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            await RetryAwareDirectDispatchAgent.WaitForSuccessAsync(envelope.Id, TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.ActivationCount.Should().Be(2);
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task HandleEnvelopeAsync_WhenRetrySchedulerFailsForRequiredRedelivery_ShouldPreserveFailureAndReactivate()
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        using var metricProbe = new RuntimeTerminalFailureMetricProbe();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+        var callbackScheduler = new AlwaysFailingCallbackScheduler();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "1",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(
+            siloPort,
+            gatewayPort,
+            callbackScheduler: callbackScheduler);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+            RetryAwareDirectDispatchAgent.ActivationCount.Should().Be(1);
+
+            var grainFactory = host.Services.GetRequiredService<IGrainFactory>();
+            var grain = grainFactory.GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateEnvelope("runtime-retryable-scheduler-failure");
+
+            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowAsync<Exception>()
+                .WithMessage("*runtime-retryable-scheduler-failure*");
+            await RetryAwareDirectDispatchAgent.WaitForDeactivationAsync(TimeSpan.FromSeconds(20));
+
+            callbackScheduler.ScheduleTimeoutCallCount.Should().Be(1);
+            RetryAwareDirectDispatchAgent.DeactivationCount.Should().Be(1);
+            metricProbe.Measurements.Should().Contain(measurement =>
+                measurement.Reason == AgentMetrics.FailureReasonHandlerRetryExhausted &&
+                measurement.Disposition == AgentMetrics.FailureDispositionPropagated);
+
+            await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            await RetryAwareDirectDispatchAgent.WaitForSuccessAsync(envelope.Id, TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.ActivationCount.Should().Be(2);
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
         }
         finally
         {
@@ -460,6 +575,47 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         }
     }
 
+    private sealed class AlwaysFailingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        private int _scheduleTimeoutCallCount;
+
+        public int ScheduleTimeoutCallCount => Volatile.Read(ref _scheduleTimeoutCallCount);
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _scheduleTimeoutCallCount);
+            return Task.FromException<RuntimeCallbackLease>(
+                new InvalidOperationException("callback-scheduler-fail-always"));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            throw new NotSupportedException();
+        }
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default)
+        {
+            _ = lease;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class RuntimeRetryLogProbe : ILoggerProvider, ILogger
     {
         private readonly TaskCompletionSource<bool> _runtimeRetryScheduledDetected =
@@ -578,6 +734,10 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         private static readonly Dictionary<string, TaskCompletionSource<int>> AttemptSourcesByEnvelopeId =
             new(StringComparer.Ordinal);
         private static TaskCompletionSource<EventEnvelope> _successfulEnvelopeSource = CreateSuccessSource();
+        private static TaskCompletionSource<bool> _deactivationSource = CreateDeactivationSource();
+        private static int _activationCount;
+        private static int _deactivationCount;
+        private static int _runtimeRetryableFailuresRemaining;
 
         public static void Reset()
         {
@@ -586,8 +746,16 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 AttemptsByEnvelopeId.Clear();
                 AttemptSourcesByEnvelopeId.Clear();
                 _successfulEnvelopeSource = CreateSuccessSource();
+                _deactivationSource = CreateDeactivationSource();
+                _activationCount = 0;
+                _deactivationCount = 0;
+                _runtimeRetryableFailuresRemaining = 1;
             }
         }
+
+        public static int ActivationCount => Volatile.Read(ref _activationCount);
+
+        public static int DeactivationCount => Volatile.Read(ref _deactivationCount);
 
         public static int GetAttemptCount(string envelopeId)
         {
@@ -625,6 +793,19 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             }
         }
 
+        public static async Task WaitForDeactivationAsync(TimeSpan timeout)
+        {
+            try
+            {
+                await _deactivationSource.Task.WaitAsync(timeout);
+            }
+            catch (TimeoutException)
+            {
+                throw new TimeoutException(
+                    $"Timed out after {timeout} waiting for direct-dispatch agent deactivation.");
+            }
+        }
+
         public string Id => "retry-aware-direct-dispatch-agent";
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
@@ -652,6 +833,13 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
             if (payload == "always-fail-retry-exhausted")
                 throw new InvalidOperationException("always-fail-retry-exhausted");
+
+            if ((payload == "runtime-retryable-exhausted" ||
+                 payload == "runtime-retryable-scheduler-failure") &&
+                Interlocked.Exchange(ref _runtimeRetryableFailuresRemaining, 0) == 1)
+            {
+                throw new RuntimeRetryableDirectDispatchException(payload);
+            }
 
             if (payload == "fail-once-then-succeed" &&
                 RuntimeEnvelopeDeliveryIdentity.GetAttempt(envelope) == 0)
@@ -682,11 +870,25 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
             Task.FromResult<IReadOnlyList<System.Type>>([]);
 
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task ActivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _activationCount);
+            return Task.CompletedTask;
+        }
 
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _deactivationCount);
+            _deactivationSource.TrySetResult(true);
+            return Task.CompletedTask;
+        }
 
         private static TaskCompletionSource<EventEnvelope> CreateSuccessSource() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private static TaskCompletionSource<bool> CreateDeactivationSource() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private static void RecordAttempt(string envelopeId)
@@ -721,5 +923,8 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
 
             return source;
         }
+
+        private sealed class RuntimeRetryableDirectDispatchException(string message)
+            : Exception(message), IRuntimeEnvelopeRetryableException;
     }
 }

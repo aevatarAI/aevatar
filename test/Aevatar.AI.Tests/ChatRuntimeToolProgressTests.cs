@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
@@ -154,6 +155,61 @@ public sealed class ChatRuntimeToolProgressTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_CancellationAfterToolStart_ShouldYieldTerminalBeforeThrowing()
+    {
+        var provider = new ToolThenAnswerProvider();
+        var tool = new ControlledTool();
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var runtime = new ChatRuntime(
+            providerFactory: () => provider,
+            history: new ChatHistory(),
+            toolLoop: CreateToolCallLoop(tools),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Tools = tools.GetAll(),
+                ToolContext = TestToolContext,
+            });
+        using var cts = new CancellationTokenSource();
+        await using var stream = runtime.ChatStreamAsync(
+                "hello",
+                maxToolRounds: 2,
+                requestId: "cancelled-tool-request",
+                turnCatalog: null,
+                ct: cts.Token)
+            .GetAsyncEnumerator(cts.Token);
+
+        ToolCallStartedChunk? started = null;
+        while (await stream.MoveNextAsync())
+        {
+            if (stream.Current.ToolCallStarted is not null)
+            {
+                started = stream.Current.ToolCallStarted;
+                break;
+            }
+        }
+
+        started.Should().NotBeNull();
+        var pendingMove = stream.MoveNextAsync().AsTask();
+        await tool.Started.Task;
+        cts.Cancel();
+
+        (await pendingMove).Should().BeTrue(
+            "the tool terminal must cross the stream before cancellation is rethrown");
+        var completed = stream.Current.ToolCallCompleted;
+        completed.Should().NotBeNull();
+        completed!.CallId.Should().Be(started!.ToolCall.Id);
+        completed.OperationId.Should().Be(started.OperationId);
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Be("Tool execution was cancelled.");
+
+        var moveAfterTerminal = async () => await stream.MoveNextAsync().AsTask();
+        await moveAfterTerminal.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_TextParsedToolCall_ShouldUseSameStartedThenCompletedLifecycle()
     {
         var provider = new TextToolThenAnswerProvider();
@@ -201,6 +257,269 @@ public sealed class ChatRuntimeToolProgressTests
         stream.Current.ToolCallCompleted.Should().NotBeNull();
         stream.Current.ToolCallCompleted!.ToolName.Should().Be("controlled_tool");
         stream.Current.ToolCallCompleted.ResultJson.Should().Be("{\"source\":\"text\"}");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_ShouldPublishModelStartBeforeProviderAndKeepEveryRoundIndependent()
+    {
+        var provider = new ControlledRoundProvider();
+        var runtime = new ChatRuntime(
+            providerFactory: () => provider,
+            history: new ChatHistory(),
+            toolLoop: CreateToolCallLoop(new ToolManager()),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Model = "model-a",
+            },
+            suppressToolCallRoundText: true);
+
+        await using var stream = runtime.ChatStreamAsync(
+                "hello",
+                maxToolRounds: 1,
+                requestId: "model-progress-request",
+                turnCatalog: null)
+            .GetAsyncEnumerator();
+
+        (await stream.MoveNextAsync()).Should().BeTrue();
+        var started = stream.Current.LLMInvocationStarted;
+        started.Should().NotBeNull();
+        started!.Round.Should().Be(0);
+        started.Model.Should().Be("model-a");
+        started.OperationId.Should().StartWith("model-progress-request:model:0:");
+        provider.Entered.Task.IsCompleted.Should().BeFalse(
+            "the model start must be observable before provider execution advances");
+
+        var providerMove = stream.MoveNextAsync().AsTask();
+        var entered = await Task.WhenAny(provider.Entered.Task, providerMove);
+        entered.Should().BeSameAs(provider.Entered.Task);
+        providerMove.IsCompleted.Should().BeFalse();
+        provider.Release();
+
+        var lifecycle = new List<LLMStreamChunk>();
+        while (await providerMove)
+        {
+            lifecycle.Add(stream.Current);
+            providerMove = stream.MoveNextAsync().AsTask();
+        }
+
+        var completed = lifecycle
+            .Select(chunk => chunk.LLMInvocationCompleted)
+            .Single(item => item != null)!;
+        completed.OperationId.Should().Be(started.OperationId);
+        completed.Round.Should().Be(0);
+        completed.Content.Should().Be("done");
+        completed.Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_ModelStart_ShouldDescribeFinalAuthorizedProviderRequest()
+    {
+        var provider = new AnswerProvider();
+        var alphaTool = new PassiveTool("alpha_tool");
+        var zetaTool = new PassiveTool("zeta_tool");
+        var tools = new ToolManager();
+        tools.Register(alphaTool);
+        tools.Register(zetaTool);
+        var runtime = new ChatRuntime(
+            providerFactory: () => provider,
+            history: new ChatHistory(),
+            toolLoop: CreateToolCallLoop(tools),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [ChatMessage.System("original-system-secret")],
+                Model = "original-model",
+                Tools = [zetaTool, alphaTool],
+            },
+            llmMiddlewares:
+            [
+                new DelegateLlmCallMiddleware(async (context, next) =>
+                {
+                    context.Request = new LLMRequest
+                    {
+                        Messages =
+                        [
+                            ChatMessage.System("private-system-prompt"),
+                            ChatMessage.User("authorized request Authorization: Bearer raw-secret"),
+                        ],
+                        RequestId = context.Request.RequestId,
+                        ToolContext = context.Request.ToolContext,
+                        Model = "authorized-model",
+                        Tools = [zetaTool, alphaTool, alphaTool],
+                    };
+                    await next();
+                }),
+            ]);
+
+        LLMInvocationStartedChunk? started = null;
+        await foreach (var chunk in runtime.ChatStreamAsync(
+                           "original user input",
+                           maxToolRounds: 1,
+                           requestId: "authorized-facts-request",
+                           turnCatalog: null))
+        {
+            if (chunk.LLMInvocationStarted != null)
+            {
+                started = chunk.LLMInvocationStarted;
+                break;
+            }
+        }
+
+        started.Should().NotBeNull();
+        started!.Model.Should().Be("authorized-model");
+        started.Provider.Should().Be("answer");
+        started.AvailableToolNames.Should().Equal("alpha_tool", "zeta_tool");
+        started.InputSummary.Should().Be("authorized request Authorization: Bearer ***REDACTED***");
+        started.InputSummary.Should().NotContain("private-system-prompt");
+        started.InputSummary.Should().NotContain("raw-secret");
+        started.InputSummary.Length.Should().BeLessThanOrEqualTo(503);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_ModelStart_ShouldRecursivelyScrubStructuredInputSummary()
+    {
+        var runtime = new ChatRuntime(
+            providerFactory: () => new AnswerProvider(),
+            history: new ChatHistory(),
+            toolLoop: CreateToolCallLoop(new ToolManager()),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [] });
+        LLMInvocationStartedChunk? started = null;
+
+        await foreach (var chunk in runtime.ChatStreamAsync(
+                           """{"query":"status","cookie":"session=short","credentials":{"user":"alice","password":"tiny"}}""",
+                           maxToolRounds: 1,
+                           requestId: "structured-input-summary",
+                           turnCatalog: null))
+        {
+            if (chunk.LLMInvocationStarted is not null)
+            {
+                started = chunk.LLMInvocationStarted;
+                break;
+            }
+        }
+
+        started.Should().NotBeNull();
+        started!.InputSummary.Should().Contain("\"query\":\"status\"");
+        started.InputSummary.Should().Contain("\"cookie\":\"***REDACTED***\"");
+        started.InputSummary.Should().Contain("\"credentials\":\"***REDACTED***\"");
+        started.InputSummary.Should().NotContain("session=short");
+        started.InputSummary.Should().NotContain("alice");
+        started.InputSummary.Should().NotContain("tiny");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_ReusedRequestId_ShouldCreateNewModelOperationIdentity()
+    {
+        var runtime = new ChatRuntime(
+            providerFactory: () => new AnswerProvider(),
+            history: new ChatHistory(),
+            toolLoop: CreateToolCallLoop(new ToolManager()),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [] });
+
+        async Task<string> ReadOperationIdAsync()
+        {
+            await foreach (var chunk in runtime.ChatStreamAsync(
+                               "hello",
+                               maxToolRounds: 1,
+                               requestId: "same-request",
+                               turnCatalog: null))
+            {
+                if (chunk.LLMInvocationStarted != null)
+                    return chunk.LLMInvocationStarted.OperationId;
+            }
+
+            throw new InvalidOperationException("Model start was not emitted.");
+        }
+
+        var first = await ReadOperationIdAsync();
+        var second = await ReadOperationIdAsync();
+
+        first.Should().NotBe(second);
+        first.Should().StartWith("same-request:model:0:");
+        second.Should().StartWith("same-request:model:0:");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_CancellationAfterModelStart_ShouldYieldTerminalBeforeThrowing()
+    {
+        var provider = new ControlledRoundProvider();
+        var runtime = new ChatRuntime(
+            providerFactory: () => provider,
+            history: new ChatHistory(),
+            toolLoop: CreateToolCallLoop(new ToolManager()),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Model = "model-a",
+            });
+        using var cts = new CancellationTokenSource();
+        await using var stream = runtime.ChatStreamAsync(
+                "hello",
+                maxToolRounds: 1,
+                requestId: "cancelled-model-request",
+                turnCatalog: null,
+                ct: cts.Token)
+            .GetAsyncEnumerator(cts.Token);
+
+        (await stream.MoveNextAsync()).Should().BeTrue();
+        var started = stream.Current.LLMInvocationStarted;
+        started.Should().NotBeNull();
+
+        var providerMove = stream.MoveNextAsync().AsTask();
+        await provider.Entered.Task;
+        cts.Cancel();
+
+        (await providerMove).Should().BeTrue(
+            "the model terminal must cross the stream before cancellation is rethrown");
+        var completed = stream.Current.LLMInvocationCompleted;
+        completed.Should().NotBeNull();
+        completed!.OperationId.Should().Be(started!.OperationId);
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Be("Model invocation was cancelled.");
+
+        var moveAfterTerminal = async () => await stream.MoveNextAsync().AsTask();
+        await moveAfterTerminal.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task ExecuteSingleLlmStepAsync_ShouldUseZeroBasedLifecycleRound()
+    {
+        var provider = new AnswerProvider();
+        var runtime = new ChatRuntime(
+            providerFactory: () => provider,
+            history: new ChatHistory(),
+            toolLoop: CreateToolCallLoop(new ToolManager()),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [] });
+        var lifecycle = new List<LLMStreamChunk>();
+
+        await runtime.ExecuteSingleLlmStepAsync(
+            provider,
+            new LLMRequest
+            {
+                RequestId = "single-step-request",
+                Messages = [ChatMessage.User("hello")],
+            },
+            CancellationToken.None,
+            (chunk, _) =>
+            {
+                lifecycle.Add(chunk);
+                return Task.CompletedTask;
+            });
+
+        var started = lifecycle.Should().ContainSingle(chunk => chunk.LLMInvocationStarted != null)
+            .Which.LLMInvocationStarted!;
+        var completed = lifecycle.Should().ContainSingle(chunk => chunk.LLMInvocationCompleted != null)
+            .Which.LLMInvocationCompleted!;
+        started.Round.Should().Be(0);
+        completed.Round.Should().Be(0);
+        completed.OperationId.Should().Be(started.OperationId);
+        started.OperationId.Should().StartWith("single-step-request:model:0:");
     }
 
     private static ToolCallLoop CreateToolCallLoop(ToolManager tools) =>
@@ -263,6 +582,23 @@ public sealed class ChatRuntimeToolProgressTests
         }
 
         public void Release(string result) => _release.TrySetResult(result);
+    }
+
+    private sealed class PassiveTool(string name) : IAgentTool
+    {
+        public string Name { get; } = name;
+        public string Description => "A passive test tool.";
+        public string ParametersSchema => "{}";
+        public bool IsReadOnly => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    private sealed class DelegateLlmCallMiddleware(
+        Func<LLMCallContext, Func<Task>, Task> handler) : ILLMCallMiddleware
+    {
+        public Task InvokeAsync(LLMCallContext context, Func<Task> next) => handler(context, next);
     }
 
     private sealed class ControlledRecoveryTool : IAgentTool
@@ -384,5 +720,29 @@ public sealed class ChatRuntimeToolProgressTests
             await Task.CompletedTask;
             yield return new LLMStreamChunk { IsLast = true };
         }
+    }
+
+    private sealed class ControlledRoundProvider : ILLMProvider
+    {
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string Name => "controlled-round";
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            Entered.TrySetResult();
+            await _release.Task.WaitAsync(ct);
+            yield return new LLMStreamChunk { DeltaContent = "done" };
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+
+        public void Release() => _release.TrySetResult();
     }
 }

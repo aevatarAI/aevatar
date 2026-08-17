@@ -287,7 +287,8 @@ internal static class WorkflowWebhookIngressEndpoints
                     authority.BindingId),
                 Kind: NyxIdCallerCredentialKind.ProxyDelegation,
                 SourceReadableUserBearerToken: null,
-                UnattendedEffectAuthorization: authorization.Clone()),
+                UnattendedEffectAuthorization: authorization.Clone(),
+                DurableCallerCredential: record.CallerDurableCredential?.Clone()),
         };
         return true;
     }

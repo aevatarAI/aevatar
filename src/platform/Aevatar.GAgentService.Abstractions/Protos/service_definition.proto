@@ -38,11 +38,32 @@ message ServiceDefinitionSpec {
   ExternalExposure external_exposure = 5;
 }
 
+enum DefaultServingRevisionCommitDisposition {
+  DEFAULT_SERVING_REVISION_COMMIT_DISPOSITION_UNSPECIFIED = 0;
+  DEFAULT_SERVING_REVISION_COMMIT_DISPOSITION_APPLIED = 1;
+  DEFAULT_SERVING_REVISION_COMMIT_DISPOSITION_SUPERSEDED = 2;
+}
+
+message DefaultServingRevisionOperationRecord {
+  string revision_id = 1;
+  string operation_id = 2;
+  string command_id = 3;
+  string reply_actor_id = 4;
+  string activation_attempt_id = 5;
+  string deployment_id = 6;
+  int64 serving_generation = 7;
+  google.protobuf.Timestamp committed_at = 8;
+  DefaultServingRevisionCommitDisposition disposition = 9;
+  int64 superseded_by_generation = 10;
+}
+
 message ServiceDefinitionState {
   ServiceDefinitionSpec spec = 1;
   string default_serving_revision_id = 2;
   int64 last_applied_event_version = 3;
   string last_event_id = 4;
+  map<string, DefaultServingRevisionOperationRecord> default_serving_revision_operations = 5;
+  int64 default_serving_generation = 6;
 }
 
 message CreateServiceDefinitionCommand {
@@ -87,6 +108,25 @@ message RegistrationRetryDueCommand {
 message SetDefaultServingRevisionCommand {
   ServiceIdentity identity = 1;
   string revision_id = 2;
+  string operation_id = 3;
+  string command_id = 4;
+  string reply_actor_id = 5;
+  string activation_attempt_id = 6;
+  string deployment_id = 7;
+  int64 serving_generation = 8;
+}
+
+message DefaultServingRevisionCommittedAck {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string operation_id = 3;
+  string command_id = 4;
+  string activation_attempt_id = 5;
+  string deployment_id = 6;
+  int64 serving_generation = 7;
+  google.protobuf.Timestamp committed_at = 8;
+  DefaultServingRevisionCommitDisposition disposition = 9;
+  int64 superseded_by_generation = 10;
 }
 
 message ServiceDefinitionCreatedEvent {
@@ -151,4 +191,24 @@ message ServiceRegistrationRetiredEvent {
 message DefaultServingRevisionChangedEvent {
   ServiceIdentity identity = 1;
   string revision_id = 2;
+  string operation_id = 3;
+  string command_id = 4;
+  string reply_actor_id = 5;
+  string activation_attempt_id = 6;
+  string deployment_id = 7;
+  int64 serving_generation = 8;
+  google.protobuf.Timestamp committed_at = 9;
+}
+
+message DefaultServingRevisionSupersededEvent {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string operation_id = 3;
+  string command_id = 4;
+  string reply_actor_id = 5;
+  string activation_attempt_id = 6;
+  string deployment_id = 7;
+  int64 serving_generation = 8;
+  google.protobuf.Timestamp superseded_at = 9;
+  int64 superseded_by_generation = 10;
 }

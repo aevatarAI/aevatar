@@ -517,7 +517,7 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
     }
 
     [Fact]
-    public async Task SaveDraftAsync_ShouldPreserveUnresolvedRuntimeYamlAndStableDraftIdentity()
+    public async Task SaveDraftAsync_ShouldUseExplicitWorkflowNameAndAlignYaml()
     {
         using var environment = new ScopedWorkflowEnvironment();
         var workspacePort = new RecordingStudioWorkspacePorts();
@@ -526,6 +526,9 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
             workspaceCommandPort: workspacePort);
         var yaml = """
             name: x_digest
+            when_to_use: Use when generating weekly reports.
+            on_failure:
+              mode: fail
             steps:
               - id: fetch
                 type: tool_call
@@ -550,9 +553,16 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         saved.Yaml.Should().Contain("name: X Digest");
         saved.Yaml.Should().Contain("tool: nyxid_proxy");
         saved.Yaml.Should().NotContain("name: x_digest");
+        saved.Yaml.Should().Contain("when_to_use: Use when generating weekly reports.");
+        saved.Yaml.Should().Contain("on_failure:");
         accepted.WorkflowId.Should().Be("wf-alpha");
         accepted.Accepted.Should().BeTrue();
         accepted.Readiness.Stage.Should().Be("projection_pending");
+
+        var reopened = await service.GetDraftAsync("scope-alpha", "wf-alpha");
+        reopened.Should().NotBeNull();
+        reopened!.Name.Should().Be("X Digest");
+        reopened.Yaml.Should().Contain("name: X Digest");
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -481,13 +482,47 @@ public sealed class ResponsesCommandFacade(
         var routedModel = string.IsNullOrWhiteSpace(forwardToModel?.ModelName)
             ? normalized.Model
             : forwardToModel.ModelName.Trim();
-        var (effectiveModel, resolvedRouteValue) = await ResolveModelRouteAsync(
-            routedModel, ownerControl?.NyxIdRoutePreference, bearerToken, ct);
+        string effectiveModel;
+        string? resolvedRoutePreference;
+        LLMRouteTarget? resolvedRouteTarget;
+        try
+        {
+            (effectiveModel, resolvedRoutePreference, resolvedRouteTarget) = await ResolveModelRouteAsync(
+                routedModel,
+                ownerControl,
+                callerScope,
+                ct);
+        }
+        catch (ResponsesModelNotFoundException ex)
+        {
+            await TryUpdateSessionStatusAsync(
+                responseSession,
+                LlmSessionStatus.Failed,
+                CancellationToken.None);
+            logger.LogInformation(ex, "Requested model route is not configured for response {ResponseId}", normalized.ResponseId);
+            return ExecutionPlanResult.FromError(new ResponsesCommandError(
+                404,
+                "model_not_found",
+                ex.Message));
+        }
+        catch (ResponsesRouteUnavailableException ex)
+        {
+            await TryUpdateSessionStatusAsync(
+                responseSession,
+                LlmSessionStatus.Failed,
+                CancellationToken.None);
+            logger.LogWarning(ex, "Model route inventory is unavailable for response {ResponseId}", normalized.ResponseId);
+            return ExecutionPlanResult.FromError(new ResponsesCommandError(
+                503,
+                "model_route_unavailable",
+                "The model routing inventory is temporarily unavailable."));
+        }
         var toolContext = toolProviderContext.ToolContext with
         {
             Routing = toolProviderContext.ToolContext.Routing with
             {
-                NyxIdRoutePreference = resolvedRouteValue,
+                NyxIdRoutePreference = resolvedRoutePreference,
+                RouteTarget = resolvedRouteTarget?.Clone(),
             },
             SkillRecovery = AgentSkillRecoveryContextBuilder.FromTrigger(trigger),
         };
@@ -497,7 +532,8 @@ public sealed class ResponsesCommandFacade(
             callerScope,
             bearerToken,
             effectiveModel,
-            resolvedRouteValue,
+            resolvedRoutePreference,
+            resolvedRouteTarget,
             toolClassification,
             toolContext);
 
@@ -594,31 +630,42 @@ public sealed class ResponsesCommandFacade(
         }
     }
 
-    private async Task<(string EffectiveModel, string? ResolvedRouteValue)> ResolveModelRouteAsync(
+    private async Task<(
+        string EffectiveModel,
+        string? ResolvedRoutePreference,
+        LLMRouteTarget? RouteTarget)> ResolveModelRouteAsync(
         string routedModel,
-        string? accountPreferredRoute,
-        string bearerToken,
+        LLMControlContext? ownerControl,
+        ResponsesCallerScope callerScope,
         CancellationToken ct)
     {
         var modelRoute = ResponsesModelRouteParser.Parse(routedModel);
         var effectiveModel = routedModel;
-        string? resolvedRouteValue = null;
+        string? resolvedRoutePreference = null;
+        LLMRouteTarget? resolvedRouteTarget = null;
         if (modelRoute.RouteSlug is not null)
         {
-            resolvedRouteValue = await routeResolver
-                .ResolveRouteValueAsync(modelRoute.RouteSlug, bearerToken, ct)
+            resolvedRouteTarget = await routeResolver
+                .ResolveRouteTargetAsync(modelRoute.RouteSlug, modelRoute.Model, callerScope, ct)
                 .ConfigureAwait(false);
-            if (resolvedRouteValue is not null)
-                effectiveModel = modelRoute.Model;
+            if (resolvedRouteTarget is null)
+            {
+                throw new ResponsesModelNotFoundException(
+                    $"Model '{modelRoute.Model}' is not configured for service '{modelRoute.RouteSlug}'.");
+            }
+
+            effectiveModel = modelRoute.Model;
         }
         else
         {
             // Bare model (no vendor slug): honor the account's PreferredLlmRoute so the account
             // preference is fully expressed even when its model carries no slug.
-            resolvedRouteValue = IngressModelPreference.Normalize(accountPreferredRoute);
+            resolvedRouteTarget = ownerControl?.RouteTarget?.Clone();
+            if (resolvedRouteTarget is null)
+                resolvedRoutePreference = IngressModelPreference.Normalize(ownerControl?.NyxIdRoutePreference);
         }
 
-        return (effectiveModel, resolvedRouteValue);
+        return (effectiveModel, resolvedRoutePreference, resolvedRouteTarget);
     }
 
     private static LLMRequest BuildLlmRequest(
@@ -627,7 +674,8 @@ public sealed class ResponsesCommandFacade(
         ResponsesCallerScope callerScope,
         string bearerToken,
         string effectiveModel,
-        string? resolvedRouteValue,
+        string? resolvedRoutePreference,
+        LLMRouteTarget? resolvedRouteTarget,
         ResponsesToolClassification toolClassification,
         AgentToolExecutionContext toolContext)
     {
@@ -648,9 +696,10 @@ public sealed class ResponsesCommandFacade(
                 NyxIdOrgToken: null,
                 SenderNyxIdAccessToken: null,
                 ModelOverride: null,
-                NyxIdRoutePreference: resolvedRouteValue,
+                NyxIdRoutePreference: resolvedRoutePreference,
                 MaxToolRoundsOverride: null,
                 UserMemoryPrompt: null),
+            RouteTarget = resolvedRouteTarget?.Clone(),
             Model = effectiveModel,
             Temperature = normalized.Temperature,
             MaxTokens = normalized.MaxOutputTokens,
@@ -1018,6 +1067,8 @@ public sealed class ResponsesCommandFacade(
             command.Temperature = request.Temperature.Value;
         if (request.MaxTokens is not null)
             command.MaxTokens = request.MaxTokens.Value;
+        if (request.RouteTarget is not null)
+            command.RouteTarget = request.RouteTarget.Clone();
         command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
         command.ToolSelection = ResponsesRuntimeToolSelectionFactory.Create(
             toolClassification, toolChoiceHintPlan, toolSetName);

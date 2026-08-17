@@ -37,7 +37,10 @@ message WorkflowRunEventEnvelope {
     WorkflowCustomEventPayload custom = 13;
     WorkflowRunStoppedEventPayload run_stopped = 14;
     WorkflowUsageEventPayload usage = 15;
+    WorkflowModelCallStartEventPayload model_call_start = 16;
+    WorkflowModelCallEndEventPayload model_call_end = 17;
   }
+  google.protobuf.Int64Value sequence = 18;
 }
 
 message WorkflowRunStartedEventPayload {
@@ -94,6 +97,32 @@ message WorkflowToolCallStartEventPayload {
 message WorkflowToolCallEndEventPayload {
   string tool_call_id = 1;
   google.protobuf.StringValue result = 2;
+  google.protobuf.BoolValue success = 3;
+  google.protobuf.StringValue error = 4;
+  google.protobuf.StringValue arguments_json = 5;
+}
+
+message WorkflowModelCallStartEventPayload {
+  string operation_id = 1;
+  string session_id = 2;
+  int32 round = 3;
+  string model = 4;
+  string provider = 5;
+  string input_summary = 6;
+  repeated string available_tool_names = 7;
+}
+
+message WorkflowModelCallEndEventPayload {
+  string operation_id = 1;
+  string session_id = 2;
+  int32 round = 3;
+  string model = 4;
+  string content = 5;
+  string reasoning_content = 6;
+  WorkflowUsageEventPayload usage = 7;
+  string finish_reason = 8;
+  bool success = 9;
+  string error = 10;
 }
 
 message WorkflowUsageEventPayload {

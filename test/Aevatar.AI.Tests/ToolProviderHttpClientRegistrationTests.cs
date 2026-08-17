@@ -41,6 +41,22 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
+    public void AddNyxIdTools_DisablesAutomaticRedirectsOnThePrimaryHandler()
+    {
+        var services = new ServiceCollection();
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+
+        using var provider = services.BuildServiceProvider();
+        var handler = provider.GetRequiredService<IHttpMessageHandlerFactory>()
+            .CreateHandler(nameof(NyxIdApiClient));
+        while (handler is DelegatingHandler { InnerHandler: { } innerHandler })
+            handler = innerHandler;
+
+        handler.Should().BeOfType<HttpClientHandler>()
+            .Which.AllowAutoRedirect.Should().BeFalse();
+    }
+
+    [Fact]
     public void AddNyxIdTools_GivesTheNyxIdClientRoomForTheLongestCodexRun()
     {
         // The 100s HttpClient default aborts long codex_exec runs before their own deadline
@@ -434,7 +450,26 @@ public sealed class ToolProviderHttpClientRegistrationTests
     [Fact]
     public async Task NyxIdRequireServiceTool_ShouldCreateSuccessReceipt_WhenServiceIsAlreadyVisible()
     {
-        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "github-personal", "catalog_service_slug": "api-github", "status": "active", "is_active": true, "connected": true, "credential_source": { "type": "personal" } }] }""");
+        var handler = new StubUserServiceListHandler("""{ "keys": [{ "id": "us-github-alpha", "slug": "github-personal", "catalog_service_slug": "api-github", "status": "active", "is_active": true, "connected": true, "credential_source": { "type": "personal" } }] }""")
+        {
+            McpResponseJson = """
+                {
+                  "contract_version": "1.0",
+                  "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "user_id": "nyx-user-alpha",
+                  "services": [
+                    {
+                      "service_id": "us-github-alpha",
+                      "service_name": "GitHub",
+                      "service_slug": "api-github",
+                      "is_user_service": true,
+                      "is_generic_proxy": false,
+                      "endpoints": []
+                    }
+                  ]
+                }
+                """,
+        };
         var tool = CreateRequireServiceTool(handler);
         const string arguments = """{"service_slug":"api-github","requested_scopes":[]}""";
 
@@ -451,6 +486,70 @@ public sealed class ToolProviderHttpClientRegistrationTests
             receipt.ResultJson.Should().Be(result);
             receipt.ProviderResourceId.Should().Be("us-github-alpha");
             receipt.AuthorizationRequired.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_WhenConnectedServiceIsExcludedFromCurrentBearer_ShouldRequireServiceAccess()
+    {
+        var handler = new StubUserServiceListHandler("""
+            {
+              "keys": [
+                {
+                  "id": "us-github-alpha",
+                  "slug": "api-github",
+                  "catalog_service_slug": "api-github",
+                  "resource_uri": "https://nyx.test/api/v1/proxy/s/api-github",
+                  "status": "active",
+                  "is_active": true,
+                  "connected": true,
+                  "credential_source": { "type": "personal" }
+                }
+              ]
+            }
+            """)
+        {
+            CatalogResponseJson = """
+                {
+                  "slug": "api-github",
+                  "resource_uri": "https://nyx.test/api/v1/proxy/s/api-github",
+                  "scope_catalog": [{"scope":"repo"}]
+                }
+                """,
+            McpResponseJson = """
+                {
+                  "contract_version": "1.0",
+                  "catalog_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "user_id": "nyx-user-alpha",
+                  "services": []
+                }
+                """,
+        };
+        var tool = CreateRequireServiceTool(handler);
+        const string arguments =
+            """{"service_slug":"api-github","requested_scopes":["repo"]}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-access", tool.Name, arguments, result);
+
+            result.Should().Contain("\"readiness_status\":\"ServiceAccessDenied\"");
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.AuthorizationRequired.Should().NotBeNull();
+            receipt.AuthorizationRequired!.ServiceSlug.Should().Be("api-github");
+            receipt.AuthorizationRequired.UserServiceId.Should().Be("us-github-alpha");
+            receipt.AuthorizationRequired.ResourceUri.Should()
+                .Be("https://nyx.test/api/v1/proxy/s/api-github");
+            receipt.AuthorizationRequired.ReasonCode.Should().Be("USER_SERVICE_ACCESS_REQUIRED");
+            handler.Requests.Should().Contain("/api/v1/mcp/config");
         }
         finally
         {
@@ -969,6 +1068,8 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         public string? CatalogResponseJson { get; init; }
 
+        public string? McpResponseJson { get; init; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -978,12 +1079,14 @@ public sealed class ToolProviderHttpClientRegistrationTests
             BearerTokens.Add(request.Headers.Authorization?.Parameter);
             Methods.Add(request.Method);
             var isCatalogRequest = path.StartsWith("/api/v1/catalog/", StringComparison.Ordinal);
-            var response = isCatalogRequest
-                ? CatalogResponseJson ?? System.Text.Json.JsonSerializer.Serialize(new
+            var response = path == "/api/v1/mcp/config"
+                ? McpResponseJson ?? responseJson
+                : isCatalogRequest
+                    ? CatalogResponseJson ?? System.Text.Json.JsonSerializer.Serialize(new
                 {
                     slug = Uri.UnescapeDataString(path["/api/v1/catalog/".Length..]),
                 })
-                : responseJson;
+                    : responseJson;
             return Task.FromResult(new HttpResponseMessage(
                 isCatalogRequest ? CatalogStatus : System.Net.HttpStatusCode.OK)
             {

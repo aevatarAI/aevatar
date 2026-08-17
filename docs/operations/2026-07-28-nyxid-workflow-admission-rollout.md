@@ -143,10 +143,12 @@ For each serving v2 workflow revision:
 
 4. Activate the new revision with
    `POST /api/services/{serviceId}:activate`, then read the deployment view until
-   the new deployment is `Active`.
-5. Repoint the default or weighted serving set using the existing
-   `:default-serving` or `:serving-targets` endpoint. Read back `/serving`; do not
-   treat the accepted command as the cutover fact.
+   the new deployment is `Active` and `/serving` exposes the same revision. The
+   activation actor commits serving targets before it commits the definition's
+   default-serving revision; there is no separate direct default-serving write.
+5. For an explicit weighted rollout, update only the weighted serving set through
+   `:serving-targets` and read back `/serving`; do not treat the accepted command
+   as the cutover fact.
 6. Repoint every affected schedule with a full reviewed
    `PUT /api/schedules/{scheduleId}` configuration whose
    `serviceInvocation.revisionId` is the v3 revision. Preserve its owner, auth,

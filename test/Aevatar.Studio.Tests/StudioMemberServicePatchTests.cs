@@ -668,8 +668,6 @@ public sealed class StudioMemberServicePatchTests
             PublishServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(PublishRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(
             RetireServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(RetireRevisionAsync));
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
-            SetDefaultServingRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(SetDefaultServingRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(
             ActivateServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(ActivateServiceRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(

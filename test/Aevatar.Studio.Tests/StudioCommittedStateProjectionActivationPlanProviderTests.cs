@@ -11,6 +11,7 @@ using Aevatar.GAgents.StudioTeam;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.WorkflowDelivery;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Workspace;
 using FluentAssertions;
@@ -82,6 +83,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProviderTests
         new()
         {
             { typeof(UserConfigGAgent), UserConfigGAgent.ProjectionKind },
+            { typeof(LLMModelCatalogPolicyGAgent), LLMModelCatalogPolicyGAgent.ProjectionKind },
             { typeof(GAgentRegistryGAgent), GAgentRegistryGAgent.ProjectionKind },
             { typeof(ConnectorCatalogGAgent), ConnectorCatalogGAgent.ProjectionKind },
             { typeof(RoleCatalogGAgent), RoleCatalogGAgent.ProjectionKind },
@@ -89,6 +91,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProviderTests
             { typeof(ChatConversationGAgent), ChatConversationGAgent.ProjectionKind },
             { typeof(ChatTurnHistoryDeliveryGAgent), ChatTurnHistoryDeliveryGAgent.ProjectionKind },
             { typeof(NyxIdChatConversationGAgent), NyxIdChatConversationGAgent.ProjectionKind },
+            { typeof(WorkflowDeliveryGAgent), WorkflowDeliveryGAgent.ProjectionKind },
             { typeof(StudioMemberGAgent), StudioMemberGAgent.ProjectionKind },
             { typeof(StudioMemberBindingRunGAgent), StudioMemberBindingRunGAgent.ProjectionKind },
             { typeof(StudioTeamGAgent), StudioTeamGAgent.ProjectionKind },
