@@ -163,26 +163,26 @@ add_files(
     {".ts", ".tsx"},
 )
 
-# Ambiguous external names are forbidden only where Aevatar owns the product
-# semantics. Provider adapters and generic transport tests must remain able to
-# carry arbitrary operation names and user-authored content unchanged.
-platform_owned_business_identity_files = set(owned_business_semantics_files)
-add_files(
-    platform_owned_business_identity_files,
-    root / "test",
-    {".cs", ".json", ".md", ".proto", ".yaml", ".yml"},
-    name_contains="nyxidchat",
-)
+# Ambiguous external names are forbidden only in Aevatar-owned production
+# defaults. Tests must remain able to prove that arbitrary user content and
+# provider operation names pass through generic NyxID Chat contracts unchanged.
+def is_test_fixture(path: pathlib.Path) -> bool:
+    path_from_root = path.relative_to(root)
+    return (
+        path_from_root.parts[0] == "test"
+        or ".test." in path.name.lower()
+        or ".spec." in path.name.lower()
+    )
+
+
+platform_owned_business_identity_files = {
+    path for path in owned_business_semantics_files if not is_test_fixture(path)
+}
 mainnet_config_root = root / "src" / "Aevatar.Mainnet.Host.Api"
 if mainnet_config_root.exists():
     platform_owned_business_identity_files.update(
         mainnet_config_root.glob("appsettings*.json")
     )
-mainnet_composition_test = (
-    root / "test" / "Aevatar.Capabilities.Tests" / "MainnetHostCompositionTests.cs"
-)
-if mainnet_composition_test.exists():
-    platform_owned_business_identity_files.add(mainnet_composition_test)
 
 # Broad shared directories are checked only for unmistakable types, tool names,
 # and fixed routes from the removed implementation. Common terms such as

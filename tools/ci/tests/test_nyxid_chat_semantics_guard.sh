@@ -31,11 +31,13 @@ tool_provider_file="${FIXTURE_ROOT}/src/Aevatar.AI.ToolProviders.Web/RouteCandid
 shared_tool_provider_file="${FIXTURE_ROOT}/src/Aevatar.AI.ToolProviders.Web/ExternalDirectoryAgentToolSource.cs"
 frontend_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/pages/chat/chatRouteCandidate.ts"
 frontend_test_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/pages/chat/chatRouteCandidate.test.ts"
+frontend_spec_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/pages/chat/chatUserPayload.spec.tsx"
 frontend_doc_file="${FIXTURE_ROOT}/apps/aevatar-console-web/docs/prototypes/business-identity.html"
 locale_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/locales/projectMessages.en-US.ts"
 workflow_delivery_package_file="${FIXTURE_ROOT}/workflow-delivery-packages/workflow-alpha.yaml"
 demo_file="${FIXTURE_ROOT}/demos/lark-interaction-probe/structured-review-shadow.yaml"
 backend_test_file="${FIXTURE_ROOT}/test/Aevatar.Integration.Tests/GenericTemplateTests.cs"
+nyxid_backend_test_file="${FIXTURE_ROOT}/test/Aevatar.AI.Tests/NyxIdChatUserPayloadTests.cs"
 runbook_file="${FIXTURE_ROOT}/docs/operations/generic-canary.md"
 workflow_file="${FIXTURE_ROOT}/workflows/generic-transform.yaml"
 studio_design_cache_file="${FIXTURE_ROOT}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/.firecrawl/nyx-chat-wf-branding.json"
@@ -49,11 +51,13 @@ mkdir -p \
   "$(dirname -- "${query_adapter_file}")" \
   "$(dirname -- "${tool_provider_file}")" \
   "$(dirname -- "${frontend_file}")" \
+  "$(dirname -- "${frontend_spec_file}")" \
   "$(dirname -- "${frontend_doc_file}")" \
   "$(dirname -- "${locale_file}")" \
   "$(dirname -- "${workflow_delivery_package_file}")" \
   "$(dirname -- "${demo_file}")" \
   "$(dirname -- "${backend_test_file}")" \
+  "$(dirname -- "${nyxid_backend_test_file}")" \
   "$(dirname -- "${runbook_file}")" \
   "$(dirname -- "${workflow_file}")" \
   "$(dirname -- "${studio_design_cache_file}")"
@@ -146,8 +150,15 @@ write_baseline() {
     > "${frontend_file}"
   printf '%s\n' \
     'type ChatConditionalWriteFixture = { observedValue: number };' \
+    'const externalOperation = "invoice_review";' \
+    'const userPrompt = "Compare the candidate score to the screening threshold.";' \
     'test("domain-neutral fixtures remain valid", () => {});' \
     > "${frontend_test_file}"
+  printf '%s\n' \
+    'const externalOperation = "submit_invoice";' \
+    'const externalEffect = "invoice.submit";' \
+    'test("external operations remain opaque", () => {});' \
+    > "${frontend_spec_file}"
   printf '%s\n' \
     'export default { routeCandidate: "Route candidate" };' \
     > "${locale_file}"
@@ -173,6 +184,16 @@ write_baseline() {
     '    public const string ExternalCategory = "Expense Approval / Finance";' \
     '}' \
     > "${backend_test_file}"
+  printf '%s\n' \
+    'public sealed class NyxIdChatUserPayloadTests' \
+    '{' \
+    '    public const string Prompt = "Compare the candidate score to the screening threshold.";' \
+    '    public const string ReviewOperation = "invoice_review";' \
+    '    public const string ApprovalOperation = "invoice_approval";' \
+    '    public const string SubmitOperation = "submit_invoice";' \
+    '    public const string SideEffect = "invoice.submit";' \
+    '}' \
+    > "${nyxid_backend_test_file}"
   printf '%s\n' \
     '# Generic conditional-write canary' \
     > "${runbook_file}"
@@ -227,11 +248,11 @@ run_guard
 require_success
 
 require_business_fixture_failure \
-  "${frontend_test_file}" \
+  "${frontend_file}" \
   'public sealed class CandidateFixture { public const string Prompt = "Check the candidate score"; }'
 
 require_business_fixture_failure \
-  "${frontend_test_file}" \
+  "${frontend_file}" \
   'public sealed class ThresholdFixture { public const string Prompt = "Choose the screening threshold"; }'
 
 require_business_fixture_failure \
