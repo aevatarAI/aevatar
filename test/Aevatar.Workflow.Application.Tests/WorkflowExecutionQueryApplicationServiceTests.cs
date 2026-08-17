@@ -344,6 +344,12 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
 
         public Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(string workflowName, CancellationToken ct = default) =>
             Task.FromResult<WorkflowCatalogItemDetail?>(null);
+
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListPublicWorkflowCatalogAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowCatalogItem>>([]);
+
+        public Task<WorkflowCatalogItemDetail?> GetPublicWorkflowDetailAsync(string templateId, CancellationToken ct = default) =>
+            Task.FromResult<WorkflowCatalogItemDetail?>(null);
     }
 
     private sealed class StaticWorkflowCapabilitiesPort : IWorkflowCapabilitiesPort
@@ -371,6 +377,21 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             Calls.Add($"GetWorkflowDetail:{workflowName}");
             CancellationTokens.Add(ct);
             return Task.FromResult(Detail);
+        }
+
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListPublicWorkflowCatalogAsync(CancellationToken ct = default)
+        {
+            Calls.Add("ListPublicWorkflowCatalog");
+            CancellationTokens.Add(ct);
+            IReadOnlyList<WorkflowCatalogItem> publicCatalog = Catalog.Where(static item => item.ShowInLibrary).ToList();
+            return Task.FromResult(publicCatalog);
+        }
+
+        public Task<WorkflowCatalogItemDetail?> GetPublicWorkflowDetailAsync(string templateId, CancellationToken ct = default)
+        {
+            Calls.Add($"GetPublicWorkflowDetail:{templateId}");
+            CancellationTokens.Add(ct);
+            return Task.FromResult(Detail?.Catalog.ShowInLibrary == true ? Detail : null);
         }
     }
 
