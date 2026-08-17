@@ -258,6 +258,272 @@ async function nyxidJson(path, init = {}) {
   return { response, payload: await response.json() };
 }
 
+const KEY_ACTION_SECRET_FIELD = /^(?:authorization|cookie|full[-_]?key|key[-_]?hash|access[-_]?token|refresh[-_]?token|secret|raw[-_]?upstream[-_]?body|oauth[-_]?client[-_]?secret)$/i;
+const KEY_ACTION_IDENTITY = /^[^\s\u0000-\u001f\u007f/\\?#]{1,256}$/u;
+
+export class KeyActionVerificationError extends Error {
+  constructor(code = "NYXID_KEY_ACTION_INVALID") {
+    super("NyxID key action evidence is invalid.");
+    this.name = "KeyActionVerificationError";
+    this.code = code;
+  }
+}
+
+function invalidKeyAction(code) {
+  return new KeyActionVerificationError(code);
+}
+
+function requireKeyActionObject(value, code = "NYXID_KEY_ACTION_INVALID") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidKeyAction(code);
+  }
+  return value;
+}
+
+function assertExactKeyActionFields(value, allowed, code = "NYXID_KEY_ACTION_INVALID") {
+  const allowedFields = new Set(allowed);
+  if (Object.keys(value).some((key) => !allowedFields.has(key))) {
+    throw invalidKeyAction(code);
+  }
+}
+
+function requireKeyActionIdentity(value, code = "NYXID_KEY_ACTION_IDENTITY_INVALID") {
+  if (typeof value !== "string" || !KEY_ACTION_IDENTITY.test(value)) {
+    throw invalidKeyAction(code);
+  }
+  return value;
+}
+
+function requireKeyActionText(value, maximum, code = "NYXID_KEY_ACTION_INVALID") {
+  if (typeof value !== "string" ||
+      value.length < 1 ||
+      value.length > maximum ||
+      value.trim() !== value) {
+    throw invalidKeyAction(code);
+  }
+  return value;
+}
+
+function assertKeyActionSecretFree(value) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) assertKeyActionSecretFree(item);
+    return;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (KEY_ACTION_SECRET_FIELD.test(key)) {
+      throw invalidKeyAction("NYXID_KEY_ACTION_SECRET_FIELD");
+    }
+    assertKeyActionSecretFree(item);
+  }
+}
+
+function requireUniqueKeyActionIdentities(value, code = "NYXID_KEY_ACTION_INVALID") {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 64) {
+    throw invalidKeyAction(code);
+  }
+  const identities = value.map((item) => requireKeyActionIdentity(item, code));
+  if (new Set(identities).size !== identities.length) {
+    throw invalidKeyAction(code);
+  }
+  return identities;
+}
+
+function requireKeyActionTimestamp(value, code = "NYXID_KEY_ACTION_TIMESTAMP_INVALID") {
+  if (typeof value !== "string" || !value || !Number.isFinite(Date.parse(value))) {
+    throw invalidKeyAction(code);
+  }
+  return value;
+}
+
+export function buildKeyActionMutation(action, input) {
+  const value = requireKeyActionObject(input);
+  if (action === "key.create") {
+    assertExactKeyActionFields(value, [
+      "actionRequestId", "name", "platform", "allowedServiceIds",
+    ]);
+    return {
+      path: "/api/v1/assistant/actions/key-create",
+      body: {
+        actionRequestId: requireKeyActionIdentity(value.actionRequestId),
+        name: requireKeyActionText(value.name, 200),
+        platform: requireKeyActionText(value.platform, 100),
+        allowedServiceIds: requireUniqueKeyActionIdentities(value.allowedServiceIds),
+      },
+    };
+  }
+  if (action === "key.rotate") {
+    assertExactKeyActionFields(value, ["actionRequestId", "keyId"]);
+    return {
+      path: "/api/v1/assistant/actions/key-rotate",
+      body: {
+        actionRequestId: requireKeyActionIdentity(value.actionRequestId),
+        keyId: requireKeyActionIdentity(value.keyId),
+      },
+    };
+  }
+  throw invalidKeyAction("NYXID_KEY_ACTION_UNSUPPORTED");
+}
+
+export function normalizeKeyActionEffect(action, input) {
+  const value = requireKeyActionObject(input, "NYXID_KEY_ACTION_EFFECT_INVALID");
+  const allowedFields = action === "key.create"
+    ? ["resource", "replayed", "fullKey"]
+    : action === "key.rotate"
+      ? ["resource", "replayed", "requestedAt", "fullKey"]
+      : null;
+  if (!allowedFields) throw invalidKeyAction("NYXID_KEY_ACTION_UNSUPPORTED");
+  assertExactKeyActionFields(value, allowedFields, "NYXID_KEY_ACTION_EFFECT_INVALID");
+  const resource = requireKeyActionObject(value.resource, "NYXID_KEY_ACTION_EFFECT_INVALID");
+  assertExactKeyActionFields(resource, ["keyId"], "NYXID_KEY_ACTION_EFFECT_INVALID");
+  if (typeof value.replayed !== "boolean") {
+    throw invalidKeyAction("NYXID_KEY_ACTION_EFFECT_INVALID");
+  }
+  const fullKeyPresent = Object.prototype.hasOwnProperty.call(value, "fullKey");
+  if (value.replayed && fullKeyPresent) {
+    throw invalidKeyAction("NYXID_KEY_ACTION_REPLAY_SECRET");
+  }
+  if (!value.replayed && !fullKeyPresent) {
+    throw invalidKeyAction("NYXID_KEY_ACTION_EFFECT_INVALID");
+  }
+  if (fullKeyPresent && (typeof value.fullKey !== "string" || !value.fullKey)) {
+    throw invalidKeyAction("NYXID_KEY_ACTION_EFFECT_INVALID");
+  }
+  const result = {
+    resource: { keyId: requireKeyActionIdentity(resource.keyId) },
+    replayed: value.replayed,
+  };
+  if (action === "key.rotate") {
+    result.requestedAt = requireKeyActionTimestamp(value.requestedAt);
+  }
+  if (fullKeyPresent) result.fullKey = value.fullKey;
+  return result;
+}
+
+export function verifyPersonalServiceReadBack(expectedServiceId, input) {
+  const expectedId = requireKeyActionIdentity(expectedServiceId);
+  const value = requireKeyActionObject(input, "NYXID_KEY_SERVICE_READ_BACK_INVALID");
+  assertKeyActionSecretFree(value);
+  if (requireKeyActionIdentity(value.id) !== expectedId ||
+      value.is_active !== true ||
+      value.credential_source?.type !== "personal") {
+    throw invalidKeyAction("NYXID_KEY_SERVICE_READ_BACK_MISMATCH");
+  }
+  return { verified: true, serviceId: expectedId };
+}
+
+export function verifyKeyCreateReadBack(request, effect, input) {
+  const requestValue = requireKeyActionObject(request, "NYXID_KEY_CREATE_READ_BACK_INVALID");
+  const params = requireKeyActionObject(
+    requestValue.params,
+    "NYXID_KEY_CREATE_READ_BACK_INVALID",
+  );
+  const effectValue = requireKeyActionObject(effect, "NYXID_KEY_CREATE_READ_BACK_INVALID");
+  const effectResource = requireKeyActionObject(
+    effectValue.resource,
+    "NYXID_KEY_CREATE_READ_BACK_INVALID",
+  );
+  const value = requireKeyActionObject(input, "NYXID_KEY_CREATE_READ_BACK_INVALID");
+  assertKeyActionSecretFree(value);
+
+  const expectedKeyId = requireKeyActionIdentity(effectResource.keyId);
+  const expectedServiceIds = requireUniqueKeyActionIdentities(
+    params.allowedServiceIds,
+    "NYXID_KEY_CREATE_READ_BACK_INVALID",
+  );
+  const actualServiceIds = requireUniqueKeyActionIdentities(
+    value.allowed_service_ids,
+    "NYXID_KEY_CREATE_READ_BACK_INVALID",
+  );
+  const actualNodeIds = Array.isArray(value.allowed_node_ids)
+    ? value.allowed_node_ids.map((item) => requireKeyActionIdentity(
+      item,
+      "NYXID_KEY_CREATE_READ_BACK_INVALID",
+    ))
+    : null;
+  const exactServiceIds = actualServiceIds.length === expectedServiceIds.length &&
+    [...actualServiceIds].sort().every((id, index) => id === [...expectedServiceIds].sort()[index]);
+  if (requireKeyActionIdentity(value.id) !== expectedKeyId ||
+      value.name !== params.name ||
+      value.platform !== params.platform ||
+      value.scopes !== "proxy" ||
+      value.is_active !== true ||
+      !exactServiceIds ||
+      !actualNodeIds ||
+      actualNodeIds.length !== 0 ||
+      value.allow_all_services !== false ||
+      value.allow_all_nodes !== false) {
+    throw invalidKeyAction("NYXID_KEY_CREATE_READ_BACK_MISMATCH");
+  }
+  return { verified: true, keyId: expectedKeyId };
+}
+
+export function verifyKeyRotateReadBack(request, effect, input) {
+  const requestValue = requireKeyActionObject(request, "NYXID_KEY_ROTATE_READ_BACK_INVALID");
+  const params = requireKeyActionObject(
+    requestValue.params,
+    "NYXID_KEY_ROTATE_READ_BACK_INVALID",
+  );
+  const effectValue = requireKeyActionObject(effect, "NYXID_KEY_ROTATE_READ_BACK_INVALID");
+  const effectResource = requireKeyActionObject(
+    effectValue.resource,
+    "NYXID_KEY_ROTATE_READ_BACK_INVALID",
+  );
+  const value = requireKeyActionObject(input, "NYXID_KEY_ROTATE_READ_BACK_INVALID");
+  assertKeyActionSecretFree(value);
+
+  const predecessorId = requireKeyActionIdentity(params.keyId);
+  const successorId = requireKeyActionIdentity(effectResource.keyId);
+  const requestedAt = Date.parse(requireKeyActionTimestamp(effectValue.requestedAt));
+  const createdAt = Date.parse(requireKeyActionTimestamp(value.created_at));
+  const updatedAt = Date.parse(requireKeyActionTimestamp(value.updated_at));
+  if (requireKeyActionIdentity(value.id) !== successorId ||
+      successorId === predecessorId ||
+      value.rotation_predecessor_id !== predecessorId ||
+      !Number.isInteger(value.state_version) ||
+      value.state_version < 1 ||
+      value.is_active !== true ||
+      createdAt < requestedAt ||
+      updatedAt < requestedAt ||
+      updatedAt < createdAt) {
+    throw invalidKeyAction("NYXID_KEY_ROTATE_READ_BACK_MISMATCH");
+  }
+  return { verified: true, keyId: successorId };
+}
+
+function keyActionErrorResponse(status = 502, code = "NYXID_KEY_ACTION_UNAVAILABLE") {
+  return jsonResponse({
+    code,
+    message: "NyxID key action evidence is unavailable.",
+  }, status);
+}
+
+async function keyActionJson(path, init = {}) {
+  const response = await authorizedFetch(`${config.nyxidApi}${path}`, init);
+  if (!response.ok) {
+    return { response: keyActionErrorResponse(response.status), payload: null };
+  }
+  try {
+    return { response, payload: await response.json() };
+  } catch {
+    return { response: keyActionErrorResponse(), payload: null };
+  }
+}
+
+function keyActionPathIdentity(pathname, prefix) {
+  if (!pathname.startsWith(prefix)) return null;
+  const encodedIdentity = pathname.slice(prefix.length);
+  if (!encodedIdentity || encodedIdentity.includes("/")) {
+    throw invalidKeyAction("NYXID_KEY_ACTION_IDENTITY_INVALID");
+  }
+  try {
+    return requireKeyActionIdentity(decodeURIComponent(encodedIdentity));
+  } catch (error) {
+    if (error instanceof KeyActionVerificationError) throw error;
+    throw invalidKeyAction("NYXID_KEY_ACTION_IDENTITY_INVALID");
+  }
+}
+
 function proxyResourceForSlug(slug) {
   return `${config.nyxidApi}/api/v1/proxy/s/${encodeURIComponent(slug)}`;
 }
@@ -489,6 +755,60 @@ async function studioFetch(input, init = {}) {
         ? catalogResult.payload
         : [];
     return jsonResponse(deriveConnectors(keys, catalog));
+  }
+  if ([
+    "/api/nyxid/assistant-actions/key-create",
+    "/api/nyxid/assistant-actions/key-rotate",
+  ].includes(url.pathname)) {
+    if (String(init.method || "GET").toUpperCase() !== "POST") {
+      return keyActionErrorResponse(405, "NYXID_KEY_ACTION_METHOD_INVALID");
+    }
+    try {
+      const action = url.pathname.endsWith("key-create") ? "key.create" : "key.rotate";
+      const mutation = buildKeyActionMutation(action, JSON.parse(String(init.body || "{}")));
+      const result = await keyActionJson(mutation.path, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(mutation.body),
+      });
+      if (!result.payload) return result.response;
+      return jsonResponse(normalizeKeyActionEffect(action, result.payload));
+    } catch {
+      return keyActionErrorResponse(400, "NYXID_KEY_ACTION_INVALID");
+    }
+  }
+  if (url.pathname.startsWith("/api/nyxid/api-keys/")) {
+    if (String(init.method || "GET").toUpperCase() !== "GET") {
+      return keyActionErrorResponse(405, "NYXID_KEY_ACTION_METHOD_INVALID");
+    }
+    try {
+      const keyId = keyActionPathIdentity(url.pathname, "/api/nyxid/api-keys/");
+      const result = await keyActionJson(`/api/v1/api-keys/${encodeURIComponent(keyId)}`, {
+        cache: "no-store",
+      });
+      if (!result.payload) return result.response;
+      assertKeyActionSecretFree(result.payload);
+      return jsonResponse(result.payload);
+    } catch {
+      return keyActionErrorResponse(502, "NYXID_KEY_READ_BACK_INVALID");
+    }
+  }
+  if (url.pathname.startsWith("/api/nyxid/keys/")) {
+    if (String(init.method || "GET").toUpperCase() !== "GET") {
+      return keyActionErrorResponse(405, "NYXID_KEY_ACTION_METHOD_INVALID");
+    }
+    try {
+      const serviceId = keyActionPathIdentity(url.pathname, "/api/nyxid/keys/");
+      const result = await keyActionJson(`/api/v1/keys/${encodeURIComponent(serviceId)}`, {
+        cache: "no-store",
+      });
+      if (!result.payload) return result.response;
+      assertKeyActionSecretFree(result.payload);
+      return jsonResponse(result.payload);
+    } catch {
+      return keyActionErrorResponse(502, "NYXID_KEY_SERVICE_READ_BACK_INVALID");
+    }
   }
   if (url.pathname === "/api/nyxid/keys" && String(init.method || "GET").toUpperCase() === "POST") {
     const body = JSON.parse(String(init.body || "{}"));

@@ -1,4 +1,8 @@
-import "./transport.js?v=20260807-m40-thread-polish";
+import {
+  verifyKeyCreateReadBack,
+  verifyKeyRotateReadBack,
+  verifyPersonalServiceReadBack,
+} from "./transport.js?v=20260813-p0-key-actions";
 import {
   consumeSse,
   mergeUsage,
@@ -9,20 +13,21 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260807-m40-thread-polish";
+} from "./protocol.js?v=20260813-p0-key-actions";
 import {
   buildConnectCardBlock,
+  buildKeyActionCardBlock,
   connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260807-m40-thread-polish";
+} from "./blocks.js?v=20260813-p0-key-actions";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260807-m40-thread-polish";
+} from "./actor-state.js?v=20260813-p0-key-actions";
 import { describeReadinessFailure } from "./readiness.js?v=20260807-m40-thread-polish";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
@@ -50,11 +55,13 @@ const dom = {
   attachmentName: $("#attachmentName"),
   cancelSettingsButton: $("#cancelSettingsButton"),
   clearEventsButton: $("#clearEventsButton"),
+  closeKeyActionDialogButton: $("#closeKeyActionDialogButton"),
   closeComposerServicesButton: $("#closeComposerServicesButton"),
   closeInspectorButton: $("#closeInspectorButton"),
   closeSettingsButton: $("#closeSettingsButton"),
   commandFact: $("#commandFact"),
   commandFactRow: $("#commandFactRow"),
+  completeKeyActionButton: $("#completeKeyActionButton"),
   composerForm: $("#composerForm"),
   composerInputOptions: $("#composerInputOptions"),
   composerInputPrompt: $("#composerInputPrompt"),
@@ -68,6 +75,7 @@ const dom = {
   connectionDot: $("#connectionDot"),
   connectionTest: $("#connectionTest"),
   connectionText: $("#connectionText"),
+  copyKeyActionSecretButton: $("#copyKeyActionSecretButton"),
   conversationTitle: $("#conversationTitle"),
   accountAvatar: $("#accountAvatar"),
   accountEmail: $("#accountEmail"),
@@ -79,10 +87,23 @@ const dom = {
   emptyTitle: $("#emptyTitle"),
   eventCount: $("#eventCount"),
   eventList: $("#eventList"),
+  executeKeyActionButton: $("#executeKeyActionButton"),
   eventsPanel: $("#eventsPanel"),
   eventsTabButton: $("#eventsTabButton"),
   fileInput: $("#fileInput"),
   inspector: $("#inspector"),
+  keyActionDialog: $("#keyActionDialog"),
+  keyActionDialogDescription: $("#keyActionDialogDescription"),
+  keyActionDialogError: $("#keyActionDialogError"),
+  keyActionDialogFacts: $("#keyActionDialogFacts"),
+  keyActionDialogStatus: $("#keyActionDialogStatus"),
+  keyActionDialogTitle: $("#keyActionDialogTitle"),
+  keyActionReplayKeyId: $("#keyActionReplayKeyId"),
+  keyActionReplayPanel: $("#keyActionReplayPanel"),
+  keyActionSavedConfirm: $("#keyActionSavedConfirm"),
+  keyActionSavedConfirmRow: $("#keyActionSavedConfirmRow"),
+  keyActionSecretInput: $("#keyActionSecretInput"),
+  keyActionSecretPanel: $("#keyActionSecretPanel"),
   mobileBackdrop: $("#mobileBackdrop"),
   mobileInspectorButton: $("#mobileInspectorButton"),
   mobileMenuButton: $("#mobileMenuButton"),
@@ -101,6 +122,7 @@ const dom = {
   readinessSummary: $("#readinessSummary"),
   refreshReadinessButton: $("#refreshReadinessButton"),
   refreshComposerServicesButton: $("#refreshComposerServicesButton"),
+  retryKeyActionReadBackButton: $("#retryKeyActionReadBackButton"),
   recentGroup: $("#recentGroup"),
   recentSessionsList: $("#recentSessionsList"),
   needsYouCount: $("#needsYouCount"),
@@ -142,6 +164,7 @@ const dom = {
   steerButton: $("#steerButton"),
   stopButton: $("#stopButton"),
   testConnectionButton: $("#testConnectionButton"),
+  cancelKeyActionButton: $("#cancelKeyActionButton"),
   thread: $("#thread"),
   toast: $("#toast"),
   toastText: $("#toastText"),
@@ -483,6 +506,26 @@ function bindEvents() {
   dom.connectionButton.addEventListener("click", openSettings);
   dom.closeSettingsButton.addEventListener("click", closeSettings);
   dom.cancelSettingsButton.addEventListener("click", closeSettings);
+  dom.closeKeyActionDialogButton.addEventListener("click", () => closeKeyActionDialog());
+  dom.executeKeyActionButton.addEventListener("click", () => void executeKeyActionDialog());
+  dom.retryKeyActionReadBackButton.addEventListener("click", () => void retryKeyActionReadBack());
+  dom.completeKeyActionButton.addEventListener("click", () => void completeKeyActionDialog());
+  dom.cancelKeyActionButton.addEventListener("click", () => void cancelKeyActionDialog());
+  dom.copyKeyActionSecretButton.addEventListener("click", () => void copyKeyActionSecret());
+  dom.keyActionSavedConfirm.addEventListener("change", () => {
+    if (!activeKeyActionDialog) return;
+    activeKeyActionDialog.savedConfirmed = dom.keyActionSavedConfirm.checked;
+    activeKeyActionDialog.error = "";
+    renderKeyActionDialog(activeKeyActionDialog);
+  });
+  dom.keyActionDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeKeyActionDialog();
+  });
+  dom.keyActionDialog.addEventListener("close", () => {
+    if (activeKeyActionDialog) clearActiveKeyActionDialog();
+  });
+  window.addEventListener("pagehide", () => clearActiveKeyActionDialog());
   dom.settingsForm.addEventListener("submit", saveSettings);
   dom.settingsForm.querySelectorAll('input[name="surface"]').forEach((input) => {
     input.addEventListener("change", updateSettingsVisibility);
@@ -969,6 +1012,63 @@ function createConnectCard(action, { conversation = null } = {}) {
   return card;
 }
 
+function projectedActionReport(action) {
+  if (!Array.isArray(action?.reports)) return null;
+  return [...action.reports].reverse().find((report) =>
+    report?.actionRequestId === action.actionRequestId &&
+    report?.originTurnId === action.originTurnId) || null;
+}
+
+function createKeyActionCard(action, { conversation = null } = {}) {
+  const request = action?.request || null;
+  if (!request || !KEY_ACTION_CARD_ACTIONS.includes(request.action)) return null;
+  const block = buildKeyActionCardBlock(request);
+  const report = projectedActionReport(action);
+  const completed = report?.disposition === "completed";
+  const card = {
+    action,
+    request,
+    conversation,
+    root: el("section", "connect-card key-action-card"),
+    block,
+    status: action.conflicted
+      ? "conflicted"
+      : report
+        ? completed ? "awaiting_verification" : "reported"
+        : "ready",
+    busy: false,
+    error: "",
+    note: completed
+      ? "Browser journey 已报告；等待 Actor 验证精确的 key postcondition。"
+      : report
+        ? `Browser journey 已报告 ${report.disposition}；等待 Actor 状态确认。`
+        : "",
+    continuation: null,
+    report,
+    effectKeyId: completed ? keyActionResourceId(report.resource) : "",
+    replayed: null,
+    requestedAt: "",
+    browserVerified: completed,
+    externalExpiryTimer: null,
+  };
+  card.root.dataset.actionRequestId = request.actionRequestId;
+  card.root.dataset.actorId = request.actorId;
+  card.root.dataset.originTurnId = request.originTurnId;
+  card.root.dataset.taskId = request.taskId;
+  card.root.dataset.stepId = request.stepId;
+  if (!action.conflicted) applyActorActionProof(card, action, conversation?.actorProjection);
+  renderKeyActionCard(card);
+  return card;
+}
+
+function renderActionCard(card) {
+  if (KEY_ACTION_CARD_ACTIONS.includes(card?.request?.action)) {
+    renderKeyActionCard(card);
+  } else {
+    renderConnectCard(card);
+  }
+}
+
 function renderActionCards(entry = conversationContext || state.activeConversation) {
   if (!entry) return;
   const projection = entry.actorProjection;
@@ -977,10 +1077,14 @@ function renderActionCards(entry = conversationContext || state.activeConversati
   entry.run.actionCardsElement = container;
 
   for (const action of projection?.actions?.values?.() || []) {
-    if (action.action !== "service.connect" || !action.request) continue;
+    if (!["service.connect", ...KEY_ACTION_CARD_ACTIONS].includes(action.action) || !action.request) {
+      continue;
+    }
     let card = entry.run.cardElements.get(action.actionRequestId);
     if (!card) {
-      card = createConnectCard(action, { conversation: entry });
+      card = action.action === "service.connect"
+        ? createConnectCard(action, { conversation: entry })
+        : createKeyActionCard(action, { conversation: entry });
       if (!card) continue;
       entry.run.cardElements.set(action.actionRequestId, card);
     } else {
@@ -990,9 +1094,20 @@ function renderActionCards(entry = conversationContext || state.activeConversati
         card.status = "conflicted";
         card.error = "Action identity conflict；该 browser journey 已禁用。";
       } else {
+        const report = projectedActionReport(action);
+        if (report) {
+          card.report = report;
+          if (report.disposition === "completed") {
+            card.effectKeyId ||= keyActionResourceId(report.resource);
+            card.browserVerified = true;
+            if (card.status !== "verified") card.status = "awaiting_verification";
+          } else if (card.status !== "verified") {
+            card.status = "reported";
+          }
+        }
         applyActorActionProof(card, action, projection);
       }
-      renderConnectCard(card);
+      renderActionCard(card);
     }
   }
 
@@ -1005,24 +1120,541 @@ function actionResourceUserServiceId(resource) {
   return resource?.userService?.userServiceId || resource?.userServiceId || "";
 }
 
+const KEY_ACTION_CARD_ACTIONS = Object.freeze(["key.create", "key.rotate"]);
+const KEY_ACTION_ERROR_MESSAGE = "NyxID 密钥操作证据暂时不可用；未向 Aevatar 报告结果。";
+
+let activeKeyActionDialog = null;
+
+export class KeyActionCardError extends Error {
+  constructor(code = "NYXID_KEY_ACTION_CARD_INVALID") {
+    super("NyxID key action is not ready to report.");
+    this.name = "KeyActionCardError";
+    this.code = code;
+  }
+}
+
+function keyActionResourceId(resource) {
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) return "";
+  const hasNestedKey = Object.prototype.hasOwnProperty.call(resource, "key");
+  const hasFlatKey = Object.prototype.hasOwnProperty.call(resource, "keyId");
+  const hasUserService = Object.prototype.hasOwnProperty.call(resource, "userService") ||
+    Object.prototype.hasOwnProperty.call(resource, "userServiceId");
+  if (hasUserService || hasNestedKey === hasFlatKey) return "";
+  const keyId = hasNestedKey ? resource.key?.keyId : resource.keyId;
+  return typeof keyId === "string" ? keyId : "";
+}
+
+export function buildKeyActionCompletedResource(request, effect, state) {
+  if (!KEY_ACTION_CARD_ACTIONS.includes(request?.action) ||
+      state?.browserVerified !== true ||
+      (!effect?.replayed && state?.savedConfirmed !== true)) {
+    throw new KeyActionCardError();
+  }
+  const keyId = String(effect?.resource?.keyId || "");
+  if (!keyId || effect?.replayed !== true && typeof effect?.fullKey !== "string") {
+    throw new KeyActionCardError();
+  }
+  return { key: { keyId } };
+}
+
+function createKeyActionDialogState(card) {
+  if (!KEY_ACTION_CARD_ACTIONS.includes(card?.request?.action)) {
+    throw new KeyActionCardError();
+  }
+  return {
+    card,
+    request: card.request,
+    effect: null,
+    phase: "confirm",
+    busy: false,
+    browserVerified: false,
+    savedConfirmed: false,
+    error: "",
+  };
+}
+
+function keyActionDialogCanClose(dialogState) {
+  if (!dialogState?.effect || dialogState.effect.replayed) return true;
+  return dialogState.savedConfirmed === true;
+}
+
+function keyActionDialogCompletedResource(dialogState) {
+  return buildKeyActionCompletedResource(
+    dialogState?.request,
+    dialogState?.effect,
+    dialogState,
+  );
+}
+
+function clearKeyActionDialogState(dialogState) {
+  if (!dialogState) return;
+  dialogState.effect = null;
+  dialogState.browserVerified = false;
+  dialogState.savedConfirmed = false;
+  dialogState.busy = false;
+  dialogState.error = "";
+  dialogState.phase = "cleared";
+}
+
+async function readKeyActionIoJson(fetchImpl, path, init = {}) {
+  try {
+    const response = await fetchImpl(path, init);
+    if (!response?.ok) throw new KeyActionCardError("NYXID_KEY_ACTION_IO_UNAVAILABLE");
+    const payload = await response.json();
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new KeyActionCardError("NYXID_KEY_ACTION_IO_INVALID");
+    }
+    return payload;
+  } catch {
+    throw new KeyActionCardError("NYXID_KEY_ACTION_IO_UNAVAILABLE");
+  }
+}
+
+export function createKeyActionIo(fetchImpl) {
+  if (typeof fetchImpl !== "function") throw new KeyActionCardError();
+  return {
+    async readService(serviceId) {
+      return await readKeyActionIoJson(
+        fetchImpl,
+        `/api/nyxid/keys/${encodeURIComponent(serviceId)}`,
+        { cache: "no-store" },
+      );
+    },
+    verifyService(serviceId, snapshot) {
+      return verifyPersonalServiceReadBack(serviceId, snapshot);
+    },
+    async mutate(request) {
+      const create = request.action === "key.create";
+      const path = create
+        ? "/api/nyxid/assistant-actions/key-create"
+        : request.action === "key.rotate"
+          ? "/api/nyxid/assistant-actions/key-rotate"
+          : "";
+      if (!path) throw new KeyActionCardError();
+      const body = create
+        ? {
+            actionRequestId: request.actionRequestId,
+            name: request.params.name,
+            platform: request.params.platform,
+            allowedServiceIds: [...request.params.allowedServiceIds],
+          }
+        : {
+            actionRequestId: request.actionRequestId,
+            keyId: request.params.keyId,
+          };
+      return await readKeyActionIoJson(fetchImpl, path, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    },
+    async readKey(keyId) {
+      return await readKeyActionIoJson(
+        fetchImpl,
+        `/api/nyxid/api-keys/${encodeURIComponent(keyId)}`,
+        { cache: "no-store" },
+      );
+    },
+    verifyCreate(request, effect, snapshot) {
+      return verifyKeyCreateReadBack(request, effect, snapshot);
+    },
+    verifyRotate(request, effect, snapshot) {
+      return verifyKeyRotateReadBack(request, effect, snapshot);
+    },
+  };
+}
+
+const keyActionIo = createKeyActionIo((...args) => fetch(...args));
+
+async function runKeyActionReadBack(dialogState, io) {
+  if (!dialogState?.effect) throw new KeyActionCardError();
+  dialogState.busy = true;
+  dialogState.browserVerified = false;
+  dialogState.error = "";
+  dialogState.phase = "verifying";
+  try {
+    const keyId = String(dialogState.effect.resource?.keyId || "");
+    const snapshot = await io.readKey(keyId);
+    if (dialogState.request.action === "key.create") {
+      io.verifyCreate(dialogState.request, dialogState.effect, snapshot);
+    } else {
+      io.verifyRotate(dialogState.request, dialogState.effect, snapshot);
+    }
+    dialogState.browserVerified = true;
+    dialogState.phase = "verified";
+    const card = dialogState.card;
+    card.effectKeyId = keyId;
+    card.replayed = dialogState.effect.replayed;
+    card.requestedAt = dialogState.effect.requestedAt || "";
+    card.browserVerified = true;
+    if (!card.report) card.status = "browser_verified";
+    card.error = "";
+    card.note = dialogState.effect.replayed
+      ? "已精确读取既有 key identity；原始一次性密钥不可恢复。"
+      : "浏览器已精确验证 key；确认安全保存后才能报告。";
+    return true;
+  } catch {
+    dialogState.error = KEY_ACTION_ERROR_MESSAGE;
+    dialogState.phase = "verification_error";
+    dialogState.card.browserVerified = false;
+    throw new KeyActionCardError("NYXID_KEY_ACTION_READ_BACK_UNAVAILABLE");
+  } finally {
+    dialogState.busy = false;
+  }
+}
+
+async function runKeyActionMutation(dialogState, io) {
+  if (!dialogState || dialogState.effect || dialogState.busy) {
+    throw new KeyActionCardError();
+  }
+  dialogState.busy = true;
+  dialogState.error = "";
+  dialogState.phase = "mutating";
+  try {
+    if (dialogState.request.action === "key.create") {
+      for (const serviceId of dialogState.request.params.allowedServiceIds) {
+        io.verifyService(serviceId, await io.readService(serviceId));
+      }
+    }
+    dialogState.effect = await io.mutate(dialogState.request);
+  } catch {
+    dialogState.error = KEY_ACTION_ERROR_MESSAGE;
+    dialogState.phase = "mutation_error";
+    throw new KeyActionCardError("NYXID_KEY_ACTION_MUTATION_UNAVAILABLE");
+  } finally {
+    dialogState.busy = false;
+  }
+  return await runKeyActionReadBack(dialogState, io);
+}
+
+function keyActionCardPill(card) {
+  const labels = {
+    ready: "待执行",
+    browser_verified: "浏览器已验证",
+    reporting: "正在报告",
+    awaiting_verification: "等待 Actor 验证",
+    reported: "等待 Actor 确认",
+    verified: "已验证",
+    conflicted: "身份冲突",
+    error: "操作失败",
+  };
+  const modifier = card.status === "verified"
+    ? " ok"
+    : ["error", "conflicted"].includes(card.status)
+      ? " bad"
+      : "";
+  return el("span", `cc-pill${modifier}`, card.busy ? "处理中…" : labels[card.status] || "待执行");
+}
+
+function renderKeyActionCard(card) {
+  const reported = ["reporting", "awaiting_verification", "reported", "verified"]
+    .includes(card.status);
+  const browserVerified = card.browserVerified === true || reported;
+  const verified = card.status === "verified";
+  card.root.className = `connect-card key-action-card ${card.status}`;
+  card.root.replaceChildren();
+
+  const head = el("div", "cc-head");
+  const brand = el("div", "cc-brand");
+  const logo = el("span", "cc-logo");
+  logo.append(iconNode(card.request.action === "key.rotate" ? "refresh-cw" : "key-round"));
+  const copy = el("div", "cc-copy");
+  const subtitle = card.status === "conflicted"
+    ? "同一个 actionRequestId 出现了不一致的 authoritative params"
+    : verified
+      ? "Actor 已验证精确的 key postcondition"
+      : reported
+        ? "Browser journey 已完成；这还不是 Action 成功证明"
+        : browserVerified
+          ? "浏览器已完成精确 read-back；尚未取得 Actor 验证"
+          : card.block.subtitle;
+  copy.append(el("div", "cc-title", card.block.title), el("div", "cc-sub", subtitle));
+  brand.append(logo, copy);
+  head.append(brand, keyActionCardPill(card));
+  card.root.append(head);
+
+  const facts = el("dl", "key-action-card-facts");
+  for (const fact of card.block.facts) {
+    const row = el("div", "key-action-card-fact");
+    row.append(el("dt", "", fact.label), el("dd", "mono", fact.value));
+    facts.append(row);
+  }
+  if (card.effectKeyId) {
+    const row = el("div", "key-action-card-fact");
+    row.append(el("dt", "", "Effect Key ID"), el("dd", "mono", card.effectKeyId));
+    facts.append(row);
+  }
+  card.root.append(facts);
+
+  const progress = el("div", "cc-progress");
+  card.block.steps.forEach((step, index) => {
+    const done = index < 2 ? browserVerified : verified;
+    const active = !verified && (
+      (!browserVerified && index === 0) ||
+      (browserVerified && index === 2)
+    );
+    const item = el("div", `cc-progress-step${done ? " done" : active ? " active" : ""}`);
+    item.title = step.body || step.title;
+    const marker = el("span", "cc-progress-marker");
+    if (done) marker.append(iconNode("check"));
+    else if (active) marker.append(iconNode(reported ? "loader-circle" : "circle"));
+    else marker.textContent = String(index + 1);
+    item.append(marker, el("span", "cc-progress-label", step.title));
+    progress.append(item);
+  });
+  card.root.append(progress);
+
+  if (reported) {
+    const verification = el("div", `cc-verification${verified ? " verified" : ""}`);
+    verification.append(
+      iconNode(verified ? "badge-check" : "loader-circle"),
+      el("span", "", card.note || (verified ? "已验证" : "等待 Actor 验证")),
+    );
+    card.root.append(verification);
+  } else if (card.status !== "conflicted") {
+    const zone = el("div", "cc-action-zone");
+    if (card.note) zone.append(el("div", "cc-hint", card.note));
+    const actions = el("div", "cc-actions");
+    if (card.status === "error" && card.continuation && card.report) {
+      const retry = el("button", "cc-btn primary", "重试安全报告");
+      retry.type = "button";
+      retry.disabled = card.busy;
+      retry.addEventListener("click", () => void submitActionContinuation(
+        card,
+        card.report.disposition,
+        card.report.resource || null,
+      ));
+      actions.append(retry);
+    } else {
+      const execute = el("button", "cc-btn primary", "");
+      execute.type = "button";
+      execute.disabled = card.busy;
+      execute.append(
+        iconNode(card.request.action === "key.rotate" ? "refresh-cw" : "key-round"),
+        el("span", "", browserVerified ? "重新读取并上报" : card.block.title),
+      );
+      execute.addEventListener("click", () => openKeyActionDialog(card));
+      actions.append(execute);
+      if (!browserVerified) {
+        const decline = el("button", "cc-btn ghost", "不执行");
+        decline.type = "button";
+        decline.disabled = card.busy;
+        decline.addEventListener("click", () => void submitActionContinuation(card, "declined"));
+        actions.append(decline);
+      }
+    }
+    zone.append(actions);
+    card.root.append(zone);
+  }
+
+  if (card.error) {
+    const error = el("div", "cc-error");
+    error.append(iconNode("circle-alert"), el("span", "", card.error));
+    card.root.append(error);
+  }
+  const foot = el("div", "cc-foot");
+  foot.append(iconNode("shield-check"), el("span", "", card.block.footer));
+  card.root.append(foot);
+  refreshIcons(card.root);
+}
+
+function openKeyActionDialog(card) {
+  if (!card || card.busy || card.status === "conflicted") return;
+  if (activeKeyActionDialog && !closeKeyActionDialog()) return;
+  activeKeyActionDialog = createKeyActionDialogState(card);
+  renderKeyActionDialog(activeKeyActionDialog);
+  if (!dom.keyActionDialog.open) dom.keyActionDialog.showModal();
+  refreshIcons(dom.keyActionDialog);
+}
+
+function renderKeyActionDialog(dialogState = activeKeyActionDialog) {
+  if (!dialogState) return;
+  const create = dialogState.request.action === "key.create";
+  const effect = dialogState.effect;
+  const hasSecret = effect?.replayed === false && typeof effect.fullKey === "string";
+  const replayed = effect?.replayed === true;
+  const phaseText = {
+    confirm: "确认以下请求后，浏览器将使用当前 OIDC 会话直接调用 NyxID。",
+    mutating: "正在执行 NyxID 密钥操作…",
+    verifying: "正在读取同一 key identity 并精确校验…",
+    verified: replayed
+      ? "已验证 replay 返回的 key identity；原始一次性密钥不可恢复。"
+      : "浏览器 read-back 已通过；确认已安全保存后才能报告。",
+    mutation_error: "密钥操作未取得可验证证据，尚未向 Aevatar 报告。",
+    verification_error: "Read-back 未通过，保留同一 key identity 供安全重试。",
+  }[dialogState.phase] || "";
+
+  dom.keyActionDialogTitle.textContent = create ? "创建 API key" : "轮换 API key";
+  dom.keyActionDialogDescription.textContent = create
+    ? "NyxID 将创建仅允许所列 Services、scope 为 proxy 的 API key。"
+    : "NyxID 将轮换指定 predecessor key，并验证 replacement lineage。";
+  dom.keyActionDialogStatus.textContent = dialogState.copied
+    ? `${phaseText} 一次性密钥已复制，请确认保存位置。`
+    : phaseText;
+  dom.keyActionDialogFacts.replaceChildren();
+  for (const fact of dialogState.card.block.facts) {
+    const row = el("div", "key-action-dialog-fact");
+    row.append(el("dt", "", fact.label), el("dd", "mono", fact.value));
+    dom.keyActionDialogFacts.append(row);
+  }
+
+  dom.keyActionSecretPanel.classList.toggle("hidden", !hasSecret);
+  dom.keyActionSecretInput.value = hasSecret ? effect.fullKey : "";
+  dom.copyKeyActionSecretButton.disabled = dialogState.busy || !hasSecret;
+  dom.keyActionReplayPanel.classList.toggle("hidden", !replayed);
+  dom.keyActionReplayKeyId.textContent = replayed ? String(effect.resource?.keyId || "") : "";
+  dom.keyActionSavedConfirmRow.classList.toggle("hidden", !hasSecret);
+  dom.keyActionSavedConfirm.checked = dialogState.savedConfirmed === true;
+  dom.keyActionSavedConfirm.disabled = dialogState.busy || !hasSecret;
+  dom.keyActionDialogError.textContent = dialogState.error || "";
+  dom.keyActionDialogError.classList.toggle("hidden", !dialogState.error);
+
+  const canComplete = dialogState.browserVerified === true &&
+    (replayed || dialogState.savedConfirmed === true);
+  dom.executeKeyActionButton.classList.toggle("hidden", Boolean(effect));
+  dom.executeKeyActionButton.disabled = dialogState.busy || Boolean(effect);
+  dom.executeKeyActionButton.textContent = dialogState.phase === "mutation_error"
+    ? "重试执行"
+    : create ? "创建密钥" : "轮换密钥";
+  dom.retryKeyActionReadBackButton.classList.toggle(
+    "hidden",
+    !effect || dialogState.browserVerified === true,
+  );
+  dom.retryKeyActionReadBackButton.disabled = dialogState.busy || !effect;
+  dom.completeKeyActionButton.classList.toggle("hidden", !dialogState.browserVerified);
+  dom.completeKeyActionButton.disabled = dialogState.busy || !canComplete;
+  dom.cancelKeyActionButton.disabled = dialogState.busy;
+  dom.closeKeyActionDialogButton.disabled = dialogState.busy;
+  refreshIcons(dom.keyActionDialog);
+}
+
+function clearActiveKeyActionDialog() {
+  const dialogState = activeKeyActionDialog;
+  if (!dialogState) {
+    if (dom.keyActionSecretInput) dom.keyActionSecretInput.value = "";
+    return;
+  }
+  const card = dialogState.card;
+  dom.keyActionSecretInput.value = "";
+  clearKeyActionDialogState(dialogState);
+  activeKeyActionDialog = null;
+  if (card) renderActionCard(card);
+}
+
+function closeKeyActionDialog({ force = false } = {}) {
+  const dialogState = activeKeyActionDialog;
+  if (!dialogState) {
+    if (dom.keyActionDialog.open) dom.keyActionDialog.close();
+    return true;
+  }
+  if (!force && !keyActionDialogCanClose(dialogState)) {
+    dialogState.error = "一次性密钥仍在当前对话框中；请先安全保存并勾选确认。";
+    renderKeyActionDialog(dialogState);
+    return false;
+  }
+  clearActiveKeyActionDialog();
+  if (dom.keyActionDialog.open) dom.keyActionDialog.close();
+  return true;
+}
+
+async function executeKeyActionDialog() {
+  const dialogState = activeKeyActionDialog;
+  if (!dialogState || dialogState.busy || dialogState.effect) return;
+  const operation = runKeyActionMutation(dialogState, keyActionIo);
+  renderKeyActionDialog(dialogState);
+  try {
+    await operation;
+  } catch {
+    // The journey helper records only the stable, secret-free error state.
+  }
+  if (activeKeyActionDialog === dialogState) {
+    renderKeyActionDialog(dialogState);
+    renderActionCard(dialogState.card);
+  }
+}
+
+async function retryKeyActionReadBack() {
+  const dialogState = activeKeyActionDialog;
+  if (!dialogState || dialogState.busy || !dialogState.effect) return;
+  const operation = runKeyActionReadBack(dialogState, keyActionIo);
+  renderKeyActionDialog(dialogState);
+  try {
+    await operation;
+  } catch {
+    // The journey helper records only the stable, secret-free error state.
+  }
+  if (activeKeyActionDialog === dialogState) {
+    renderKeyActionDialog(dialogState);
+    renderActionCard(dialogState.card);
+  }
+}
+
+async function copyKeyActionSecret() {
+  const dialogState = activeKeyActionDialog;
+  if (!dialogState ||
+      dialogState.effect?.replayed !== false ||
+      !dom.keyActionSecretInput.value ||
+      dialogState.busy) return;
+  try {
+    await navigator.clipboard.writeText(dom.keyActionSecretInput.value);
+    dialogState.copied = true;
+    dialogState.error = "";
+  } catch {
+    dialogState.error = "浏览器无法写入剪贴板；请从只读字段手动选择并保存。";
+  }
+  if (activeKeyActionDialog === dialogState) renderKeyActionDialog(dialogState);
+}
+
+async function completeKeyActionDialog() {
+  const dialogState = activeKeyActionDialog;
+  if (!dialogState || dialogState.busy) return;
+  let resource;
+  try {
+    resource = keyActionDialogCompletedResource(dialogState);
+  } catch {
+    dialogState.error = "浏览器证据或安全保存确认尚未完成。";
+    renderKeyActionDialog(dialogState);
+    return;
+  }
+  const card = dialogState.card;
+  if (!closeKeyActionDialog({ force: true })) return;
+  await submitActionContinuation(card, "completed", resource);
+}
+
+async function cancelKeyActionDialog() {
+  const dialogState = activeKeyActionDialog;
+  if (!dialogState || dialogState.busy) return;
+  const card = dialogState.card;
+  if (!closeKeyActionDialog()) return;
+  await submitActionContinuation(card, "cancelled");
+}
+
 function applyActorActionProof(card, action, projection) {
   if (!card.report || card.report.disposition !== "completed") return false;
-  const expectedUserServiceId = actionResourceUserServiceId(card.report.resource);
+  const keyAction = KEY_ACTION_CARD_ACTIONS.includes(card.request.action);
+  const expectedResourceId = keyAction
+    ? keyActionResourceId(card.report.resource)
+    : actionResourceUserServiceId(card.report.resource);
   const proof = action.postconditionResult;
-  const proofMatches = proof?.verified === true &&
+  const proofMatches = Boolean(expectedResourceId) && proof?.verified === true &&
     proof.actionRequestId === card.request.actionRequestId &&
     proof.disposition === card.report.disposition &&
-    actionResourceUserServiceId(proof.resource) === expectedUserServiceId;
+    (keyAction
+      ? keyActionResourceId(proof.resource) === expectedResourceId
+      : actionResourceUserServiceId(proof.resource) === expectedResourceId);
   const confirmedStep = [...(projection?.steps?.values?.() || [])].some((step) =>
     step?.actionRequestId === card.request.actionRequestId &&
     step?.kind === "postcondition" &&
     step?.status === "done" &&
     step?.externalEffect === "confirmed");
-  if (!proofMatches && !confirmedStep) return false;
+  if (!proofMatches && (keyAction || !confirmedStep)) return false;
   card.status = "verified";
   card.busy = false;
   card.error = "";
-  card.note = "Actor 已确认精确的 UserService postcondition。";
+  card.note = keyAction
+    ? "Actor 已确认精确的 key postcondition。"
+    : "Actor 已确认精确的 UserService postcondition。";
   return true;
 }
 
@@ -1206,7 +1838,7 @@ async function submitActionContinuation(card, disposition, resource = null) {
       card.busy = false;
       card.status = "error";
       card.error = "This action is no longer pending with the same identity; the changed report was not sent.";
-      renderConnectCard(card);
+      renderActionCard(card);
       return;
     }
   }
@@ -1216,7 +1848,7 @@ async function submitActionContinuation(card, disposition, resource = null) {
   } catch (error) {
     card.status = "error";
     card.error = error.message || "Action continuation is invalid.";
-    renderConnectCard(card);
+    renderActionCard(card);
     return;
   }
 
@@ -1233,7 +1865,7 @@ async function submitActionContinuation(card, disposition, resource = null) {
   card.status = "reporting";
   card.error = "";
   card.note = "正在向 Aevatar 报告 browser journey 结果。";
-  renderConnectCard(card);
+  renderActionCard(card);
   try {
     const response = await fetch("/api/demo/chat", {
       method: "POST",
@@ -1250,7 +1882,7 @@ async function submitActionContinuation(card, disposition, resource = null) {
     card.note = disposition === "completed"
       ? "Browser journey 已报告；等待 actor 验证 postcondition。"
       : `Browser journey 已报告 ${disposition}；等待 actor 状态确认。`;
-    renderConnectCard(card);
+    renderActionCard(card);
     await consumeSse(response, async (raw) => {
       withConversationState(conversation, () => handleFrame(raw));
     });
@@ -1265,7 +1897,7 @@ async function submitActionContinuation(card, disposition, resource = null) {
           : `Browser journey 已报告 ${disposition}；等待 actor 状态确认。`;
       }
       card.busy = false;
-      renderConnectCard(card);
+      renderActionCard(card);
     });
   } catch (error) {
     withConversationState(conversation, () => {
@@ -1274,7 +1906,7 @@ async function submitActionContinuation(card, disposition, resource = null) {
       card.error = error.name === "AbortError"
         ? "已停止观察 continuation；Actor 可能仍在处理报告。"
         : error.message || "Action continuation 提交失败。";
-      renderConnectCard(card);
+      renderActionCard(card);
     });
   } finally {
     withConversationState(conversation, () => {
@@ -2127,6 +2759,48 @@ function actorStateTurnId(projection) {
     "";
 }
 
+function actorStateWithActionHistory(envelope) {
+  const snapshot = envelope?.status === "current" ? envelope.snapshot : null;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return envelope;
+
+  const actions = [];
+  const positions = new Map();
+  for (const summary of [
+    ...(Array.isArray(snapshot.pendingActions) ? snapshot.pendingActions : []),
+    ...(Array.isArray(snapshot.recentActions) ? snapshot.recentActions : []),
+  ]) {
+    const actionRequestId = typeof summary?.actionRequestId === "string"
+      ? summary.actionRequestId
+      : "";
+    if (!actionRequestId || !positions.has(actionRequestId)) {
+      if (actionRequestId) positions.set(actionRequestId, actions.length);
+      actions.push(summary);
+      continue;
+    }
+    actions[positions.get(actionRequestId)] = summary;
+  }
+
+  return {
+    ...envelope,
+    snapshot: {
+      ...snapshot,
+      pendingActions: actions,
+    },
+  };
+}
+
+function restoreCurrentStateActionRequests(entry, envelope) {
+  const snapshot = envelope?.status === "current" ? envelope.snapshot : null;
+  const summaries = snapshot?.pendingActions;
+  const actorId = typeof snapshot?.actorId === "string" ? snapshot.actorId : "";
+  if (!entry?.actionFrameCache || !Array.isArray(summaries) ||
+      !actorId || actorId !== entry.actorId) return;
+  for (const summary of summaries) {
+    const request = restoreCachedAction({ ...summary, actorId }, summary?.request);
+    if (request) entry.actionFrameCache.set(request.actionRequestId, request);
+  }
+}
+
 async function refreshActorState(entry, { uncursored = false } = {}) {
   if (!entry?.actorId) return null;
   if (entry.stateReloadInFlight && !uncursored) return entry.stateReloadInFlight;
@@ -2146,7 +2820,9 @@ async function refreshActorState(entry, { uncursored = false } = {}) {
         { headers: demoHeaders(), cache: "no-store" },
       );
       if (!response.ok) throw await responseError(response);
-      const result = applyCurrentStateResult(projection, await response.json());
+      const envelope = actorStateWithActionHistory(await response.json());
+      restoreCurrentStateActionRequests(entry, envelope);
+      const result = applyCurrentStateResult(projection, envelope);
       entry.actorProjection = result.projection;
       if (result.reloadWithoutCursor) {
         if (!uncursored) return refreshActorState(entry, { uncursored: true });

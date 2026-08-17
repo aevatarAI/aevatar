@@ -158,6 +158,749 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task WorkflowStudio_ActionProtocol_ShouldAdmitExactKeyActionsAndFailClosed()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const identity = {
+              schemaVersion:4,
+              actorId:'conversation-alpha',
+              originTurnId:'turn-alpha',
+              taskId:'task-alpha',
+              stepId:'step-alpha',
+              actionRequestId:'action-alpha'
+            };
+            const create = context.validateActionRequest({
+              ...identity,
+              action:'key.create',
+              params:{
+                name:'studio-agent',
+                platform:'codex',
+                allowedServiceIds:['service-alpha','service-beta']
+              }
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(create)), {
+              ...identity,
+              action:'key.create',
+              params:{
+                name:'studio-agent',
+                platform:'codex',
+                allowedServiceIds:['service-alpha','service-beta']
+              }
+            });
+            assert.equal(Object.isFrozen(create), true);
+            assert.equal(Object.isFrozen(create.params.allowedServiceIds), true);
+
+            const rotate = context.validateActionRequest({
+              ...identity,
+              actionRequestId:'action-rotate',
+              action:'key.rotate',
+              params:{keyId:'key-predecessor'}
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(rotate.params)), {keyId:'key-predecessor'});
+
+            const invalid = [
+              {...identity,action:'key.create',params:{name:'studio-agent',platform:'codex',allowedServiceIds:[]}},
+              {...identity,action:'key.create',params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha','service-alpha']}},
+              {...identity,action:'key.create',params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service/alpha']}},
+              {...identity,action:'key.create',params:{name:' studio-agent',platform:'codex',allowedServiceIds:['service-alpha']}},
+              {...identity,action:'key.create',params:{name:'studio-agent',platform:'Bearer secret-value',allowedServiceIds:['service-alpha']}},
+              {...identity,action:'key.create',params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha'],allowAllServices:true}},
+              {...identity,action:'key.rotate',params:{keyId:'key-predecessor',replacementKeyId:'key-successor'}},
+              {...identity,action:'key.rotate',params:{keyId:'key/predecessor'}},
+              {...identity,action:'key.delete',params:{keyId:'key-predecessor'}}
+            ];
+            for (const value of invalid) {
+              assert.throws(() => context.validateActionRequest(value), context.ProtocolValidationError);
+            }
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ActionContinuation_ShouldRequireActionSpecificCompletedResources()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const continuation = (disposition, resource) => ({
+              type:'action.continue',
+              clientRequestId:'client-action-alpha',
+              originTurnId:'turn-alpha',
+              actions:[{
+                actionRequestId:'action-alpha',
+                originTurnId:'turn-alpha',
+                disposition,
+                ...(resource ? {resource} : {})
+              }]
+            });
+
+            for (const action of ['key.create','key.rotate']) {
+              const accepted = context.validateActionContinuation(
+                continuation('completed', {key:{keyId:'key-successor'}}),
+                {expectedAction:action}
+              );
+              assert.equal(accepted.actions[0].resource.key.keyId, 'key-successor');
+              assert.throws(
+                () => context.validateActionContinuation(
+                  continuation('completed', {userService:{userServiceId:'service-alpha'}}),
+                  {expectedAction:action}
+                ),
+                context.ProtocolValidationError
+              );
+              assert.throws(
+                () => context.validateActionContinuation(continuation('completed'), {expectedAction:action}),
+                context.ProtocolValidationError
+              );
+              const declined = context.validateActionContinuation(
+                continuation('declined'),
+                {expectedAction:action}
+              );
+              assert.equal(declined.actions[0].disposition, 'declined');
+              assert.equal(Object.prototype.hasOwnProperty.call(declined.actions[0], 'resource'), false);
+            }
+
+            assert.throws(
+              () => context.validateActionContinuation(
+                continuation('completed', {key:{keyId:'key-successor'}}),
+                {expectedAction:'service.connect'}
+              ),
+              context.ProtocolValidationError
+            );
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_KeyActionTransport_ShouldConstructAllowlistedMutationsAndNormalizeEffects()
+    {
+        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('const KEY_ACTION_SECRET_FIELD');
+            const end = source.indexOf('\nfunction proxyResourceForSlug(', start);
+            assert.notEqual(start, -1, 'key action transport helpers must exist');
+            assert.notEqual(end, -1, 'key action helper boundary must exist');
+            const context = { URL, Date, structuredClone };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end).replace(/^export /gm, ''), context);
+
+            const created = context.buildKeyActionMutation('key.create', {
+              actionRequestId:'action-create',
+              name:'studio-agent',
+              platform:'codex',
+              allowedServiceIds:['service-alpha','service-beta']
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(created)), {
+              path:'/api/v1/assistant/actions/key-create',
+              body:{
+                actionRequestId:'action-create',
+                name:'studio-agent',
+                platform:'codex',
+                allowedServiceIds:['service-alpha','service-beta']
+              }
+            });
+
+            const rotated = context.buildKeyActionMutation('key.rotate', {
+              actionRequestId:'action-rotate', keyId:'key-predecessor'
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(rotated)), {
+              path:'/api/v1/assistant/actions/key-rotate',
+              body:{actionRequestId:'action-rotate',keyId:'key-predecessor'}
+            });
+            assert.throws(
+              () => context.buildKeyActionMutation('key.create', {
+                actionRequestId:'action-create', name:'studio-agent', platform:'codex',
+                allowedServiceIds:['service-alpha'], rawBearer:'forbidden'
+              }),
+              context.KeyActionVerificationError
+            );
+            assert.throws(
+              () => context.buildKeyActionMutation('key.delete', {actionRequestId:'action-delete'}),
+              context.KeyActionVerificationError
+            );
+
+            const effect = context.normalizeKeyActionEffect('key.create', {
+              resource:{keyId:'key-created'}, replayed:false, fullKey:'nyxid_ag_one_time_value'
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(effect)), {
+              resource:{keyId:'key-created'}, replayed:false, fullKey:'nyxid_ag_one_time_value'
+            });
+            const replay = context.normalizeKeyActionEffect('key.create', {
+              resource:{keyId:'key-created'}, replayed:true
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(replay)), {
+              resource:{keyId:'key-created'}, replayed:true
+            });
+            const rotateEffect = context.normalizeKeyActionEffect('key.rotate', {
+              resource:{keyId:'key-successor'}, replayed:false,
+              requestedAt:'2026-08-13T08:00:00Z', fullKey:'nyxid_ag_rotated_once'
+            });
+            assert.equal(rotateEffect.requestedAt, '2026-08-13T08:00:00Z');
+            assert.throws(
+              () => context.normalizeKeyActionEffect('key.create', {
+                resource:{keyId:'key-created'}, replayed:true, fullKey:'must-not-replay'
+              }),
+              context.KeyActionVerificationError
+            );
+            assert.throws(
+              () => context.normalizeKeyActionEffect('key.rotate', {
+                resource:{keyId:'key-successor'}, replayed:false,
+                requestedAt:'not-a-time', fullKey:'nyxid_ag_rotated_once'
+              }),
+              context.KeyActionVerificationError
+            );
+            """;
+
+        var result = await RunNodeAsync(script, transport);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        transport.Should().Contain("/api/nyxid/assistant-actions/key-create");
+        transport.Should().Contain("/api/nyxid/assistant-actions/key-rotate");
+        transport.Should().Contain("/api/nyxid/api-keys/");
+        transport.Should().Contain("/api/nyxid/keys/");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_KeyCreateReadBack_ShouldRequirePersonalServicesAndExactLeastScope()
+    {
+        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('const KEY_ACTION_SECRET_FIELD');
+            const end = source.indexOf('\nfunction proxyResourceForSlug(', start);
+            assert.notEqual(start, -1, 'key action transport helpers must exist');
+            assert.notEqual(end, -1, 'key action helper boundary must exist');
+            const context = { URL, Date, structuredClone };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end).replace(/^export /gm, ''), context);
+
+            const request = {
+              params:{
+                name:'studio-agent', platform:'codex',
+                allowedServiceIds:['service-alpha','service-beta']
+              }
+            };
+            const effect = {resource:{keyId:'key-created'},replayed:false,fullKey:'one-time'};
+            const service = id => ({
+              id, is_active:true, credential_source:{type:'personal'},
+              name:'Service', status:'connected'
+            });
+            assert.equal(
+              context.verifyPersonalServiceReadBack('service-alpha', service('service-alpha')).verified,
+              true
+            );
+            for (const invalid of [
+              null,
+              service('service-other'),
+              {...service('service-alpha'),is_active:false},
+              {...service('service-alpha'),credential_source:{type:'org',org_id:'org-alpha'}},
+              {...service('service-alpha'),oauth_client_secret:'forbidden'}
+            ]) {
+              assert.throws(
+                () => context.verifyPersonalServiceReadBack('service-alpha', invalid),
+                context.KeyActionVerificationError
+              );
+            }
+
+            const exact = {
+              id:'key-created', name:'studio-agent', platform:'codex', scopes:'proxy',
+              is_active:true,
+              allowed_service_ids:['service-beta','service-alpha'],
+              allowed_node_ids:[], allow_all_services:false, allow_all_nodes:false,
+              state_version:1
+            };
+            const verified = context.verifyKeyCreateReadBack(request, effect, exact);
+            assert.deepEqual(JSON.parse(JSON.stringify(verified)), {
+              verified:true,keyId:'key-created'
+            });
+
+            const invalidKeys = [
+              null,
+              {...exact,id:'key-other'},
+              {...exact,name:'other-agent'},
+              {...exact,platform:'other-platform'},
+              {...exact,scopes:'proxy read'},
+              {...exact,is_active:false},
+              {...exact,allowed_service_ids:['service-alpha']},
+              {...exact,allowed_service_ids:['service-alpha','service-beta','service-beta']},
+              {...exact,allowed_node_ids:['node-alpha']},
+              {...exact,allow_all_services:true},
+              {...exact,allow_all_nodes:true},
+              {...exact,key_hash:'forbidden'}
+            ];
+            for (const invalid of invalidKeys) {
+              assert.throws(
+                () => context.verifyKeyCreateReadBack(request, effect, invalid),
+                context.KeyActionVerificationError
+              );
+            }
+            """;
+
+        var result = await RunNodeAsync(script, transport);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_KeyRotateReadBack_ShouldRequireFreshExactLineage()
+    {
+        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('const KEY_ACTION_SECRET_FIELD');
+            const end = source.indexOf('\nfunction proxyResourceForSlug(', start);
+            assert.notEqual(start, -1, 'key action transport helpers must exist');
+            assert.notEqual(end, -1, 'key action helper boundary must exist');
+            const context = { URL, Date, structuredClone };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end).replace(/^export /gm, ''), context);
+
+            const request = {params:{keyId:'key-predecessor'}};
+            const effect = {
+              resource:{keyId:'key-successor'}, replayed:false,
+              requestedAt:'2026-08-13T08:00:00Z', fullKey:'one-time'
+            };
+            const exact = {
+              id:'key-successor', is_active:true,
+              rotation_predecessor_id:'key-predecessor', state_version:2,
+              created_at:'2026-08-13T08:00:01Z', updated_at:'2026-08-13T08:00:02Z'
+            };
+            const verified = context.verifyKeyRotateReadBack(request, effect, exact);
+            assert.deepEqual(JSON.parse(JSON.stringify(verified)), {
+              verified:true,keyId:'key-successor'
+            });
+
+            const invalid = [
+              null,
+              {...exact,id:'key-other'},
+              {...exact,id:'key-predecessor'},
+              {...exact,rotation_predecessor_id:null},
+              {...exact,rotation_predecessor_id:'key-other'},
+              {...exact,state_version:0},
+              {...exact,state_version:'2'},
+              {...exact,is_active:false},
+              {...exact,created_at:'2026-08-13T07:59:59Z'},
+              {...exact,updated_at:'2026-08-13T07:59:59Z'},
+              {...exact,created_at:'2026-08-13T08:00:03Z',updated_at:'2026-08-13T08:00:02Z'},
+              {...exact,created_at:'invalid'},
+              {...exact,refresh_token:'forbidden'}
+            ];
+            for (const value of invalid) {
+              assert.throws(
+                () => context.verifyKeyRotateReadBack(request, effect, value),
+                context.KeyActionVerificationError
+              );
+            }
+            """;
+
+        var result = await RunNodeAsync(script, transport);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_KeyActionCard_ShouldExposeOnlySafeFactsAndAwaitActorVerification()
+    {
+        var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8')
+              .replace(/^import[^;]+;\s*/m, '')
+              .replace(/^export /gm, '');
+            const context = { validateActionRequest:value => value };
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const identity = {
+              schemaVersion:4, actorId:'conversation-alpha', originTurnId:'turn-alpha',
+              taskId:'task-alpha', stepId:'step-alpha', actionRequestId:'action-alpha'
+            };
+            const created = context.buildKeyActionCardBlock({
+              ...identity,
+              action:'key.create',
+              params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha','service-beta']}
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(created)), {
+              type:'key_action_card', block_id:'action-alpha', action:'key.create',
+              identity:{
+                actorId:'conversation-alpha',originTurnId:'turn-alpha',taskId:'task-alpha',
+                stepId:'step-alpha',actionRequestId:'action-alpha'
+              },
+              title:'创建 API key', subtitle:'studio-agent · codex',
+              facts:[
+                {label:'名称',value:'studio-agent'},
+                {label:'平台',value:'codex'},
+                {label:'允许的 Services',value:'service-alpha, service-beta'}
+              ],
+              state:'ready', steps:[
+                {title:'执行 NyxID 密钥操作',body:'浏览器直接调用 NyxID；完整密钥不会发送给 Aevatar。',done:false},
+                {title:'精确读取并确认密钥',body:'读取同一 key identity，验证最小权限，并确认一次性密钥已安全保存。',done:false},
+                {title:'报告 key reference 并等待 Actor 验证',body:'仅报告 keyId；Actor postcondition 精确匹配后才显示成功。',done:false}
+              ],
+              footer:'完整密钥仅在当前对话框显示一次 · Aevatar 只接收 keyId'
+            });
+
+            const rotated = context.buildKeyActionCardBlock({
+              ...identity, actionRequestId:'action-rotate', action:'key.rotate',
+              params:{keyId:'key-predecessor'}
+            });
+            assert.equal(rotated.title, '轮换 API key');
+            assert.deepEqual(JSON.parse(JSON.stringify(rotated.facts)), [
+              {label:'原 Key ID',value:'key-predecessor'}
+            ]);
+            const serialized = JSON.stringify({created,rotated});
+            for (const forbidden of ['fullKey','full_key','keyHash','accessToken','refreshToken']) {
+              assert.equal(serialized.includes(forbidden), false);
+            }
+            """;
+
+        var result = await RunNodeAsync(script, blocks);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_KeyActionCompletion_ShouldRequireBrowserVerificationAndExactActorProof()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            (async () => {
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('const KEY_ACTION_CARD_ACTIONS');
+            const end = source.indexOf('\nfunction connectDeepLink(', start);
+            assert.notEqual(start, -1, 'key action card helpers must exist');
+            assert.notEqual(end, -1, 'key action helper boundary must exist');
+            const context = { JSON };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end).replace(/^export /gm, ''), context);
+
+            assert.equal(context.keyActionResourceId({key:{keyId:'key-created'}}), 'key-created');
+            assert.equal(context.keyActionResourceId({keyId:'key-created'}), 'key-created');
+            assert.equal(context.keyActionResourceId({
+              key:{keyId:'key-created'},userService:{userServiceId:'service-alpha'}
+            }), '');
+            assert.equal(context.keyActionResourceId({
+              keyId:'key-created',userServiceId:'service-alpha'
+            }), '');
+
+            const request = {
+              schemaVersion:4,actorId:'conversation-alpha',originTurnId:'turn-alpha',
+              taskId:'task-alpha',stepId:'step-alpha',actionRequestId:'action-alpha',
+              action:'key.create',
+              params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha']}
+            };
+            const effect = {
+              resource:{keyId:'key-created'},replayed:false,fullKey:'nyxid_ag_one_time_value'
+            };
+            assert.throws(
+              () => context.buildKeyActionCompletedResource(request, effect, {browserVerified:false,savedConfirmed:true}),
+              context.KeyActionCardError
+            );
+            assert.throws(
+              () => context.buildKeyActionCompletedResource(request, effect, {browserVerified:true,savedConfirmed:false}),
+              context.KeyActionCardError
+            );
+            assert.deepEqual(JSON.parse(JSON.stringify(
+              context.buildKeyActionCompletedResource(request, effect, {browserVerified:true,savedConfirmed:true})
+            )), {key:{keyId:'key-created'}});
+            assert.deepEqual(JSON.parse(JSON.stringify(
+              context.buildKeyActionCompletedResource(request, {...effect,replayed:true,fullKey:undefined}, {
+                browserVerified:true,savedConfirmed:false
+              })
+            )), {key:{keyId:'key-created'}});
+
+            const card = {
+              request,report:{disposition:'completed',resource:{key:{keyId:'key-created'}}},
+              status:'awaiting_verification',busy:false,error:'',note:''
+            };
+            const confirmedStep = {steps:new Map([['postcondition',{
+              actionRequestId:'action-alpha',kind:'postcondition',status:'done',externalEffect:'confirmed'
+            }]])};
+            assert.equal(context.applyActorActionProof(card, {
+              postconditionResult:null
+            }, confirmedStep), false);
+            assert.equal(card.status, 'awaiting_verification');
+
+            const invalidProofs = [
+              {verified:false,actionRequestId:'action-alpha',disposition:'completed',resource:{key:{keyId:'key-created'}}},
+              {verified:true,actionRequestId:'action-other',disposition:'completed',resource:{key:{keyId:'key-created'}}},
+              {verified:true,actionRequestId:'action-alpha',disposition:'failed',resource:{key:{keyId:'key-created'}}},
+              {verified:true,actionRequestId:'action-alpha',disposition:'completed',resource:{userService:{userServiceId:'key-created'}}},
+              {verified:true,actionRequestId:'action-alpha',disposition:'completed',resource:{key:{keyId:'key-other'}}}
+            ];
+            for (const proof of invalidProofs) {
+              card.status = 'awaiting_verification';
+              assert.equal(context.applyActorActionProof(card, {postconditionResult:proof}, {steps:new Map()}), false);
+              assert.equal(card.status, 'awaiting_verification');
+            }
+
+            assert.equal(context.applyActorActionProof(card, {postconditionResult:{
+              verified:true,actionRequestId:'action-alpha',disposition:'completed',
+              resource:{key:{keyId:'key-created'}}
+            }}, {steps:new Map()}), true);
+            assert.equal(card.status, 'verified');
+            assert.equal(JSON.stringify(card).includes('nyxid_ag_one_time_value'), false);
+            const journeyCard = {
+              request,status:'ready',busy:false,error:'',note:'',report:null,
+              effectKeyId:'',replayed:null,requestedAt:'',browserVerified:false
+            };
+            const requests = [];
+            const ioAdapter = context.createKeyActionIo(async (url, init = {}) => {
+              requests.push({url,method:init.method || 'GET',body:init.body || ''});
+              if (url.endsWith('/keys/service-alpha')) {
+                return {ok:true,async json(){return {id:'service-alpha'};}};
+              }
+              if (url.endsWith('/assistant-actions/key-create')) {
+                return {ok:true,async json(){return {resource:{keyId:'key-created'}};}};
+              }
+              if (url.endsWith('/api-keys/key-created')) {
+                return {ok:true,async json(){return {id:'key-created'};}};
+              }
+              return {ok:false,async json(){throw new Error('upstream secret body');}};
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(await ioAdapter.readService('service-alpha'))), {
+              id:'service-alpha'
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(await ioAdapter.mutate(request))), {
+              resource:{keyId:'key-created'}
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(await ioAdapter.readKey('key-created'))), {
+              id:'key-created'
+            });
+            assert.deepEqual(requests, [
+              {url:'/api/nyxid/keys/service-alpha',method:'GET',body:''},
+              {url:'/api/nyxid/assistant-actions/key-create',method:'POST',body:JSON.stringify({
+                actionRequestId:'action-alpha',name:'studio-agent',platform:'codex',
+                allowedServiceIds:['service-alpha']
+              })},
+              {url:'/api/nyxid/api-keys/key-created',method:'GET',body:''}
+            ]);
+            await assert.rejects(
+              ioAdapter.readKey('key-unavailable'),
+              error => error?.name === 'KeyActionCardError' &&
+                error?.code === 'NYXID_KEY_ACTION_IO_UNAVAILABLE' &&
+                error.message.includes('upstream secret body') === false
+            );
+            const journey = context.createKeyActionDialogState(journeyCard);
+            let mutationCalls = 0;
+            let serviceReads = 0;
+            let keyReads = 0;
+            const io = {
+              async readService(serviceId) {
+                serviceReads += 1;
+                return {id:serviceId,is_active:true,credential_source:{type:'personal'}};
+              },
+              verifyService(serviceId, snapshot) {
+                assert.equal(snapshot.id, serviceId);
+              },
+              async mutate(candidate) {
+                mutationCalls += 1;
+                assert.equal(candidate.action, 'key.create');
+                return {
+                  resource:{keyId:'key-created'},replayed:false,
+                  fullKey:'nyxid_ag_one_time_value'
+                };
+              },
+              async readKey(keyId) {
+                keyReads += 1;
+                assert.equal(keyId, 'key-created');
+                if (keyReads === 1) throw new Error('raw upstream secret detail');
+                return {id:keyId};
+              },
+              verifyCreate(candidate, effectValue, snapshot) {
+                assert.equal(candidate.actionRequestId, 'action-alpha');
+                assert.equal(effectValue.resource.keyId, snapshot.id);
+              },
+              verifyRotate() {
+                throw new Error('wrong verifier');
+              }
+            };
+            await assert.rejects(
+              context.runKeyActionMutation(journey, io),
+              context.KeyActionCardError
+            );
+            assert.equal(mutationCalls, 1);
+            assert.equal(serviceReads, 1);
+            assert.equal(keyReads, 1);
+            assert.equal(journey.effect.resource.keyId, 'key-created');
+            assert.equal(journey.phase, 'verification_error');
+            assert.equal(journey.error.includes('raw upstream secret detail'), false);
+            assert.equal(JSON.stringify(journeyCard).includes('nyxid_ag_one_time_value'), false);
+            await context.runKeyActionReadBack(journey, io);
+            assert.equal(mutationCalls, 1, 'read-back retry must not repeat mutation');
+            assert.equal(serviceReads, 1, 'read-back retry must not repeat service validation');
+            assert.equal(keyReads, 2);
+            assert.equal(journey.browserVerified, true);
+            assert.throws(
+              () => context.keyActionDialogCompletedResource(journey),
+              context.KeyActionCardError
+            );
+            assert.equal(context.keyActionDialogCanClose(journey), false);
+            journey.savedConfirmed = true;
+            assert.deepEqual(JSON.parse(JSON.stringify(
+              context.keyActionDialogCompletedResource(journey)
+            )), {key:{keyId:'key-created'}});
+            assert.equal(context.keyActionDialogCanClose(journey), true);
+            context.clearKeyActionDialogState(journey);
+            assert.equal(journey.effect, null);
+            assert.equal(journey.browserVerified, false);
+            assert.equal(JSON.stringify(journey).includes('nyxid_ag_one_time_value'), false);
+
+            const rotateRequest = {
+              ...request,actionRequestId:'action-rotate',action:'key.rotate',
+              params:{keyId:'key-predecessor'}
+            };
+            const rotateJourney = context.createKeyActionDialogState({
+              request:rotateRequest,status:'ready',busy:false,error:'',note:'',report:null,
+              effectKeyId:'',replayed:null,requestedAt:'',browserVerified:false
+            });
+            let rotateVerifierCalls = 0;
+            await context.runKeyActionMutation(rotateJourney, {
+              async readService() { throw new Error('rotate must not read services'); },
+              verifyService() { throw new Error('rotate must not verify services'); },
+              async mutate() {
+                return {resource:{keyId:'key-successor'},replayed:true,
+                  requestedAt:'2026-08-13T08:00:00Z'};
+              },
+              async readKey(keyId) { return {id:keyId}; },
+              verifyCreate() { throw new Error('wrong verifier'); },
+              verifyRotate(candidate, effectValue, snapshot) {
+                rotateVerifierCalls += 1;
+                assert.equal(candidate.params.keyId, 'key-predecessor');
+                assert.equal(effectValue.resource.keyId, snapshot.id);
+              }
+            });
+            assert.equal(rotateVerifierCalls, 1);
+            assert.equal(rotateJourney.effect.replayed, true);
+            assert.equal(Object.hasOwn(rotateJourney.effect, 'fullKey'), false);
+            assert.equal(rotateJourney.savedConfirmed, false);
+            assert.equal(rotateJourney.browserVerified, true);
+            assert.equal(context.keyActionDialogCanClose(rotateJourney), true);
+            assert.deepEqual(JSON.parse(JSON.stringify(
+              context.keyActionDialogCompletedResource(rotateJourney)
+            )), {key:{keyId:'key-successor'}});
+            })().catch((error) => {
+              console.error(error);
+              process.exitCode = 1;
+            });
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_KeyActionRecovery_ShouldProjectPendingAndRecentSafeActions()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const assets = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+            const context = { structuredClone, TextDecoder, URL, console };
+            vm.createContext(context);
+            vm.runInContext(assets.protocol.replace(/^export /gm, ''), context);
+            vm.runInContext(assets.actorState
+              .replace(/^import[^;]+;\s*/m, '')
+              .replace(/^export /gm, ''), context);
+            const start = assets.app.indexOf('function actorStateWithActionHistory(');
+            const end = assets.app.indexOf('\nasync function refreshActorState(', start);
+            assert.notEqual(start, -1, 'action recovery helper must exist');
+            assert.notEqual(end, -1, 'action recovery helper boundary must exist');
+            vm.runInContext(assets.app.slice(start, end), context);
+
+            const pending = {
+              schemaVersion:4,actionRequestId:'action-create',originTurnId:'turn-alpha',
+              taskId:'task-alpha',stepId:'step-create',action:'key.create',
+              request:{schemaVersion:4,actorId:'conversation-alpha',originTurnId:'turn-alpha',
+                taskId:'task-alpha',stepId:'step-create',actionRequestId:'action-create',
+                action:'key.create',params:{
+                name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha']
+              }},reports:[],postconditionResult:null
+            };
+            const recent = {
+              schemaVersion:4,actionRequestId:'action-rotate',originTurnId:'turn-alpha',
+              taskId:'task-alpha',stepId:'step-rotate',action:'key.rotate',
+              request:{schemaVersion:4,actorId:'conversation-alpha',originTurnId:'turn-alpha',
+                taskId:'task-alpha',stepId:'step-rotate',actionRequestId:'action-rotate',
+                action:'key.rotate',params:{keyId:'key-predecessor'}},
+              reports:[{disposition:'completed',resource:{key:{keyId:'key-successor'}}}],
+              postconditionResult:{verified:true,actionRequestId:'action-rotate',disposition:'completed',
+                resource:{key:{keyId:'key-successor'}}}
+            };
+            const envelope = context.actorStateWithActionHistory({
+              status:'current',stateVersion:7,snapshot:{actorId:'conversation-alpha',
+                pendingActions:[pending],recentActions:[recent]}
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(
+              envelope.snapshot.pendingActions.map(action => action.actionRequestId)
+            )), ['action-create','action-rotate']);
+            assert.deepEqual(JSON.parse(JSON.stringify(envelope.snapshot.recentActions)), [recent]);
+            assert.equal(JSON.stringify(envelope).includes('fullKey'), false);
+            const entry = {actorId:'conversation-alpha',actionFrameCache:new Map()};
+            context.restoreCurrentStateActionRequests(entry, envelope);
+            assert.equal(entry.actionFrameCache.get('action-create').action, 'key.create');
+            assert.deepEqual(JSON.parse(JSON.stringify(
+              entry.actionFrameCache.get('action-create').params
+            )), {name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha']});
+            assert.equal(entry.actionFrameCache.get('action-rotate').action, 'key.rotate');
+
+            const mismatched = context.actorStateWithActionHistory({
+              status:'current',stateVersion:8,snapshot:{actorId:'conversation-alpha',pendingActions:[{
+                ...pending,actionRequestId:'action-other'
+              }],recentActions:[]}
+            });
+            context.restoreCurrentStateActionRequests(entry, mismatched);
+            assert.equal(entry.actionFrameCache.has('action-other'), false);
+            const wrongOwner = context.actorStateWithActionHistory({
+              status:'current',stateVersion:9,snapshot:{actorId:'conversation-other',
+                pendingActions:[pending],recentActions:[]}
+            });
+            const wrongOwnerEntry = {actorId:'conversation-alpha',actionFrameCache:new Map()};
+            context.restoreCurrentStateActionRequests(wrongOwnerEntry, wrongOwner);
+            assert.equal(wrongOwnerEntry.actionFrameCache.size, 0);
+            assert.equal(JSON.stringify([...entry.actionFrameCache.values()]).includes('fullKey'), false);
+            """;
+
+        var input = System.Text.Json.JsonSerializer.Serialize(new { app, actorState, protocol });
+        var result = await RunNodeAsync(script, input);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
     public async Task WorkflowStudio_AssistantAssets_ShouldShipNyxIdV4FeatureParity()
     {
         var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
@@ -172,7 +915,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
         var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
 
-        app.Should().Contain("import \"./transport.js?v=20260807-m40-thread-polish\"");
+        app.Should().Contain("verifyKeyCreateReadBack,");
+        app.Should().Contain("verifyKeyRotateReadBack,");
+        app.Should().Contain("verifyPersonalServiceReadBack,");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -186,6 +931,17 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().Contain("已受理，等待 Actor 确认");
         app.Should().Contain("async function submitApproval(");
         app.Should().Contain("async function submitActionContinuation(");
+        app.Should().Contain("function createKeyActionCard(");
+        app.Should().Contain("function renderKeyActionCard(");
+        app.Should().Contain("function createKeyActionDialogState(");
+        app.Should().Contain("function openKeyActionDialog(");
+        app.Should().Contain("function renderKeyActionDialog(");
+        app.Should().Contain("function closeKeyActionDialog(");
+        app.Should().Contain("export function createKeyActionIo(");
+        app.Should().Contain("async function runKeyActionMutation(");
+        app.Should().Contain("async function runKeyActionReadBack(");
+        app.Should().Contain("renderActionCard(card);");
+        app.Should().Contain("window.addEventListener(\"pagehide\"");
         app.Should().Contain("async function selectAttachment(");
         app.Should().Contain("conversationStates: new Map()");
         protocol.Should().Contain("export function normalizeFrame(");
@@ -212,6 +968,10 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("id=\"needsYouFilterButton\"");
         html.Should().NotContain("id=\"taskPhaseList\"");
         html.Should().Contain("id=\"composerInputRequest\"");
+        html.Should().Contain("<dialog class=\"key-action-dialog\" id=\"keyActionDialog\"");
+        html.Should().Contain("id=\"keyActionSecretInput\"");
+        html.Should().Contain("id=\"keyActionSavedConfirm\"");
+        html.Should().Contain("id=\"copyKeyActionSecretButton\"");
         html.Should().Contain("class=\"hidden\" id=\"eventsTabButton\"");
         html.Should().Contain("/workflow/studio/assets/vendor/lucide.min.js");
         html.Should().Contain("/workflow/studio/assets/vendor/marked.min.js");
@@ -221,6 +981,15 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         marked.Should().Contain("marked v15.0.12");
         purify.Should().Contain("DOMPurify 3.2.6");
         styles.Should().Contain(".connect-card");
+        styles.Should().Contain(".key-action-dialog");
+        styles.Should().Contain(".key-action-secret-row");
+        styles.Should().Contain(".key-action-dialog-actions");
+        styles.Should().Contain("""
+            .key-action-dialog-actions {
+              height: auto;
+              min-height: 58px;
+              flex: 0 0 auto;
+            """);
         styles.Should().Contain(".readiness-panel");
         styles.Should().Contain(".needs-you-panel");
         styles.Should().Contain(".history-filter");
@@ -258,13 +1027,19 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260808-m42-card-scale-tighten");
-        html.Should().Contain("styles.css?v=20260808-m42-card-scale-tighten");
-        app.Should().Contain("transport.js?v=20260807-m40-thread-polish");
+        html.Should().Contain("app.js?v=20260813-p0-key-actions");
+        html.Should().Contain("styles.css?v=20260813-p0-key-actions");
+        html.Should().Contain("vendor/lucide.min.js?v=20260808-m42-card-scale-tighten");
+        html.Should().Contain("vendor/marked.min.js?v=20260808-m42-card-scale-tighten");
+        html.Should().Contain("vendor/purify.min.js?v=20260808-m42-card-scale-tighten");
+        app.Should().Contain("transport.js?v=20260813-p0-key-actions");
+        app.Should().Contain("protocol.js?v=20260813-p0-key-actions");
+        app.Should().Contain("blocks.js?v=20260813-p0-key-actions");
+        app.Should().Contain("actor-state.js?v=20260813-p0-key-actions");
         app.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
         transport.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
-        actorState.Should().Contain("protocol.js?v=20260807-m40-thread-polish");
-        blocks.Should().Contain("protocol.js?v=20260807-m40-thread-polish");
+        actorState.Should().Contain("protocol.js?v=20260813-p0-key-actions");
+        blocks.Should().Contain("protocol.js?v=20260813-p0-key-actions");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -1097,23 +1872,40 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
         var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
 
-        var entryVersions = System.Text.RegularExpressions.Regex.Matches(
+        var firstPartyEntryVersions = System.Text.RegularExpressions.Regex.Matches(
                 html,
-                @"\.(?:js|css)\?v=([A-Za-z0-9-]+)")
+                @"/workflow/studio/assets/(?:app\.js|styles\.css)\?v=([A-Za-z0-9-]+)")
             .Select(match => match.Groups[1].Value)
             .ToList();
-        var transitiveVersions = new[] { app, transport, actorState, blocks }
+        var vendorEntryVersions = System.Text.RegularExpressions.Regex.Matches(
+                html,
+                @"/workflow/studio/assets/vendor/[^""?]+\?v=([A-Za-z0-9-]+)")
+            .Select(match => match.Groups[1].Value)
+            .ToList();
+        var changedTransitiveVersions = new[] { app, actorState, blocks }
             .SelectMany(source => System.Text.RegularExpressions.Regex.Matches(
                 source,
-                @"\.(?:js|css)\?v=([A-Za-z0-9-]+)")
+                @"(?:transport|protocol|blocks|actor-state)\.js\?v=([A-Za-z0-9-]+)")
+                .Select(match => match.Groups[1].Value))
+            .ToList();
+        var stableTransitiveVersions = new[] { app, transport }
+            .SelectMany(source => System.Text.RegularExpressions.Regex.Matches(
+                source,
+                @"readiness\.js\?v=([A-Za-z0-9-]+)")
                 .Select(match => match.Groups[1].Value))
             .ToList();
 
-        entryVersions.Should().NotBeEmpty();
-        entryVersions.Should().OnlyContain(static version =>
+        firstPartyEntryVersions.Should().HaveCount(2);
+        firstPartyEntryVersions.Should().OnlyContain(static version =>
+            version == "20260813-p0-key-actions");
+        vendorEntryVersions.Should().HaveCount(3);
+        vendorEntryVersions.Should().OnlyContain(static version =>
             version == "20260808-m42-card-scale-tighten");
-        transitiveVersions.Should().NotBeEmpty();
-        transitiveVersions.Should().OnlyContain(static version =>
+        changedTransitiveVersions.Should().NotBeEmpty();
+        changedTransitiveVersions.Should().OnlyContain(static version =>
+            version == "20260813-p0-key-actions");
+        stableTransitiveVersions.Should().HaveCount(2);
+        stableTransitiveVersions.Should().OnlyContain(static version =>
             version == "20260807-m40-thread-polish");
         html.Should().Contain("styles.css?v=");
         html.Should().Contain("app.js?v=");

@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260807-m40-thread-polish";
+import { validateActionRequest } from "./protocol.js?v=20260813-p0-key-actions";
 
 // Assistant prose is always Markdown text. Executable cards are built only
 // from actor-authored, schema-v4 action requests.
@@ -80,6 +80,60 @@ export function connectCardSteps(serviceName, authKind) {
     {
       title: "向 Aevatar 报告结果并等待 actor 验证",
       body: "连接结果只是继续信号；actor 确认后才会显示任务成功。",
+      done: false,
+    },
+  ];
+}
+
+export function buildKeyActionCardBlock(actionRequest) {
+  const request = validateActionRequest(actionRequest);
+  const create = request.action === "key.create";
+  if (!create && request.action !== "key.rotate") {
+    throw new TypeError("Key action card requires a key action request.");
+  }
+  return {
+    type: "key_action_card",
+    block_id: request.actionRequestId,
+    action: request.action,
+    identity: {
+      actorId: request.actorId,
+      originTurnId: request.originTurnId,
+      taskId: request.taskId,
+      stepId: request.stepId,
+      actionRequestId: request.actionRequestId,
+    },
+    title: create ? "创建 API key" : "轮换 API key",
+    subtitle: create
+      ? `${request.params.name} · ${request.params.platform}`
+      : request.params.keyId,
+    facts: create
+      ? [
+          { label: "名称", value: request.params.name },
+          { label: "平台", value: request.params.platform },
+          { label: "允许的 Services", value: request.params.allowedServiceIds.join(", ") },
+        ]
+      : [{ label: "原 Key ID", value: request.params.keyId }],
+    state: "ready",
+    steps: keyActionCardSteps(),
+    footer: "完整密钥仅在当前对话框显示一次 · Aevatar 只接收 keyId",
+  };
+}
+
+export function keyActionCardSteps() {
+  return [
+    {
+      title: "执行 NyxID 密钥操作",
+      body: "浏览器直接调用 NyxID；完整密钥不会发送给 Aevatar。",
+      done: false,
+    },
+    {
+      title: "精确读取并确认密钥",
+      body: "读取同一 key identity，验证最小权限，并确认一次性密钥已安全保存。",
+      done: false,
+    },
+    {
+      title: "报告 key reference 并等待 Actor 验证",
+      body: "仅报告 keyId；Actor postcondition 精确匹配后才显示成功。",
       done: false,
     },
   ];

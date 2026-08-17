@@ -3460,6 +3460,208 @@ summary:focus-visible {
   padding: 0 15px;
 }
 
+.key-action-card-facts,
+.key-action-dialog-facts {
+  margin: 0;
+}
+
+.key-action-card-fact,
+.key-action-dialog-fact {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(112px, 0.34fr) minmax(0, 1fr);
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+}
+
+.key-action-card-fact:first-child,
+.key-action-dialog-fact:first-child {
+  border-top: 1px solid var(--border);
+}
+
+.key-action-card-fact dt,
+.key-action-dialog-fact dt {
+  color: var(--tertiary);
+  font-size: 11px;
+}
+
+.key-action-card-fact dd,
+.key-action-dialog-fact dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  text-align: right;
+  word-break: break-word;
+}
+
+.key-action-dialog {
+  width: min(620px, calc(100% - 48px));
+  max-height: min(760px, calc(100dvh - 48px));
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  color: var(--text);
+  padding: 0;
+  box-shadow: var(--shadow);
+}
+
+.key-action-dialog::backdrop {
+  background: rgba(24, 24, 27, 0.46);
+  backdrop-filter: blur(2px);
+}
+
+.key-action-dialog-layout {
+  display: flex;
+  max-height: inherit;
+  flex-direction: column;
+}
+
+.key-action-dialog-body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.key-action-dialog-description,
+.key-action-dialog-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.key-action-dialog-facts {
+  border-bottom: 0;
+}
+
+.key-action-dialog-fact {
+  padding-right: 2px;
+  padding-left: 2px;
+}
+
+.key-action-dialog-status {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 9px 11px;
+}
+
+.key-action-secret-panel,
+.key-action-replay-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 12px;
+}
+
+.key-action-secret-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.key-action-secret-heading strong,
+.key-action-replay-panel strong {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.key-action-secret-heading span,
+.key-action-replay-panel span {
+  color: var(--tertiary);
+  font-size: 11px;
+}
+
+.key-action-secret-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 8px;
+}
+
+.key-action-secret-row input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.key-action-secret-row .icon-button {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  background: var(--panel);
+}
+
+.key-action-replay-panel {
+  display: grid;
+  gap: 5px;
+}
+
+.key-action-replay-panel code {
+  min-width: 0;
+  color: var(--text-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.key-action-saved-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--text-soft);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.key-action-saved-confirmation input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.key-action-dialog-error {
+  border: 1px solid color-mix(in srgb, var(--error) 30%, var(--border));
+  border-radius: var(--radius);
+  background: var(--error-soft);
+  color: var(--error);
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.key-action-dialog-actions {
+  height: auto;
+  min-height: 58px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.key-action-dialog-actions .secondary-button:first-child {
+  margin-right: auto;
+}
+
 .toast {
   position: fixed;
   right: 18px;
@@ -5113,11 +5315,46 @@ body:has(.settings-dialog[open]) #servicesButton,
     width: calc(100% - 24px);
     max-height: calc(100dvh - 24px);
   }
+
+  .key-action-dialog {
+    width: calc(100% - 24px);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .key-action-dialog-actions > button {
+    min-width: min(150px, 100%);
+    flex: 1 1 calc(50% - 8px);
+  }
+
+  .key-action-dialog-actions .secondary-button:first-child {
+    margin-right: 0;
+  }
 }
 
 @media (max-width: 420px) {
   .connection-pill {
     width: 32px;
+  }
+
+  .key-action-card-fact,
+  .key-action-dialog-fact {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .key-action-card-fact dd,
+  .key-action-dialog-fact dd {
+    text-align: left;
+  }
+
+  .key-action-secret-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .key-action-dialog-actions > button {
+    flex-basis: 100%;
   }
 }
 

@@ -409,7 +409,8 @@ export function unpackAny(payload) {
 export function validateActionRequest(payload) {
   const value = requireObject(unpackAny(payload), "NyxID action request must be an object.");
   assertAllowedKeys(value, ACTION_REQUEST_KEYS);
-  if (value.schemaVersion !== 4 || value.action !== "service.connect") {
+  if (value.schemaVersion !== 4 ||
+      !["service.connect", "key.create", "key.rotate"].includes(value.action)) {
     throw new ProtocolValidationError(
       "Unsupported NyxID action request.",
       "NYXID_ACTION_UNSUPPORTED",
@@ -419,12 +420,16 @@ export function validateActionRequest(payload) {
   const identity = Object.fromEntries(
     IDENTITY_KEYS.map((key) => [key, validateIdentity(value[key])]),
   );
-  const params = validateServiceConnectParams(value.params);
+  const params = value.action === "service.connect"
+    ? validateServiceConnectParams(value.params)
+    : value.action === "key.create"
+      ? validateKeyCreateParams(value.params)
+      : validateKeyRotateParams(value.params);
   rejectSecretBearingInput({ ...identity, params });
   return deepFreeze({
     schemaVersion: 4,
     ...identity,
-    action: "service.connect",
+    action: value.action,
     params,
   });
 }
@@ -466,10 +471,16 @@ export function validateActionContinuation(input, { expectedAction = null } = {}
     }
 
     const resource = validateActionResource(report.resource);
-    if (expectedAction === "service.connect" &&
-        report.disposition === "completed" &&
-        (!resource || !Object.prototype.hasOwnProperty.call(resource, "userService"))) {
-      throw invalidActionResource();
+    if (report.disposition === "completed") {
+      const expectedVariant = expectedAction === "service.connect"
+        ? "userService"
+        : ["key.create", "key.rotate"].includes(expectedAction)
+          ? "key"
+          : null;
+      if (expectedVariant &&
+          (!resource || !Object.prototype.hasOwnProperty.call(resource, expectedVariant))) {
+        throw invalidActionResource();
+      }
     }
     return {
       actionRequestId,
@@ -538,6 +549,31 @@ function validateServiceConnectParams(input) {
   return hasCatalog
     ? { catalogService: validateCatalogService(value.catalogService) }
     : { customService: validateCustomService(value.customService) };
+}
+
+function validateKeyCreateParams(input) {
+  const value = requireObject(input, "Key create params must be an object.");
+  assertAllowedKeys(value, ["name", "platform", "allowedServiceIds"]);
+  if (!Array.isArray(value.allowedServiceIds) ||
+      value.allowedServiceIds.length < 1 ||
+      value.allowedServiceIds.length > 64) {
+    throw invalidActionVariant();
+  }
+  const allowedServiceIds = value.allowedServiceIds.map(validateIdentity);
+  if (new Set(allowedServiceIds).size !== allowedServiceIds.length) {
+    throw invalidActionVariant();
+  }
+  return {
+    name: validateBoundedString(value.name, 200),
+    platform: validateBoundedString(value.platform, 100),
+    allowedServiceIds,
+  };
+}
+
+function validateKeyRotateParams(input) {
+  const value = requireObject(input, "Key rotate params must be an object.");
+  assertAllowedKeys(value, ["keyId"]);
+  return { keyId: validateIdentity(value.keyId) };
 }
 
 function validateCatalogService(input) {

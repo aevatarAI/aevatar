@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="only light" />
     <meta name="supported-color-schemes" content="light" />
     <title>Aevatar Studio</title>
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260808-m42-card-scale-tighten" />
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260813-p0-key-actions" />
     <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260808-m42-card-scale-tighten"></script>
     <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260808-m42-card-scale-tighten"></script>
     <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260808-m42-card-scale-tighten"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260808-m42-card-scale-tighten"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260813-p0-key-actions"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -364,6 +364,86 @@
           <button class="primary-button" type="submit">完成</button>
         </footer>
       </form>
+    </dialog>
+
+    <dialog class="key-action-dialog" id="keyActionDialog"
+      aria-labelledby="keyActionDialogTitle"
+      aria-describedby="keyActionDialogDescription keyActionDialogStatus"
+    >
+      <div class="key-action-dialog-layout">
+        <header class="dialog-header">
+          <div>
+            <span class="eyebrow">NyxID key action</span>
+            <h2 id="keyActionDialogTitle">API key 操作</h2>
+          </div>
+          <button
+            class="icon-button"
+            id="closeKeyActionDialogButton"
+            type="button"
+            aria-label="关闭密钥操作"
+            title="关闭"
+          >
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+
+        <div class="dialog-body key-action-dialog-body">
+          <p class="key-action-dialog-description" id="keyActionDialogDescription"></p>
+          <dl class="key-action-dialog-facts" id="keyActionDialogFacts"></dl>
+
+          <div class="key-action-dialog-status" id="keyActionDialogStatus" role="status" aria-live="polite"></div>
+
+          <section class="key-action-secret-panel hidden" id="keyActionSecretPanel" aria-labelledby="keyActionSecretLabel">
+            <div class="key-action-secret-heading">
+              <strong id="keyActionSecretLabel">一次性密钥</strong>
+              <span>关闭后无法再次查看</span>
+            </div>
+            <div class="key-action-secret-row">
+              <input
+                id="keyActionSecretInput"
+                type="text"
+                readonly
+                autocomplete="off"
+                spellcheck="false"
+                aria-label="一次性 API key"
+              />
+              <button
+                class="icon-button"
+                id="copyKeyActionSecretButton"
+                type="button"
+                aria-label="复制一次性 API key"
+                title="复制"
+              >
+                <i data-lucide="copy"></i>
+              </button>
+            </div>
+          </section>
+
+          <section class="key-action-replay-panel hidden" id="keyActionReplayPanel" aria-labelledby="keyActionReplayTitle">
+            <strong id="keyActionReplayTitle">已恢复密钥操作</strong>
+            <span>原始一次性密钥不可恢复；将继续验证同一个 key identity。</span>
+            <code id="keyActionReplayKeyId"></code>
+          </section>
+
+          <label class="key-action-saved-confirmation hidden" id="keyActionSavedConfirmRow">
+            <input id="keyActionSavedConfirm" type="checkbox" />
+            <span>我已将一次性密钥保存到安全位置</span>
+          </label>
+
+          <div class="key-action-dialog-error hidden" id="keyActionDialogError" role="alert"></div>
+        </div>
+
+        <footer class="dialog-footer key-action-dialog-actions">
+          <button class="secondary-button" id="cancelKeyActionButton" type="button">取消操作</button>
+          <button class="secondary-button hidden" id="retryKeyActionReadBackButton" type="button">
+            重试读取
+          </button>
+          <button class="primary-button" id="executeKeyActionButton" type="button">执行</button>
+          <button class="primary-button hidden" id="completeKeyActionButton" type="button">
+            报告并等待验证
+          </button>
+        </footer>
+      </div>
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite">
