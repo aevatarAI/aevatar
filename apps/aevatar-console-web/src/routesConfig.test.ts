@@ -45,10 +45,21 @@ describe("console routes", () => {
   it("keeps scoped Team navigation as the default resource route model", () => {
     const routes = loadRoutes();
 
-    expect(findRoute(routes, "/chat").hideInMenu).toBe(false);
-    expect(findRoute(routes, "/chat").name).toBe("Chat");
-    expect(findRoute(routes, "/chat").menuGroupKey).toBe("chat");
-    expect(findRoute(routes, "/chat").icon).toBeUndefined();
+    expect(findRoute(routes, "/chat").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/chat").component).toBe("./ai/legacy-chat");
+    expect(findRoute(routes, "/chat").parentKeys).toEqual(["/ai"]);
+    expect(findRoute(routes, "/ai").hideInMenu).toBe(false);
+    expect(findRoute(routes, "/ai").name).toBe("AI");
+    expect(findRoute(routes, "/ai").menuGroupKey).toBe("ai");
+    expect(findRoute(routes, "/ai/chat").component).toBe("./ai/chat");
+    expect(findRoute(routes, "/ai/chat").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/ai/chat").parentKeys).toEqual(["/ai"]);
+    expect(findRoute(routes, "/ai/agents").component).toBe("./ai/agents");
+    expect(findRoute(routes, "/ai/agents").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/ai/agents").parentKeys).toEqual(["/ai"]);
+    expect(findRoute(routes, "/ai/models").component).toBe("./ai/models");
+    expect(findRoute(routes, "/ai/models").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/ai/models").parentKeys).toEqual(["/ai"]);
     expect(findRoute(routes, "/scopes").hideInMenu).toBe(false);
     expect(findRoute(routes, "/studio").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/runs").hideInMenu).toBeUndefined();
@@ -56,7 +67,7 @@ describe("console routes", () => {
     expect(findRoute(routes, "/scopes/overview").hideInMenu).toBe(true);
     expect(findRoute(routes, "/scopes").name).toBe("My Teams");
     expect(findRoute(routes, "/scopes").component).toBe("./teams");
-    expect(findRouteIndex(routes, "/chat")).toBeLessThan(
+    expect(findRouteIndex(routes, "/ai")).toBeLessThan(
       findRouteIndex(routes, "/scopes"),
     );
     expect(hasRoute(routes, "/teams")).toBe(false);

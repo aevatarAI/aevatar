@@ -1,5 +1,12 @@
 **/bin/
 **/obj/
+**/node_modules/
+**/dist/
+**/coverage/
+**/test-results/
+**/.umi*/
+**/.env
+**/.env.*
 **/.DS_Store
 **/.idea/
 **/.vscode/

@@ -261,6 +261,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     public async Task ListActivityRunsForScopeAsync_ShouldRepresentMissingFactsExplicitly()
     {
         var snapshot = Snapshot("actor-legacy", CallerScope, WorkflowRunCompletionStatus.Running, updated: 300);
+        snapshot.RunId = string.Empty;
         var currentState = new FakeCurrentStateQueryPort
         {
             PageResult = new WorkflowActorCurrentStatePage([snapshot], null, null),
@@ -468,9 +469,19 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     [Fact]
     public async Task GetRunForScopeAsync_ShouldReturnReconstructedTimeline_WhenOwned()
     {
+        var snapshot = Snapshot(
+            "run-alpha",
+            CallerScope,
+            WorkflowRunCompletionStatus.Completed,
+            started: 100,
+            updated: 300,
+            actorId: "actor-alpha");
+        snapshot.WorkflowId = "wf-alpha";
+        snapshot.CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UnixEpoch.AddSeconds(220));
+        snapshot.DurationMs = 120_000;
         var currentState = new FakeCurrentStateQueryPort
         {
-            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
+            SingleResult = snapshot,
         };
         var report = new WorkflowRunReport
         {
@@ -493,10 +504,18 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var artifact = new FakeArtifactQueryPort { Report = report };
         var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
 
-        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-alpha");
 
         detail.Should().NotBeNull();
-        detail!.Summary.RunId.Should().Be("run-1");
+        detail!.Summary.RunId.Should().Be("run-alpha");
+        detail.Summary.WorkflowId.Should().Be("wf-alpha");
+        detail.Summary.StartedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(100));
+        detail.Summary.CompletedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(220));
+        detail.Summary.DurationMs.Should().Be(120_000);
+        currentState.RunGetRequests.Should().ContainSingle().Which.Should().Be("run-alpha");
+        currentState.GetRequests.Should().BeEmpty();
+        artifact.ReportRequests.Should().ContainSingle().Which.Should().Be("actor-alpha");
+        artifact.GraphRequests.Should().ContainSingle().Which.Should().Be("actor-alpha");
         detail.Timeline.Select(x => x.Kind).Should().ContainInOrder(
             "RunStarted", "StepStarted", "Message", "ToolCall", "StepFinished", "RunFinished");
 
@@ -515,6 +534,29 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         toolEvent.ToolCall.ArgumentsJson.Should().Be("{\"q\":\"x\"}");
         toolEvent.ToolCall.ResultJson.Should().Be("{\"hits\":3}");
         toolEvent.ToolCall.Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldNotTreatActorIdAsRunId()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            SingleResult = Snapshot(
+                "run-alpha",
+                CallerScope,
+                WorkflowRunCompletionStatus.Running,
+                actorId: "actor-alpha"),
+        };
+        var artifact = new FakeArtifactQueryPort();
+        var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "actor-alpha");
+
+        detail.Should().BeNull();
+        currentState.RunGetRequests.Should().ContainSingle().Which.Should().Be("actor-alpha");
+        currentState.GetRequests.Should().BeEmpty();
+        artifact.ReportRequests.Should().BeEmpty();
+        artifact.GraphRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1547,7 +1589,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         detail!.Summary.RunId.Should().Be("run-foreign");
         detail.Summary.ScopeId.Should().Be(OtherScope);
         detail.FinalOutput.Should().Be("done");
-        currentState.GetRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
+        currentState.RunGetRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
         artifact.ReportRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
     }
 
@@ -1588,7 +1630,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
 
         graph.Should().NotBeNull();
         graph!.RootNodeId.Should().Be("run-foreign");
-        currentState.GetRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
+        currentState.RunGetRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
         artifact.GraphRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
     }
 
@@ -1611,11 +1653,13 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         string scopeId,
         WorkflowRunCompletionStatus status,
         long started = 0,
-        long updated = 0)
+        long updated = 0,
+        string? actorId = null)
     {
         var snapshot = new WorkflowActorSnapshot
         {
-            ActorId = runId,
+            ActorId = actorId ?? runId,
+            RunId = runId,
             ScopeId = scopeId,
             WorkflowName = "wf-" + runId,
             CompletionStatus = status,
@@ -1709,6 +1753,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         public WorkflowActorCurrentStateListQuery? LastPageQuery { get; private set; }
         public List<WorkflowActorCurrentStateListQuery> PageQueries { get; } = [];
         public List<string> GetRequests { get; } = [];
+        public List<string> RunGetRequests { get; } = [];
 
         public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
         {
@@ -1722,6 +1767,22 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
 
             return Task.FromResult(Snapshots.FirstOrDefault(snapshot =>
                 string.Equals(snapshot.ActorId, actorId, StringComparison.Ordinal)));
+        }
+
+        public Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(
+            string runId,
+            CancellationToken ct = default)
+        {
+            RunGetRequests.Add(runId);
+            if (SingleResult != null)
+            {
+                return Task.FromResult(string.Equals(SingleResult.RunId, runId, StringComparison.Ordinal)
+                    ? SingleResult
+                    : null);
+            }
+
+            return Task.FromResult(Snapshots.FirstOrDefault(snapshot =>
+                string.Equals(snapshot.RunId, runId, StringComparison.Ordinal)));
         }
 
         public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>

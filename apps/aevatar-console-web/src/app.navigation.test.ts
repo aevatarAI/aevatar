@@ -21,33 +21,33 @@ describe("app navigation groups", () => {
     jest.resetModules();
   });
 
-  it("places Chat as a top-level navigation group below Teams", () => {
+  it("places the AI workspace as a top-level navigation group below Teams", () => {
     const groups = loadNavigationGroups();
 
     expect(groups.map((group) => group.label)).toEqual([
       "Teams",
-      "Chat",
+      "AI",
       "Settings",
     ]);
     expect(groups.map((group) => group.labelMessageId)).toEqual([
       "nav.groups.teams",
-      "nav.groups.chat",
+      "nav.groups.ai",
       "nav.groups.settings",
     ]);
-    expect(groups.find((group) => group.key === "chat")?.flattenSingleItem).toBe(true);
-    expect(groups.find((group) => group.key === "chat")?.flattenSingleItemAsGroupLabel).toBe(true);
+    expect(groups.find((group) => group.key === "ai")?.flattenSingleItem).toBe(true);
+    expect(groups.find((group) => group.key === "ai")?.flattenSingleItemAsGroupLabel).toBe(true);
     expect(groups.find((group) => group.key === "teams")?.flattenSingleItem).toBeUndefined();
   });
 
-  it("renders Teams before Chat even when the Chat route is declared first", () => {
+  it("renders Teams before AI even when the AI route is declared first", () => {
     const groupNavigationMenuItems = loadMenuGrouper();
     const groups = loadNavigationGroups();
     const menuItems = groupNavigationMenuItems(
       [
         {
-          menuGroupKey: "chat",
-          name: "Chat",
-          path: "/chat",
+          menuGroupKey: "ai",
+          name: "AI",
+          path: "/ai",
         },
         {
           menuGroupKey: "teams",
@@ -76,7 +76,7 @@ describe("app navigation groups", () => {
 
     expect(menuItems.map((item) => item.path ?? item.key)).toEqual([
       "menu-group:teams",
-      "/chat",
+      "/ai",
       "/settings",
     ]);
     expect(menuItems[0].children?.map((child) => child.path)).toEqual([

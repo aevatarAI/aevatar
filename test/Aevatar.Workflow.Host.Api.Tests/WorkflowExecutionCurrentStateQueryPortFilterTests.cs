@@ -12,6 +12,67 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
 {
     [Fact]
+    public async Task GetWorkflowRunCurrentStateAsync_ShouldQueryTypedRunIdWithoutActorKeyLookup()
+    {
+        var reader = new RecordingCurrentStateReader
+        {
+            Items =
+            [
+                new WorkflowExecutionCurrentStateDocument
+                {
+                    Id = "actor-alpha",
+                    RootActorId = "actor-alpha",
+                    RunId = "run-alpha",
+                    ScopeId = "scope-alpha",
+                },
+            ],
+        };
+        IWorkflowExecutionCurrentStateQueryPort port = CreatePort(reader);
+
+        var snapshot = await port.GetWorkflowRunCurrentStateAsync(" run-alpha ");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.RunId.Should().Be("run-alpha");
+        snapshot.ActorId.Should().Be("actor-alpha");
+        reader.GetKeys.Should().BeEmpty();
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Take.Should().Be(2);
+        ShouldContainStringFilter(
+            reader.LastQuery.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.RunId),
+            ProjectionDocumentFilterOperator.Eq,
+            "run-alpha");
+    }
+
+    [Fact]
+    public async Task GetWorkflowRunCurrentStateAsync_ShouldNotFallBackToActorId()
+    {
+        var reader = new RecordingCurrentStateReader
+        {
+            Items =
+            [
+                new WorkflowExecutionCurrentStateDocument
+                {
+                    Id = "actor-alpha",
+                    RootActorId = "actor-alpha",
+                    RunId = "run-alpha",
+                },
+            ],
+        };
+        IWorkflowExecutionCurrentStateQueryPort port = CreatePort(reader);
+
+        var snapshot = await port.GetWorkflowRunCurrentStateAsync("actor-alpha");
+
+        snapshot.Should().BeNull();
+        reader.GetKeys.Should().BeEmpty();
+        ShouldContainStringFilter(
+            reader.LastQuery!.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.RunId),
+            ProjectionDocumentFilterOperator.Eq,
+            "actor-alpha");
+    }
+
+    [Fact]
     public async Task ListWorkflowActorCurrentStatesAsync_ShouldEmitDeadLetterFilters_ForSingleDefinitionActorId()
     {
         var reader = new RecordingCurrentStateReader();
@@ -247,14 +308,16 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
     private sealed class RecordingCurrentStateReader
         : IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>
     {
+        public IReadOnlyList<WorkflowExecutionCurrentStateDocument> Items { get; init; } = [];
         public ProjectionDocumentQuery? LastQuery { get; private set; }
+        public List<string> GetKeys { get; } = [];
 
         public Task<WorkflowExecutionCurrentStateDocument?> GetAsync(
             string key,
             CancellationToken ct = default)
         {
-            _ = key;
             ct.ThrowIfCancellationRequested();
+            GetKeys.Add(key);
             return Task.FromResult<WorkflowExecutionCurrentStateDocument?>(null);
         }
 
@@ -264,7 +327,10 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
         {
             ct.ThrowIfCancellationRequested();
             LastQuery = query;
-            return Task.FromResult(ProjectionDocumentQueryResult<WorkflowExecutionCurrentStateDocument>.Empty);
+            return Task.FromResult(new ProjectionDocumentQueryResult<WorkflowExecutionCurrentStateDocument>
+            {
+                Items = Items,
+            });
         }
     }
 }

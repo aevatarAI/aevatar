@@ -142,6 +142,32 @@ ASPNETCORE_ENVIRONMENT=PersistentLocal dotnet run --project src/Aevatar.Mainnet.
 
 `Aevatar.Mainnet.Host.Api` 现在是 `aevatar app` 的唯一后端 API 面。当前用户面 contract 已经收敛为 `scope-first`，默认认为一个 `scope` 对应一个对外 service binding；内核仍保留 `service` 级别接口，作为未来扩展到多 service 的基础。
 
+`/ai` 是与 `/admin` 平行的用户 AI 工作区入口。Mainnet Host 的 `/ai` 与
+`/ai/{**path}` 直接返回同源 Console SPA，不做跨 origin 跳转。Mainnet Docker image 会以
+`/ai-assets/` 为 frontend public path 构建 `apps/aevatar-console-web`，再把产物放入
+`Aevatar:AIWorkspace:StaticAssetsPath`（默认 `AIWorkspaceWeb`）。`/login`、`/auth/callback`、
+legacy `/chat`、`/scopes/**` 和 `/settings` 使用同一 SPA document；`/admin` 仍由原 embedded asset 提供。
+部署产物缺失时返回 `503 AI_CONSOLE_UNAVAILABLE`。
+
+`/api/ai/*` 要求认证，并只从唯一、无歧义的 `scope_id` 或 `workflow.scope_id` claim
+确定当前 scope，不接受浏览器通过 route、query 或 body 自报 scope。当前 facade 提供：
+
+- `GET /api/ai/context`
+- `GET /api/ai/overview`
+- `GET /api/ai/agents`
+- `GET /api/ai/models`
+- `GET /api/ai/activity`
+- `GET /api/ai/activity/conversations`
+- `GET /api/ai/activity/runs`
+- `GET /api/ai/activity/runs/{runId}`
+
+这些 query 复用 Agent Profile、user model preference、scope model catalog、Conversation 和
+Workflow Observatory 的既有 Application/query authority；各来源独立暴露可用性、版本与刷新时间，
+不会在 Host 或浏览器内伪造统一版本、统一排序或第二份事实状态。当前 Console Web 导航到 Overview、
+Chat 以及 Agents/Models 基础查询页；Agent 编辑/发布/default 和 Models 独立保存尚未接入。
+Activity API 是后续 Activity/Run Detail 页面的后端基础，Channels 与 Capabilities 仍为规划项。完整边界见
+[`docs/canon/ai-workspace.md`](../../docs/canon/ai-workspace.md)。
+
 Backend Admin 的 Studio 从 `/admin#/studio` 进入。Admin shell 通过 Mainnet-owned
 `/admin/studio` 页面路由装载 canonical Studio 静态资源，并在嵌入时移除 Studio 自带顶栏；
 `/workflow/studio` 仅保留为独立 Studio surface，不再是 Admin 导航的目标。

@@ -8,6 +8,8 @@
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.AIWorkspace.Application\Aevatar.AIWorkspace.Application.csproj" />
+    <ProjectReference Include="..\Aevatar.AIWorkspace.Application.Abstractions\Aevatar.AIWorkspace.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
     <ProjectReference Include="..\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
