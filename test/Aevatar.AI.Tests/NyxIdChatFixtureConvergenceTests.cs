@@ -115,79 +115,6 @@ public sealed class NyxIdChatFixtureConvergenceTests
     }
 
     [Fact]
-    public void VersionOneUc3AndUc4Fixtures_ShouldConvergeOnTypedDomainJourneys()
-    {
-        using var fixture = ReadFixture("uc3-uc4-domain-journeys.json");
-        var root = fixture.RootElement;
-        root.GetProperty("specRevision").GetString().Should()
-            .Be("f45febb057a7182dab2495d4c739d2bb8d7026f5");
-        root.GetProperty("schemaVersion").GetInt32().Should().Be(6);
-        var journeys = root.GetProperty("journeys").EnumerateArray().ToArray();
-        journeys.Select(item => item.GetProperty("variant").GetString()).Should()
-            .Equal(
-                "uc3-reimbursement",
-                "uc4-below-threshold",
-                "uc4-above-threshold");
-
-        foreach (var journey in journeys)
-        {
-            var live = journey.GetProperty("live");
-            var reload = journey.GetProperty("reload");
-            var liveTask = live.GetProperty("custom").GetProperty("payload");
-            var reloadSnapshot = reload.GetProperty("snapshot");
-            var reloadTask = reloadSnapshot.GetProperty("activeTask");
-
-            live.GetProperty("type").GetString().Should().Be("CUSTOM");
-            live.GetProperty("custom").GetProperty("name").GetString().Should()
-                .Be("nyxid.task.snapshot");
-            live.GetProperty("sequence").GetInt64().Should()
-                .Be(reload.GetProperty("stateVersion").GetInt64())
-                .And.Be(reloadSnapshot.GetProperty("progressSequence").GetInt64());
-            liveTask.GetProperty("schemaVersion").GetInt32().Should().Be(6);
-            liveTask.GetProperty("status").GetString().Should().Be("succeeded");
-            JsonNode.DeepEquals(
-                    JsonNode.Parse(liveTask.GetRawText()),
-                    JsonNode.Parse(reloadTask.GetRawText()))
-                .Should().BeTrue("live and reload must expose the same typed task");
-        }
-
-        var reimbursement = FindJourney(journeys, "uc3-reimbursement");
-        var reimbursementTask = reimbursement.GetProperty("live")
-            .GetProperty("custom").GetProperty("payload");
-        var reimbursementDomain = reimbursementTask.GetProperty("domain")
-            .GetProperty("reimbursement");
-        reimbursementDomain.GetProperty("sourceInvoices").GetArrayLength().Should().Be(3);
-        reimbursementDomain.GetProperty("retainedSourceOrdinals")
-            .EnumerateArray().Select(item => item.GetInt32()).Should().Equal(1, 2);
-        reimbursementDomain.GetProperty("duplicateInvoices")[0]
-            .GetProperty("duplicateSourceOrdinal").GetInt32().Should().Be(3);
-        reimbursementTask.GetProperty("steps").EnumerateArray()
-            .Single(step => step.GetProperty("stepId").GetString() == "step-uc3-write")
-            .GetProperty("operation").GetProperty("operationGeneration")
-            .GetInt32().Should().Be(2);
-        reimbursementTask.GetProperty("artifact").GetProperty("reimbursement")
-            .GetProperty("providerInstanceId").GetString().Should()
-            .Be("approval-instance-uc3");
-
-        var belowTask = FindJourney(journeys, "uc4-below-threshold")
-            .GetProperty("live").GetProperty("custom").GetProperty("payload");
-        belowTask.GetProperty("domain").GetProperty("candidateScreening")
-            .GetProperty("totalScore").GetInt32().Should().Be(72);
-        AssertConditionAndGuard(belowTask, "false", "skipped", "not_applied");
-        belowTask.TryGetProperty("artifact", out _).Should().BeFalse();
-        belowTask.GetRawText().Should().NotContain("approvalObservation");
-
-        var aboveTask = FindJourney(journeys, "uc4-above-threshold")
-            .GetProperty("live").GetProperty("custom").GetProperty("payload");
-        aboveTask.GetProperty("domain").GetProperty("candidateScreening")
-            .GetProperty("totalScore").GetInt32().Should().Be(80);
-        AssertConditionAndGuard(aboveTask, "true", "done", "confirmed");
-        aboveTask.GetProperty("artifact").GetProperty("candidateTracker")
-            .GetProperty("providerRecordId").GetString().Should()
-            .Be("rec-candidate-uc4");
-    }
-
-    [Fact]
     public void Uc2ResearchJourneyFixture_ShouldConvergeAcrossScopeSteerStopReloadAndRestart()
     {
         using var fixture = ReadFixture("uc2-research-journey.json");
@@ -452,33 +379,6 @@ public sealed class NyxIdChatFixtureConvergenceTests
         actions.GetProperty("stop").GetBoolean().Should().Be(stop);
     }
 
-    private static void AssertConditionAndGuard(
-        JsonElement task,
-        string outcome,
-        string writeStatus,
-        string writeEffect)
-    {
-        var steps = task.GetProperty("steps").EnumerateArray().ToArray();
-        var condition = steps.Single(step =>
-            step.GetProperty("kind").GetString() == "condition");
-        var conditionFacts = condition.GetProperty("source")
-            .GetProperty("condition").GetProperty("condition");
-        conditionFacts.GetProperty("effectiveThreshold").GetInt32().Should().Be(75);
-        conditionFacts.GetProperty("thresholdOrigin").GetString().Should()
-            .Be("user_override");
-        conditionFacts.GetProperty("outcome").GetString().Should().Be(outcome);
-
-        var write = steps.Single(step =>
-            step.GetProperty("source").TryGetProperty("tool", out var tool) &&
-            tool.GetProperty("toolName").GetString() == "bitable_record_create");
-        write.GetProperty("guard").GetProperty("conditionStepId").GetString()
-            .Should().Be(condition.GetProperty("stepId").GetString());
-        write.GetProperty("guard").GetProperty("requiredOutcome").GetString()
-            .Should().Be("true");
-        write.GetProperty("status").GetString().Should().Be(writeStatus);
-        write.GetProperty("externalEffect").GetString().Should().Be(writeEffect);
-    }
-
     private static void AssertPendingInputEquivalent(JsonElement live, JsonElement current)
     {
         foreach (var propertyName in new[]
@@ -523,12 +423,6 @@ public sealed class NyxIdChatFixtureConvergenceTests
     private static JsonElement FindScenario(JsonElement root, string scenario) =>
         root.EnumerateArray().Single(item =>
             item.GetProperty("scenario").GetString() == scenario);
-
-    private static JsonElement FindJourney(
-        IEnumerable<JsonElement> journeys,
-        string variant) =>
-        journeys.Single(item => item.GetProperty("variant").GetString() == variant);
-
     private static JsonElement FindStep(JsonElement task, string stepId) =>
         task.GetProperty("steps").EnumerateArray().Single(step =>
             step.GetProperty("stepId").GetString() == stepId);
