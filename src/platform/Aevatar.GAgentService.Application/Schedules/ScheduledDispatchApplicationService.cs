@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -133,7 +134,12 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             BuildScheduleCorrelationId(normalized.ScheduleId),
             ct);
         var actorId = await ResolveScheduleActorAsync(normalized.ScheduleId, ct);
-        var admission = await _actorPort.DispatchUpdateAsync(actorId, normalized, dispatch, ct);
+        var admission = await _actorPort.DispatchUpdateAsync(
+            actorId,
+            normalized,
+            dispatch,
+            normalizedContext.ExpectedServiceTarget,
+            ct);
         return CreateMutationReceipt(normalized.ScheduleId, actorId, admission);
     }
 
@@ -146,7 +152,13 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var existing = await EnsureMutableAsync(normalizedScheduleId, context, ct);
         var actorId = await ResolveScheduleActorAsync(existing.Schedule.ScheduleId, ct);
-        var admission = await _actorPort.DispatchEnableAsync(actorId, NormalizeOptional(reason), ct);
+        var expectedTarget = NormalizeMutationContext(context ?? ScheduledDispatchMutationContext.None)
+            .ExpectedServiceTarget;
+        var admission = await _actorPort.DispatchEnableAsync(
+            actorId,
+            NormalizeOptional(reason),
+            expectedTarget,
+            ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
 
@@ -159,7 +171,13 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var existing = await EnsureMutableAsync(normalizedScheduleId, context, ct);
         var actorId = await ResolveScheduleActorAsync(existing.Schedule.ScheduleId, ct);
-        var admission = await _actorPort.DispatchDisableAsync(actorId, NormalizeOptional(reason), ct);
+        var expectedTarget = NormalizeMutationContext(context ?? ScheduledDispatchMutationContext.None)
+            .ExpectedServiceTarget;
+        var admission = await _actorPort.DispatchDisableAsync(
+            actorId,
+            NormalizeOptional(reason),
+            expectedTarget,
+            ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
 
@@ -172,7 +190,13 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var existing = await EnsureMutableAsync(normalizedScheduleId, context, ct);
         var actorId = await ResolveScheduleActorAsync(existing.Schedule.ScheduleId, ct);
-        var admission = await _actorPort.DispatchDeleteAsync(actorId, NormalizeOptional(reason), ct);
+        var expectedTarget = NormalizeMutationContext(context ?? ScheduledDispatchMutationContext.None)
+            .ExpectedServiceTarget;
+        var admission = await _actorPort.DispatchDeleteAsync(
+            actorId,
+            NormalizeOptional(reason),
+            expectedTarget,
+            ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
 
@@ -281,7 +305,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         AdmitRunNowCredentialRequirement(detail.Schedule);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var scheduledFireAt = DateTimeOffset.UtcNow;
-        var admission = await _actorPort.DispatchRunNowAsync(actorId, scheduledFireAt, ct);
+        var admission = await _actorPort.DispatchRunNowAsync(
+            actorId,
+            scheduledFireAt,
+            normalizedContext.ExpectedServiceTarget,
+            ct);
         return new ScheduledDispatchRunNowReceipt(
             normalizedScheduleId,
             actorId,
@@ -927,9 +955,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return new ScheduledDispatchExpectedServiceTarget(
             target.ScheduleKind,
             target.TargetKind,
-            NormalizeRequired(target.ServiceEndpointId, nameof(target.ServiceEndpointId)),
-            NormalizeRequired(target.ServiceId, nameof(target.ServiceId)),
-            NormalizeNullable(target.ServiceKey));
+            NormalizeServiceInvocationIdentity(target.ServiceIdentity),
+            NormalizeRequired(target.ServiceEndpointId, nameof(target.ServiceEndpointId)));
     }
 
     private static ScheduledInvocationAuthorizationOwner NormalizeAuthorizationOwner(
@@ -1315,13 +1342,44 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             schedule.ScheduleKind != expectedTarget.ScheduleKind ||
             schedule.TargetKind != expectedTarget.TargetKind ||
             !string.Equals(schedule.ServiceEndpointId, expectedTarget.ServiceEndpointId, StringComparison.Ordinal) ||
-            !string.Equals(schedule.ServiceId, expectedTarget.ServiceId, StringComparison.Ordinal) ||
-            (expectedTarget.ServiceKey != null &&
-             !string.Equals(schedule.ServiceKey, expectedTarget.ServiceKey, StringComparison.Ordinal)))
+            !ProjectedServiceIdentityEquals(schedule, expectedTarget.ServiceIdentity))
         {
             throw new ScheduledDispatchNotFoundException(scheduleId);
         }
     }
+
+    private static bool ProjectedServiceIdentityEquals(
+        ScheduledDispatchSummary schedule,
+        ServiceIdentity expectedIdentity)
+    {
+        if (!IsEmptyServiceIdentity(schedule.ServiceIdentity))
+            return ServiceIdentityEquals(schedule.ServiceIdentity, expectedIdentity);
+
+        // Documents projected before service_identity was introduced retain the
+        // canonical service key and service id. This compatibility path is only
+        // for workflow-owned routes; generic schedule routes remain fail-closed.
+        return schedule.ScheduleKind == ScheduledDispatchScheduleKind.Workflow &&
+               string.Equals(schedule.ServiceId, expectedIdentity.ServiceId, StringComparison.Ordinal) &&
+               string.Equals(
+                   schedule.ServiceKey,
+                   ServiceKeys.Build(expectedIdentity),
+                   StringComparison.Ordinal);
+    }
+
+    private static bool IsEmptyServiceIdentity(ServiceIdentity? identity) =>
+        identity == null ||
+        (string.IsNullOrEmpty(identity.TenantId) &&
+         string.IsNullOrEmpty(identity.AppId) &&
+         string.IsNullOrEmpty(identity.Namespace) &&
+         string.IsNullOrEmpty(identity.ServiceId));
+
+    private static bool ServiceIdentityEquals(ServiceIdentity? left, ServiceIdentity? right) =>
+        left != null &&
+        right != null &&
+        string.Equals(left.TenantId, right.TenantId, StringComparison.Ordinal) &&
+        string.Equals(left.AppId, right.AppId, StringComparison.Ordinal) &&
+        string.Equals(left.Namespace, right.Namespace, StringComparison.Ordinal) &&
+        string.Equals(left.ServiceId, right.ServiceId, StringComparison.Ordinal);
 
     private async Task<ScheduledDispatchDetail?> GetMutableScheduleAsync(
         string scheduleId,

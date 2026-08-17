@@ -205,6 +205,98 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
     }
 
     [Fact]
+    public async Task LookupCatalogueByWorkflowIdAsync_ShouldReturnCommittedServiceWithoutRunnableDeployment()
+    {
+        const string workflowId = "wf-alpha";
+        var snapshot = CreateServiceSnapshot(
+            "svc-alpha",
+            "Studio Workflow",
+            activeRevisionId: string.Empty,
+            deploymentId: string.Empty,
+            primaryActorId: string.Empty,
+            appId: "studio") with
+        {
+            DeploymentStatus = "inactive",
+        };
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: snapshot);
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                ScopeId,
+                workflowId,
+                "studio",
+                DefaultOptions.ServiceNamespace,
+                "svc-alpha",
+                "Studio Workflow",
+                DateTimeOffset.UtcNow));
+        var service = CreateService(
+            lifecyclePort,
+            new FakeWorkflowActorBindingReader(),
+            descriptorSource);
+
+        var result = await service.LookupCatalogueByWorkflowIdAsync(ScopeId, workflowId);
+
+        result.Status.Should().Be(ScopeWorkflowCatalogueLookupStatus.Found);
+        result.Workflow.Should().NotBeNull();
+        result.Workflow!.WorkflowId.Should().Be(workflowId);
+        result.Workflow.ServiceAppId.Should().Be("studio");
+        result.Workflow.ServiceNamespace.Should().Be(DefaultOptions.ServiceNamespace);
+        result.Workflow.PublishedServiceId.Should().Be("svc-alpha");
+        result.Workflow.DeploymentStatus.Should().Be("inactive");
+        lifecyclePort.LastGetRequest.Should().NotBeNull();
+        lifecyclePort.LastGetRequest!.ServiceId.Should().Be("svc-alpha");
+    }
+
+    [Fact]
+    public async Task LookupCatalogueByWorkflowIdAsync_ShouldReportAmbiguousPublishedServices()
+    {
+        const string workflowId = "wf-alpha";
+        var lifecyclePort = new FakeServiceLifecycleQueryPort();
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                ScopeId,
+                workflowId,
+                "studio",
+                DefaultOptions.ServiceNamespace,
+                "svc-alpha",
+                "Studio Workflow A",
+                DateTimeOffset.UtcNow),
+            new ScopeWorkflowPublishedServiceDescriptor(
+                ScopeId,
+                workflowId,
+                "studio",
+                DefaultOptions.ServiceNamespace,
+                "svc-beta",
+                "Studio Workflow B",
+                DateTimeOffset.UtcNow));
+        var service = CreateService(
+            lifecyclePort,
+            new FakeWorkflowActorBindingReader(),
+            descriptorSource);
+
+        var result = await service.LookupCatalogueByWorkflowIdAsync(ScopeId, workflowId);
+
+        result.Status.Should().Be(ScopeWorkflowCatalogueLookupStatus.Ambiguous);
+        result.Workflow.Should().BeNull();
+        lifecyclePort.LastGetRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LookupCatalogueByWorkflowIdAsync_ShouldNotTreatSameNamedServiceAsPublishedWorkflow()
+    {
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            getResult: CreateServiceSnapshot("wf-missing", "Unrelated Service"));
+        var service = CreateService(
+            lifecyclePort,
+            new FakeWorkflowActorBindingReader());
+
+        var result = await service.LookupCatalogueByWorkflowIdAsync(ScopeId, "wf-missing");
+
+        result.Status.Should().Be(ScopeWorkflowCatalogueLookupStatus.NotFound);
+        result.Workflow.Should().BeNull();
+        lifecyclePort.LastGetRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ListAsync_ShouldIncludeExplicitPublishedServiceDescriptor()
     {
         var snapshot = CreateServiceSnapshot(

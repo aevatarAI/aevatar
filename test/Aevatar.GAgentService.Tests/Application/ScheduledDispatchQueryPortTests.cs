@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -8,6 +9,32 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class ScheduledDispatchQueryPortTests
 {
+    [Fact]
+    public async Task GetAsync_ShouldPreserveProjectedServiceIdentity()
+    {
+        var identity = new ServiceIdentity
+        {
+            TenantId = "scope-alpha",
+            AppId = "app-alpha",
+            Namespace = "workflows",
+            ServiceId = "svc-alpha",
+        };
+        var reader = new RecordingScheduleDocumentReader
+        {
+            Document = new ScheduledDispatchDocument
+            {
+                ScheduleId = "schedule-alpha",
+                ServiceIdentity = identity.Clone(),
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var detail = await port.GetAsync("schedule-alpha");
+
+        detail.Should().NotBeNull();
+        detail!.Schedule.ServiceIdentity.Should().BeEquivalentTo(identity);
+    }
+
     [Fact]
     public async Task ListAsync_ShouldApplyServiceIdentityFilters()
     {
@@ -50,9 +77,10 @@ public sealed class ScheduledDispatchQueryPortTests
     private sealed class RecordingScheduleDocumentReader : IProjectionDocumentReader<ScheduledDispatchDocument, string>
     {
         public ProjectionDocumentQuery? Query { get; private set; }
+        public ScheduledDispatchDocument? Document { get; init; }
 
         public Task<ScheduledDispatchDocument?> GetAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult<ScheduledDispatchDocument?>(null);
+            Task.FromResult(Document);
 
         public Task<ProjectionDocumentQueryResult<ScheduledDispatchDocument>> QueryAsync(
             ProjectionDocumentQuery query,

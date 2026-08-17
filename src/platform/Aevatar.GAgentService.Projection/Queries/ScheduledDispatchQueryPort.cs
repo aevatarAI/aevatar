@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Projection.ReadModels;
 
@@ -265,6 +266,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             OwnerLLMServiceSlug = document.OwnerLlmServiceSlug ?? string.Empty,
             OwnerLLMModel = document.OwnerLlmModel ?? string.Empty,
             ServiceRevisionId = document.ServiceRevisionId ?? string.Empty,
+            ServiceIdentity = document.ServiceIdentity?.Clone() ?? new ServiceIdentity(),
             NyxIdRevocationStatus = document.NyxidRevocationStatus ?? string.Empty,
             VaultRevocationStatus = document.VaultRevocationStatus ?? string.Empty,
         };

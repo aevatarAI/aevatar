@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
@@ -292,9 +293,8 @@ public sealed record ScheduledDispatchMutationContext(
 public sealed record ScheduledDispatchExpectedServiceTarget(
     ScheduledDispatchScheduleKind ScheduleKind,
     ScheduledDispatchTargetKind TargetKind,
-    string ServiceEndpointId,
-    string ServiceId,
-    string? ServiceKey = null);
+    ServiceIdentity ServiceIdentity,
+    string ServiceEndpointId);
 
 public sealed record ScheduledDispatchCredentialAdmissionRequest(
     ScheduledDispatchMutationContext Context,
@@ -430,6 +430,9 @@ public sealed record ScheduledDispatchSummary(
     string CredentialOwnerKind = "",
     string CredentialOwnerSubject = "")
 {
+    [JsonIgnore]
+    public ServiceIdentity ServiceIdentity { get; init; } = new();
+
     public string OwnerLLMRouteKind { get; init; } = "unspecified";
 
     public string OwnerLLMRoute { get; init; } = string.Empty;
@@ -530,6 +533,7 @@ public interface IScheduledDispatchActorPort
         string actorId,
         ScheduledDispatchConfiguration configuration,
         PreparedScheduledDispatchTarget dispatch,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchEnsureAsync(
@@ -541,21 +545,25 @@ public interface IScheduledDispatchActorPort
     Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchDisableAsync(
         string actorId,
         string reason,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchDeleteAsync(
         string actorId,
         string reason,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchBeginTeamAutomationCredentialOperationAsync(

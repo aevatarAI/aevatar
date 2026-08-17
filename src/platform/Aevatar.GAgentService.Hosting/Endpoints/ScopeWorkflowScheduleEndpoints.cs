@@ -25,12 +25,16 @@ internal static class ScopeWorkflowScheduleEndpoints
     {
         group.MapGet("/{scopeId}/workflows/{workflowId}/schedules", List)
             .Produces<ScheduledDispatchListResult>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status403Forbidden)
             .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status409Conflict);
         group.MapPost("/{scopeId}/workflows/{workflowId}/schedules/preview", Preview)
             .Produces<ScheduledDispatchPreview>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest);
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
         group.MapPost("/{scopeId}/workflows/{workflowId}/schedules", Create)
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest)
@@ -39,6 +43,7 @@ internal static class ScopeWorkflowScheduleEndpoints
             .Produces(StatusCodes.Status409Conflict);
         group.MapGet("/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}", Get)
             .Produces<ScheduledDispatchDetail>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status403Forbidden)
             .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status409Conflict);
@@ -50,21 +55,25 @@ internal static class ScopeWorkflowScheduleEndpoints
             .Produces(StatusCodes.Status409Conflict);
         group.MapPost("/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:enable", Enable)
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status403Forbidden)
             .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status409Conflict);
         group.MapPost("/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:disable", Disable)
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status403Forbidden)
             .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status409Conflict);
         group.MapPost("/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:run-now", RunNow)
             .Produces<ScheduledDispatchRunNowReceipt>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status403Forbidden)
             .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status409Conflict);
         group.MapDelete("/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}", Delete)
             .Produces<ScheduledDispatchMutationReceipt>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status403Forbidden)
             .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status409Conflict);
@@ -202,10 +211,18 @@ internal static class ScopeWorkflowScheduleEndpoints
     }
 
     internal static async Task<IResult> Preview(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
         WorkflowSchedulePreviewHttpRequest input,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
         [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
+        var resolved = await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct);
+        if (resolved.Result != null)
+            return resolved.Result;
+
         try
         {
             return Results.Ok(await schedules.PreviewAsync(
@@ -237,6 +254,7 @@ internal static class ScopeWorkflowScheduleEndpoints
             scheduleId,
             input?.Reason ?? string.Empty,
             workflowQueryPort,
+            workflowCataloguePort: null,
             schedules,
             static (service, id, reason, context, token) => service.EnableAsync(id, reason, context, token),
             requireRunnableWorkflow: true,
@@ -249,6 +267,7 @@ internal static class ScopeWorkflowScheduleEndpoints
         string scheduleId,
         WorkflowScheduleStateChangeHttpRequest? input,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        [FromServices] IScopeWorkflowCatalogueCommittedSourcePort workflowCataloguePort,
         [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default) =>
         await ChangeStateAsync(
@@ -258,6 +277,7 @@ internal static class ScopeWorkflowScheduleEndpoints
             scheduleId,
             input?.Reason ?? string.Empty,
             workflowQueryPort,
+            workflowCataloguePort,
             schedules,
             static (service, id, reason, context, token) => service.DisableAsync(id, reason, context, token),
             requireRunnableWorkflow: false,
@@ -271,6 +291,7 @@ internal static class ScopeWorkflowScheduleEndpoints
         [FromQuery] string? reason,
         [FromBody] WorkflowScheduleStateChangeHttpRequest? input,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        [FromServices] IScopeWorkflowCatalogueCommittedSourcePort workflowCataloguePort,
         [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default) =>
         await ChangeStateAsync(
@@ -280,6 +301,7 @@ internal static class ScopeWorkflowScheduleEndpoints
             scheduleId,
             input?.Reason ?? reason ?? string.Empty,
             workflowQueryPort,
+            workflowCataloguePort,
             schedules,
             static (service, id, deleteReason, context, token) => service.DeleteAsync(id, deleteReason, context, token),
             requireRunnableWorkflow: false,
@@ -320,6 +342,7 @@ internal static class ScopeWorkflowScheduleEndpoints
         string scheduleId,
         string reason,
         IScopeWorkflowQueryPort workflowQueryPort,
+        IScopeWorkflowCatalogueCommittedSourcePort? workflowCataloguePort,
         IScheduledDispatchApplicationService schedules,
         Func<IScheduledDispatchApplicationService, string, string, ScheduledDispatchMutationContext, CancellationToken, Task<ScheduledDispatchMutationReceipt>> mutateAsync,
         bool requireRunnableWorkflow,
@@ -327,7 +350,13 @@ internal static class ScopeWorkflowScheduleEndpoints
     {
         var resolved = requireRunnableWorkflow
             ? await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct)
-            : await ResolveWorkflowForTeardownAsync(http, scopeId, workflowId, workflowQueryPort, ct);
+            : await ResolveWorkflowForTeardownAsync(
+                http,
+                scopeId,
+                workflowId,
+                workflowCataloguePort ?? throw new InvalidOperationException(
+                    "Workflow catalogue source is required for schedule teardown."),
+                ct);
         if (resolved.Result != null)
             return resolved.Result;
 
@@ -356,6 +385,8 @@ internal static class ScopeWorkflowScheduleEndpoints
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return new ResolvedWorkflowResult(null, denied);
+        if (TryCreateInvalidWorkflowIdResult(workflowId, out var invalidWorkflowId))
+            return new ResolvedWorkflowResult(null, invalidWorkflowId);
 
         var lookup = await workflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct);
         if (lookup.IsRunnable)
@@ -371,17 +402,41 @@ internal static class ScopeWorkflowScheduleEndpoints
         HttpContext http,
         string scopeId,
         string workflowId,
-        IScopeWorkflowQueryPort workflowQueryPort,
+        IScopeWorkflowCatalogueCommittedSourcePort workflowCataloguePort,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return new ResolvedWorkflowResult(null, denied);
+        if (TryCreateInvalidWorkflowIdResult(workflowId, out var invalidWorkflowId))
+            return new ResolvedWorkflowResult(null, invalidWorkflowId);
 
-        var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
-        if (workflow != null && !string.IsNullOrWhiteSpace(workflow.PublishedServiceId))
+        var catalogueLookup = await workflowCataloguePort.LookupCatalogueByWorkflowIdAsync(scopeId, workflowId, ct);
+        var workflow = catalogueLookup.Workflow;
+        if (catalogueLookup.Status == ScopeWorkflowCatalogueLookupStatus.Found &&
+            workflow != null &&
+            !string.IsNullOrWhiteSpace(workflow.ServiceAppId) &&
+            !string.IsNullOrWhiteSpace(workflow.ServiceNamespace) &&
+            !string.IsNullOrWhiteSpace(workflow.PublishedServiceId))
+        {
             return new ResolvedWorkflowResult(workflow, null);
+        }
 
-        var lookup = new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, string.Empty);
+        if (catalogueLookup.Status == ScopeWorkflowCatalogueLookupStatus.Ambiguous)
+        {
+            return new ResolvedWorkflowResult(
+                null,
+                Results.Json(
+                    new
+                    {
+                        code = "USER_WORKFLOW_AMBIGUOUS",
+                        message = $"Workflow '{workflowId}' resolves to multiple published services for scope '{scopeId}'.",
+                    },
+                    statusCode: StatusCodes.Status409Conflict));
+        }
+
+        var lookup = catalogueLookup.Status == ScopeWorkflowCatalogueLookupStatus.Found
+            ? new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.Stale, null, "catalogue_service_identity_incomplete")
+            : new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotFound, null, string.Empty);
         var (statusCode, code, message) = ScopeWorkflowEndpoints.MapWorkflowLookupError(scopeId, workflowId, lookup);
         return new ResolvedWorkflowResult(
             null,
@@ -394,6 +449,9 @@ internal static class ScopeWorkflowScheduleEndpoints
         ScopeWorkflowSummary workflow,
         CancellationToken ct)
     {
+        if (TryCreateInvalidScheduleIdResult(scheduleId, out var invalidScheduleId))
+            return new WorkflowScheduleOwnershipResult(null, invalidScheduleId);
+
         var detail = await schedules.GetAsync(scheduleId, ct);
         if (detail == null || !BelongsToWorkflow(detail.Schedule, workflow))
         {
@@ -441,7 +499,7 @@ internal static class ScopeWorkflowScheduleEndpoints
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: serviceInvocation),
-            input.CronExpression,
+            input.CronExpression ?? string.Empty,
             input.Timezone ?? string.Empty,
             input.Enabled,
             input.Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
@@ -507,9 +565,42 @@ internal static class ScopeWorkflowScheduleEndpoints
     private static ScheduledDispatchExpectedServiceTarget BuildExpectedServiceTarget(ScopeWorkflowSummary workflow) => new(
         ScheduledDispatchScheduleKind.Workflow,
         ScheduledDispatchTargetKind.ServiceInvocation,
-        ChatEndpointId,
-        workflow.PublishedServiceId,
-        string.IsNullOrWhiteSpace(workflow.ServiceKey) ? null : workflow.ServiceKey);
+        BuildServiceIdentity(workflow),
+        ChatEndpointId);
+
+    private static bool TryCreateInvalidWorkflowIdResult(string? workflowId, out IResult result)
+    {
+        if (string.IsNullOrWhiteSpace(workflowId) || workflowId.Trim().Contains(':', StringComparison.Ordinal))
+        {
+            result = Results.BadRequest(new
+            {
+                code = "INVALID_WORKFLOW_ID",
+                message = "workflowId is required and must not contain ':'.",
+            });
+            return true;
+        }
+
+        result = null!;
+        return false;
+    }
+
+    private static bool TryCreateInvalidScheduleIdResult(string? scheduleId, out IResult result)
+    {
+        var normalized = scheduleId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            normalized.Any(static ch => !(char.IsAsciiLetterOrDigit(ch) || ch is '.' or '_' or '-')))
+        {
+            result = Results.BadRequest(new
+            {
+                code = "INVALID_SCHEDULE_ID",
+                message = "scheduleId may only contain letters, digits, '.', '_', and '-'.",
+            });
+            return true;
+        }
+
+        result = null!;
+        return false;
+    }
 
     private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)
     {
@@ -560,7 +651,7 @@ public sealed record WorkflowScheduleConfigurationHttpRequest
 {
     public string? ScheduleId { get; init; }
     public string? DisplayName { get; init; }
-    public required string CronExpression { get; init; }
+    public string? CronExpression { get; init; }
     public string? Timezone { get; init; }
     public bool Enabled { get; init; } = true;
     public string? Prompt { get; init; }

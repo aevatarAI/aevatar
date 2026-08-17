@@ -1675,6 +1675,40 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task WorkflowScheduleCreate_ShouldAllowOneShotWithoutCronExpression()
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+        var schedules = new RecordingWorkflowScheduledDispatchService();
+        var fireAt = DateTimeOffset.UtcNow.AddHours(1);
+
+        var result = await ScopeWorkflowScheduleEndpoints.Create(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            new WorkflowScheduleConfigurationHttpRequest
+            {
+                ScheduleId = "schedule-once",
+                ScheduleMode = ScheduledDispatchScheduleMode.OneShotAtUtc,
+                OneShotFireAt = fireAt,
+            },
+            workflowQueryPort,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var configuration = schedules.Created.Should().ContainSingle().Which;
+        configuration.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.OneShotAtUtc);
+        configuration.OneShotFireAt.Should().Be(fireAt);
+        configuration.CronExpression.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowScheduleList_ShouldQueryExactWorkflowServiceTarget()
     {
         var http = CreateHttpContext("scope-alpha");
@@ -1768,7 +1802,7 @@ public sealed class ScopeWorkflowEndpointsTests
         workflowQueryPort.GetByWorkflowRequest.Should().BeNull();
         schedules.EnableReasons.Should().ContainSingle().Which.Should().Be("resume");
         schedules.EnableContexts.Should().ContainSingle()
-            .Which!.ExpectedServiceTarget!.ServiceId.Should().Be("svc-alpha");
+            .Which!.ExpectedServiceTarget!.ServiceIdentity.ServiceId.Should().Be("svc-alpha");
     }
 
     [Fact]
@@ -1781,7 +1815,9 @@ public sealed class ScopeWorkflowEndpointsTests
         };
         var workflowQueryPort = new RecordingScopeWorkflowQueryPort
         {
-            GetByWorkflowResult = workflow,
+            CatalogueLookupResult = new ScopeWorkflowCatalogueLookupResult(
+                ScopeWorkflowCatalogueLookupStatus.Found,
+                workflow),
         };
         var schedules = new RecordingWorkflowScheduledDispatchService
         {
@@ -1795,6 +1831,7 @@ public sealed class ScopeWorkflowEndpointsTests
             "schedule-alpha",
             new WorkflowScheduleStateChangeHttpRequest { Reason = "pause" },
             workflowQueryPort,
+            workflowQueryPort,
             schedules,
             CancellationToken.None);
 
@@ -1803,25 +1840,33 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         schedules.DisableReasons.Should().ContainSingle().Which.Should().Be("pause");
         schedules.DisableContexts.Should().ContainSingle()
-            .Which!.ExpectedServiceTarget!.ServiceKey.Should().BeNull();
+            .Which!.ExpectedServiceTarget!.ServiceIdentity.ServiceId.Should().Be("svc-alpha");
     }
 
     [Fact]
     public async Task WorkflowSchedulePreview_ShouldUseDefaultCountWhenInputCountIsNotPositive()
     {
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
         var schedules = new RecordingWorkflowScheduledDispatchService();
 
         var result = await ScopeWorkflowScheduleEndpoints.Preview(
+            http,
+            "scope-alpha",
+            "wf-alpha",
             new WorkflowSchedulePreviewHttpRequest
             {
                 CronExpression = "0 9 * * *",
                 Timezone = "UTC",
                 Count = 0,
             },
+            workflowQueryPort,
             schedules,
             CancellationToken.None);
 
-        var http = CreateHttpContext("scope-alpha");
         await result.ExecuteAsync(http);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
@@ -1835,25 +1880,109 @@ public sealed class ScopeWorkflowEndpointsTests
     [Fact]
     public async Task WorkflowSchedulePreview_ShouldMapInvalidCronToBadRequest()
     {
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
         var schedules = new RecordingWorkflowScheduledDispatchService
         {
             PreviewError = new ArgumentException("invalid cron"),
         };
 
         var result = await ScopeWorkflowScheduleEndpoints.Preview(
+            http,
+            "scope-alpha",
+            "wf-alpha",
             new WorkflowSchedulePreviewHttpRequest
             {
                 CronExpression = "bad cron",
             },
+            workflowQueryPort,
             schedules,
             CancellationToken.None);
 
-        var http = CreateHttpContext("scope-alpha");
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.Should().Contain("invalid cron");
+    }
+
+    [Fact]
+    public async Task WorkflowSchedulePreview_ShouldRejectMismatchedScopeBeforeLookupOrPreview()
+    {
+        var http = CreateHttpContext("scope-other");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort();
+        var schedules = new RecordingWorkflowScheduledDispatchService();
+
+        var result = await ScopeWorkflowScheduleEndpoints.Preview(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            new WorkflowSchedulePreviewHttpRequest
+            {
+                CronExpression = "0 9 * * *",
+            },
+            workflowQueryPort,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        workflowQueryPort.LookupRequest.Should().BeNull();
+        schedules.LastPreview.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowScheduleList_ShouldRejectInvalidWorkflowIdBeforeLookup()
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort();
+        var schedules = new RecordingWorkflowScheduledDispatchService();
+
+        var result = await ScopeWorkflowScheduleEndpoints.List(
+            http,
+            "scope-alpha",
+            "wf:invalid",
+            workflowQueryPort,
+            schedules,
+            take: 25,
+            cursor: null,
+            includeTotalCount: false,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        workflowQueryPort.LookupRequest.Should().BeNull();
+        schedules.LastListQuery.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowScheduleGet_ShouldRejectInvalidScheduleIdBeforeScheduleLookup()
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+        var schedules = new RecordingWorkflowScheduledDispatchService();
+
+        var result = await ScopeWorkflowScheduleEndpoints.Get(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            "schedule:invalid",
+            workflowQueryPort,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        schedules.LastScheduleGet.Should().BeNull();
     }
 
     [Fact]
@@ -1992,8 +2121,10 @@ public sealed class ScopeWorkflowEndpointsTests
         expectedTarget!.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         expectedTarget.TargetKind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
         expectedTarget.ServiceEndpointId.Should().Be("chat");
-        expectedTarget.ServiceId.Should().Be("svc-alpha");
-        expectedTarget.ServiceKey.Should().Be("svc-key-alpha");
+        expectedTarget.ServiceIdentity.TenantId.Should().Be("scope-alpha");
+        expectedTarget.ServiceIdentity.AppId.Should().Be("workflow-app");
+        expectedTarget.ServiceIdentity.Namespace.Should().Be("workflow-ns");
+        expectedTarget.ServiceIdentity.ServiceId.Should().Be("svc-alpha");
     }
 
     [Fact]
@@ -2007,7 +2138,9 @@ public sealed class ScopeWorkflowEndpointsTests
         var workflowQueryPort = new RecordingScopeWorkflowQueryPort
         {
             LookupResult = new ScopeWorkflowLookupResult(ScopeWorkflowLookupStatus.NotReady, null, "inactive"),
-            GetByWorkflowResult = workflow,
+            CatalogueLookupResult = new ScopeWorkflowCatalogueLookupResult(
+                ScopeWorkflowCatalogueLookupStatus.Found,
+                workflow),
         };
         var schedules = new RecordingWorkflowScheduledDispatchService
         {
@@ -2022,6 +2155,7 @@ public sealed class ScopeWorkflowEndpointsTests
             reason: null,
             input: new WorkflowScheduleStateChangeHttpRequest { Reason = "cleanup" },
             workflowQueryPort,
+            workflowQueryPort,
             schedules,
             CancellationToken.None);
 
@@ -2029,9 +2163,46 @@ public sealed class ScopeWorkflowEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         workflowQueryPort.LookupRequest.Should().BeNull();
-        workflowQueryPort.GetByWorkflowRequest.Should().Be(("scope-alpha", "wf-alpha"));
+        workflowQueryPort.CatalogueRequest.Should().Be(("scope-alpha", "wf-alpha"));
         schedules.DeleteContexts.Should().ContainSingle()
-            .Which!.ExpectedServiceTarget!.ServiceId.Should().Be("svc-alpha");
+            .Which!.ExpectedServiceTarget!.ServiceIdentity.ServiceId.Should().Be("svc-alpha");
+    }
+
+    [Fact]
+    public async Task WorkflowScheduleDelete_ShouldReturnConflictForAmbiguousCommittedCatalogue()
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            CatalogueLookupResult = new ScopeWorkflowCatalogueLookupResult(
+                ScopeWorkflowCatalogueLookupStatus.Ambiguous,
+                Workflow: null),
+        };
+        var schedules = new RecordingWorkflowScheduledDispatchService
+        {
+            Detail = new ScheduledDispatchDetail(WorkflowScheduleSummary("schedule-alpha"), []),
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.Delete(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            "schedule-alpha",
+            reason: null,
+            input: null,
+            workflowQueryPort,
+            workflowQueryPort,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.Should().Contain("USER_WORKFLOW_AMBIGUOUS");
+        workflowQueryPort.CatalogueRequest.Should().Be(("scope-alpha", "wf-alpha"));
+        schedules.LastScheduleGet.Should().BeNull();
+        schedules.DeleteContexts.Should().BeEmpty();
     }
 
     [Fact]
@@ -2258,12 +2429,17 @@ public sealed class ScopeWorkflowEndpointsTests
         "run workflow",
         ScheduledDispatchScheduleKind.Workflow);
 
-    private sealed class RecordingScopeWorkflowQueryPort : IScopeWorkflowQueryPort
+    private sealed class RecordingScopeWorkflowQueryPort :
+        IScopeWorkflowQueryPort,
+        IScopeWorkflowCatalogueCommittedSourcePort
     {
         public ScopeWorkflowLookupResult LookupResult { get; init; } = RunnableWorkflow();
         public ScopeWorkflowSummary? GetByWorkflowResult { get; init; }
+        public ScopeWorkflowCatalogueLookupResult CatalogueLookupResult { get; init; } =
+            new(ScopeWorkflowCatalogueLookupStatus.NotFound, Workflow: null);
         public (string ScopeId, string WorkflowId)? LookupRequest { get; private set; }
         public (string ScopeId, string WorkflowId)? GetByWorkflowRequest { get; private set; }
+        public (string ScopeId, string WorkflowId)? CatalogueRequest { get; private set; }
 
         public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
             string scopeId,
@@ -2293,6 +2469,21 @@ public sealed class ScopeWorkflowEndpointsTests
             string actorId,
             CancellationToken ct = default) =>
             Task.FromResult<ScopeWorkflowSummary?>(null);
+
+        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListCatalogueAsync(
+            string scopeId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(
+                CatalogueLookupResult.IsFound ? [CatalogueLookupResult.Workflow!] : []);
+
+        public Task<ScopeWorkflowCatalogueLookupResult> LookupCatalogueByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default)
+        {
+            CatalogueRequest = (scopeId, workflowId);
+            return Task.FromResult(CatalogueLookupResult);
+        }
     }
 
     private sealed class RecordingWorkflowScheduledDispatchService : IScheduledDispatchApplicationService

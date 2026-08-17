@@ -43,6 +43,67 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         return await ListCoreAsync(normalizedScopeId, int.MaxValue, applyResultTake: false, ct);
     }
 
+    public async Task<ScopeWorkflowCatalogueLookupResult> LookupCatalogueByWorkflowIdAsync(
+        string scopeId,
+        string workflowId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(workflowId);
+        var descriptors = new List<ScopeWorkflowPublishedServiceDescriptor>();
+        foreach (var source in _descriptorSources)
+        {
+            var matches = await source.FindByWorkflowIdAsync(normalizedScopeId, normalizedWorkflowId, ct);
+            descriptors.AddRange(matches.Select(descriptor => NormalizeDescriptor(normalizedScopeId, descriptor)));
+        }
+
+        var distinctDescriptors = descriptors
+            .Where(descriptor => string.Equals(descriptor.WorkflowId, normalizedWorkflowId, StringComparison.Ordinal))
+            .GroupBy(static descriptor =>
+                (descriptor.ServiceAppId, descriptor.ServiceNamespace, descriptor.PublishedServiceId))
+            .Select(static group => group.OrderByDescending(descriptor => descriptor.UpdatedAt).First())
+            .ToArray();
+        if (distinctDescriptors.Length > 1)
+        {
+            return new ScopeWorkflowCatalogueLookupResult(
+                ScopeWorkflowCatalogueLookupStatus.Ambiguous,
+                Workflow: null);
+        }
+
+        if (distinctDescriptors.Length == 0)
+        {
+            return new ScopeWorkflowCatalogueLookupResult(
+                ScopeWorkflowCatalogueLookupStatus.NotFound,
+                Workflow: null);
+        }
+
+        var descriptor = distinctDescriptors[0];
+        var identity = BuildIdentity(descriptor);
+        var serviceSnapshot = await GetExistingServiceAsync(identity, ct);
+        var fallbackDisplayName = descriptor.DisplayName;
+
+        if (serviceSnapshot == null)
+        {
+            return new ScopeWorkflowCatalogueLookupResult(
+                ScopeWorkflowCatalogueLookupStatus.NotFound,
+                Workflow: null);
+        }
+
+        return new ScopeWorkflowCatalogueLookupResult(
+            ScopeWorkflowCatalogueLookupStatus.Found,
+            BuildWorkflowSummary(
+                normalizedScopeId,
+                serviceSnapshot,
+                identity,
+                normalizedWorkflowId,
+                fallbackDisplayName,
+                workflowName: null,
+                serviceSnapshot.ActiveServingRevisionId,
+                serviceSnapshot.DeploymentId,
+                serviceSnapshot.PrimaryActorId,
+                serviceSnapshot.DeploymentStatus));
+    }
+
     private async Task<IReadOnlyList<ScopeWorkflowSummary>> ListCoreAsync(
         string normalizedScopeId,
         int sourceTake,

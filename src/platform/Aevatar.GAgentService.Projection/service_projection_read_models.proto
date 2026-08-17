@@ -11,6 +11,7 @@ import "service_definition.proto";
 import "service_invocation_catalog.proto";
 import "service_deployment.proto";
 import "service_revision.proto";
+import "service_endpoint.proto";
 import "content_artifact_messages.proto";
 import "agent_profiles.proto";
 
@@ -512,6 +513,7 @@ message ScheduledDispatchDocument {
   string owner_llm_model = 63;
   string last_error_code = 64;
   string service_revision_id = 65;
+  aevatar.gagentservice.ServiceIdentity service_identity = 66;
 }
 
 enum TeamAutomationLifecycleStatusDocument {
