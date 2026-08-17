@@ -415,6 +415,8 @@ message NyxIdChatApprovalStepSource {
 message NyxIdChatWebStepSource {}
 
 message NyxIdChatNumericConditionState {
+  reserved 11;
+  reserved "source_evidence_id";
   string condition_id = 1;
   string source_input_request_id = 2;
   int64 suggested_threshold = 3;
@@ -547,8 +549,8 @@ message NyxIdChatPlanRevisionRecord {
 }
 
 message NyxIdChatTaskState {
-  reserved 16;
-  reserved "gate";
+  reserved 16, 19, 20;
+  reserved "gate", "domain", "artifact";
   string task_id = 1;
   string turn_id = 2;
   NyxIdChatTaskStatus status = 3;
@@ -621,8 +623,8 @@ message NyxIdChatTaskPlanStep {
 }
 
 message NyxIdChatTaskPlan {
-  reserved 16;
-  reserved "gate";
+  reserved 16, 19, 20;
+  reserved "gate", "domain", "artifact";
   string task_id = 1;
   string turn_id = 2;
   NyxIdChatTaskStatus status = 3;
@@ -1511,8 +1513,8 @@ message NyxIdChatToolApprovalContinuationInput {
 }
 
 message NyxIdChatOperationDispatchCommand {
-  reserved 15;
-  reserved "plan_gate_continuation";
+  reserved 15, 18;
+  reserved "plan_gate_continuation", "domain_continuation";
   NyxIdChatOperationKey key = 1;
   oneof input {
     NyxIdChatLLMOperationInput llm = 10;

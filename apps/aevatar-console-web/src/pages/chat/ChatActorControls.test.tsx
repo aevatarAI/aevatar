@@ -288,7 +288,7 @@ describe('ChatActorControls', () => {
       order: 1,
       kind: 'condition',
       status: 'done',
-      description: 'Evaluate the candidate score',
+      description: 'Evaluate the observed value',
       source: {
         kind: 'condition',
         label: '80 >= 75',
@@ -301,7 +301,7 @@ describe('ChatActorControls', () => {
           observedValue: 80,
           comparison: 'gte',
           outcome: 'true',
-          guardedToolName: 'bitable_record_create',
+          guardedToolName: 'external_record_create',
         },
       },
       mayChangeExternalState: false,
@@ -315,8 +315,8 @@ describe('ChatActorControls', () => {
       stepId: 'step-write',
       order: 2,
       status: 'planned',
-      description: 'Create the attestation row',
-      source: { kind: 'tool', label: 'bitable_record_create' },
+      description: 'Create the verified record',
+      source: { kind: 'tool', label: 'external_record_create' },
       guard: {
         conditionStepId: 'step-condition',
         requiredOutcome: 'true',
@@ -338,7 +338,7 @@ describe('ChatActorControls', () => {
     expect(facts).toHaveTextContent('80 >= 75');
     expect(facts).toHaveTextContent('true');
     expect(facts).toHaveTextContent('user_override');
-    expect(facts).toHaveTextContent('bitable_record_create');
+    expect(facts).toHaveTextContent('external_record_create');
     expect(
       screen.getByText('Guard step-condition requires true'),
     ).toBeInTheDocument();

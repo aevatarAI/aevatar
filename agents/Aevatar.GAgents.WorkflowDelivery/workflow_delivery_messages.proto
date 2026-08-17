@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.GAgents.WorkflowDelivery";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
 import "scheduled_invocation_authorization_evidence.proto";
 import "workflow_capability_admission.proto";
 
@@ -93,9 +94,40 @@ message WorkflowDeliveryConnectionSlotDefinition {
   bool required = 4;
 }
 
+enum WorkflowDeliveryAcceptanceDateProjection {
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UNSPECIFIED = 0;
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UTC_DATE = 1;
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UTC_YEAR_MONTH = 2;
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UTC_ISO_WEEK = 3;
+  WORKFLOW_DELIVERY_ACCEPTANCE_DATE_PROJECTION_UTC_COMPACT_DATE = 4;
+}
+
+message WorkflowDeliveryInstallationCreatedAtUtcInput {
+  WorkflowDeliveryAcceptanceDateProjection date_projection = 1;
+  sint32 day_offset = 2;
+}
+
+message WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput {}
+
+message WorkflowDeliveryAcceptanceInputBinding {
+  string key = 1;
+  string prefix = 2;
+  string suffix = 3;
+  oneof source {
+    WorkflowDeliveryInstallationCreatedAtUtcInput installation_created_at_utc = 4;
+    WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput authenticated_owner_external_user_id = 5;
+  }
+}
+
+message WorkflowDeliveryAcceptanceInputRecipe {
+  google.protobuf.Struct literals = 1;
+  repeated WorkflowDeliveryAcceptanceInputBinding bindings = 2;
+}
+
 message WorkflowDeliveryAcceptancePolicy {
   WorkflowDeliveryAcceptanceMode mode = 1;
   string limitation = 2;
+  WorkflowDeliveryAcceptanceInputRecipe input = 3;
 }
 
 message WorkflowPackageVersionSnapshot {
@@ -247,6 +279,7 @@ message WorkflowInstallationState {
   WorkflowDeliveryAuthorizationOwnerContext authenticated_owner = 31;
   WorkflowInstallationStatus failure_origin_status = 32;
   WorkflowInstallationContinuationClaim continuation_claim = 33;
+  google.protobuf.Struct acceptance_input = 34;
 }
 
 message WorkflowDeliveryState {

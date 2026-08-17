@@ -20,10 +20,44 @@ controller_file="${nyxid_dir}/NyxIdChatConversationGAgent.cs"
 transition_file="${nyxid_dir}/NyxIdChatTaskTransitionPolicy.cs"
 registry_file="${nyxid_dir}/NyxIdAssistantActionRegistry.cs"
 service_file="${nyxid_dir}/SafeOperationService.cs"
+actor_semantics_file="${nyxid_dir}/NyxIdChatRouteCandidate.cs"
+system_prompt_file="${nyxid_dir}/Skills/system-prompt.md"
+overlay_file="${nyxid_dir}/Skills/system-skill-overlay-default.md"
+projector_file="${FIXTURE_ROOT}/src/Aevatar.Studio.Projection/Projectors/NyxIdChatRouteCandidateProjector.cs"
+shared_projector_file="${FIXTURE_ROOT}/src/Aevatar.Studio.Projection/Projectors/ExternalDirectoryProjector.cs"
+query_contract_file="${FIXTURE_ROOT}/src/Aevatar.Studio.Application.Abstractions/Studio/Abstractions/INyxIdChatRouteCandidateQueryPort.cs"
+query_adapter_file="${FIXTURE_ROOT}/src/Aevatar.Studio.Infrastructure/ActorBacked/ProjectionNyxIdChatRouteCandidateQueryPort.cs"
+tool_provider_file="${FIXTURE_ROOT}/src/Aevatar.AI.ToolProviders.Web/RouteCandidateAgentToolSource.cs"
+shared_tool_provider_file="${FIXTURE_ROOT}/src/Aevatar.AI.ToolProviders.Web/ExternalDirectoryAgentToolSource.cs"
+frontend_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/pages/chat/chatRouteCandidate.ts"
+frontend_test_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/pages/chat/chatRouteCandidate.test.ts"
+locale_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/locales/projectMessages.en-US.ts"
+workflow_delivery_package_file="${FIXTURE_ROOT}/workflow-delivery-packages/workflow-alpha.yaml"
+demo_file="${FIXTURE_ROOT}/demos/lark-interaction-probe/structured-review-shadow.yaml"
+backend_test_file="${FIXTURE_ROOT}/test/Aevatar.Integration.Tests/GenericTemplateTests.cs"
+runbook_file="${FIXTURE_ROOT}/docs/operations/generic-canary.md"
+workflow_file="${FIXTURE_ROOT}/workflows/generic-transform.yaml"
+studio_design_cache_file="${FIXTURE_ROOT}/src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/StudioAssistant/.firecrawl/nyx-chat-wf-branding.json"
 
-mkdir -p "$(dirname -- "${proto_file}")" "$(dirname -- "${readmodel_file}")"
+mkdir -p \
+  "$(dirname -- "${proto_file}")" \
+  "$(dirname -- "${readmodel_file}")" \
+  "$(dirname -- "${system_prompt_file}")" \
+  "$(dirname -- "${projector_file}")" \
+  "$(dirname -- "${query_contract_file}")" \
+  "$(dirname -- "${query_adapter_file}")" \
+  "$(dirname -- "${tool_provider_file}")" \
+  "$(dirname -- "${frontend_file}")" \
+  "$(dirname -- "${locale_file}")" \
+  "$(dirname -- "${workflow_delivery_package_file}")" \
+  "$(dirname -- "${demo_file}")" \
+  "$(dirname -- "${backend_test_file}")" \
+  "$(dirname -- "${runbook_file}")" \
+  "$(dirname -- "${workflow_file}")" \
+  "$(dirname -- "${studio_design_cache_file}")"
 
 write_baseline() {
+  rm -f "${workflow_delivery_package_file}" "${studio_design_cache_file}"
   printf '%s\n' \
     'public static class NyxIdChatTaskLifecycle' \
     '{' \
@@ -52,12 +86,24 @@ write_baseline() {
     '}' \
     > "${service_file}"
   printf '%s\n' \
+    'public sealed record NyxIdChatRouteCandidate(string Route);' \
+    > "${actor_semantics_file}"
+  printf '%s\n' \
+    'Use typed input, guarded operation admission, and verified read-back.' \
+    > "${system_prompt_file}"
+  printf '%s\n' \
+    'Select the best route candidate from the loaded skill contract.' \
+    > "${overlay_file}"
+  printf '%s\n' \
     'syntax = "proto3";' \
     'message NyxIdDeveloperAppRotateSecretParams {' \
     '  string client_id = 1;' \
     '}' \
     'message NyxIdAssistantActionParams {' \
     '  NyxIdDeveloperAppRotateSecretParams developer_app_rotate_secret = 1;' \
+    '}' \
+    'message NyxIdChatRouteCandidate {' \
+    '  string route_candidate = 1;' \
     '}' \
     > "${proto_file}"
   printf '%s\n' \
@@ -69,6 +115,51 @@ write_baseline() {
     '  string access_token = 1;' \
     '}' \
     > "${readmodel_file}"
+  printf '%s\n' \
+    'public sealed class NyxIdChatRouteCandidateProjector { }' \
+    > "${projector_file}"
+  printf '%s\n' \
+    'public sealed record ExternalDirectoryRow(string roleTitle, string costCenter);' \
+    > "${shared_projector_file}"
+  printf '%s\n' \
+    'public interface INyxIdChatRouteCandidateQueryPort { }' \
+    > "${query_contract_file}"
+  printf '%s\n' \
+    'public sealed class ProjectionNyxIdChatRouteCandidateQueryPort { }' \
+    > "${query_adapter_file}"
+  printf '%s\n' \
+    'public sealed class RouteCandidateAgentToolSource' \
+    '{' \
+    '    public const string ToolName = "condition_evaluate";' \
+    '}' \
+    > "${tool_provider_file}"
+  printf '%s\n' \
+    'public sealed record ExternalDirectoryAgentToolSource(string roleTitle, string costCenter);' \
+    > "${shared_tool_provider_file}"
+  printf '%s\n' \
+    'export type ChatRouteCandidate = { route: string };' \
+    > "${frontend_file}"
+  printf '%s\n' \
+    'type ChatConditionalWriteFixture = { observedValue: number };' \
+    'test("domain-neutral fixtures remain valid", () => {});' \
+    > "${frontend_test_file}"
+  printf '%s\n' \
+    'export default { routeCandidate: "Route candidate" };' \
+    > "${locale_file}"
+  printf '%s\n' \
+    'name: structured_review_shadow_probe' \
+    'description: Domain-neutral interaction fixture.' \
+    > "${demo_file}"
+  printf '%s\n' \
+    'public sealed class GenericTemplateTests { }' \
+    > "${backend_test_file}"
+  printf '%s\n' \
+    '# Generic conditional-write canary' \
+    > "${runbook_file}"
+  printf '%s\n' \
+    'name: generic_transform' \
+    'description: Domain-neutral workflow fixture.' \
+    > "${workflow_file}"
 }
 
 run_guard() {
@@ -105,6 +196,155 @@ require_failure() {
 write_baseline
 run_guard
 require_success
+
+printf '%s\n' \
+  'syntax = "proto3";' \
+  'message NyxIdChatCandidateScreeningEvidence {' \
+  '  string evidence_id = 1;' \
+  '}' \
+  > "${proto_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'public sealed class NyxIdChatReimbursementEvidence { }' \
+  > "${actor_semantics_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'public sealed class NyxIdChatExpenseClaimEvidence { }' \
+  > "${actor_semantics_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'public sealed class NyxIdChatApplicantEvidence { }' \
+  > "${actor_semantics_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'public sealed class NyxIdChatTaskDomainDocument { }' \
+  > "${projector_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'public interface INyxIdChatRouteCandidateQueryPort' \
+  '{' \
+  '    string trackerTableId { get; }' \
+  '}' \
+  > "${query_contract_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'public sealed class ProjectionNyxIdChatRouteCandidateQueryPort' \
+  '{' \
+  '    public string cost_center = string.Empty;' \
+  '}' \
+  > "${query_adapter_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'public sealed class DomainToolSource' \
+  '{' \
+  '    public const string ToolName = "candidate_screening_evidence_commit";' \
+  '}' \
+  > "${tool_provider_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'Commit typed reimbursement evidence before any provider write.' \
+  > "${overlay_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'Always select the FIN-01 workflow route.' \
+  > "${system_prompt_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'name: expense_claim_approval' \
+  'description: Renamed concrete business package.' \
+  > "${workflow_delivery_package_file}"
+run_guard
+require_failure "bundled workflow delivery packages"
+write_baseline
+
+printf '%s\n' \
+  'export type ChatCandidateScreeningEvidence = { score: number };' \
+  > "${frontend_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'type ChatApplicantScreeningEvidence = { observedValue: number };' \
+  'test("forbidden fixture", () => {});' \
+  > "${frontend_test_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'name: reimbursement_review_probe' \
+  'description: Concrete business demo.' \
+  > "${demo_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'public sealed class BudgetVarianceFixture { }' \
+  > "${backend_test_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  '# Candidate screening production runbook' \
+  > "${runbook_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  'name: expense_claim_review' \
+  'description: Concrete business workflow.' \
+  > "${workflow_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
+
+printf '%s\n' \
+  '{"markdown":"domain-neutral generated design output"}' \
+  > "${studio_design_cache_file}"
+run_guard
+require_failure "production-source design cache artifacts"
+write_baseline
+
+printf '%s\n' \
+  'export default { duplicatePolicy: "Preserve exact duplicate relationships" };' \
+  > "${locale_file}"
+run_guard
+require_failure "business-specific NyxIdChat semantics"
+write_baseline
 
 printf '%s\n' \
   'public sealed class ForbiddenOperationService' \

@@ -26,7 +26,7 @@ public sealed class FileWorkflowDeliveryPackageSource : IWorkflowDeliveryPackage
 
         var configuredDirectory = _options.Value.PackageDirectory?.Trim();
         var packageDirectory = string.IsNullOrWhiteSpace(configuredDirectory)
-            ? Path.Combine(AppContext.BaseDirectory, "delivery-workflows")
+            ? Path.Combine(AppContext.BaseDirectory, "workflow-delivery-packages")
             : Path.IsPathRooted(configuredDirectory)
                 ? Path.GetFullPath(configuredDirectory)
                 : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, configuredDirectory));

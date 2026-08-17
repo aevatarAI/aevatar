@@ -1,15 +1,15 @@
 # Isolated Studio identities: memberId=m-alpha, workflowId=wf-alpha,
 # publishedServiceId=svc-alpha. They are not aliases for user_service_id=usvc-alpha.
-name: finance-budget-nosend
+name: resource-status-read
 steps:
-  - id: read_budget
+  - id: read_resource_status
     type: tool_call
     capability:
       nyxid_request:
         user_service_id: usvc-alpha
         method: GET
-        path_template: /v1/budget/status
-        query_parameters: [period]
+        path_template: /v1/resources/status
+        query_parameters: [view]
         header_parameters: [If-None-Match]
         body_mode: none
         response_mode: text

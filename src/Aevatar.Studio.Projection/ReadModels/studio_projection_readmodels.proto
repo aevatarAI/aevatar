@@ -586,8 +586,8 @@ message NyxIdChatConversationPlanRevisionDocument {
 }
 
 message NyxIdChatConversationTaskDocument {
-  reserved 16;
-  reserved "gate";
+  reserved 16, 19, 20;
+  reserved "gate", "domain", "artifact";
   string task_id = 1;
   string turn_id = 2;
   string status = 3;

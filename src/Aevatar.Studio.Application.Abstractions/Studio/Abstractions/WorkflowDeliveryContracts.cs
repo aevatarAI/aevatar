@@ -1,5 +1,6 @@
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
@@ -102,9 +103,39 @@ public sealed record WorkflowDeliveryConnectionSlotDefinition(
     string ServiceSlug,
     bool Required);
 
+public enum WorkflowDeliveryAcceptanceDateProjection
+{
+    Unspecified = 0,
+    UtcDate = 1,
+    UtcYearMonth = 2,
+    UtcIsoWeek = 3,
+    UtcCompactDate = 4,
+}
+
+public abstract record WorkflowDeliveryAcceptanceInputBindingSource;
+
+public sealed record WorkflowDeliveryInstallationCreatedAtUtcInput(
+    WorkflowDeliveryAcceptanceDateProjection DateProjection,
+    int DayOffset) : WorkflowDeliveryAcceptanceInputBindingSource;
+
+public sealed record WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput
+    : WorkflowDeliveryAcceptanceInputBindingSource;
+
+public sealed record WorkflowDeliveryAcceptanceInputBinding(
+    string Key,
+    string Prefix,
+    string Suffix,
+    WorkflowDeliveryAcceptanceInputBindingSource Source);
+
+public sealed record WorkflowDeliveryAcceptanceInputRecipe(
+    Struct Literals,
+    IReadOnlyList<WorkflowDeliveryAcceptanceInputBinding> Bindings);
+
 public sealed record WorkflowDeliveryAcceptancePolicy(
     WorkflowDeliveryAcceptanceMode Mode,
-    string? Limitation);
+    string? Limitation,
+    WorkflowDeliveryAcceptanceInputRecipe Input,
+    bool InputDeclared = true);
 
 public sealed record WorkflowDeliveryPackageSnapshot(
     string PackageId,
@@ -210,6 +241,7 @@ public sealed record WorkflowInstallationSnapshot(
     IReadOnlyList<WorkflowDeliveryConfirmationReference> Confirmations,
     WorkflowCapabilityAdmissionPlan CapabilityAdmissionPlan,
     AuthenticatedAuthorizationOwnerContext? AuthenticatedOwner,
+    Struct? AcceptanceInput,
     string OperationId,
     WorkflowInstallationStatus Status,
     string Stage,

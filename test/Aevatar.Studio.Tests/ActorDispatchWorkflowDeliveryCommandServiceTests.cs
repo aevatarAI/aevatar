@@ -5,6 +5,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.CommandServices;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using ApplicationConfirmationReference = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryConfirmationReference;
 using ApplicationConnectionSlotDefinition = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryConnectionSlotDefinition;
 using ApplicationTriggerIntent = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryTriggerIntent;
@@ -12,6 +13,9 @@ using ApplicationTriggerKind = Aevatar.Studio.Application.Studio.Abstractions.Wo
 using ApplicationVariableDefinition = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryVariableDefinition;
 using ApplicationVariableKind = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryVariableKind;
 using DeliveryApplication = global::Aevatar.Studio.Application.Studio.Abstractions;
+using ProtoAcceptanceDateProjection = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceDateProjection;
+using ProtoAcceptanceInputBinding = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputBinding;
+using ProtobufValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Studio.Tests;
 
@@ -49,12 +53,47 @@ public sealed class ActorDispatchWorkflowDeliveryCommandServiceTests
         command.Package.PackageHash.Should().Be("package-hash-alpha");
         command.Package.AcceptancePolicy.Mode.Should().Be(
             Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceMode.AutomaticPreview);
+        command.Package.AcceptancePolicy.Input.Literals.Fields.Should().ContainKey("dry_run")
+            .WhoseValue.BoolValue.Should().BeTrue();
+        command.Package.AcceptancePolicy.Input.Bindings.Select(static value => value.Key)
+            .Should().Equal("created_month", "owner_id");
+        var dateBinding = command.Package.AcceptancePolicy.Input.Bindings[0];
+        dateBinding.SourceCase.Should().Be(
+            ProtoAcceptanceInputBinding.SourceOneofCase.InstallationCreatedAtUtc);
+        dateBinding.InstallationCreatedAtUtc.DateProjection.Should().Be(
+            ProtoAcceptanceDateProjection.UtcYearMonth);
+        dateBinding.InstallationCreatedAtUtc.DayOffset.Should().Be(-2);
+        command.Package.AcceptancePolicy.Input.Bindings[1].SourceCase.Should().Be(
+            ProtoAcceptanceInputBinding.SourceOneofCase.AuthenticatedOwnerExternalUserId);
         command.ExpiresAtDefaulted.Should().BeFalse();
         receipt.DeliveryId.Should().Be("delivery-alpha");
         receipt.ActorId.Should().Be(WorkflowDeliveryConventions.BuildActorId("delivery-alpha"));
         receipt.AckStage.Should().Be(WorkflowDeliveryCommandAckStage.AcceptedForDispatch);
         receipt.CommandId.Should().Be(envelope.Id);
         receipt.CorrelationId.Should().Be(envelope.Id);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenAcceptanceInputIsLegacyMissing_ShouldPreserveProtoAbsence()
+    {
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchWorkflowDeliveryCommandService(
+            new RecordingBootstrap(),
+            CreateCommandDispatch(dispatch));
+
+        await service.CreateAsync(new CreateWorkflowDeliveryMutation(
+            "delivery-alpha",
+            Package(inputDeclared: false),
+            "scope-alpha",
+            CreatedAt.AddHours(8),
+            false,
+            null,
+            "admin-alpha",
+            CreatedAt));
+
+        var command = dispatch.Envelopes.Should().ContainSingle().Subject.Payload
+            .Unpack<CreateWorkflowDeliveryCommand>();
+        command.Package.AcceptancePolicy.Input.Should().BeNull();
     }
 
     [Fact]
@@ -293,7 +332,7 @@ public sealed class ActorDispatchWorkflowDeliveryCommandServiceTests
             Aevatar.GAgents.WorkflowDelivery.WorkflowInstallationStatus.ProvisioningAccepted);
     }
 
-    private static WorkflowDeliveryPackageSnapshot Package() =>
+    private static WorkflowDeliveryPackageSnapshot Package(bool inputDeclared = true) =>
         new(
             "package-alpha",
             "package-alpha@sha256-alpha",
@@ -321,9 +360,35 @@ public sealed class ActorDispatchWorkflowDeliveryCommandServiceTests
             [],
             new DeliveryApplication.WorkflowDeliveryAcceptancePolicy(
                 DeliveryApplication.WorkflowDeliveryAcceptanceMode.AutomaticPreview,
-                null),
+                null,
+                AcceptanceInput(),
+                inputDeclared),
             "admin-alpha",
             CreatedAt);
+
+    private static DeliveryApplication.WorkflowDeliveryAcceptanceInputRecipe AcceptanceInput() =>
+        new(
+            new Struct
+            {
+                Fields =
+                {
+                    ["dry_run"] = ProtobufValue.ForBool(true),
+                },
+            },
+            [
+                new DeliveryApplication.WorkflowDeliveryAcceptanceInputBinding(
+                    "created_month",
+                    "period:",
+                    ":utc",
+                    new DeliveryApplication.WorkflowDeliveryInstallationCreatedAtUtcInput(
+                        DeliveryApplication.WorkflowDeliveryAcceptanceDateProjection.UtcYearMonth,
+                        -2)),
+                new DeliveryApplication.WorkflowDeliveryAcceptanceInputBinding(
+                    "owner_id",
+                    "owner:",
+                    string.Empty,
+                    new DeliveryApplication.WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput()),
+            ]);
 
     private static StartWorkflowInstallationMutation StartMutation(DateTimeOffset requestedAt) =>
         new(

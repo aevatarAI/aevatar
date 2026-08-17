@@ -16,7 +16,7 @@ public class WorkflowRunInputContractTests
     [Fact]
     public void RequiresJsonInput_WhenEntryCaptureFeedsTransform_ShouldBeTrue()
     {
-        // The hr02/hr03/fin02 shape: assign "$input" -> transform template.
+        // Structured input is captured before it feeds a transform template.
         var definition = Parse(
             """
             name: probe_capture_then_transform
@@ -40,8 +40,8 @@ public class WorkflowRunInputContractTests
     [Fact]
     public void RequiresJsonInput_WhenSwitchUsesJsonAccessorOnCapture_ShouldBeTrue()
     {
-        // The hr01/fin01 shape: assign "$input" -> assign literal config ->
-        // switch on ${steps.capture_request.json.submit}.
+        // Structured input is captured before a switch reads one of its JSON
+        // fields, with an unrelated literal configuration step in between.
         var definition = Parse(
             """
             name: probe_json_accessor
@@ -146,7 +146,7 @@ public class WorkflowRunInputContractTests
     [InlineData("[1,2,3]", true)]
     [InlineData("", false)]
     [InlineData("   ", false)]
-    [InlineData("帮我预览2026年8月的考勤填写提醒，先不要发送。", false)]
+    [InlineData("帮我预览2026年8月的状态提醒，先不要发送。", false)]
     [InlineData("{broken json", false)]
     public void IsBoundedJson_MirrorsRendererAcceptance(string input, bool expected)
     {
@@ -157,13 +157,13 @@ public class WorkflowRunInputContractTests
     public void BuildViolationMessage_IsCorrectiveAndDoesNotEchoInput()
     {
         var message = WorkflowRunInputContract.BuildViolationMessage(
-            "hr_attendance_fill_reminder",
-            "帮我预览2026年8月的考勤填写提醒");
+            "workflow-alpha",
+            "帮我预览2026年8月的状态提醒");
 
-        message.Should().Contain("hr_attendance_fill_reminder");
+        message.Should().Contain("workflow-alpha");
         message.Should().Contain("serialized JSON");
         message.Should().Contain("inputs.prompt");
-        message.Should().NotContain("考勤填写提醒");
+        message.Should().NotContain("状态提醒");
     }
 
     private static WorkflowDefinition Parse(string yaml) => new WorkflowParser().Parse(yaml);

@@ -7,6 +7,7 @@ using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using DeliveryApplication = global::Aevatar.Studio.Application.Studio.Abstractions;
+using ProtobufValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Studio.Tests;
 
@@ -30,8 +31,22 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
         snapshot.Package.PackageHash.Should().Be("package-hash-alpha");
         snapshot.Package.AcceptancePolicy.Mode.Should().Be(
             DeliveryApplication.WorkflowDeliveryAcceptanceMode.AutomaticPreview);
+        snapshot.Package.AcceptancePolicy.InputDeclared.Should().BeTrue();
+        snapshot.Package.AcceptancePolicy.Input.Literals.Fields.Should().ContainKey("dry_run")
+            .WhoseValue.BoolValue.Should().BeTrue();
+        snapshot.Package.AcceptancePolicy.Input.Bindings.Select(static value => value.Key)
+            .Should().Equal("created_month", "owner_id");
+        snapshot.Package.AcceptancePolicy.Input.Bindings[0].Source.Should().BeEquivalentTo(
+            new DeliveryApplication.WorkflowDeliveryInstallationCreatedAtUtcInput(
+                DeliveryApplication.WorkflowDeliveryAcceptanceDateProjection.UtcYearMonth,
+                -2));
+        snapshot.Package.AcceptancePolicy.Input.Bindings[1].Source.Should().BeOfType<
+            DeliveryApplication.WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput>();
         snapshot.LifecycleStatus.Should().Be(DeliveryApplication.WorkflowDeliveryLifecycleStatus.Active);
         snapshot.Installation!.Status.Should().Be(DeliveryApplication.WorkflowInstallationStatus.Ready);
+        snapshot.Installation.AcceptanceInput.Should().NotBeNull();
+        snapshot.Installation.AcceptanceInput!.Fields.Should().ContainKey("created_month")
+            .WhoseValue.StringValue.Should().Be("period:2026-08:utc");
         snapshot.Installation.OperationId.Should().Be("installation-alpha:provision:a1");
         snapshot.Installation.ContinuationClaim.Should().NotBeNull();
         snapshot.Installation.ContinuationClaim!.ClaimId.Should().Be("claim-readiness-a1");
@@ -56,6 +71,73 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
         query.Filters.Should().Contain(filter =>
             filter.FieldPath == "target_scope_id" &&
             Equals(filter.Value.RawValue, "scope-alpha"));
+    }
+
+    [Fact]
+    public async Task GetForScopeAsync_WhenLegacyPackageHasNoAcceptanceInput_ShouldMapEmptyInput()
+    {
+        var document = ValidDocument();
+        document.Package.AcceptancePolicy.Input = null;
+        var port = new ProjectionWorkflowDeliveryQueryPort(new RecordingReader
+        {
+            QueryResult = Result(document),
+        });
+
+        var snapshot = await port.GetForScopeAsync("delivery-alpha", "scope-alpha");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Package.AcceptancePolicy.Input.Literals.Fields.Should().BeEmpty();
+        snapshot.Package.AcceptancePolicy.Input.Bindings.Should().BeEmpty();
+        snapshot.Package.AcceptancePolicy.InputDeclared.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetForScopeAsync_WhenInstallationAcceptanceInputIsMissing_ShouldPreserveAbsence()
+    {
+        var document = ValidDocument();
+        document.Installation.AcceptanceInput = null;
+        var port = new ProjectionWorkflowDeliveryQueryPort(new RecordingReader
+        {
+            QueryResult = Result(document),
+        });
+
+        var snapshot = await port.GetForScopeAsync("delivery-alpha", "scope-alpha");
+
+        snapshot!.Installation!.AcceptanceInput.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetForScopeAsync_WhenAcceptanceBindingHasNoSource_ShouldRejectDocument()
+    {
+        var document = ValidDocument();
+        document.Package.AcceptancePolicy.Input.Bindings.Add(
+            new WorkflowDeliveryAcceptanceInputBinding { Key = "unsupported" });
+        var port = new ProjectionWorkflowDeliveryQueryPort(new RecordingReader
+        {
+            QueryResult = Result(document),
+        });
+
+        var act = () => port.GetForScopeAsync("delivery-alpha", "scope-alpha");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*acceptance_policy input is invalid*");
+    }
+
+    [Fact]
+    public async Task GetForScopeAsync_WhenAcceptanceDateProjectionIsUnspecified_ShouldRejectDocument()
+    {
+        var document = ValidDocument();
+        document.Package.AcceptancePolicy.Input.Bindings[0].InstallationCreatedAtUtc.DateProjection =
+            WorkflowDeliveryAcceptanceDateProjection.Unspecified;
+        var port = new ProjectionWorkflowDeliveryQueryPort(new RecordingReader
+        {
+            QueryResult = Result(document),
+        });
+
+        var act = () => port.GetForScopeAsync("delivery-alpha", "scope-alpha");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*acceptance_policy input is invalid*");
     }
 
     [Fact]
@@ -183,6 +265,38 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
                 AcceptancePolicy = new WorkflowDeliveryAcceptancePolicy
                 {
                     Mode = WorkflowDeliveryAcceptanceMode.AutomaticPreview,
+                    Input = new WorkflowDeliveryAcceptanceInputRecipe
+                    {
+                        Literals = new Struct
+                        {
+                            Fields =
+                            {
+                                ["dry_run"] = ProtobufValue.ForBool(true),
+                            },
+                        },
+                        Bindings =
+                        {
+                            new WorkflowDeliveryAcceptanceInputBinding
+                            {
+                                Key = "created_month",
+                                Prefix = "period:",
+                                Suffix = ":utc",
+                                InstallationCreatedAtUtc =
+                                    new WorkflowDeliveryInstallationCreatedAtUtcInput
+                                    {
+                                        DateProjection =
+                                            WorkflowDeliveryAcceptanceDateProjection.UtcYearMonth,
+                                        DayOffset = -2,
+                                    },
+                            },
+                            new WorkflowDeliveryAcceptanceInputBinding
+                            {
+                                Key = "owner_id",
+                                AuthenticatedOwnerExternalUserId =
+                                    new WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput(),
+                            },
+                        },
+                    },
                 },
                 CreatedBy = "admin-alpha",
                 CreatedAtUtc = At(0),
@@ -214,6 +328,15 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
                 Attempt = 1,
                 OperationId = "installation-alpha:provision:a1",
                 CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan(),
+                AcceptanceInput = new Struct
+                {
+                    Fields =
+                    {
+                        ["created_month"] = ProtobufValue.ForString("period:2026-08:utc"),
+                        ["dry_run"] = ProtobufValue.ForBool(true),
+                        ["owner_id"] = ProtobufValue.ForString("user-alpha"),
+                    },
+                },
                 CreatedAtUtc = At(1),
                 UpdatedAtUtc = At(1),
                 ContinuationClaim = new WorkflowInstallationContinuationClaim

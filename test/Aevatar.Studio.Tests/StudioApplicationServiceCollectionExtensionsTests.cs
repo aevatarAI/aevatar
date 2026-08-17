@@ -11,6 +11,7 @@ using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Hosting.WorkOrders;
+using Aevatar.Studio.Hosting.WorkflowDeliveries;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -157,86 +158,90 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddStudioHostingCore_WhenDeliverySectionIsMissing_ShouldUseShippedWorkflowAllowlist()
+    public void AddStudioHostingCore_ShouldRegisterDeliveryPackageCatalogStartupProbe()
+    {
+        var services = new ServiceCollection();
+
+        services.AddStudioHostingCore(new ConfigurationBuilder().Build());
+
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType == typeof(WorkflowDeliveryPackageCatalogStartupProbe));
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliverySectionIsMissing_ShouldExposeEmptyPackageCatalog()
     {
         var options = ResolveDeliveryOptions(new ConfigurationBuilder().Build());
 
-        options.AllowedWorkflowNames.Should().Equal(
-            "hr_onboarding_email_approval",
-            "hr_monthly_attendance_approval",
-            "hr_attendance_fill_reminder",
-            "fin_invoice_precheck_approval",
-            "fin_budget_variance_monitor");
+        options.Packages.Should().BeEmpty();
     }
 
     [Fact]
-    public void AddStudioHostingCore_WhenDeliveryAllowlistIsConfigured_ShouldPreserveExactSubset()
+    public void AddStudioHostingCore_WhenDeliveryPackageIsConfigured_ShouldBindTypedDefinition()
     {
         var configuration = new ConfigurationBuilder()
-            .AddJsonStream(new MemoryStream("""
-                {"Aevatar":{"Delivery":{"UseShippedWorkflowAllowlist":true}}}
-                """u8.ToArray()))
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:0"] =
-                    "fin_invoice_precheck_approval",
-                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:1"] =
-                    "hr_onboarding_email_approval",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:WorkflowName"] = "workflow-alpha",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:DisplayName"] = "Workflow Alpha",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:Acceptance:Mode"] = "AutomaticPreview",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:Acceptance:Input:0:Key"] = "dry_run",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:Acceptance:Input:0:Kind"] = "Boolean",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:Acceptance:Input:0:Value"] = "true",
             })
             .Build();
 
         var options = ResolveDeliveryOptions(configuration);
 
-        options.AllowedWorkflowNames.Should().Equal(
-            "fin_invoice_precheck_approval",
-            "hr_onboarding_email_approval");
+        var package = options.Packages.Should().ContainSingle().Which;
+        package.WorkflowName.Should().Be("workflow-alpha");
+        package.DisplayName.Should().Be("Workflow Alpha");
+        package.Acceptance.Mode.Should().Be(WorkflowDeliveryAcceptanceMode.AutomaticPreview);
+        package.Acceptance.Input.Should().ContainSingle().Which.Kind
+            .Should().Be(WorkflowDeliveryAcceptanceInputValueKind.Boolean);
     }
 
     [Fact]
-    public void AddStudioHostingCore_WhenDeliveryAllowlistIsExplicitlyEmpty_ShouldRemainEmpty()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddJsonStream(new MemoryStream("""
-                {"Aevatar":{"Delivery":{"UseShippedWorkflowAllowlist":true}}}
-                """u8.ToArray()))
-            .AddJsonStream(new MemoryStream("""
-                {"Aevatar":{"Delivery":{"AllowedWorkflowNames":[]}}}
-                """u8.ToArray()))
-            .Build();
-
-        var options = ResolveDeliveryOptions(configuration);
-
-        options.AllowedWorkflowNames.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void AddStudioHostingCore_WhenShippedAllowlistIsExplicitlyEnabled_ShouldUseShippedWorkflows()
+    public void AddStudioHostingCore_WhenDeliveryConfigurationContainsUnknownKey_ShouldFailHostStartup()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packagess:0:WorkflowName"] = "workflow-alpha",
             })
             .Build();
+        var services = new ServiceCollection();
+        services.AddStudioHostingCore(configuration);
+        using var provider = services.BuildServiceProvider();
 
-        var options = ResolveDeliveryOptions(configuration);
+        var action = () => provider.GetRequiredService<IStartupValidator>().Validate();
 
-        options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Packagess*");
     }
 
-    [Fact]
-    public void AddStudioHostingCore_WhenDeliverySectionOmitsAllowlistAndOptIn_ShouldRemainEmpty()
+    [Theory]
+    [InlineData("AllowedWorkflowNames:0", "workflow-alpha")]
+    [InlineData("UseShippedWorkflowAllowlist", "true")]
+    public void AddStudioHostingCore_WhenLegacyDeliveryCatalogConfigurationIsPresent_ShouldFailHostStartup(
+        string key,
+        string value)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [$"{WorkflowDeliveryOptions.SectionName}:PackageDirectory"] = "delivery-workflows",
+                [$"{WorkflowDeliveryOptions.SectionName}:{key}"] = value,
             })
             .Build();
+        var services = new ServiceCollection();
+        services.AddStudioHostingCore(configuration);
+        using var provider = services.BuildServiceProvider();
 
-        var options = ResolveDeliveryOptions(configuration);
+        var action = () => provider.GetRequiredService<IStartupValidator>().Validate();
 
-        options.AllowedWorkflowNames.Should().BeEmpty();
+        action.Should().Throw<OptionsValidationException>()
+            .WithMessage("*no longer supported*Packages*");
     }
 
     [Theory]
@@ -266,14 +271,12 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
     {
         var action = () => ResolveDeliveryOptions(DeliveryConfiguration("ConsoleWebBaseUrl", value));
 
-        action.Should().Throw<InvalidOperationException>()
+        action.Should().Throw<OptionsValidationException>()
             .WithMessage("*ConsoleWebBaseUrl*");
     }
 
-    // The production ConfigMap carries the product-console URL. Adding that section is what makes
-    // `Aevatar:Delivery` exist, which flips the allowlist from "absent, use shipped" to
-    // "present, fail closed" — so the deployed config must opt in explicitly or every
-    // package disappears.
+    // Console routing does not imply package publication. Package definitions remain an
+    // explicit deployment-owned catalog.
     [Fact]
     public void AddStudioHostingCore_WhenDeliverySectionCarriesOnlyConsoleWebUrl_ShouldExposeNoPackages()
     {
@@ -286,28 +289,28 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
 
         var options = ResolveDeliveryOptions(configuration);
 
-        options.AllowedWorkflowNames.Should().BeEmpty();
+        options.Packages.Should().BeEmpty();
     }
 
     [Fact]
-    public void AddStudioHostingCore_WhenConsoleWebUrlIsCombinedWithTheShippedOptIn_ShouldKeepBoth()
+    public void AddStudioHostingCore_WhenConsoleWebUrlIsCombinedWithConfiguredPackage_ShouldKeepBoth()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:WorkflowName"] = "workflow-alpha",
                 [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "https://console.example.com",
             })
             .Build();
 
         var options = ResolveDeliveryOptions(configuration);
 
-        options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
+        options.Packages.Should().ContainSingle().Which.WorkflowName.Should().Be("workflow-alpha");
         options.ConsoleWebBaseUrl.Should().Be("https://console.example.com");
     }
 
     [Fact]
-    public void MainnetDistributedDeliveryConfiguration_ShouldKeepTheShippedAllowlistWithConsoleWebUrl()
+    public void MainnetDistributedDeliveryConfiguration_ShouldKeepEmptyCatalogWithConsoleWebUrl()
     {
         using var stream = File.OpenRead(Path.Combine(
             Aevatar.Configuration.AevatarPaths.RepoRoot,
@@ -320,7 +323,7 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
 
         var options = ResolveDeliveryOptions(configuration);
 
-        options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
+        options.Packages.Should().BeEmpty();
         options.ConsoleWebBaseUrl.Should().Be("https://aevatar-console.aevatar.ai");
     }
 

@@ -7,13 +7,45 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Options;
 using ActorPackage = Aevatar.GAgents.WorkflowDelivery.WorkflowPackageVersionSnapshot;
+using ApplicationAcceptanceDateProjection = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceDateProjection;
+using ProtobufValue = Google.Protobuf.WellKnownTypes.Value;
+using ProtoAcceptanceDateProjection = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceDateProjection;
 
 namespace Aevatar.Studio.Tests;
 
 public sealed class WorkflowDeliveryServiceTests
 {
+    [Fact]
+    public async Task CreateAsync_ShouldCarryGenericAcceptanceRecipeIntoCommandContract()
+    {
+        var package = DeliveryActorPackage();
+        var context = new TestContext(packageCatalog: new StubPackageCatalog(package));
+
+        await context.Service.CreateAsync(
+            "admin-alpha",
+            new WorkflowDeliveryCreateRequest(
+                package.WorkflowName,
+                package.PackageVersionId,
+                "scope-alpha",
+                "create-alpha"));
+
+        var policy = context.Commands.Created.Should().ContainSingle().Subject.Package.AcceptancePolicy;
+        policy.InputDeclared.Should().BeTrue();
+        policy.Input.Literals.Fields.Should().ContainKey("dry_run")
+            .WhoseValue.BoolValue.Should().BeTrue();
+        policy.Input.Bindings.Select(static value => value.Key)
+            .Should().Equal("created_month", "owner_id");
+        policy.Input.Bindings[0].Source.Should().BeEquivalentTo(
+            new WorkflowDeliveryInstallationCreatedAtUtcInput(
+                ApplicationAcceptanceDateProjection.UtcYearMonth,
+                -2));
+        policy.Input.Bindings[1].Source.Should().BeOfType<
+            WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput>();
+    }
+
     [Theory]
     [InlineData("stale-digest", "write")]
     [InlineData("digest-alpha", "destructive")]
@@ -114,25 +146,52 @@ public sealed class WorkflowDeliveryServiceTests
     }
 
     [Fact]
-    public async Task ListCustomerAsync_WhenInvoiceNeedsAttachments_ShouldExposeManualOnlyAcceptancePolicy()
+    public async Task ListCustomerAsync_WhenPackageRequiresManualAcceptance_ShouldExposeManualOnlyPolicy()
     {
-        var context = new TestContext(DeliverySnapshot(WorkflowDeliveryAcceptancePolicies.InvoicePrecheckApproval));
+        var context = new TestContext(DeliverySnapshot(
+            acceptanceMode: WorkflowDeliveryAcceptanceMode.Manual,
+            acceptanceLimitation: "An external acceptance run is required."));
 
         var result = await context.Service.ListCustomerAsync("scope-alpha");
 
         var delivery = result.Items.Should().ContainSingle().Subject;
         delivery.AvailableTriggerIntents.Select(static option => option.Kind).Should().Equal("none");
         delivery.Package.AcceptancePolicy.AutomaticAcceptanceSupported.Should().BeFalse();
-        delivery.Package.AcceptancePolicy.Limitation.Should().Contain("input_file_refs");
+        delivery.Package.AcceptancePolicy.Limitation.Should().Be("An external acceptance run is required.");
+    }
+
+    [Fact]
+    public async Task ListCustomerAsync_WhenAcceptanceInputWasNotDeclared_ShouldExposeMigrationWithoutTriggers()
+    {
+        var context = new TestContext(DeliverySnapshot(inputDeclared: false));
+
+        var result = await context.Service.ListCustomerAsync("scope-alpha");
+
+        var delivery = result.Items.Should().ContainSingle().Subject;
+        delivery.AvailableTriggerIntents.Should().BeEmpty();
+        delivery.Package.AcceptancePolicy.AutomaticAcceptanceSupported.Should().BeFalse();
+        delivery.Package.AcceptancePolicy.InputDeclared.Should().BeFalse();
+        delivery.Package.AcceptancePolicy.Limitation.Should().Contain("revoked");
+        delivery.Package.AcceptancePolicy.Limitation.Should().Contain("recreated");
+        delivery.Package.AcceptancePolicy.Limitation.Should().Contain("reinstall");
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(
+            delivery,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        json.RootElement.GetProperty("availableTriggerIntents").GetArrayLength().Should().Be(0);
+        json.RootElement.GetProperty("package").GetProperty("acceptancePolicy")
+            .GetProperty("inputDeclared").GetBoolean().Should().BeFalse();
     }
 
     [Theory]
     [InlineData("one_shot")]
     [InlineData("cron")]
-    public async Task ValidateConfigurationAsync_WhenInvoiceNeedsAttachments_ShouldRejectAutomaticAcceptance(
+    public async Task ValidateConfigurationAsync_WhenPackageRequiresManualAcceptance_ShouldRejectAutomaticTrigger(
         string triggerKind)
     {
-        var context = new TestContext(DeliverySnapshot(WorkflowDeliveryAcceptancePolicies.InvoicePrecheckApproval));
+        var context = new TestContext(DeliverySnapshot(
+            acceptanceMode: WorkflowDeliveryAcceptanceMode.Manual,
+            acceptanceLimitation: "An external acceptance run is required."));
         var request = new WorkflowDeliveryValidateConfigurationRequest(
             "team-alpha",
             TriggerIntent: AutomaticTrigger(triggerKind));
@@ -145,7 +204,7 @@ public sealed class WorkflowDeliveryServiceTests
 
         var exception = (await action.Should().ThrowAsync<WorkflowDeliveryException>()).Which;
         exception.Code.Should().Be("AUTOMATIC_ACCEPTANCE_UNSUPPORTED");
-        exception.Message.Should().Contain("input_file_refs");
+        exception.Message.Should().Be("An external acceptance run is required.");
         context.Commands.Started.Should().BeEmpty();
         context.Provisioning.PreparationRequests.Should().BeEmpty();
     }
@@ -153,10 +212,12 @@ public sealed class WorkflowDeliveryServiceTests
     [Theory]
     [InlineData("one_shot")]
     [InlineData("cron")]
-    public async Task PublishAsync_WhenInvoiceNeedsAttachments_ShouldRejectAutomaticAcceptance(
+    public async Task PublishAsync_WhenPackageRequiresManualAcceptance_ShouldRejectAutomaticTrigger(
         string triggerKind)
     {
-        var context = new TestContext(DeliverySnapshot(WorkflowDeliveryAcceptancePolicies.InvoicePrecheckApproval));
+        var context = new TestContext(DeliverySnapshot(
+            acceptanceMode: WorkflowDeliveryAcceptanceMode.Manual,
+            acceptanceLimitation: "An external acceptance run is required."));
         var request = new WorkflowDeliveryPublishRequest(
             "team-alpha",
             "publish-alpha",
@@ -170,7 +231,7 @@ public sealed class WorkflowDeliveryServiceTests
 
         var exception = (await action.Should().ThrowAsync<WorkflowDeliveryException>()).Which;
         exception.Code.Should().Be("AUTOMATIC_ACCEPTANCE_UNSUPPORTED");
-        exception.Message.Should().Contain("input_file_refs");
+        exception.Message.Should().Be("An external acceptance run is required.");
         context.Commands.Started.Should().BeEmpty();
         context.Provisioning.PreparationRequests.Should().BeEmpty();
     }
@@ -674,6 +735,7 @@ public sealed class WorkflowDeliveryServiceTests
             [],
             new WorkflowCapabilityAdmissionPlan(),
             null,
+            new Struct(),
             "installation-alpha:provision:a1",
             WorkflowInstallationStatus.ProvisioningAccepted,
             "provisioning_accepted",
@@ -749,6 +811,7 @@ public sealed class WorkflowDeliveryServiceTests
             [],
             new WorkflowCapabilityAdmissionPlan(),
             null,
+            new Struct(),
             "installation-alpha:provision:a1",
             WorkflowInstallationStatus.ProvisioningAccepted,
             "provisioning_accepted",
@@ -805,7 +868,10 @@ public sealed class WorkflowDeliveryServiceTests
             null);
 
     private static WorkflowDeliverySnapshot DeliverySnapshot(
-        string workflowName = WorkflowDeliveryAcceptancePolicies.BudgetVarianceMonitor)
+        string workflowName = "workflow-alpha",
+        WorkflowDeliveryAcceptanceMode acceptanceMode = WorkflowDeliveryAcceptanceMode.AutomaticPreview,
+        string? acceptanceLimitation = null,
+        bool inputDeclared = true)
     {
         var now = DateTimeOffset.Parse("2026-08-16T01:00:00Z");
         return new WorkflowDeliverySnapshot(
@@ -825,7 +891,19 @@ public sealed class WorkflowDeliveryServiceTests
                 ["network.write"],
                 "Writes an external resource",
                 [],
-                WorkflowDeliveryAcceptancePolicies.Resolve(workflowName),
+                new WorkflowDeliveryAcceptancePolicy(
+                    acceptanceMode,
+                    acceptanceLimitation,
+                    new WorkflowDeliveryAcceptanceInputRecipe(
+                        new Struct
+                        {
+                            Fields =
+                            {
+                                ["dry_run"] = ProtobufValue.ForBool(true),
+                            },
+                        },
+                        []),
+                    inputDeclared),
                 "admin-alpha",
                 now),
             "scope-alpha",
@@ -841,6 +919,59 @@ public sealed class WorkflowDeliveryServiceTests
             null,
             1,
             now);
+    }
+
+    private static ActorPackage DeliveryActorPackage()
+    {
+        var recipe = new Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputRecipe
+        {
+            Literals = new Struct
+            {
+                Fields =
+                {
+                    ["dry_run"] = ProtobufValue.ForBool(true),
+                },
+            },
+        };
+        recipe.Bindings.Add(new Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = "created_month",
+            Prefix = "period:",
+            Suffix = ":utc",
+            InstallationCreatedAtUtc =
+                new Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryInstallationCreatedAtUtcInput
+                {
+                    DateProjection = ProtoAcceptanceDateProjection.UtcYearMonth,
+                    DayOffset = -2,
+                },
+        });
+        recipe.Bindings.Add(new Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = "owner_id",
+            AuthenticatedOwnerExternalUserId =
+                new Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput(),
+        });
+        return new ActorPackage
+        {
+            PackageId = "package-alpha",
+            PackageVersionId = "package-alpha@package-hash-alpha",
+            WorkflowName = "workflow-alpha",
+            Version = "package-hash-alpha",
+            DisplayName = "Workflow Alpha",
+            Description = "Description",
+            SourceYaml = "name: workflow-alpha\nsteps: []\n",
+            SourceHash = "source-alpha",
+            PackageHash = "package-hash-alpha",
+            RiskSummary = "Writes an external resource",
+            AcceptancePolicy = new Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptancePolicy
+            {
+                Mode = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceMode.AutomaticPreview,
+                Input = recipe,
+            },
+            CreatedBy = "admin-alpha",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-08-16T01:00:00Z")),
+        };
     }
 
     private static WorkflowDeliverySnapshot DeliveryWithLarkSlot()
@@ -897,7 +1028,8 @@ public sealed class WorkflowDeliveryServiceTests
             INyxIdUserServiceInventoryPort? connectionInventory = null,
             WorkflowDeliveryOptions? options = null,
             Action<BeginWorkflowDeliveryConnectionMutation, StubQueryPort>? beginProjection = null,
-            Action<AttachWorkflowDeliveryConnectionMutation, StubQueryPort>? attachProjection = null)
+            Action<AttachWorkflowDeliveryConnectionMutation, StubQueryPort>? attachProjection = null,
+            IWorkflowDeliveryPackageCatalog? packageCatalog = null)
         {
             Queries = new StubQueryPort(snapshot ?? DeliverySnapshot());
             var projector = beginProjection ??
@@ -910,7 +1042,7 @@ public sealed class WorkflowDeliveryServiceTests
             Preview = new StubPreviewService();
             Provisioning = new RecordingProvisioningService();
             Service = new WorkflowDeliveryService(
-                new UnusedPackageCatalog(),
+                packageCatalog ?? new UnusedPackageCatalog(),
                 new StubRenderer(),
                 Commands,
                 Queries,
@@ -1027,6 +1159,8 @@ public sealed class WorkflowDeliveryServiceTests
         Action<BeginWorkflowDeliveryConnectionMutation>? projectBegin = null,
         Action<AttachWorkflowDeliveryConnectionMutation>? projectAttach = null) : IWorkflowDeliveryCommandPort
     {
+        public List<CreateWorkflowDeliveryMutation> Created { get; } = [];
+
         public List<StartWorkflowInstallationMutation> Started { get; } = [];
 
         public List<RecordWorkflowProvisioningAcceptedMutation> ProvisioningAccepted { get; } = [];
@@ -1043,7 +1177,11 @@ public sealed class WorkflowDeliveryServiceTests
 
         public Task<WorkflowDeliveryCommandReceipt> CreateAsync(
             CreateWorkflowDeliveryMutation mutation,
-            CancellationToken ct = default) => Accepted(mutation.DeliveryId);
+            CancellationToken ct = default)
+        {
+            Created.Add(mutation);
+            return Accepted(mutation.DeliveryId);
+        }
 
         public Task<WorkflowDeliveryCommandReceipt> RecordAccessAsync(
             RecordWorkflowDeliveryAccessMutation mutation,
@@ -1256,6 +1394,20 @@ public sealed class WorkflowDeliveryServiceTests
             string createdBy,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class StubPackageCatalog(ActorPackage package) : IWorkflowDeliveryPackageCatalog
+    {
+        public Task<IReadOnlyList<ActorPackage>> ListAsync(
+            string createdBy,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ActorPackage>>([package]);
+
+        public Task<ActorPackage> GetAsync(
+            string workflowName,
+            string createdBy,
+            CancellationToken ct = default) =>
+            Task.FromResult(package);
     }
 
     private sealed class UnusedConnectLinkPort : INyxIdConnectLinkPort

@@ -31,14 +31,19 @@ import json, os, sys
 current, target = sys.argv[1], sys.argv[2]
 cfg = json.load(open(current))
 delivery = cfg.setdefault("Aevatar", {}).setdefault("Delivery", {})
+legacy_keys = sorted(
+    key for key in ("AllowedWorkflowNames", "UseShippedWorkflowAllowlist")
+    if key in delivery
+)
+if legacy_keys:
+    joined = ", ".join(legacy_keys)
+    raise SystemExit(
+        "error: legacy Aevatar:Delivery settings remain: " + joined + ". "
+        "Remove them, configure typed Aevatar:Delivery:Packages, and mount each matching "
+        "{workflowName}.yaml under Aevatar:Delivery:PackageDirectory before rollout."
+    )
 delivery.pop("ConsoleBaseUrl", None)
 delivery["ConsoleWebBaseUrl"] = os.environ["CONSOLE_WEB_BASE_URL"]
-# Creating this section is itself a behaviour change: the allowlist falls back to the
-# shipped packages only while Aevatar:Delivery is ABSENT. Once the section exists it fails
-# closed unless it names an allowlist or opts in, so writing the URLs alone would remove
-# every deliverable package. Opt in explicitly, without touching a configured allowlist.
-if "AllowedWorkflowNames" not in delivery:
-    delivery["UseShippedWorkflowAllowlist"] = True
 json.dump(cfg, open(target, "w"), indent=2, ensure_ascii=False)
 PY
 
@@ -55,6 +60,9 @@ if a != b:
     raise SystemExit("error: the rewrite changed settings outside Aevatar:Delivery; refusing to apply")
 print("verified: no setting outside Aevatar:Delivery changed")
 PY
+
+echo "delivery package prerequisite: this helper does not create Aevatar:Delivery:Packages or mount YAML sources."
+echo "Each configured package requires a matching {workflowName}.yaml under Aevatar:Delivery:PackageDirectory before rollout."
 
 if [ "${APPLY:-0}" != "1" ]; then
   echo "dry run only. Re-run with APPLY=1 to write the ConfigMap and restart the deployment."

@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
@@ -80,6 +81,8 @@ public sealed record ProvisionWorkflowRequest(
     string? Timezone = null,
     ProvisionWorkflowCallerCredential? Caller = null)
 {
+    private Struct? _acceptanceInput;
+
     /// <summary>
     /// Additional named workflow definitions referenced by the entry workflow.
     /// Each dictionary key is the stable definition name used by workflow_call.
@@ -90,6 +93,13 @@ public sealed record ProvisionWorkflowRequest(
 
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+
+    [JsonIgnore]
+    public Struct? AcceptanceInput
+    {
+        get => _acceptanceInput?.Clone();
+        init => _acceptanceInput = value?.Clone();
+    }
 
     /// <summary>
     /// Target Studio Team that owns the provisioned workflow member. Required:

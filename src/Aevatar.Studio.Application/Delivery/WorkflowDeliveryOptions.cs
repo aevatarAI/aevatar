@@ -4,20 +4,9 @@ public sealed class WorkflowDeliveryOptions
 {
     public const string SectionName = "Aevatar:Delivery";
 
-    public static IReadOnlyList<string> ShippedWorkflowNames { get; } = Array.AsReadOnly(new[]
-    {
-        "hr_onboarding_email_approval",
-        "hr_monthly_attendance_approval",
-        "hr_attendance_fill_reminder",
-        "fin_invoice_precheck_approval",
-        "fin_budget_variance_monitor",
-    });
+    public IList<WorkflowDeliveryPackageOptions> Packages { get; set; } = [];
 
-    public bool UseShippedWorkflowAllowlist { get; set; }
-
-    public IList<string> AllowedWorkflowNames { get; set; } = [];
-
-    public string PackageDirectory { get; set; } = "delivery-workflows";
+    public string PackageDirectory { get; set; } = "workflow-delivery-packages";
 
     public int DefaultExpiryHours { get; set; } = 168;
 
@@ -31,4 +20,108 @@ public sealed class WorkflowDeliveryOptions
     /// to the backend API host.
     /// </summary>
     public string ConsoleWebBaseUrl { get; set; } = string.Empty;
+}
+
+public sealed class WorkflowDeliveryPackageOptions
+{
+    public string WorkflowName { get; set; } = string.Empty;
+
+    public string DisplayName { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    public string RiskSummary { get; set; } = string.Empty;
+
+    public IList<string> Capabilities { get; set; } = [];
+
+    public IList<WorkflowDeliveryVariableOptions> Variables { get; set; } = [];
+
+    public IList<WorkflowDeliveryConnectionSlotOptions> ConnectionSlots { get; set; } = [];
+
+    public WorkflowDeliveryAcceptanceOptions Acceptance { get; set; } = new();
+}
+
+public sealed class WorkflowDeliveryVariableOptions
+{
+    public string Key { get; set; } = string.Empty;
+
+    public string Label { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    public Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryVariableKind Kind { get; set; }
+
+    public bool Required { get; set; }
+
+    public string YamlPointer { get; set; } = string.Empty;
+
+    public string? JsonPointer { get; set; }
+
+    public string? DefaultValue { get; set; }
+}
+
+public sealed class WorkflowDeliveryConnectionSlotOptions
+{
+    public string Key { get; set; } = string.Empty;
+
+    public string Label { get; set; } = string.Empty;
+
+    public string ServiceSlug { get; set; } = string.Empty;
+
+    public bool Required { get; set; }
+}
+
+public sealed class WorkflowDeliveryAcceptanceOptions
+{
+    public Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceMode Mode { get; set; }
+
+    public string? Limitation { get; set; }
+
+    public IList<WorkflowDeliveryAcceptanceInputValueOptions> Input { get; set; } = [];
+}
+
+public enum WorkflowDeliveryAcceptanceInputValueKind
+{
+    Unspecified = 0,
+    String = 1,
+    Integer = 2,
+    Number = 3,
+    Boolean = 4,
+}
+
+public enum WorkflowDeliveryAcceptanceInputValueSource
+{
+    Unspecified = 0,
+    Literal = 1,
+    InstallationCreatedAtUtc = 2,
+    AuthenticatedOwnerExternalUserId = 3,
+}
+
+public enum WorkflowDeliveryAcceptanceDateProjection
+{
+    Unspecified = 0,
+    UtcDate = 1,
+    UtcYearMonth = 2,
+    UtcIsoWeek = 3,
+    UtcCompactDate = 4,
+}
+
+public sealed class WorkflowDeliveryAcceptanceInputValueOptions
+{
+    public string Key { get; set; } = string.Empty;
+
+    public WorkflowDeliveryAcceptanceInputValueKind Kind { get; set; }
+
+    public WorkflowDeliveryAcceptanceInputValueSource Source { get; set; } =
+        WorkflowDeliveryAcceptanceInputValueSource.Literal;
+
+    public string Value { get; set; } = string.Empty;
+
+    public WorkflowDeliveryAcceptanceDateProjection DateProjection { get; set; }
+
+    public int DayOffset { get; set; }
+
+    public string Prefix { get; set; } = string.Empty;
+
+    public string Suffix { get; set; } = string.Empty;
 }

@@ -56,7 +56,7 @@ function taskPlanWithCondition(
     planId: 'plan-alpha',
     planRevision: 2,
     planRevisions: [],
-    title: 'Screen candidate',
+    title: 'Evaluate threshold',
     status: 'active',
     steps: [
       {
@@ -78,7 +78,7 @@ function taskPlanWithCondition(
               comparison: 'gte',
               outcome: 'true',
               evaluatedAt: '2026-08-09T00:10:00Z',
-              guardedToolName: 'bitable_record_create',
+              guardedToolName: 'external_record_create',
               ...conditionOverrides,
             },
           },
@@ -95,8 +95,8 @@ function taskPlanWithCondition(
         kind: 'tool',
         status: 'planned',
         required: true,
-        description: 'Create the attestation row',
-        source: { tool: { toolName: 'bitable_record_create' } },
+        description: 'Create the verified record',
+        source: { tool: { toolName: 'external_record_create' } },
         mayChangeExternalState: true,
         externalEffect: 'not_started',
         availableActions: {},
@@ -151,7 +151,7 @@ describe('decodeChatTaskPlan', () => {
         comparison: 'gte',
         outcome: 'true',
         evaluatedAt: '2026-08-09T00:10:00Z',
-        guardedToolName: 'bitable_record_create',
+        guardedToolName: 'external_record_create',
       },
     });
     expect(decoded.steps[1]?.guard).toEqual({
