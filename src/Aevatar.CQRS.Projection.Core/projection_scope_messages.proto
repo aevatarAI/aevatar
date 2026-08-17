@@ -35,6 +35,7 @@ message ProjectionScopeState {
   // Bounded, payload-free diagnostics. Trimming this ring never removes repair facts.
   repeated ProjectionFailureDiagnostic retained_failure_diagnostics = 20;
   int64 failure_diagnostic_dropped_total = 21;
+  int64 activation_generation = 22;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -92,6 +93,12 @@ message ProjectionScopeStartedEvent {
   string session_id = 3;
   ProjectionScopeMode mode = 4;
   google.protobuf.Timestamp occurred_at_utc = 5;
+  int64 activation_generation = 6;
+}
+
+message ProjectionScopeActivationGenerationMigratedEvent {
+  int64 activation_generation = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
 }
 
 message ProjectionObservationAttachmentUpdatedEvent {

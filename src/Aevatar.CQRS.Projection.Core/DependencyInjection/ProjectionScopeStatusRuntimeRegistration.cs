@@ -61,7 +61,8 @@ public static class ProjectionScopeStatusRuntimeRegistration
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindVerifier>(),
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
-                sp.GetService<ILoggerFactory>()));
+                sp.GetService<ILoggerFactory>(),
+                sp.GetRequiredService<IStreamForwardingBindingAuthority>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<ProjectionScopeStatusRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<
                 ProjectionScopeStatusRuntimeLease,
@@ -73,7 +74,9 @@ public static class ProjectionScopeStatusRuntimeRegistration
                     lease.Context.ProjectionKind,
                     ProjectionRuntimeMode.DurableMaterialization),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindVerifier>(),
-                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>()));
+                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
+                sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
+                sp.GetRequiredService<IStreamForwardingRegistry>()));
         return services;
     }
 

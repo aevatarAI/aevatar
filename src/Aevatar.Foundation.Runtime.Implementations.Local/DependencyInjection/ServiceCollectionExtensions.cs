@@ -52,6 +52,8 @@ public static class ServiceCollectionExtensions
             (IStreamLifecycleManager)sp.GetRequiredService<IStreamProvider>());
         services.TryAddSingleton<IStreamForwardingRegistry>(sp =>
             sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
+        services.TryAddSingleton<IStreamForwardingBindingAuthority>(sp =>
+            sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
         services.TryAddSingleton<IActorEventSubscriptionProvider>(sp =>
             new StreamProviderActorEventSubscriptionProvider(sp.GetRequiredService<IStreamProvider>()));
         services.TryAddSingleton<InMemoryActorRuntimeCallbackScheduler>();

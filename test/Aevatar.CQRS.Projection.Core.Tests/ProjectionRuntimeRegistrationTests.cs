@@ -17,10 +17,12 @@ public sealed class ProjectionRuntimeRegistrationTests
     public async Task AddProjectionMaterializationRuntimeCore_ShouldRegisterLifecycleAndAdministrationServices()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamForwardingRegistry>(dispatchPort);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(dispatchPort);
 
         services.AddProjectionMaterializationRuntimeCore<
             TestMaterializationContext,
@@ -68,10 +70,12 @@ public sealed class ProjectionRuntimeRegistrationTests
     public async Task AddProjectionMaterializationRuntimeCore_ShouldReleaseSessionScopedMaterialization()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamForwardingRegistry>(dispatchPort);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(dispatchPort);
 
         services.AddProjectionMaterializationRuntimeCore<
             TestSessionScopedMaterializationContext,
@@ -115,11 +119,13 @@ public sealed class ProjectionRuntimeRegistrationTests
     public async Task AddProjectionMaterializationRuntimeCore_ShouldNotWriteObservationRelayFromActivationService()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var streamProvider = new RecordingStreamProvider();
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamForwardingRegistry>(dispatchPort);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(dispatchPort);
         services.AddSingleton<IStreamProvider>(streamProvider);
 
         services.AddProjectionMaterializationRuntimeCore<
@@ -153,12 +159,15 @@ public sealed class ProjectionRuntimeRegistrationTests
     public async Task AddProjectionMaterializationRuntimeCore_ShouldPreserveDurableScope_WhenRelayReadinessFails()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
-        services.AddSingleton<IStreamForwardingRegistry>(
-            new FailingStreamForwardingRegistry(new TimeoutException("relay unavailable")));
+        var failingRegistry = new FailingStreamForwardingRegistry(
+            new TimeoutException("relay unavailable"),
+            successfulReadsBeforeFailure: 1);
+        services.AddSingleton<IStreamForwardingRegistry>(failingRegistry);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(failingRegistry);
 
         services.AddProjectionMaterializationRuntimeCore<
             TestMaterializationContext,
@@ -196,12 +205,15 @@ public sealed class ProjectionRuntimeRegistrationTests
     public async Task AddEventSinkProjectionRuntimeCore_ShouldReleaseSessionScope_WhenRelayReadinessFails()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
-        services.AddSingleton<IStreamForwardingRegistry>(
-            new FailingStreamForwardingRegistry(new TimeoutException("relay unavailable")));
+        var failingRegistry = new FailingStreamForwardingRegistry(
+            new TimeoutException("relay unavailable"),
+            successfulReadsBeforeFailure: 1);
+        services.AddSingleton<IStreamForwardingRegistry>(failingRegistry);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(failingRegistry);
 
         services.AddEventSinkProjectionRuntimeCore<
             TestSessionContext,
@@ -245,10 +257,12 @@ public sealed class ProjectionRuntimeRegistrationTests
     public async Task AddProjectionMaterializationRuntimeCore_ShouldRegisterAttachExistingLeaseLookup()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamForwardingRegistry>(dispatchPort);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(dispatchPort);
 
         services.AddProjectionMaterializationRuntimeCore<
             TestSessionScopedMaterializationContext,
@@ -360,10 +374,12 @@ public sealed class ProjectionRuntimeRegistrationTests
     public async Task AddEventSinkProjectionRuntimeCore_ShouldRegisterSessionLifecycleAndSessionScopeContext()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamForwardingRegistry>(dispatchPort);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(dispatchPort);
 
         services.AddEventSinkProjectionRuntimeCore<
             TestSessionContext,
@@ -412,10 +428,12 @@ public sealed class ProjectionRuntimeRegistrationTests
     public async Task AddEventSinkProjectionRuntimeCore_ShouldRegisterAttachExistingSessionLeaseLookup()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamForwardingRegistry>(dispatchPort);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(dispatchPort);
 
         services.AddEventSinkProjectionRuntimeCore<
             TestSessionContext,
@@ -458,7 +476,7 @@ public sealed class ProjectionRuntimeRegistrationTests
     public async Task ProjectionFailureReplayService_ShouldOnlyDispatchForExistingScope()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var service = new ProjectionFailureReplayService(runtime, dispatchPort);
         var scopeKey = new ProjectionRuntimeScopeKey("actor-3", "projection-c", ProjectionRuntimeMode.DurableMaterialization);
         runtime.ExistingActorIds.Add(ProjectionScopeActorId.Build(scopeKey));
@@ -618,19 +636,77 @@ public sealed class ProjectionRuntimeRegistrationTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    private sealed class RecordingActorDispatchPort
+        : IActorDispatchPort,
+          IStreamForwardingRegistry,
+          IStreamForwardingBindingAuthority
     {
+        private readonly RecordingActorRuntime _runtime;
+        private readonly Dictionary<(string Source, string Target), StreamForwardingBinding> _bindings = [];
+
+        public RecordingActorDispatchPort(RecordingActorRuntime runtime)
+        {
+            _runtime = runtime;
+        }
+
         public List<(string actorId, EventEnvelope command)> Dispatched { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Dispatched.Add((actorId, envelope));
+            if (envelope.Payload?.Is(EnsureProjectionScopeCommand.Descriptor) == true)
+            {
+                var command = envelope.Payload.Unpack<EnsureProjectionScopeCommand>();
+                var targetKind = _runtime.CreatedByKind
+                    .Last(item => string.Equals(item.actorId, actorId, StringComparison.Ordinal))
+                    .agentKind;
+                _bindings[(command.RootActorId, actorId)] = ProjectionScopeObservationRelayBinding.Create(
+                    command.RootActorId,
+                    actorId,
+                    targetKind,
+                    1);
+            }
+            else if (envelope.Payload?.Is(ReleaseProjectionScopeCommand.Descriptor) == true)
+            {
+                var command = envelope.Payload.Unpack<ReleaseProjectionScopeCommand>();
+                _bindings.Remove((command.RootActorId, actorId));
+            }
+
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
+
+        public Task UpsertAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+        {
+            _bindings[(binding.SourceStreamId, binding.TargetStreamId)] = binding;
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveAsync(string sourceStreamId, string targetStreamId, CancellationToken ct = default)
+        {
+            _bindings.Remove((sourceStreamId, targetStreamId));
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListBySourceAsync(
+            string sourceStreamId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<StreamForwardingBinding>>(
+                _bindings.Values.Where(binding => binding.SourceStreamId == sourceStreamId).ToList());
+
+        public Task<StreamForwardingBinding?> GetAsync(
+            string sourceStreamId,
+            string targetStreamId,
+            CancellationToken ct = default) =>
+            Task.FromResult(_bindings.GetValueOrDefault((sourceStreamId, targetStreamId)));
     }
 
-    private sealed class FailingStreamForwardingRegistry(Exception failure) : IStreamForwardingRegistry
+    private sealed class FailingStreamForwardingRegistry(
+        Exception failure,
+        int successfulReadsBeforeFailure = 0)
+        : IStreamForwardingRegistry,
+          IStreamForwardingBindingAuthority
     {
+        private int _readCount;
         public Task UpsertAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
             Task.CompletedTask;
 
@@ -644,6 +720,17 @@ public sealed class ProjectionRuntimeRegistrationTests
             string sourceStreamId,
             CancellationToken ct = default) =>
             Task.FromException<IReadOnlyList<StreamForwardingBinding>>(failure);
+
+        public Task<StreamForwardingBinding?> GetAsync(
+            string sourceStreamId,
+            string targetStreamId,
+            CancellationToken ct = default)
+        {
+            if (Interlocked.Increment(ref _readCount) <= successfulReadsBeforeFailure)
+                return Task.FromResult<StreamForwardingBinding?>(null);
+
+            return Task.FromException<StreamForwardingBinding?>(failure);
+        }
     }
 
     private sealed class RecordingStreamProvider : IStreamProvider

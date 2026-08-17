@@ -61,7 +61,7 @@ public static class ProjectionMaterializationRuntimeRegistration
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
                 sp.GetService<ILoggerFactory>(),
-                sp.GetService<IStreamForwardingRegistry>());
+                sp.GetRequiredService<IStreamForwardingBindingAuthority>());
 
             return materializeScopeStatus
                 ? new ProjectionScopeStatusActivationService<TRuntimeLease>(
@@ -83,7 +83,9 @@ public static class ProjectionMaterializationRuntimeRegistration
                         ? scopedContext.SessionId
                         : string.Empty),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindVerifier>(),
-                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>()));
+                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
+                sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
+                sp.GetRequiredService<IStreamForwardingRegistry>()));
         return services;
     }
 

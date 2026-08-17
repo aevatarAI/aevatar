@@ -15,6 +15,17 @@ internal static class ProjectionScopeStateApplier
         next.Mode = evt.Mode;
         next.Active = true;
         next.Released = false;
+        next.ActivationGeneration = evt.ActivationGeneration;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyActivationGenerationMigrated(
+        ProjectionScopeState current,
+        ProjectionScopeActivationGenerationMigratedEvent evt)
+    {
+        var next = current.Clone();
+        next.ActivationGeneration = evt.ActivationGeneration;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }

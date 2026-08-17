@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -34,7 +35,7 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
     public async Task AddProjectionScopeStatusRuntimeCore_ShouldRegisterAttachExistingLeaseLookup()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = CreateServices(runtime, dispatchPort);
         services.AddProjectionScopeStatusRuntimeCore();
         var scopeKey = new ProjectionRuntimeScopeKey(
@@ -64,7 +65,7 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
     public async Task MaterializationActivation_EnsuresStatusScopeForNormalProjection()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = CreateServices(runtime, dispatchPort);
         services.AddProjectionScopeStatusRuntimeCore();
         services.AddProjectionMaterializationRuntimeCore<
@@ -111,7 +112,7 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
     public async Task StatusActivation_DoesNotRecursivelyEnsureStatusForItself()
     {
         var runtime = new RecordingActorRuntime();
-        var dispatchPort = new RecordingActorDispatchPort();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
         var services = CreateServices(runtime, dispatchPort);
         services.AddProjectionScopeStatusRuntimeCore();
 
@@ -132,6 +133,57 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
             .Be(ProjectionScopeStatusMaterializationContext.ProjectionKindValue);
     }
 
+    [Fact]
+    public async Task MaterializationAndStatusActivation_ExactEvidence_ShouldUseWarmPathForBothScopes()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddProjectionScopeStatusRuntimeCore();
+        services.AddProjectionMaterializationRuntimeCore<
+            TestMaterializationContext,
+            TestMaterializationLease,
+            ProjectionMaterializationScopeGAgent<TestMaterializationContext>>(
+            scopeKey => new TestMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new TestMaterializationLease(context));
+        var mainScopeKey = new ProjectionRuntimeScopeKey(
+            "root-warm",
+            "projection-warm",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var mainScopeActorId = ProjectionScopeActorId.Build(mainScopeKey);
+        var statusScopeKey = new ProjectionRuntimeScopeKey(
+            mainScopeActorId,
+            ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
+            ProjectionRuntimeMode.DurableMaterialization);
+        await dispatchPort.UpsertAsync(ProjectionScopeObservationRelayBinding.Create(
+            mainScopeKey.RootActorId,
+            mainScopeActorId,
+            "projection.materialization-scope.test-materialization-context",
+            1));
+        await dispatchPort.UpsertAsync(ProjectionScopeObservationRelayBinding.Create(
+            statusScopeKey.RootActorId,
+            ProjectionScopeActorId.Build(statusScopeKey),
+            "projection.materialization-scope.projection-scope-status-materialization-context",
+            1));
+
+        await using var provider = services.BuildServiceProvider();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestMaterializationLease>>();
+        await activation.EnsureAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = mainScopeKey.RootActorId,
+            ProjectionKind = mainScopeKey.ProjectionKind,
+            Mode = mainScopeKey.Mode,
+        });
+
+        runtime.ExistsCallCount.Should().Be(0);
+        runtime.CreatedActorIds.Should().BeEmpty();
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
     private static ServiceCollection CreateServices(
         RecordingActorRuntime runtime,
         RecordingActorDispatchPort dispatchPort)
@@ -139,6 +191,8 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
         var services = new ServiceCollection();
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamForwardingRegistry>(dispatchPort);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(dispatchPort);
         return services;
     }
 
@@ -146,6 +200,8 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
     {
         public HashSet<string> ExistingActorIds { get; } = [];
         public List<string> CreatedActorIds { get; } = [];
+        public List<(string agentKind, string actorId)> CreatedByKind { get; } = [];
+        public int ExistsCallCount { get; private set; }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent
@@ -167,6 +223,7 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
             var actorId = id ?? Guid.NewGuid().ToString("N");
             ExistingActorIds.Add(actorId);
             CreatedActorIds.Add(actorId);
+            CreatedByKind.Add((agentKind, actorId));
             return Task.FromResult<IActor>(new RecordingActor(actorId));
         }
 
@@ -174,23 +231,80 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
 
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
 
-        public Task<bool> ExistsAsync(string id) => Task.FromResult(ExistingActorIds.Contains(id));
+        public Task<bool> ExistsAsync(string id)
+        {
+            ExistsCallCount++;
+            return Task.FromResult(ExistingActorIds.Contains(id));
+        }
 
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    private sealed class RecordingActorDispatchPort
+        : IActorDispatchPort,
+          IStreamForwardingRegistry,
+          IStreamForwardingBindingAuthority
     {
+        private readonly RecordingActorRuntime _runtime;
+        private readonly Dictionary<(string Source, string Target), StreamForwardingBinding> _bindings = [];
+
+        public RecordingActorDispatchPort(RecordingActorRuntime runtime)
+        {
+            _runtime = runtime;
+        }
+
         public List<(string actorId, EventEnvelope command)> Dispatched { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Dispatched.Add((actorId, envelope));
+            if (envelope.Payload?.Is(EnsureProjectionScopeCommand.Descriptor) == true)
+            {
+                var command = envelope.Payload.Unpack<EnsureProjectionScopeCommand>();
+                var targetKind = _runtime.CreatedByKind
+                    .Last(item => string.Equals(item.actorId, actorId, StringComparison.Ordinal))
+                    .agentKind;
+                _bindings[(command.RootActorId, actorId)] = ProjectionScopeObservationRelayBinding.Create(
+                    command.RootActorId,
+                    actorId,
+                    targetKind,
+                    1);
+            }
+            else if (envelope.Payload?.Is(ReleaseProjectionScopeCommand.Descriptor) == true)
+            {
+                var command = envelope.Payload.Unpack<ReleaseProjectionScopeCommand>();
+                _bindings.Remove((command.RootActorId, actorId));
+            }
+
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
+
+        public Task UpsertAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+        {
+            _bindings[(binding.SourceStreamId, binding.TargetStreamId)] = binding;
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveAsync(string sourceStreamId, string targetStreamId, CancellationToken ct = default)
+        {
+            _bindings.Remove((sourceStreamId, targetStreamId));
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListBySourceAsync(
+            string sourceStreamId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<StreamForwardingBinding>>(
+                _bindings.Values.Where(binding => binding.SourceStreamId == sourceStreamId).ToList());
+
+        public Task<StreamForwardingBinding?> GetAsync(
+            string sourceStreamId,
+            string targetStreamId,
+            CancellationToken ct = default) =>
+            Task.FromResult(_bindings.GetValueOrDefault((sourceStreamId, targetStreamId)));
     }
 
     private sealed class RecordingActor : IActor

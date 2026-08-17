@@ -10,6 +10,8 @@ public interface IStreamTopologyGrain : IGrainWithStringKey
 
     Task<IReadOnlyList<StreamForwardingBindingEntry>> ListAsync();
 
+    Task<StreamForwardingBindingEntry?> GetAsync(string targetStreamId);
+
     Task<long> GetRevisionAsync();
 
     Task ClearAsync();
