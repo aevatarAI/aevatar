@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Studio.Application;
+using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -15,6 +16,7 @@ using Aevatar.Studio.Hosting.ContentArtifacts;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Hosting.WorkflowBoards;
 using Aevatar.Studio.Hosting.WorkOrders;
+using Aevatar.Studio.Hosting.WorkflowDeliveries;
 using Aevatar.Studio.Hosting.NyxId;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
@@ -37,6 +39,28 @@ internal static class StudioHostingServiceCollectionExtensions
     {
         services.TryAddSingleton(configuration);
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
+        var deliverySection = configuration.GetSection(WorkflowDeliveryOptions.SectionName);
+        var allowedWorkflowNamesSection = deliverySection.GetSection(
+            nameof(WorkflowDeliveryOptions.AllowedWorkflowNames));
+        services.Configure<WorkflowDeliveryOptions>(deliverySection);
+        services.PostConfigure<WorkflowDeliveryOptions>(options =>
+        {
+            if (!deliverySection.Exists() ||
+                (!allowedWorkflowNamesSection.Exists() && options.UseShippedWorkflowAllowlist))
+            {
+                options.AllowedWorkflowNames = [.. WorkflowDeliveryOptions.ShippedWorkflowNames];
+            }
+
+            // A misconfigured console-web origin would silently degrade to "no console link"
+            // for every customer, so a present-but-invalid value fails the host instead.
+            if (!string.IsNullOrWhiteSpace(options.ConsoleWebBaseUrl) &&
+                !WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl(options.ConsoleWebBaseUrl, out _))
+            {
+                throw new InvalidOperationException(
+                    $"{WorkflowDeliveryOptions.SectionName}:{nameof(WorkflowDeliveryOptions.ConsoleWebBaseUrl)} " +
+                    "must be an absolute HTTPS origin (or a loopback HTTP origin) without userinfo, query, or fragment.");
+            }
+        });
         services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()
             .AddApplicationPart(typeof(EditorController).Assembly)
@@ -57,8 +81,18 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
         AddWorkOrderExecutionWorker(services, configuration);
+        AddWorkflowDeliveryContinuationWorker(services, configuration);
         services.Configure<NyxIdLlmCatalogCacheOptions>(
             configuration.GetSection(NyxIdLlmCatalogCacheOptions.SectionName));
+        services.TryAddSingleton<
+            INyxIdModelSourceInventoryPort,
+            NyxIdModelSourceInventoryHttpClient>();
+        services.TryAddSingleton<
+            INyxIdModelDiscoveryPort,
+            NyxIdModelDiscoveryHttpClient>();
+        services.TryAddSingleton<
+            INyxIdUserServiceInventoryPort,
+            NyxIdWorkflowDeliveryConnectionInventoryPort>();
         services.TryAddSingleton<NyxIdLlmCatalogHttpClient>();
         services.TryAddSingleton<IUserLlmCatalogPort>(sp => new CachedNyxIdLlmCatalogPort(
             sp.GetRequiredService<NyxIdLlmCatalogHttpClient>(),
@@ -134,5 +168,15 @@ internal static class StudioHostingServiceCollectionExtensions
         services.Configure<WorkOrderExecutionWorkerOptions>(
             configuration.GetSection(WorkOrderExecutionWorkerOptions.SectionName));
         services.AddHostedService<WorkOrderExecutionWorker>();
+    }
+
+    private static void AddWorkflowDeliveryContinuationWorker(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.Configure<WorkflowDeliveryContinuationWorkerOptions>(
+            configuration.GetSection(WorkflowDeliveryContinuationWorkerOptions.SectionName));
+        services.TryAddSingleton<WorkflowDeliveryContinuationScanner>();
+        services.AddHostedService<WorkflowDeliveryContinuationWorker>();
     }
 }

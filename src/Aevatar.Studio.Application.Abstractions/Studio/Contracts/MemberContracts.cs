@@ -47,6 +47,27 @@ public static class StudioMemberBindingAckStageNames
     public const string DispatchAccepted = "dispatch_accepted";
 }
 
+public static class StudioMemberPlatformBindingExecutionStageNames
+{
+    public const string AcceptancePending = "acceptance_pending";
+    public const string CommandPending = "command_pending";
+    public const string CommandInFlight = "command_in_flight";
+    public const string ReadinessPending = "readiness_pending";
+    public const string ReadinessInFlight = "readiness_in_flight";
+}
+
+public static class StudioMemberPlatformBindingReadinessStatusNames
+{
+    public const string ServiceCatalogMissing = "service_catalog_missing";
+    public const string ServingSetMissing = "serving_set_missing";
+    public const string EligibleServingTargetMissing = "eligible_serving_target_missing";
+    public const string ServiceCatalogTargetMissing = "service_catalog_target_missing";
+    public const string Ready = "ready";
+    public const string TrafficViewTargetMissing = "traffic_view_target_missing";
+    public const string PreparedArtifactMissing = "prepared_artifact_missing";
+    public const string InvocationCatalogNotReady = "invocation_catalog_not_ready";
+}
+
 public static class StudioMemberBindingRunRoleNames
 {
     public const string Candidate = "candidate";
@@ -201,6 +222,12 @@ public sealed record StudioMemberBindingRunStatusResponse(
     DateTimeOffset? UpdatedAt = null)
 {
     public string? PlatformBindingCommandId { get; init; }
+
+    public string? PlatformExecutionStage { get; init; }
+
+    public int PlatformExecutionAttempt { get; init; }
+
+    public string? LastReadinessStatus { get; init; }
 
     public StudioMemberBindingRunResultResponse? Result { get; init; }
 }
@@ -392,7 +419,20 @@ public sealed record StudioMemberEndpointContractResponse(
     string RevisionId,
     StudioMemberInvocationReadinessResponse InvocationReadiness,
     string? CurlExample = null,
-    string? FetchExample = null);
+    string? FetchExample = null)
+{
+    /// <summary>
+    /// Committed source version of the published-service catalog replica used
+    /// to build this endpoint contract.
+    /// </summary>
+    public long PublishedServiceStateVersion { get; init; }
+
+    /// <summary>
+    /// Committed source version of the revision catalog that contains
+    /// <see cref="RevisionId"/>.
+    /// </summary>
+    public long BoundRevisionStateVersion { get; init; }
+}
 
 /// <summary>
 /// Activation result for a member's binding revision. Carries

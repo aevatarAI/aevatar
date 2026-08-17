@@ -52,6 +52,9 @@ public sealed class WorkflowDocumentExtractToolSource(
 
         public string Name => "document_extract";
 
+        public WorkflowToolRecoverySafety RecoverySafety =>
+            WorkflowToolRecoverySafety.ReplayableReadOnly;
+
         public async Task<WorkflowToolExecutionResult> ExecuteAsync(
             WorkflowToolExecutionRequest request,
             CancellationToken ct = default)

@@ -552,6 +552,9 @@ public static class NyxIdChatNeedsYouDecisions
                 ExactServiceApproval = pending.ExactServiceApproval?.Clone(),
                 ToolCallId = pending.ToolCallId,
                 ToolName = pending.ToolName,
+                Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                    step.Source?.Tool?.Presentation,
+                    pending.ToolName),
             },
         };
     }

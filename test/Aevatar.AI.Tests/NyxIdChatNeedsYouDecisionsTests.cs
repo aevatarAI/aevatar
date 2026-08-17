@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Google.Protobuf;
@@ -312,6 +313,8 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
             NyxIdChatOperationDispatchCommand.InputOneofCase.ToolApprovalContinuation);
         accepted.NextCommand.ToolApprovalContinuation.Approved.Should().BeFalse();
         accepted.NextCommand.ToolApprovalContinuation.ApprovalRequestId.Should().Be("approval-alpha");
+        accepted.NextCommand.ToolApprovalContinuation.Presentation
+            .Skill.SkillName.Should().Be("repository-maintenance");
 
         var reloaded = NyxIdChatConversationGAgentState.Parser.ParseFrom(
             accepted.State.ToByteArray());
@@ -556,7 +559,16 @@ public sealed class NyxIdChatNeedsYouDecisionsTests
         step.Kind = NyxIdChatStepKind.Tool;
         step.Source = new NyxIdChatStepSource
         {
-            Tool = new NyxIdChatToolStepSource { ToolName = "repository_delete" },
+            Tool = new NyxIdChatToolStepSource
+            {
+                ToolName = "repository_delete",
+                Presentation = ToolPresentationDescriptors.Skill(
+                    "repository_delete",
+                    "Repository maintenance",
+                    "Delete the exact repository.",
+                    "repository-maintenance",
+                    "local"),
+            },
         };
         step.ApprovalRequestId = "approval-alpha";
         step.MayChangeExternalState = true;

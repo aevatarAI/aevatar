@@ -1,6 +1,8 @@
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -69,6 +71,88 @@ public sealed class NyxIdAuthorizationCatalogVisibilityServiceTests
         result.ProjectionPending.Should().BeFalse();
         result.FailureCode.Should().Be("nyxid_catalog_snapshot_stale");
         query.QueryCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ResolveRequiredServicesAsync_WhenProviderClockIsWithinAllowedSkew_ShouldReturnReady()
+    {
+        var serviceEvidence = ServiceEvidence(
+            observedAt: Now.AddSeconds(-10),
+            evaluatedAt: Now.AddSeconds(10));
+        var query = new StubCatalogQueryPort(Snapshot(23) with
+        {
+            Services = [serviceEvidence],
+        });
+        var service = NewService(query);
+
+        var result = await service.ResolveRequiredServicesAsync(
+            Owner(),
+            23,
+            [new NyxIdUserServiceCapabilityRef { UserServiceId = serviceEvidence.UserServiceId }]);
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogVisibilityStatus.Ready);
+        result.Ready.Should().BeTrue();
+        result.FailureCode.Should().BeEmpty();
+        query.QueryCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void EvaluateServiceAuthorityWindow_WhenProviderClockSkewEqualsLimit_ShouldReturnReady()
+    {
+        var serviceEvidence = ServiceEvidence(
+            observedAt: Now.AddSeconds(-30),
+            evaluatedAt: Now);
+
+        var result = NyxIdAuthorizationCatalogIntegrity.EvaluateServiceAuthorityWindow(
+            Snapshot(23) with { Services = [serviceEvidence] },
+            serviceEvidence,
+            Now);
+
+        result.Status.Should().Be(NyxIdAuthorizationServiceAuthorityWindowStatus.Ready);
+        result.Ready.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ResolveRequiredServicesAsync_WhenOwnerStampIsStaleButRequiredServiceStampIsFresh_ShouldReturnReady()
+    {
+        var serviceEvidence = ServiceEvidence(
+            observedAt: Now.AddSeconds(-10),
+            evaluatedAt: Now);
+        var query = new StubCatalogQueryPort(Snapshot(23) with
+        {
+            FreshUntilUtc = Now,
+            Services = [serviceEvidence],
+        });
+        var service = NewService(query);
+
+        var result = await service.ResolveRequiredServicesAsync(
+            Owner(),
+            23,
+            [new NyxIdUserServiceCapabilityRef { UserServiceId = serviceEvidence.UserServiceId }]);
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogVisibilityStatus.Ready);
+        result.Ready.Should().BeTrue();
+        result.FailureCode.Should().BeEmpty();
+        query.QueryCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void EvaluateServiceAuthorityWindow_WhenProviderClockSkewExceedsLimit_ShouldReturnTypedStatus()
+    {
+        var serviceEvidence = ServiceEvidence(
+            observedAt: Now.AddSeconds(-31),
+            evaluatedAt: Now);
+
+        var result = NyxIdAuthorizationCatalogIntegrity.EvaluateServiceAuthorityWindow(
+            Snapshot(23) with { Services = [serviceEvidence] },
+            serviceEvidence,
+            Now);
+
+        result.Status.Should().Be(
+            NyxIdAuthorizationServiceAuthorityWindowStatus.ProviderClockSkewExceeded);
+        result.ObservedAtUtc.Should().Be(Now.AddSeconds(-31));
+        result.FreshUntilUtc.Should().Be(Now.AddMinutes(14).AddSeconds(29));
+        result.ProviderEvaluatedAtUtc.Should().Be(Now);
     }
 
     [Fact]
@@ -168,6 +252,23 @@ public sealed class NyxIdAuthorizationCatalogVisibilityServiceTests
         "catalog-digest-alpha",
         [],
         Activated: true);
+
+    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(
+        DateTimeOffset observedAt,
+        DateTimeOffset evaluatedAt) => new()
+    {
+        UserServiceId = "service-a",
+        ServiceSlug = "api-alpha",
+        DisplayName = "Alpha",
+        Access = NyxIdAuthorizationAccess.Permitted,
+        NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+        ResourceOwner = Owner(),
+        ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+        FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(15)),
+        EvaluatedAt = Timestamp.FromDateTimeOffset(evaluatedAt),
+        AuthorityContractVersion = "1",
+        AuthorityPolicyVersion = "api-key-scope-v1",
+    };
 
     private sealed class StubCatalogQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
         : INyxIdAuthorizationCatalogQueryPort

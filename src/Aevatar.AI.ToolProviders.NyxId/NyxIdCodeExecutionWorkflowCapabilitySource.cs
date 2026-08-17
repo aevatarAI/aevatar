@@ -73,7 +73,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 "CODE_EXECUTION_SOURCE_CREDENTIAL_REQUIRED",
                 "A NyxID caller credential authorized to read the code execution route is required.");
         }
-        if (string.IsNullOrWhiteSpace(options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(options.EffectiveTransportBaseUrl))
         {
             return Failure(
                 selector,
@@ -337,5 +337,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
     }
 
     private string TrustedLocator() =>
-        string.IsNullOrWhiteSpace(options.BaseUrl) ? string.Empty : options.BaseUrl.TrimEnd('/');
+        string.IsNullOrWhiteSpace(options.EffectiveApiBaseUrl)
+            ? string.Empty
+            : options.EffectiveApiBaseUrl.TrimEnd('/');
 }

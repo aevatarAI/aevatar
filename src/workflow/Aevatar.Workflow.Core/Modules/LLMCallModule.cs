@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -437,12 +438,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
         var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
-        intent.CallerCredential = callerCredential.Found && !HasUnattendedWebhookAuthorization(ctx)
-            ? await WorkflowCallerAccessTokenResolver.ResolveAsync(
-                callerCredential.Credential,
-                _callerAccessTokenProvider,
-                ct)
-            : new WorkflowCallerCredential();
+        intent.CallerCredential = await BuildRoleCallerCredentialAsync(
+            callerCredential,
+            HasUnattendedWebhookAuthorization(ctx),
+            ct);
         WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
@@ -478,6 +477,36 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         ctx is IWorkflowExecutionStateHostAccessor accessor &&
         string.Equals(accessor.StateHost.RunOrigin, WorkflowRunOrigins.Webhook, StringComparison.Ordinal) &&
         accessor.StateHost.ExecutionContextSnapshot.UnattendedEffectAuthorization is not null;
+
+    private async Task<WorkflowCallerCredential> BuildRoleCallerCredentialAsync(
+        (bool Found, WorkflowCallerCredential Credential) resolved,
+        bool hasUnattendedWebhookAuthorization,
+        CancellationToken ct)
+    {
+        if (!resolved.Found)
+            return new WorkflowCallerCredential();
+
+        if (!hasUnattendedWebhookAuthorization)
+        {
+            return await WorkflowCallerAccessTokenResolver.ResolveAsync(
+                resolved.Credential,
+                _callerAccessTokenProvider,
+                ct);
+        }
+
+        var durable = resolved.Credential.DurableCallerCredential;
+        if (durable?.SourceKind != DurableCallerCredentialSourceKind.WebhookBinding)
+            return new WorkflowCallerCredential();
+
+        // The role actor receives only the vault handle. It resolves the exact
+        // Agent Key locally, so raw binding credentials never cross actor events.
+        return new WorkflowCallerCredential
+        {
+            DurableCallerCredential = durable.Clone(),
+            NyxIdAuthority = resolved.Credential.NyxIdAuthority?.Clone(),
+            Kind = resolved.Credential.Kind,
+        };
+    }
 
     private static Task PublishFailedCompletionAsync(
         PendingLlmCallState pending,

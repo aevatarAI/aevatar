@@ -26,6 +26,16 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 /// </summary>
 public interface IStudioWorkflowProvisioningService
 {
+    /// <summary>
+    /// Resolves and validates the stable workflow capability admission plan
+    /// without creating a member, binding a workflow, or accepting a schedule.
+    /// </summary>
+    Task<ProvisionWorkflowPreparation> PrepareAsync(
+        string scopeId,
+        ProvisionWorkflowCallerCredential callerCredential,
+        ProvisionWorkflowRequest request,
+        CancellationToken ct = default);
+
     Task<ProvisionWorkflowResponse> ProvisionAsync(
         string scopeId,
         ProvisionWorkflowCallerCredential callerCredential,

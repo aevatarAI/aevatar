@@ -34,7 +34,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             .WithFormatDefaultValues(true));
 
     [Fact]
-    public async Task StartAsync_ShouldBackfillDraftAndServiceSourcesFromWorkflowNativeCurrentStateReadModels()
+    public async Task RunBackfillOnceAsync_ShouldBackfillDraftAndServiceSourcesFromWorkflowNativeCurrentStateReadModels()
     {
         var serviceCatalog = new ServiceCatalogReadModel
         {
@@ -103,7 +103,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         sourceWriter.Upserts.Select(static source => source.SourceKind)
             .Should().BeEquivalentTo([
@@ -132,7 +132,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldUsePublishedServiceId_WhenWorkflowPlanHasNoExplicitBindingIdentity()
+    public async Task RunBackfillOnceAsync_ShouldUsePublishedServiceId_WhenWorkflowPlanHasNoExplicitBindingIdentity()
     {
         var serviceCatalog = new ServiceCatalogReadModel
         {
@@ -185,7 +185,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         var serviceSource = sourceWriter.Upserts.Should().ContainSingle().Subject;
         serviceSource.Id.Should().Be("scope-1:published-service-1:service");
@@ -200,7 +200,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldDeleteStaleDraftSourcesForParsedWorkspaceScope()
+    public async Task RunBackfillOnceAsync_ShouldDeleteStaleDraftSourcesForParsedWorkspaceScope()
     {
         var workspaceState = new StudioWorkspaceState
         {
@@ -240,7 +240,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         sourceWriter.Upserts.Should().ContainSingle(source => source.Id == "scope-1:wf-current:draft");
         sourceWriter.DeleteMarkers.Should().ContainSingle().Which.Should().Be(new ProjectionDocumentDeleteMarker(
@@ -255,7 +255,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldDeleteStaleServiceSourcesByWorkflowKey()
+    public async Task RunBackfillOnceAsync_ShouldDeleteStaleServiceSourcesByWorkflowKey()
     {
         var staleServiceSource = ExistingServiceSource("scope-1", "wf-old", "published-service-1");
         var sourceWriter = new RecordingCatalogueSourceDispatcher();
@@ -282,7 +282,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         sourceWriter.DeleteMarkers.Should().ContainSingle().Which.Id.Should().Be("scope-1:wf-old:service");
         rowWriter.Commands.Should().ContainSingle(command => command.WorkflowId == "wf-old" &&
@@ -291,7 +291,135 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_ShouldSkipMalformedWorkflowServiceRevisionWithoutFailingBackfill()
+    public async Task RunBackfillOnceAsync_ShouldUseDefaultServingRevision_WhenOlderDeploymentWasDeactivatedLater()
+    {
+        var serviceCatalog = new ServiceCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-definition:scope-1:published-service-1",
+            StateVersion = 4,
+            LastEventId = "evt-service-catalog",
+            TenantId = "scope-1",
+            AppId = "workflow-app",
+            Namespace = "user",
+            ServiceId = "published-service-1",
+            DisplayName = "Published Service",
+            DefaultServingRevisionId = "rev-active",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-06T00:00:00Z"),
+        };
+        var deploymentCatalog = new ServiceDeploymentCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-deployment:scope-1:published-service-1",
+            StateVersion = 9,
+            LastEventId = "evt-deployment",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-07T00:00:00Z"),
+            Deployments =
+            [
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-old",
+                    RevisionId = "rev-old",
+                    PrimaryActorId = "workflow-actor-old",
+                    Status = ServiceDeploymentStatus.Deactivated.ToString(),
+                    ActivatedAt = DateTimeOffset.Parse("2026-08-05T00:00:00Z"),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-07T01:00:00Z"),
+                },
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-active",
+                    RevisionId = "rev-active",
+                    PrimaryActorId = "workflow-actor-active",
+                    Status = ServiceDeploymentStatus.Active.ToString(),
+                    ActivatedAt = DateTimeOffset.Parse("2026-08-06T00:00:00Z"),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-06T01:00:00Z"),
+                },
+            ],
+        };
+        var revisionCatalog = WorkflowRevisionCatalog("svc-key", "rev-active", "wf-active", "Active Workflow");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var service = CreateService(
+            [serviceCatalog],
+            [deploymentCatalog],
+            [revisionCatalog],
+            [],
+            [],
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        await service.RunBackfillOnceAsync(CancellationToken.None);
+
+        var serviceSource = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        serviceSource.WorkflowId.Should().Be("wf-active");
+        serviceSource.ActiveRevisionId.Should().Be("rev-active");
+        serviceSource.DeploymentId.Should().Be("dep-active");
+        serviceSource.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
+    }
+
+    [Fact]
+    public async Task RunBackfillOnceAsync_ShouldBackfillDeactivatedServiceSourcesFromWorkflowNativeCurrentStateReadModels()
+    {
+        var serviceCatalog = new ServiceCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-definition:scope-1:published-service-1",
+            StateVersion = 4,
+            LastEventId = "evt-service-catalog",
+            TenantId = "scope-1",
+            AppId = "workflow-app",
+            Namespace = "user",
+            ServiceId = "published-service-1",
+            DisplayName = "Published Service",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-06T00:00:00Z"),
+        };
+        var deploymentCatalog = new ServiceDeploymentCatalogReadModel
+        {
+            Id = "svc-key",
+            ActorId = "service-deployment:scope-1:published-service-1",
+            StateVersion = 9,
+            LastEventId = "evt-deployment",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-07T00:00:00Z"),
+            Deployments =
+            [
+                new ServiceDeploymentReadModel
+                {
+                    DeploymentId = "dep-1",
+                    RevisionId = "rev-live",
+                    PrimaryActorId = "workflow-actor-live",
+                    Status = ServiceDeploymentStatus.Deactivated.ToString(),
+                    UpdatedAt = DateTimeOffset.Parse("2026-08-07T01:00:00Z"),
+                },
+            ],
+        };
+        var revisionCatalog = WorkflowRevisionCatalog("svc-key", "rev-live", "wf-archived", "Archived Workflow");
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var service = CreateService(
+            [serviceCatalog],
+            [deploymentCatalog],
+            [revisionCatalog],
+            [],
+            [],
+            sourceWriter,
+            rowWriter,
+            sourceReader);
+
+        await service.RunBackfillOnceAsync(CancellationToken.None);
+
+        var serviceSource = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        serviceSource.WorkflowId.Should().Be("wf-archived");
+        serviceSource.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Deactivated.ToString());
+        rowWriter.Commands.Should().ContainSingle(command => command.WorkflowId == "wf-archived" &&
+                                                              command.ServiceSource != null &&
+                                                              command.ServiceSource.DeploymentStatus == ServiceDeploymentStatus.Deactivated.ToString());
+    }
+
+    [Fact]
+    public async Task RunBackfillOnceAsync_ShouldSkipMalformedWorkflowServiceRevisionWithoutFailingBackfill()
     {
         var sourceWriter = new RecordingCatalogueSourceDispatcher();
         var rowWriter = new RecordingCatalogueRowDispatcher();
@@ -335,14 +463,14 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.RunBackfillOnceAsync(CancellationToken.None);
 
         sourceWriter.Upserts.Should().BeEmpty();
         rowWriter.Commands.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task StartAsync_ShouldNotFailHostStartup_WhenRowRefreshThrows()
+    public async Task RunBackfillOnceAsync_ShouldNotFail_WhenRowRefreshThrows()
     {
         // Production regression (2026-08-13): during a rolling upgrade the
         // first new-image pod backfilled rows whose actors only resolve on
@@ -374,10 +502,34 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             rowWriter,
             sourceReader);
 
-        var start = async () => await service.StartAsync(CancellationToken.None);
+        var start = async () => await service.RunBackfillOnceAsync(CancellationToken.None);
 
         await start.Should().NotThrowAsync();
         rowWriter.Attempts.Should().BeGreaterThan(0, "the backfill must have tried the row before skipping it");
+    }
+
+    [Fact]
+    public async Task StartAsync_ShouldNotWaitForBackfillCompletion()
+    {
+        var blockingReader = new BlockingProjectionDocumentReader<ServiceCatalogReadModel>();
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var service = new ScopeWorkflowCatalogueBackfillHostedService(
+            blockingReader,
+            new StubProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            new StubProjectionDocumentReader<ServiceRevisionCatalogReadModel>([]),
+            new StubProjectionDocumentReader<StudioWorkspaceCurrentStateDocument>([]),
+            new StubProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument>([]),
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, new RecordingCatalogueRowDispatcher()),
+            new StubWorkflowYamlDocumentService(),
+            NullLogger<ScopeWorkflowCatalogueBackfillHostedService>.Instance);
+
+        var startTask = service.StartAsync(CancellationToken.None);
+
+        startTask.IsCompletedSuccessfully.Should().BeTrue();
+        await blockingReader.QueryStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await service.StopAsync(CancellationToken.None);
     }
 
     [Fact]
@@ -408,6 +560,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         var rowWriter = new RecordingCatalogueRowDispatcher();
         var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
         var serviceProjector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
             new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([]),
             new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([deploymentCatalog]),
             sourceWriter,
@@ -474,6 +627,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         var rowWriter = new RecordingCatalogueRowDispatcher();
         var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
         var projector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([]),
             new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([revisionCatalog]),
             new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
             sourceWriter,
@@ -505,6 +659,88 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
         command.WorkflowId.Should().Be("published-service-1");
         command.ServiceSource.Should().NotBeNull();
         command.ServiceSource!.PublishedServiceId.Should().Be("published-service-1");
+    }
+
+    [Fact]
+    public async Task ServiceSourceProjector_ShouldUseDefaultServingRevision_WhenOlderDeploymentWasDeactivatedLater()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");
+        var serviceKey = ServiceKeys.Build(identity);
+        var serviceCatalog = new ServiceCatalogReadModel
+        {
+            Id = serviceKey,
+            ActorId = "service-definition:scope-1:published-service-1",
+            StateVersion = 4,
+            LastEventId = "evt-service-catalog",
+            TenantId = identity.TenantId,
+            AppId = identity.AppId,
+            Namespace = identity.Namespace,
+            ServiceId = identity.ServiceId,
+            DisplayName = "Published Service",
+            DefaultServingRevisionId = "rev-active",
+            UpdatedAt = DateTimeOffset.Parse("2026-08-06T00:00:00Z"),
+        };
+        var revisionCatalog = WorkflowRevisionCatalog(serviceKey, "rev-active", "wf-active", "Active Workflow");
+        var deploymentState = new ServiceDeploymentState
+        {
+            Identity = identity.Clone(),
+        };
+        deploymentState.Deployments["dep-old"] = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-old",
+            RevisionId = "rev-old",
+            PrimaryActorId = "workflow-actor-old",
+            Status = ServiceDeploymentStatus.Deactivated,
+            ActivatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T00:00:00Z")),
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-07T01:00:00Z")),
+        };
+        deploymentState.Deployments["dep-active"] = new ServiceDeploymentRecord
+        {
+            DeploymentId = "dep-active",
+            RevisionId = "rev-active",
+            PrimaryActorId = "workflow-actor-active",
+            Status = ServiceDeploymentStatus.Active,
+            ActivatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T00:00:00Z")),
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-06T01:00:00Z")),
+        };
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader([], sourceWriter);
+        var projector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceCatalogReadModel>([serviceCatalog]),
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([revisionCatalog]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T02:00:00Z")));
+
+        await projector.ProjectAsync(
+            new ServiceDeploymentCatalogProjectionContext
+            {
+                RootActorId = "service-deployment:svc-key",
+                ProjectionKind = "service-deployments",
+            },
+            BuildDeploymentEnvelope(
+                new ServiceDeploymentDeactivatedEvent
+                {
+                    Identity = identity.Clone(),
+                    RevisionId = "rev-old",
+                    DeploymentId = "dep-old",
+                    DeactivatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-07T01:00:00Z")),
+                },
+                deploymentState,
+                "evt-deployment"));
+
+        var source = sourceWriter.Upserts.Should().ContainSingle().Subject;
+        source.WorkflowId.Should().Be("wf-active");
+        source.ActiveRevisionId.Should().Be("rev-active");
+        source.DeploymentId.Should().Be("dep-active");
+        source.DeploymentStatus.Should().Be(ServiceDeploymentStatus.Active.ToString());
+
+        var command = rowWriter.Commands.Should().ContainSingle().Subject;
+        command.WorkflowId.Should().Be("wf-active");
+        command.ServiceSource.Should().NotBeNull();
+        command.ServiceSource!.DeploymentId.Should().Be("dep-active");
     }
 
     [Fact]
@@ -856,7 +1092,8 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     private static ScopeWorkflowCatalogueSourceDocument ExistingServiceSource(
         string scopeId,
         string workflowId,
-        string publishedServiceId) =>
+        string publishedServiceId,
+        string? deploymentStatus = null) =>
         new()
         {
             Id = $"{scopeId}:{workflowId}:service",
@@ -874,7 +1111,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
             CommittedActorId = "workflow-actor-live",
             ActiveRevisionId = "rev-live",
             DeploymentId = "dep-1",
-            DeploymentStatus = ServiceDeploymentStatus.Active.ToString(),
+            DeploymentStatus = deploymentStatus ?? ServiceDeploymentStatus.Active.ToString(),
             PublishedServiceId = publishedServiceId,
         };
 
@@ -917,6 +1154,28 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
                 NextCursor = null,
                 TotalCount = documents.Count,
             });
+    }
+
+    private sealed class BlockingProjectionDocumentReader<TReadModel>
+        : IProjectionDocumentReader<TReadModel, string>
+        where TReadModel : class, IProjectionReadModel
+    {
+        private readonly TaskCompletionSource<ProjectionDocumentQueryResult<TReadModel>> _pending = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource QueryStarted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult(default(TReadModel));
+
+        public async Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            QueryStarted.TrySetResult();
+            return await _pending.Task.WaitAsync(ct);
+        }
     }
 
     private sealed class RecordingCatalogueSourceReader(

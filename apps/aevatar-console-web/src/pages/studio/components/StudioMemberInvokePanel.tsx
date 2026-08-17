@@ -15,7 +15,10 @@ import {
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
-import type { ScopeServiceEndpointContract } from '@/shared/models/runtime/scopeServices';
+import type {
+  ScopeMemberEndpointContract,
+  ScopeServiceEndpointContract,
+} from '@/shared/models/runtime/scopeServices';
 import { isAutoEncodableTextPayloadTypeUrl } from '@/shared/runs/protobufPayload';
 import {
   createNyxIdChatBindingInput,
@@ -52,6 +55,10 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 type StudioMemberInvokePanelProps = {
+  readonly authoritativeEndpointContract?:
+    | ScopeMemberEndpointContract
+    | ScopeServiceEndpointContract
+    | null;
   readonly enableFileAttachments?: boolean;
   readonly scopeId: string;
   readonly memberId?: string;
@@ -656,6 +663,7 @@ const runStatusDotBaseStyle: React.CSSProperties = {
 };
 
 const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
+  authoritativeEndpointContract,
   scopeId,
   memberId,
   memberRevision,
@@ -690,8 +698,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const [formError, setFormError] = useState('');
   const [payloadTypeUrl, setPayloadTypeUrl] = useState('');
   const [payloadBase64, setPayloadBase64] = useState('');
-  const [endpointContract, setEndpointContract] =
-    useState<ScopeServiceEndpointContract | null>(null);
+  const [loadedEndpointContract, setLoadedEndpointContract] =
+    useState<
+      ScopeMemberEndpointContract | ScopeServiceEndpointContract | null
+    >(null);
   const [invokeResult, setInvokeResult] = useState<InvokeResultState>(
     createIdleResult(),
   );
@@ -716,6 +726,10 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     selectedService?.endpoints.find(
       (endpoint) => endpoint.endpointId === selectedEndpointId,
     ) ?? null;
+  const endpointContract =
+    authoritativeEndpointContract !== undefined
+      ? authoritativeEndpointContract
+      : loadedEndpointContract;
   const effectiveRequestTypeUrl =
     trimOptional(endpointContract?.requestTypeUrl) ||
     trimOptional(selectedEndpoint?.requestTypeUrl);
@@ -728,6 +742,16 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const normalizedMemberId = trimOptional(memberId);
   const normalizedTeamId = trimOptional(teamId);
   const selectedPublishedServiceId = trimOptional(selectedService?.serviceId);
+  const memberEndpointContractMatchesSelection = Boolean(
+    endpointContract &&
+      trimOptional(endpointContract.scopeId) === trimOptional(scopeId) &&
+      trimOptional(endpointContract.memberId) === normalizedMemberId &&
+      trimOptional(endpointContract.publishedServiceId) ===
+        selectedPublishedServiceId &&
+      trimOptional(endpointContract.endpointId) === selectedEndpointId,
+  );
+  const memberEndpointContractAllowsInvoke =
+    runtimeTarget !== 'member' || memberEndpointContractMatchesSelection;
   const canStartWithoutInput = Boolean(
     isChatEndpoint &&
       runtimeTarget === 'member' &&
@@ -737,10 +761,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         memberRevision?.implementationKind,
       ) === 'workflow' &&
       trimOptional(memberRevision?.workflowDefinitionActorId) &&
-      trimOptional(endpointContract?.memberId) === normalizedMemberId &&
-      trimOptional(endpointContract?.publishedServiceId) ===
-        selectedPublishedServiceId &&
-      trimOptional(endpointContract?.endpointId) === selectedEndpointId,
+      memberEndpointContractMatchesSelection,
   );
   const preferredServiceId = useMemo(
     () => getPreferredScopeConsoleServiceId(services),
@@ -751,7 +772,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     trimOptional(selectedService?.displayName) ||
     t("pages.studio.studiomemberinvokepanel.current.member", "Member");
   const canInvoke = Boolean(
-    scopeId && normalizedMemberId && selectedService && selectedEndpoint,
+    scopeId &&
+      normalizedMemberId &&
+      selectedService &&
+      selectedEndpoint &&
+      memberEndpointContractAllowsInvoke,
   );
   const invokeRouteTarget = useMemo(
     () =>
@@ -895,6 +920,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
         ? t("pages.studio.studiomemberinvokepanel.select.published.member.service", "Select a published member service before running.")
         : !selectedEndpoint
           ? t("pages.studio.studiomemberinvokepanel.select.endpoint.before.invoking", "Select an endpoint before running.")
+          : !memberEndpointContractAllowsInvoke
+            ? t(
+                "pages.studio.studiomemberinvokepanel.endpoint.contract.changed",
+                "The selected member endpoint is unavailable or no longer matches this published service.",
+              )
           : '';
   const selectedHistoryEntry =
     visibleRequestHistory.find((entry) => entry.id === selectedHistoryId) ??
@@ -1042,18 +1072,19 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     const endpointId = trimOptional(selectedEndpoint?.endpointId);
     const serviceId = trimOptional(selectedService?.serviceId);
     if (
+      authoritativeEndpointContract !== undefined ||
       !scopeId ||
       !normalizedMemberId ||
       !endpointId ||
       !serviceId ||
       selectedService?.kind === 'nyxid-chat'
     ) {
-      setEndpointContract(null);
+      setLoadedEndpointContract(null);
       return;
     }
 
     let cancelled = false;
-    setEndpointContract(null);
+    setLoadedEndpointContract(null);
 
     const request = scopeRuntimeApi.getMemberEndpointContract(
       scopeId,
@@ -1067,20 +1098,21 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
           return;
         }
 
-        setEndpointContract(contract);
+        setLoadedEndpointContract(contract);
       })
       .catch(() => {
         if (cancelled) {
           return;
         }
 
-        setEndpointContract(null);
+        setLoadedEndpointContract(null);
       });
 
     return () => {
       cancelled = true;
     };
   }, [
+    authoritativeEndpointContract,
     normalizedMemberId,
     scopeId,
     selectedEndpoint?.endpointId,
@@ -1327,6 +1359,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
   const handleInvoke = useCallback(async () => {
     if (
+      !canInvoke ||
       !scopeId ||
       !normalizedMemberId ||
       !selectedService ||
@@ -1804,6 +1837,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     prompt,
     attachedFiles,
     canAttachFiles,
+    canInvoke,
     canStartWithoutInput,
     invokeRouteTarget,
     scopeId,

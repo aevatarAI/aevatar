@@ -8,6 +8,7 @@ using Aevatar.GAgents.RoleCatalog;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.GAgents.WorkOrder;
+using Aevatar.GAgents.WorkflowDelivery;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.GAgents.NyxidChat;
@@ -24,6 +25,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
         new Dictionary<Type, string>
         {
             [typeof(UserConfigGAgent)] = UserConfigGAgent.ProjectionKind,
+            [typeof(LLMModelCatalogPolicyGAgent)] = LLMModelCatalogPolicyGAgent.ProjectionKind,
             [typeof(GAgentRegistryGAgent)] = GAgentRegistryGAgent.ProjectionKind,
             [typeof(ConnectorCatalogGAgent)] = ConnectorCatalogGAgent.ProjectionKind,
             [typeof(RoleCatalogGAgent)] = RoleCatalogGAgent.ProjectionKind,
@@ -36,6 +38,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
             [typeof(StudioTeamGAgent)] = StudioTeamGAgent.ProjectionKind,
             [typeof(ContentArtifactGAgent)] = ContentArtifactGAgent.ProjectionKind,
             [typeof(WorkOrderGAgent)] = WorkOrderGAgent.ProjectionKind,
+            [typeof(WorkflowDeliveryGAgent)] = WorkflowDeliveryGAgent.ProjectionKind,
             [typeof(StudioWorkspaceGAgent)] = StudioWorkspaceGAgent.ProjectionKind,
             [typeof(ScopeWorkflowCatalogueRowGAgent)] = ScopeWorkflowCatalogueRowGAgent.ProjectionKind,
         };

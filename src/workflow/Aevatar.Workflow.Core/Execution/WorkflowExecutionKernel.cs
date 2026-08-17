@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Expressions;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
@@ -304,6 +305,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var current = _workflow.GetStep(evt.StepId);
         if (current == null)
         {
+            if (IsCurrentForEachDirectChildCompletion(state, evt, ctx))
+            {
+                ctx.Logger.LogDebug(
+                    "workflow_loop: ignore foreach child completion step={StepId} parent={ParentStepId}",
+                    evt.StepId,
+                    state.CurrentStepId);
+                return;
+            }
+
             ctx.Logger.LogDebug("workflow_loop: ignore internal completion step={StepId}", evt.StepId);
             if (!string.IsNullOrWhiteSpace(evt.StepId))
             {
@@ -411,10 +421,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     return;
                 }
 
-                if (IsTimeoutError(evt.Error))
+                if (HasUncertainOutcome(evt) || IsTimeoutError(evt.Error))
                 {
                     ctx.Logger.LogError(
-                        "workflow_loop: run={RunId} step={StepId} timed out and run will fail. error={Error}",
+                        "workflow_loop: run={RunId} step={StepId} has an uncertain external outcome and run will fail. error={Error}",
                         runId,
                         evt.StepId,
                         evt.Error);
@@ -522,7 +532,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         catch (Exception ex) when (
             !ct.IsCancellationRequested &&
-            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
         {
             ctx.Logger.LogError(
                 ex,
@@ -544,6 +554,46 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 evt,
                 CancellationToken.None);
         }
+    }
+
+    private bool IsCurrentForEachDirectChildCompletion(
+        WorkflowExecutionKernelState state,
+        StepCompletedEvent completion,
+        IWorkflowExecutionContext ctx)
+    {
+        var childStepId = completion.StepId ?? string.Empty;
+        var childExecutionId = completion.ExecutionId ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(childStepId) || string.IsNullOrWhiteSpace(state.CurrentStepId))
+            return false;
+
+        var currentStep = _workflow.GetStep(state.CurrentStepId);
+        if (currentStep == null ||
+            !string.Equals(
+                WorkflowPrimitiveCatalog.ToCanonicalType(currentStep.Type),
+                "foreach",
+                StringComparison.Ordinal) ||
+            !ForEachModule.IsDirectChildStepId(currentStep.Id, childStepId) ||
+            string.IsNullOrWhiteSpace(state.RunId) ||
+            string.IsNullOrWhiteSpace(childExecutionId) ||
+            !state.ExecutionIdsByStepId.TryGetValue(currentStep.Id, out var parentExecutionId) ||
+            string.IsNullOrWhiteSpace(parentExecutionId))
+        {
+            return false;
+        }
+
+        var forEachState = WorkflowExecutionStateAccess.Load<ForEachModuleState>(
+            ctx,
+            ForEachModule.ModuleStateKey);
+        return forEachState.Parents.Values.Any(parent =>
+            !string.IsNullOrWhiteSpace(parent.ParentRunId) &&
+            !string.IsNullOrWhiteSpace(parent.ParentStepId) &&
+            !string.IsNullOrWhiteSpace(parent.ParentExecutionId) &&
+            string.Equals(parent.ParentRunId, state.RunId, StringComparison.Ordinal) &&
+            string.Equals(parent.ParentStepId, currentStep.Id, StringComparison.Ordinal) &&
+            string.Equals(parent.ParentExecutionId, parentExecutionId, StringComparison.Ordinal) &&
+            parent.ChildExecutionIds.TryGetValue(childStepId, out var expectedChildExecutionId) &&
+            !string.IsNullOrWhiteSpace(expectedChildExecutionId) &&
+            string.Equals(expectedChildExecutionId, childExecutionId, StringComparison.Ordinal));
     }
 
     private async Task HandleCompensationRequestAsync(
@@ -834,7 +884,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         catch (Exception ex) when (
             !ct.IsCancellationRequested &&
-            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
         {
             ctx.Logger.LogError(
                 ex,
@@ -897,6 +947,22 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var policy = step.Retry;
         if (policy == null)
             return false;
+
+        if (evt.RetryDisposition == WorkflowStepRetryDisposition.Forbidden)
+        {
+            ctx.Logger.LogWarning(
+                "workflow_loop: step={StepId} callee forbids an outer retry for this physical outcome",
+                step.Id);
+            return false;
+        }
+
+        if (HasUncertainOutcome(evt))
+        {
+            ctx.Logger.LogWarning(
+                "workflow_loop: step={StepId} outcome is uncertain and is not retried to avoid repeating an external side effect",
+                step.Id);
+            return false;
+        }
 
         if (IsTimeoutError(evt.Error))
         {
@@ -1210,8 +1276,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             var request = BuildStepRequest(step, input, fileRefs, state, ctx);
             var idempotency = ResolveAndPersistStepIdempotency(step, state);
             request.IdempotencyKey = idempotency.IdempotencyKey;
-            var effectiveTimeoutMs = ResolveStepTimeoutMs(step, dispatchKind);
-            var timeoutCallbackId = effectiveTimeoutMs > 0
+            var effectiveTimeoutMs = NormalizeStepTimeoutMs(ResolveStepTimeoutMs(step, dispatchKind));
+            request.TimeoutMs = effectiveTimeoutMs;
+            var kernelTimeoutMs = UsesModuleOwnedTimeout(step) ? 0 : effectiveTimeoutMs;
+            var timeoutCallbackId = kernelTimeoutMs > 0
                 ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))
                 : string.Empty;
 
@@ -1228,7 +1296,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.CurrentStepTimeoutCallbackId = timeoutCallbackId;
             await SaveStateAsync(state, ctx, ct);
 
-            timeoutLease = await ScheduleStepTimeoutLeaseAsync(timeoutCallbackId, step, effectiveTimeoutMs, state.RunId, ctx, ct);
+            timeoutLease = await ScheduleStepTimeoutLeaseAsync(timeoutCallbackId, step, kernelTimeoutMs, state.RunId, ctx, ct);
             if (timeoutLease != null)
             {
                 state.TimeoutsByStepId[step.Id] = WorkflowRuntimeCallbackLeaseStateCodec.ToState(timeoutLease);
@@ -1244,7 +1312,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         catch (Exception ex) when (
             !ct.IsCancellationRequested &&
-            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(ex))
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
         {
             if (timeoutLease != null)
             {
@@ -1259,7 +1327,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     await SaveStateAsync(state, ctx, CancellationToken.None);
                 }
                 catch (Exception saveEx) when (
-                    !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(saveEx))
+                    !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(saveEx))
                 {
                     ctx.Logger.LogError(
                         saveEx,
@@ -1301,7 +1369,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         catch (Exception saveEx) when (
             !ct.IsCancellationRequested &&
-            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommittedStatePublicationFailure(saveEx))
+            !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(saveEx))
         {
             ctx.Logger.LogError(
                 saveEx,
@@ -1402,6 +1470,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     private static bool IsTimeoutError(string? error) =>
         !string.IsNullOrWhiteSpace(error) &&
         TimeoutErrorPattern.IsMatch(error);
+
+    private static bool HasUncertainOutcome(StepCompletedEvent completion) =>
+        completion.FailureOutcome == WorkflowStepFailureOutcome.OutcomeUncertain;
 
     private async Task<RuntimeCallbackLease?> ScheduleStepTimeoutLeaseAsync(
         string callbackId,
@@ -2366,6 +2437,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.CurrentStepId);
 
         var request = BuildStepRequest(step, state.CurrentStepInput, state.CurrentStepInputFileRefs, state, ctx);
+        request.TimeoutMs = NormalizeStepTimeoutMs(
+            ResolveStepTimeoutMs(step, ResolveRetryDispatchKind(state, step.Id)));
 
         // Restore the saved execution_id so stale-completion protection works after resume
         if (state.ExecutionIdsByStepId.TryGetValue(step.Id, out var savedExecutionId))
@@ -2472,6 +2545,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         dispatchKind == WorkflowStepDispatchKind.Compensation
             ? step.TimeoutMs is > 0 ? step.TimeoutMs.Value : DefaultCompensationTimeoutMs
             : step.TimeoutMs is > 0 ? step.TimeoutMs.Value : 0;
+
+    private static int NormalizeStepTimeoutMs(int timeoutMs) =>
+        timeoutMs > 0 ? Math.Clamp(timeoutMs, 100, 600_000) : 0;
+
+    private static bool UsesModuleOwnedTimeout(StepDefinition step) =>
+        string.Equals(
+            WorkflowPrimitiveCatalog.ToCanonicalType(step.Type),
+            "tool_call",
+            StringComparison.OrdinalIgnoreCase);
 
     private static WorkflowStepDispatchKind ResolveRetryDispatchKind(
         WorkflowExecutionKernelState state,

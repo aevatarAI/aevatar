@@ -104,7 +104,7 @@ public sealed class AevatarOAuthClientOrleansDispatchProjectionTests
                         {
                             [$"{AevatarOAuthClientBootstrapOptions.SectionName}:Enabled"] = "false",
                             [AevatarOAuthClientOptions.ClientIdConfigurationKey] = "configured-client",
-                            [NyxIdBrokerOptions.InternalApiBaseUrlConfigurationKey] = "http://nyxid.internal.test",
+                            ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal.test",
                             [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] = "https://nyxid.test",
                         })
                         .Build();

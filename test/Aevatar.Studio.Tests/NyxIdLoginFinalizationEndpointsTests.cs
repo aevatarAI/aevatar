@@ -57,6 +57,107 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     }
 
     [Fact]
+    public async Task AuthorizationCatalogRefresh_WithRequiredUserServiceIds_ShouldUseTargetedRefresh()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(
+            23,
+            services: [CatalogService("user-service-github")]));
+        var http = NewHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, "nyx-owner-alpha")],
+            "test"));
+        http.Request.Headers.Authorization = "Bearer bearer-secret";
+        var requestBody = Encoding.UTF8.GetBytes(
+            """{"requiredUserServiceIds":["user-service-github"]}""");
+        http.Request.ContentType = "application/json";
+        http.Request.ContentLength = requestBody.Length;
+        http.Request.Body = new MemoryStream(requestBody);
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
+            http,
+            lifecycle,
+            Visibility(catalog));
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        payload!.Ready.Should().BeTrue();
+        lifecycle.Requests.Should().BeEmpty();
+        var targeted = lifecycle.TargetedRequests.Should().ContainSingle().Subject;
+        targeted.Owner.Should().BeEquivalentTo(new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = "nyx-owner-alpha",
+        });
+        targeted.BearerToken.Should().Be("bearer-secret");
+        targeted.Request.RequiredServices.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("user-service-github");
+        targeted.Request.LLMTarget.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task AuthorizationCatalogRefresh_WithFreshRequiredService_ShouldIgnoreStaleOwnerCatalogStamp()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(
+            23,
+            freshUntilUtc: CatalogNow,
+            services: [CatalogService("user-service-github")]));
+        var http = NewHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, "nyx-owner-alpha")],
+            "test"));
+        http.Request.Headers.Authorization = "Bearer bearer-secret";
+        var requestBody = Encoding.UTF8.GetBytes(
+            """{"requiredUserServiceIds":["user-service-github"]}""");
+        http.Request.ContentType = "application/json";
+        http.Request.ContentLength = requestBody.Length;
+        http.Request.Body = new MemoryStream(requestBody);
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
+            http,
+            lifecycle,
+            Visibility(catalog));
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        payload!.Ready.Should().BeTrue();
+        payload.VisibilityStatus.Should().Be("ready");
+    }
+
+    [Fact]
+    public async Task AuthorizationCatalogRefresh_WhenRequiredServiceIsMissing_ShouldFailClosed()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(23));
+        var http = NewHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, "nyx-owner-alpha")],
+            "test"));
+        http.Request.Headers.Authorization = "Bearer bearer-secret";
+        var requestBody = Encoding.UTF8.GetBytes(
+            """{"requiredUserServiceIds":["user-service-github"]}""");
+        http.Request.ContentType = "application/json";
+        http.Request.ContentLength = requestBody.Length;
+        http.Request.Body = new MemoryStream(requestBody);
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
+            http,
+            lifecycle,
+            Visibility(catalog));
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        payload!.Ready.Should().BeFalse();
+        payload.VisibilityStatus.Should().Be("invalid");
+        payload.VisibilityFailureCode.Should().Be("nyxid_catalog_required_service_missing");
+    }
+
+    [Fact]
     public async Task AuthorizationCatalogRefresh_WhenCommittedVersionIsNotVisible_ShouldReturnAcceptedPending()
     {
         var lifecycle = new RecordingCatalogRefreshLifecycle(
@@ -1219,6 +1320,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         NyxIdAuthorizationCatalogRefreshResult? result = null) : INyxIdAuthorizationCatalogRefreshPort
     {
         public List<(string OwnerSubject, string BearerToken)> Requests { get; } = [];
+        public List<(
+            AuthorizationOwnerIdentity Owner,
+            string BearerToken,
+            NyxIdAuthorizationCatalogRefreshRequest Request)> TargetedRequests { get; } = [];
 
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
             string verifiedOwnerSubject,
@@ -1238,7 +1343,11 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             AuthorizationOwnerIdentity owner,
             string bearerToken,
             NyxIdAuthorizationCatalogRefreshRequest request,
-            CancellationToken ct = default) => throw new NotSupportedException();
+            CancellationToken ct = default)
+        {
+            TargetedRequests.Add((owner.Clone(), bearerToken, request));
+            return Task.FromResult(result ?? NyxIdAuthorizationCatalogRefreshResult.ObservedAt(1));
+        }
     }
 
     private sealed class RecordingCatalogQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
@@ -1273,7 +1382,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     private static NyxIdAuthorizationCatalogSnapshot CatalogSnapshot(
         long stateVersion,
         bool invalidated = false,
-        DateTimeOffset? freshUntilUtc = null) => new(
+        DateTimeOffset? freshUntilUtc = null,
+        IReadOnlyList<NyxIdAuthorizationServiceEvidence>? services = null) => new(
         new AuthorizationOwnerIdentity
         {
             Authority = NyxIdAuthorizationAuthorities.NyxId,
@@ -1287,9 +1397,31 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         "scope-plan-policy/v1",
         CatalogNow.AddMinutes(-1),
         "catalog-digest-alpha",
-        [],
+        services ?? [],
         Invalidated: invalidated,
         Activated: true);
+
+    private static NyxIdAuthorizationServiceEvidence CatalogService(string userServiceId) => new()
+    {
+        UserServiceId = userServiceId,
+        ServiceSlug = "api-github",
+        DisplayName = "GitHub OAuth",
+        Access = NyxIdAuthorizationAccess.Permitted,
+        ResourceOwner = new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = "nyx-owner-alpha",
+        },
+        ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+            CatalogNow.AddMinutes(-1)),
+        FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+            CatalogNow.AddMinutes(10)),
+        EvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+            CatalogNow.AddMinutes(-1)),
+        AuthorityContractVersion = "scope-plan-contract/v1",
+        AuthorityPolicyVersion = "scope-plan-policy/v1",
+    };
 
     private sealed class ThrowingCatalogRefreshLifecycle(Exception exception) : INyxIdAuthorizationCatalogRefreshPort
     {

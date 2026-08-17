@@ -168,7 +168,9 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
         var refresh = Create(
                 commands,
-                new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
+                new RoutingJsonHandler(
+                    Ok(UserServicesJson()),
+                    Ok(ScopePlanJson(evaluatedAt: Now.AddMinutes(1)))),
                 timeProvider: clock,
                 catalogQuery: catalog)
             .RefreshPersonalAsync("owner-alpha", "bearer-secret");
@@ -501,28 +503,42 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
-    public async Task RefreshPersonalAsync_WhenProviderCompletesInsideCancellationCallback_ShouldKeepTokenAliveUntilCallbackReturns()
+    public async Task LosingProviderTaskObservation_WhenProviderCompletesInsideCancellationCallback_ShouldKeepTokenAliveUntilCallbackReturns()
     {
-        var commands = new RecordingCommandPort();
-        var observation = new RecordingObservationRuntime();
-        var client = new CancellationCompletingHttpClient();
-        var port = CreateWithClient(commands, client, observation: observation);
-        var refresh = Task.Run(() => port.RefreshPersonalAsync("owner-alpha", "bearer-secret"));
-        await client.Blocked;
-        var refreshId = commands.Beginnings.Should().ContainSingle().Which.RefreshId;
+        var providerCancellation = new CancellationTokenSource();
+        var providerToken = providerCancellation.Token;
+        var providerCompletion = new TaskCompletionSource<bool>();
+        var callbackCompleted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Exception? tokenLifetimeFailure = null;
+        using var registration = providerToken.Register(() =>
+        {
+            providerCompletion.TrySetCanceled(providerToken);
+            try
+            {
+                _ = providerToken.WaitHandle.WaitOne(0);
+            }
+            catch (Exception ex)
+            {
+                tokenLifetimeFailure = ex;
+            }
+            finally
+            {
+                callbackCompleted.TrySetResult(true);
+            }
+        });
+        var observation = new NyxIdAuthorizationCatalogRefreshPipeline.LosingProviderTaskObservation(
+            providerCompletion.Task,
+            providerCancellation,
+            NullLogger<NyxIdAuthorizationCatalogRefreshPort>.Instance);
 
-        observation.Publish(
-            refreshId,
-            NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded,
-            "nyxid_catalog_refresh_superseded");
-        await client.CancellationCallbackCompleted.WaitAsync(TimeSpan.FromSeconds(1));
-        var result = await refresh.WaitAsync(TimeSpan.FromSeconds(1));
+        await Task.Run(observation.CancelWithoutThrowing).WaitAsync(TimeSpan.FromSeconds(1));
+        await callbackCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Superseded);
-        client.TokenLifetimeFailure.Should().BeNull();
-        observation.Detached.Should().Be(1);
-        observation.ProjectionReleases.Should().Be(1);
-        observation.PreparationReleases.Should().Be(1);
+        providerCompletion.Task.IsCanceled.Should().BeTrue();
+        tokenLifetimeFailure.Should().BeNull();
+        var accessReleasedToken = () => providerToken.WaitHandle;
+        accessReleasedToken.Should().Throw<ObjectDisposedException>();
     }
 
     [Fact]
@@ -1009,6 +1025,28 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshAsync_WhenScopePlanEvaluationExceedsAllowedClockSkew_ShouldFailBeforeObservation()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJsonForServiceA(Now.AddSeconds(31))));
+
+        var result = await Create(commands, handler)
+            .RefreshAsync(
+                Owner(),
+                "bearer-secret",
+                new NyxIdAuthorizationCatalogRefreshRequest(
+                    [new NyxIdUserServiceCapabilityRef { UserServiceId = "service-a" }],
+                    LLMTarget: null));
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+        result.FailureCode.Should().Be("nyxid_scope_plan_clock_skew_exceeded");
+        commands.Observations.Should().BeEmpty();
+        commands.Failures.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task RefreshAsync_WhenRequiredServiceIsMissing_ShouldFailClosedWithoutObservation()
     {
         var commands = new RecordingCommandPort();
@@ -1353,44 +1391,53 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
     private static string ScopePlanJson(
         string personalResourceOwnerId = "owner-alpha",
-        string organizationResourceOwnerId = "org-alpha") => $$$"""
-        {
-          "authority":"nyxid",
-          "contract_version":"1",
-          "policy_version":"api-key-scope-v1",
-          "authenticated_actor":{"id":"owner-alpha","type":"personal"},
-          "intended_key_owner":{"id":"owner-alpha","type":"personal"},
-          "services":[
-            {"user_service_id":"service-a","resource_owner":{"id":"{{{personalResourceOwnerId}}}","type":"personal"},"node_grant":{"type":"not_required"}},
-            {"user_service_id":"service-b","resource_owner":{"id":"{{{organizationResourceOwnerId}}}","type":"organization"},"node_grant":{"type":"required","node_ids":["node-a","node-b"]}}
-          ],
-          "allowed_service_ids":["service-a","service-b"],
-          "allowed_node_ids":["node-a","node-b"],
-          "evaluated_at":"{{{EvaluatedAt:O}}}",
-          "normalized_grant_digest":"sha256:{{{new string('a', 64)}}}",
-          "freshness":{"mode":"mutation_revalidated_snapshot","precondition_field":"scope_plan_digest","post_creation_drift":"fail_closed"},
-          "completeness":{"list_complete":true,"no_duplicates":true,"route_candidate_basis":"active_configured_routes","transient_node_state_excluded":true}
-        }
-        """;
+        string organizationResourceOwnerId = "org-alpha",
+        DateTimeOffset? evaluatedAt = null)
+    {
+        var resolvedEvaluatedAt = evaluatedAt ?? EvaluatedAt;
+        return $$$"""
+            {
+              "authority":"nyxid",
+              "contract_version":"1",
+              "policy_version":"api-key-scope-v1",
+              "authenticated_actor":{"id":"owner-alpha","type":"personal"},
+              "intended_key_owner":{"id":"owner-alpha","type":"personal"},
+              "services":[
+                {"user_service_id":"service-a","resource_owner":{"id":"{{{personalResourceOwnerId}}}","type":"personal"},"node_grant":{"type":"not_required"}},
+                {"user_service_id":"service-b","resource_owner":{"id":"{{{organizationResourceOwnerId}}}","type":"organization"},"node_grant":{"type":"required","node_ids":["node-a","node-b"]}}
+              ],
+              "allowed_service_ids":["service-a","service-b"],
+              "allowed_node_ids":["node-a","node-b"],
+              "evaluated_at":"{{{resolvedEvaluatedAt:O}}}",
+              "normalized_grant_digest":"sha256:{{{new string('a', 64)}}}",
+              "freshness":{"mode":"mutation_revalidated_snapshot","precondition_field":"scope_plan_digest","post_creation_drift":"fail_closed"},
+              "completeness":{"list_complete":true,"no_duplicates":true,"route_candidate_basis":"active_configured_routes","transient_node_state_excluded":true}
+            }
+            """;
+    }
 
-    private static string ScopePlanJsonForServiceA() => $$$"""
-        {
-          "authority":"nyxid",
-          "contract_version":"1",
-          "policy_version":"api-key-scope-v1",
-          "authenticated_actor":{"id":"owner-alpha","type":"personal"},
-          "intended_key_owner":{"id":"owner-alpha","type":"personal"},
-          "services":[
-            {"user_service_id":"service-a","resource_owner":{"id":"owner-alpha","type":"personal"},"node_grant":{"type":"not_required"}}
-          ],
-          "allowed_service_ids":["service-a"],
-          "allowed_node_ids":[],
-          "evaluated_at":"{{{EvaluatedAt:O}}}",
-          "normalized_grant_digest":"sha256:{{{new string('b', 64)}}}",
-          "freshness":{"mode":"mutation_revalidated_snapshot","precondition_field":"scope_plan_digest","post_creation_drift":"fail_closed"},
-          "completeness":{"list_complete":true,"no_duplicates":true,"route_candidate_basis":"active_configured_routes","transient_node_state_excluded":true}
-        }
-        """;
+    private static string ScopePlanJsonForServiceA(DateTimeOffset? evaluatedAt = null)
+    {
+        var resolvedEvaluatedAt = evaluatedAt ?? EvaluatedAt;
+        return $$$"""
+            {
+              "authority":"nyxid",
+              "contract_version":"1",
+              "policy_version":"api-key-scope-v1",
+              "authenticated_actor":{"id":"owner-alpha","type":"personal"},
+              "intended_key_owner":{"id":"owner-alpha","type":"personal"},
+              "services":[
+                {"user_service_id":"service-a","resource_owner":{"id":"owner-alpha","type":"personal"},"node_grant":{"type":"not_required"}}
+              ],
+              "allowed_service_ids":["service-a"],
+              "allowed_node_ids":[],
+              "evaluated_at":"{{{resolvedEvaluatedAt:O}}}",
+              "normalized_grant_digest":"sha256:{{{new string('b', 64)}}}",
+              "freshness":{"mode":"mutation_revalidated_snapshot","precondition_field":"scope_plan_digest","post_creation_drift":"fail_closed"},
+              "completeness":{"list_complete":true,"no_duplicates":true,"route_candidate_basis":"active_configured_routes","transient_node_state_excluded":true}
+            }
+            """;
+    }
 
     private static QueuedResponse Ok(string body) => new(HttpStatusCode.OK, body);
 
@@ -1665,45 +1712,6 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             });
             _blocked.TrySetResult(true);
             return await _pendingResponse.Task;
-        }
-    }
-
-    private sealed class CancellationCompletingHttpClient : HttpClient
-    {
-        private readonly TaskCompletionSource<bool> _blocked =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource<bool> _cancellationCallbackCompleted =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource<HttpResponseMessage> _response = new();
-
-        public Task Blocked => _blocked.Task;
-
-        public Task CancellationCallbackCompleted => _cancellationCallbackCompleted.Task;
-
-        public Exception? TokenLifetimeFailure { get; private set; }
-
-        public override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            _ = cancellationToken.Register(() =>
-            {
-                _response.TrySetCanceled(cancellationToken);
-                try
-                {
-                    _ = cancellationToken.WaitHandle.WaitOne(0);
-                }
-                catch (Exception ex)
-                {
-                    TokenLifetimeFailure = ex;
-                }
-                finally
-                {
-                    _cancellationCallbackCompleted.TrySetResult(true);
-                }
-            });
-            _blocked.TrySetResult(true);
-            return _response.Task;
         }
     }
 

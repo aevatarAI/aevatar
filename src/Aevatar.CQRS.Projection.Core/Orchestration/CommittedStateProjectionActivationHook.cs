@@ -35,6 +35,7 @@ public sealed class CommittedStateProjectionActivationHook : ICommittedStatePubl
         ArgumentNullException.ThrowIfNull(context);
 
         var planned = new HashSet<PlanKey>();
+        var failures = new List<Exception>();
         foreach (var provider in _providers)
         {
             IEnumerable<ProjectionActivationPlan> plans;
@@ -42,35 +43,68 @@ public sealed class CommittedStateProjectionActivationHook : ICommittedStatePubl
             {
                 plans = provider.GetPlans(context) ?? [];
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(
                     ex,
-                    "Projection activation plan provider {ProviderType} failed for actor {ActorId}; committed event publication will continue.",
+                    "Projection activation plan provider {ProviderType} failed for actor {ActorId}; remaining providers will be attempted before committed event publication fails.",
                     provider.GetType().FullName,
                     context.ActorId);
+                failures.Add(ex);
                 continue;
             }
 
-            foreach (var plan in plans)
+            try
             {
-                var key = PlanKey.From(plan);
-                if (!planned.Add(key))
-                    continue;
+                foreach (var plan in plans)
+                {
+                    var key = PlanKey.From(plan);
+                    if (!planned.Add(key))
+                        continue;
 
-                try
-                {
-                    await _dispatcher.DispatchAsync(plan, context, ct).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(
-                        ex,
-                        "Projection activation failed for actor {ActorId}, projection {ProjectionKind}; committed event publication will continue.",
-                        context.ActorId,
-                        plan.StartRequest.ProjectionKind);
+                    try
+                    {
+                        await _dispatcher.DispatchAsync(plan, context, ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(
+                            ex,
+                            "Projection activation failed for actor {ActorId}, projection {ProjectionKind}; remaining plans will be attempted before committed event publication fails.",
+                            context.ActorId,
+                            plan.StartRequest.ProjectionKind);
+                        failures.Add(ex);
+                    }
                 }
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Projection activation plan provider {ProviderType} failed while enumerating plans for actor {ActorId}; remaining providers will be attempted before committed event publication fails.",
+                    provider.GetType().FullName,
+                    context.ActorId);
+                failures.Add(ex);
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AggregateException(
+                $"Projection activation failed for actor '{context.ActorId}'.",
+                failures);
         }
     }
 

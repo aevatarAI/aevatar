@@ -26,7 +26,6 @@ public static class MainnetChatEndpoints
         "action.continue",
         "approval.resolve",
         "input.resolve",
-        "plan.resolve",
         "task.stop",
         "task.steer",
         "step.retry",

@@ -8,6 +8,7 @@ import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "ai_messages.proto";
+import "llm_selection.proto";
 
 enum LlmSessionOriginKind {
   LLM_SESSION_ORIGIN_KIND_UNSPECIFIED = 0;
@@ -241,6 +242,7 @@ message LlmRunRequested {
   google.protobuf.Timestamp requested_at = 12;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 13;
   google.protobuf.Duration timeout_after = 14;
+  aevatar.ai.LLMRouteTarget route_target = 15;
 }
 
 message LlmRunStartedEvent {

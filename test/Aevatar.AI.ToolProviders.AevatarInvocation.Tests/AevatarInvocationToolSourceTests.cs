@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -201,7 +203,7 @@ public sealed class AevatarInvocationToolSourceTests
         tool.Name.Should().Be("aevatar_read_workflow_run_artifact");
         tool.IsReadOnly.Should().BeTrue();
         tool.Description.Should().Contain("aevatar_start_workflow");
-        tool.Description.Should().Contain("always pass both");
+        tool.Description.Should().Contain("run-binding projection proves");
         tool.Description.Should().Contain("pending");
         doc.RootElement.GetProperty("type").GetString().Should().Be("object");
         doc.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
@@ -1891,14 +1893,18 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflow_ThroughStreamingExecutor_ShouldKeepVerifiedAcceptedStreamAck()
+    public async Task StartWorkflow_ThroughStreamingExecutorWithoutChannel_ShouldKeepBoundCommandIdentity()
     {
         var harness = new Harness();
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
             .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
 
-        using var _ = PushContext(callId: "call-workflow-executor");
+        using var _ = PushContext(
+            callId: "call-workflow-executor",
+            channelPlatform: null,
+            channelRegistrationScopeId: null,
+            durableReplyCredentialRef: null);
         var result = await ExecuteToolThroughExecutorAsync(
             tool,
             "call-workflow-executor",
@@ -1917,7 +1923,12 @@ public sealed class AevatarInvocationToolSourceTests
         result.Result.Should().NotContain("tool outcome could not be verified");
         result.Receipt.Should().NotBeNull();
         result.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        result.Receipt.CallId.Should().Be("call-workflow-executor");
         result.Receipt.SubjectId.Should().Be("workflow-actor");
+        using var receiptResult = JsonDocument.Parse(result.Receipt.ResultJson);
+        receiptResult.RootElement.GetProperty("command_id").GetString().Should().Be(result.Receipt.CallId);
+        harness.WorkflowRunDelivery.Reservations.Should().BeEmpty();
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
     }
 
     [Fact]
@@ -2248,6 +2259,50 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         harness.WorkflowDispatch.Command!.CompletionNotificationTarget.Should().BeNull();
+        harness.WorkflowDispatch.Command.CommandIdSeed.Should().Be("call-workflow-wait-complete");
+        using var result = JsonDocument.Parse(output);
+        result.RootElement.GetProperty("command_id").GetString()
+            .Should().Be("call-workflow-wait-complete");
+    }
+
+    [Theory]
+    [InlineData("stream")]
+    [InlineData("ack")]
+    [InlineData("complete")]
+    public async Task StartWorkflow_WithoutChannel_ShouldBindWorkflowCommandToToolCallForAllWaitModes(
+        string wait)
+    {
+        var harness = new Harness();
+        var dispatcher = harness.CreateDispatcher();
+        var callId = $"call-workflow-no-channel-{wait}";
+        var argumentsJson = $$"""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "{{wait}}"
+            }
+            """;
+        var request = BuildChatRunRequest(
+            $"response-workflow-no-channel-{wait}",
+            $"tool-call-workflow-no-channel-{wait}",
+            "aevatar_start_workflow",
+            argumentsJson);
+
+        using var _ = PushContext(
+            callId: callId,
+            channelPlatform: null,
+            channelRegistrationScopeId: null,
+            durableReplyCredentialRef: null);
+        var completion = await dispatcher.StartWorkflowForChatRunAsync(request, argumentsJson);
+
+        completion.ErrorCode.Should().BeEmpty(completion.ToolExecutionResultJson);
+        harness.WorkflowRunDelivery.Reservations.Should().BeEmpty();
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.CommandIdSeed.Should().Be(callId);
+        harness.WorkflowDispatch.Command.CompletionNotificationTarget.Should().BeNull();
+        using var result = JsonDocument.Parse(completion.ToolExecutionResultJson);
+        result.RootElement.GetProperty("command_id").GetString().Should().Be(callId);
     }
 
     [Fact]
@@ -3226,7 +3281,7 @@ public sealed class AevatarInvocationToolSourceTests
         {
             ScopeId = "scope-1",
             ActorId = "workflow-actor",
-            LastCommandId = "workflow-command",
+            LastCommandId = "call-workflow-observation",
             StateVersion = 1,
         };
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
@@ -3250,6 +3305,7 @@ public sealed class AevatarInvocationToolSourceTests
             output);
 
         Read(output).GetProperty("mutation_stage").GetString().Should().Be("read_model_observed");
+        Read(output).GetProperty("command_id").GetString().Should().Be("call-workflow-observation");
         harness.WorkflowQuery.LastCurrentStateActorId.Should().Be("workflow-actor");
         receipt.Should().NotBeNull();
         receipt!.MutationStage.Should().Be(AgentToolReceiptMutationStage.ReadModelObserved);
@@ -3504,6 +3560,45 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command!.CallerCredential.Should().NotBeNull();
         harness.WorkflowDispatch.Command.CallerCredential!.BearerToken.Should().Be("access-token");
         harness.WorkflowDispatch.Command.CallerCredential.Kind.Should().Be(expectedWorkflowCredentialKind);
+    }
+
+    [Fact]
+    public async Task StartWorkflow_WhenSourceReadableCredentialHasAuthority_ShouldProjectRefreshableDelegation()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-source-readable-authority",
+            channelPlatform: "lark",
+            senderBindingId: "binding-source-readable",
+            nyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-1",
+                "external-user-1"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        var callerCredential = harness.WorkflowDispatch.Command!.CallerCredential;
+        callerCredential.Should().NotBeNull();
+        callerCredential!.BearerToken.Should().Be("access-token");
+        callerCredential.SourceReadableUserBearerToken.Should().Be("access-token");
+        callerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        callerCredential.NyxIdAuthority.Should().NotBeNull();
+        callerCredential.NyxIdAuthority!.Platform.Should().Be("lark");
+        callerCredential.NyxIdAuthority.Tenant.Should().Be("tenant-1");
+        callerCredential.NyxIdAuthority.ExternalUserId.Should().Be("external-user-1");
+        callerCredential.NyxIdAuthority.Scope.Should().Be("proxy");
+        callerCredential.NyxIdAuthority.BindingId.Should().Be("binding-source-readable");
     }
 
     [Fact]
@@ -4167,11 +4262,148 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowQuery.LastCurrentStateActorId.Should().BeNull();
         var result = Read(output);
         result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
-        result.GetProperty("artifact_actor_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
         result.GetProperty("artifact").GetString().Should().Be("report");
         result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.Completed));
         result.GetProperty("final_output").GetString().Should().Be("Dinner is ready.");
+        result.GetProperty("final_output_bytes").GetInt32().Should()
+            .Be(Encoding.UTF8.GetByteCount("Dinner is ready."));
+        result.GetProperty("final_output_sha256").GetString().Should()
+            .Be(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("Dinner is ready.")))
+                .ToLowerInvariant());
         result.GetProperty("summary").GetProperty("completed_steps").GetInt32().Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData(WorkflowRunCompletionStatus.Running)]
+    [InlineData(WorkflowRunCompletionStatus.AwaitingToolApproval)]
+    [InlineData(WorkflowRunCompletionStatus.WaitingForSignal)]
+    public async Task ReadWorkflowRunArtifact_MaterializedNonTerminalReport_ShouldOmitNullableSuccess(
+        WorkflowRunCompletionStatus status)
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Report = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            WorkflowName = "non-terminal-workflow",
+            CommandId = "command-alpha",
+            CompletionStatus = status,
+            StateVersion = 18,
+            Success = null,
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+
+        var result = Read(output);
+        result.GetProperty("status").GetString().Should().Be(status.ToString());
+        result.TryGetProperty("success", out _).Should().BeFalse();
+        result.GetProperty("state_version").GetInt64().Should().Be(18);
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_TimedOutReport_ShouldSerializeTypedTerminalFailure()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Report = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            WorkflowName = "timed-out-workflow",
+            CommandId = "command-alpha",
+            CompletionStatus = WorkflowRunCompletionStatus.TimedOut,
+            StateVersion = 19,
+            Success = false,
+            FinalError = "deadline exceeded",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+
+        var result = Read(output);
+        result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.TimedOut));
+        result.GetProperty("success").GetBoolean().Should().BeFalse();
+        result.GetProperty("state_version").GetInt64().Should().Be(19);
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_ReportDigest_ShouldCoverFullUnicodeOutputWithoutTrimming()
+    {
+        var harness = new Harness();
+        var finalOutput = $" \n{new string('x', 2_100)}\u4E2D\u6587\U0001F642\n ";
+        harness.WorkflowQuery.Report = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            WorkflowName = "long-output-workflow",
+            CommandId = "command-alpha",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 18,
+            Success = true,
+            FinalOutput = finalOutput,
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+
+        var result = Read(output);
+        result.GetProperty("final_output").GetString().Should().NotBe(finalOutput);
+        result.GetProperty("final_output").GetString().Should().EndWith("...");
+        var fullBytes = Encoding.UTF8.GetBytes(finalOutput);
+        result.GetProperty("final_output_bytes").GetInt32().Should().Be(fullBytes.Length);
+        result.GetProperty("final_output_sha256").GetString().Should()
+            .Be(Convert.ToHexString(SHA256.HashData(fullBytes)).ToLowerInvariant());
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_ReportDigest_ShouldHandleEmojiAcrossBufferBoundary()
+    {
+        var harness = new Harness();
+        var tail = new string('z', 8_193);
+        var finalOutput = new string('a', 4_095) + "\U0001F642" + tail;
+        harness.WorkflowQuery.Report = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            WorkflowName = "buffer-boundary-workflow",
+            CommandId = "command-boundary",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 19,
+            Success = true,
+            FinalOutput = finalOutput,
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+
+        var result = Read(output);
+        var fullBytes = Encoding.UTF8.GetBytes(finalOutput);
+        fullBytes.Length.Should().Be(4_095 + 4 + tail.Length);
+        result.GetProperty("final_output_bytes").GetInt64().Should().Be(fullBytes.Length);
+        result.GetProperty("final_output_sha256").GetString().Should()
+            .Be(Convert.ToHexString(SHA256.HashData(fullBytes)).ToLowerInvariant());
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_EmptyReportOutput_ShouldExposeEmptyDigest()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.Report = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            WorkflowName = "empty-output-workflow",
+            CommandId = "command-alpha",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 19,
+            Success = true,
+            FinalOutput = string.Empty,
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync("""{"workflow_run_id":"run-1"}""");
+
+        var result = Read(output);
+        result.TryGetProperty("final_output", out _).Should().BeFalse();
+        result.GetProperty("final_output_bytes").GetInt32().Should().Be(0);
+        result.GetProperty("final_output_sha256").GetString().Should()
+            .Be(Convert.ToHexString(SHA256.HashData(Array.Empty<byte>())).ToLowerInvariant());
     }
 
     [Fact]
@@ -4243,9 +4475,21 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task ReadWorkflowRunArtifact_ShouldUseExplicitActorIdWithoutBindingLookup()
+    public async Task ReadWorkflowRunArtifact_ShouldUseExplicitActorIdWhenRunBindingMatches()
     {
         var harness = new Harness();
+        harness.RunBindingReader.BindingsByRunId["run-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "workflow-run-actor",
+                "workflow-definition-actor",
+                "run-1",
+                "demo-dinner-workflow",
+                string.Empty,
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive),
+        ];
         harness.WorkflowQuery.ReportsByWorkflowRunId["workflow-run-actor"] = new WorkflowRunReport
         {
             RootActorId = "workflow-run-actor",
@@ -4261,13 +4505,71 @@ public sealed class AevatarInvocationToolSourceTests
             """{"workflow_run_id":"run-1","actor_id":"workflow-run-actor"}""");
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.RunBindingReader.ListByRunIdCalls.Should().BeEmpty();
+        harness.RunBindingReader.ListByRunIdCalls.Should().Equal("run-1");
         harness.WorkflowQuery.ReportCalls.Should().Equal("run-1", "workflow-run-actor");
         var result = Read(output);
         result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
         result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
         result.GetProperty("status").GetString().Should().Be(nameof(WorkflowRunCompletionStatus.Completed));
         result.GetProperty("final_output").GetString().Should().Be("Completed through explicit actor identity.");
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_ExplicitForeignActorWithoutRunBinding_ShouldNotReadItsReport()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.ReportsByWorkflowRunId["foreign-workflow-run-actor"] = new WorkflowRunReport
+        {
+            RootActorId = "foreign-workflow-run-actor",
+            WorkflowName = "foreign-workflow",
+            CommandId = "foreign-command",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 12,
+            Success = true,
+            FinalOutput = "Foreign committed output.",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync(
+            """{"workflow_run_id":"run-1","actor_id":"foreign-workflow-run-actor","wait_ms":0}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.RunBindingReader.ListByRunIdCalls.Should().Equal("run-1");
+        harness.WorkflowQuery.ReportCalls.Should().Equal("run-1");
+        var result = Read(output);
+        result.GetProperty("workflow_run_id").GetString().Should().Be("run-1");
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("run-1");
+        result.GetProperty("status").GetString().Should().Be("pending");
+        result.GetProperty("pending").GetBoolean().Should().BeTrue();
+        result.TryGetProperty("success", out _).Should().BeFalse();
+        result.TryGetProperty("root_actor_id", out _).Should().BeFalse();
+        result.TryGetProperty("final_output_sha256", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ReadWorkflowRunArtifact_ExplicitActorId_ShouldNotOverrideCommittedReportActor()
+    {
+        var harness = new Harness();
+        harness.WorkflowQuery.ReportsByWorkflowRunId["run-1"] = new WorkflowRunReport
+        {
+            RootActorId = "workflow-run-actor",
+            WorkflowName = "actor-lineage-workflow",
+            CommandId = "command-alpha",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 12,
+            Success = true,
+            FinalOutput = "Committed actor identity wins.",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_read_workflow_run_artifact");
+
+        var output = await tool.ExecuteAsync(
+            """{"workflow_run_id":"run-1","actor_id":"caller-supplied-actor"}""");
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowQuery.ReportCalls.Should().Equal("run-1");
+        var result = Read(output);
+        result.GetProperty("artifact_actor_id").GetString().Should().Be("workflow-run-actor");
+        result.GetProperty("root_actor_id").GetString().Should().Be("workflow-run-actor");
     }
 
     [Fact]
@@ -4637,7 +4939,8 @@ public sealed class AevatarInvocationToolSourceTests
         AgentToolNyxIdCredentialKind nyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
         string? organizationAccessToken = "org-token",
         string? senderAccessToken = "sender-token",
-        string? sourceReadableAccessToken = null) =>
+        string? sourceReadableAccessToken = null,
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId),
             new AgentToolCredentials(
@@ -4656,7 +4959,7 @@ public sealed class AevatarInvocationToolSourceTests
                 null,
                 ToDeliveryCredential(durableReplyCredentialRef, durableReplyCredentialExpiresAtUnixMs),
                 "bot-reg-1"),
-            new AgentToolSenderBindingContext("binding-1", senderNyxUserId),
+            new AgentToolSenderBindingContext(senderBindingId, senderNyxUserId),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
             workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
@@ -4665,6 +4968,7 @@ public sealed class AevatarInvocationToolSourceTests
         {
             InputFileRefs = inputFileRefs ?? [],
             ExecutionOwner = AgentToolExecutionOwners.HostService(nameof(AevatarInvocationToolSourceTests)),
+            NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
         });
 
     private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger

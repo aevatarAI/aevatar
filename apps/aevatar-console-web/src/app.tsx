@@ -16,7 +16,6 @@ import {
 import { getNyxIDRuntimeConfig } from "./shared/auth/config";
 import {
   buildAuthInitialState,
-  loadRestorableAuthSession,
   loadStoredAuthSession,
   sanitizeReturnTo,
 } from "./shared/auth/session";
@@ -53,6 +52,7 @@ const STUDIO_HOST_ROUTES = new Set([
   "/scopes/:scopeId/teams/:teamId/members/new/workflow",
   "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow",
 ]);
+const SELF_MANAGED_AUTH_ROUTES = new Set(["/studio"]);
 
 function isFullscreenDisplayRoute(pathname: string): boolean {
   return FULLSCREEN_DISPLAY_ROUTES.has(pathname);
@@ -68,6 +68,10 @@ function isStudioHostRoute(pathname: string): boolean {
       pathname,
     )
   );
+}
+
+export function requiresGlobalAuthGate(pathname: string): boolean {
+  return !PUBLIC_ROUTES.has(pathname) && !SELF_MANAGED_AUTH_ROUTES.has(pathname);
 }
 
 function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {
@@ -225,7 +229,9 @@ function setLiveOpsAttentionSnapshot(next: LiveOpsAttentionSnapshot): void {
   }
 
   liveOpsAttentionSnapshot = next;
-  liveOpsAttentionListeners.forEach((listener) => listener());
+  liveOpsAttentionListeners.forEach((listener) => {
+    listener();
+  });
 }
 
 function buildLiveOpsAttentionCandidateKey(
@@ -752,16 +758,16 @@ export const layout = ({
           const isPublicRoute = PUBLIC_ROUTES.has(pathname);
           const isStudioRoute = isStudioHostRoute(pathname);
           const isDisplayRoute = isFullscreenDisplayRoute(pathname);
+          const requiresGlobalAuth = requiresGlobalAuthGate(pathname);
           const liveSession = loadStoredAuthSession();
           const needsProtectedRouteRedirect =
-            !isPublicRoute &&
-            !isStudioRoute &&
+            requiresGlobalAuth &&
             !liveSession &&
             !hasRestorableAuthSession();
 
           const content = needsProtectedRouteRedirect ? (
             <ProtectedRouteRedirectGate pathname={pathname} />
-          ) : !isPublicRoute && !isStudioRoute && !liveSession ? (
+          ) : requiresGlobalAuth && !liveSession ? (
               <AuthSessionBootstrap pathname={pathname}>
                 {children}
               </AuthSessionBootstrap>

@@ -10,6 +10,18 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 public sealed class AgentWorkflowToolSourceAdapterTests
 {
     [Fact]
+    public async Task WorkflowTool_ShouldDeclareDurableStartOnceRedispatchRecovery()
+    {
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(new CapturingAgentTool())],
+            new PassThroughExecutionPort());
+
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Should().ContainSingle().Subject;
+
+        tool.RecoverySafety.Should().Be(WorkflowToolRecoverySafety.DurableStartOnceRedispatch);
+    }
+
+    [Fact]
     public void OperationAdmissionMapper_ShouldPreservePublishedEndpointIdentity()
     {
         var mapped = WorkflowOperationAdmissionToolContextMapper.Map(

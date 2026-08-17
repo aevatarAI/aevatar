@@ -180,8 +180,9 @@ public class NyxIdChatAguiSseEventWriterTests
             Order = 1,
             Kind = NyxIdChatStepKind.Tool,
             Status = NyxIdChatStepStatus.Failed,
-            Required = true,
+            Required = false,
             Description = "Update the repository.",
+            MayChangeExternalState = false,
             ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
             AddedBy = NyxIdChatStepAddedBy.Replan,
             DependsOn = { "step-plan" },
@@ -226,6 +227,7 @@ public class NyxIdChatAguiSseEventWriterTests
                 },
                 Kind = NyxIdChatStepKind.Tool,
                 Phase = NyxIdChatOperationPhase.Failed,
+                MayChangeExternalState = false,
             },
         };
         var task = new NyxIdChatTaskState
@@ -240,11 +242,6 @@ public class NyxIdChatAguiSseEventWriterTests
             PlanId = "plan-alpha",
             PlanRevision = 2,
             Title = "Update the repository safely",
-            Gate = new NyxIdChatPlanGate
-            {
-                Mode = NyxIdChatPlanGateMode.Confirm,
-                Reason = "The plan contains an effect-capable operation.",
-            },
             Steps =
             {
                 taskStep,
@@ -307,8 +304,10 @@ public class NyxIdChatAguiSseEventWriterTests
         payload.GetProperty("status").GetString().Should().Be("active");
         payload.GetProperty("planId").GetString().Should().Be("plan-alpha");
         payload.GetProperty("planRevision").GetInt32().Should().Be(2);
-        payload.GetProperty("gate").GetProperty("mode").GetString().Should().Be("confirm");
+        payload.TryGetProperty("gate", out _).Should().BeFalse();
         var step = payload.GetProperty("steps")[0];
+        step.GetProperty("required").GetBoolean().Should().BeFalse();
+        step.GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
         step.GetProperty("kind").GetString().Should().Be("tool");
         step.GetProperty("status").GetString().Should().Be("failed");
         step.GetProperty("externalEffect").GetString().Should().Be("not_applied");
@@ -317,7 +316,9 @@ public class NyxIdChatAguiSseEventWriterTests
         step.GetProperty("estimate").GetProperty("seconds").GetInt32().Should().Be(30);
         step.GetProperty("substeps")[0].GetProperty("status").GetString().Should().Be("done");
         step.GetProperty("availableActions").GetProperty("retry").GetBoolean().Should().BeTrue();
-        step.GetProperty("operation").GetProperty("phase").GetString().Should().Be("failed");
+        var operation = step.GetProperty("operation");
+        operation.GetProperty("phase").GetString().Should().Be("failed");
+        operation.GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
         step.GetProperty("source").GetProperty("tool")
             .GetProperty("readinessCapabilityId").GetString().Should()
             .Be("readiness-capability-alpha");
@@ -330,7 +331,12 @@ public class NyxIdChatAguiSseEventWriterTests
         changedPayload.GetProperty("taskId").GetString().Should().Be("task-alpha");
         changedPayload.GetProperty("planRevision").GetInt32().Should().Be(2);
         changedPayload.GetProperty("changeKind").GetString().Should().Be("status");
-        changedPayload.GetProperty("step").GetProperty("source").GetProperty("tool")
+        var changedStep = changedPayload.GetProperty("step");
+        changedStep.GetProperty("required").GetBoolean().Should().BeFalse();
+        changedStep.GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
+        changedStep.GetProperty("operation").GetProperty("mayChangeExternalState")
+            .GetBoolean().Should().BeFalse();
+        changedStep.GetProperty("source").GetProperty("tool")
             .GetProperty("readinessCapabilityId").GetString().Should()
             .Be("readiness-capability-alpha");
         frame.GetRawText().Should().NotContain("@type");
@@ -452,10 +458,6 @@ public class NyxIdChatAguiSseEventWriterTests
             ActiveTurn = committed.OriginTurn.Clone(),
         };
         committed.State.PendingActions.Add(committed.Request.Clone());
-        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
-            committed.State,
-            committed.Request);
-        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",
@@ -542,10 +544,6 @@ public class NyxIdChatAguiSseEventWriterTests
             ActiveTurn = committed.OriginTurn.Clone(),
         };
         committed.State.PendingActions.Add(committed.Request.Clone());
-        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
-            committed.State,
-            committed.Request);
-        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",
@@ -631,10 +629,6 @@ public class NyxIdChatAguiSseEventWriterTests
             ActiveTurn = committed.OriginTurn.Clone(),
         };
         committed.State.PendingActions.Add(committed.Request.Clone());
-        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
-            committed.State,
-            committed.Request);
-        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",
@@ -720,10 +714,6 @@ public class NyxIdChatAguiSseEventWriterTests
             ActiveTurn = committed.OriginTurn.Clone(),
         };
         committed.State.PendingActions.Add(committed.Request.Clone());
-        committed.State.ActiveTask.Gate = NyxIdChatPlanGateDecisions.BuildActionGate(
-            committed.State,
-            committed.Request);
-        committed.State.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
         var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
                 "conversation-alpha",
                 "turn-alpha",

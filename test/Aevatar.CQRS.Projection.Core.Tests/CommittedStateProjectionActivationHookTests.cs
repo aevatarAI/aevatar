@@ -58,23 +58,31 @@ public sealed class CommittedStateProjectionActivationHookTests
     }
 
     [Fact]
-    public async Task BeforePublishAsync_ShouldContinuePublication_WhenProviderFails()
+    public async Task BeforePublishAsync_ShouldFailPublication_AfterAttemptingRemainingProviders()
     {
         var activation = new RecordingActivationService<TestLease>();
+        var failingProvider = new ThrowingPlanProvider();
+        var remainingProvider = new StaticPlanProvider(BuildPlan("actor-1", "projection-a", typeof(TestLease)));
         var hook = CreateHook(
             [
-                new ThrowingPlanProvider(),
-                new StaticPlanProvider(BuildPlan("actor-1", "projection-a", typeof(TestLease))),
+                failingProvider,
+                remainingProvider,
             ],
             services => services.AddSingleton<IProjectionScopeActivationService<TestLease>>(activation));
 
-        await hook.BeforePublishAsync(BuildContext("actor-fail"), CancellationToken.None);
+        var act = () => hook.BeforePublishAsync(BuildContext("actor-fail"), CancellationToken.None);
 
+        var exception = await act.Should().ThrowAsync<AggregateException>();
+        exception.Which.InnerExceptions.Should().ContainSingle()
+            .Which.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("provider failed");
+        failingProvider.Calls.Should().Be(1);
+        remainingProvider.Calls.Should().Be(1);
         activation.Requests.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task BeforePublishAsync_ShouldContinuePublication_WhenActivationServiceMissing()
+    public async Task BeforePublishAsync_ShouldFailPublication_WhenActivationServiceMissing()
     {
         var hook = CreateHook(
             [new StaticPlanProvider(BuildPlan("actor-1", "projection-a", typeof(TestLease)))],
@@ -82,7 +90,12 @@ public sealed class CommittedStateProjectionActivationHookTests
 
         var act = () => hook.BeforePublishAsync(BuildContext("actor-missing"), CancellationToken.None);
 
-        await act.Should().NotThrowAsync();
+        var exception = await act.Should().ThrowAsync<AggregateException>();
+        exception.Which.InnerExceptions.Should().ContainSingle()
+            .Which.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Contain("Projection activation service for lease")
+            .And.Contain("TestLease")
+            .And.Contain("not registered");
     }
 
     [Fact]
@@ -97,7 +110,7 @@ public sealed class CommittedStateProjectionActivationHookTests
     }
 
     [Fact]
-    public async Task BeforePublishAsync_ShouldContinuePublication_WhenActivationDispatchFails()
+    public async Task BeforePublishAsync_ShouldFailPublication_WhenActivationDispatchFails()
     {
         var hook = CreateHook(
             [new StaticPlanProvider(BuildPlan("actor-1", "projection-a", typeof(TestLease)))],
@@ -106,7 +119,91 @@ public sealed class CommittedStateProjectionActivationHookTests
 
         var act = () => hook.BeforePublishAsync(BuildContext("actor-dispatch-fail"), CancellationToken.None);
 
-        await act.Should().NotThrowAsync();
+        var exception = await act.Should().ThrowAsync<AggregateException>();
+        exception.Which.InnerExceptions.Should().ContainSingle()
+            .Which.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("activation failed");
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_ShouldAttemptAllProviderAndPlanBranches_BeforeThrowingAggregateException()
+    {
+        var activation = new RecordingFailingActivationService<TestLease>("projection-a", "projection-c");
+        var firstFailingProvider = new ThrowingPlanProvider("provider one failed");
+        var planProvider = new StaticPlanProvider(
+            BuildPlan("actor-1", "projection-a", typeof(TestLease)),
+            BuildPlan("actor-1", "projection-b", typeof(TestLease)));
+        var secondFailingProvider = new ThrowingPlanProvider("provider two failed");
+        var remainingPlanProvider = new StaticPlanProvider(
+            BuildPlan("actor-1", "projection-c", typeof(TestLease)));
+        var hook = CreateHook(
+            [firstFailingProvider, planProvider, secondFailingProvider, remainingPlanProvider],
+            services => services.AddSingleton<IProjectionScopeActivationService<TestLease>>(activation));
+
+        var act = () => hook.BeforePublishAsync(BuildContext("actor-failures"), CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<AggregateException>();
+        exception.Which.InnerExceptions.Select(inner => inner.Message).Should().BeEquivalentTo(
+            "provider one failed",
+            "activation failed for projection-a",
+            "provider two failed",
+            "activation failed for projection-c");
+        firstFailingProvider.Calls.Should().Be(1);
+        planProvider.Calls.Should().Be(1);
+        secondFailingProvider.Calls.Should().Be(1);
+        remainingPlanProvider.Calls.Should().Be(1);
+        activation.Requests.Select(request => request.ProjectionKind).Should().Equal(
+            "projection-a",
+            "projection-b",
+            "projection-c");
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_ShouldImmediatelyPropagateProviderCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var activation = new RecordingActivationService<TestLease>();
+        var remainingProvider = new StaticPlanProvider(
+            BuildPlan("actor-1", "projection-a", typeof(TestLease)));
+        var hook = CreateHook(
+            [new CancelingPlanProvider(cancellation.Token), remainingProvider],
+            services => services.AddSingleton<IProjectionScopeActivationService<TestLease>>(activation));
+
+        var act = () => hook.BeforePublishAsync(BuildContext("actor-canceled"), cancellation.Token);
+
+        await act.Should().ThrowExactlyAsync<OperationCanceledException>();
+        remainingProvider.Calls.Should().Be(0);
+        activation.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BeforePublishAsync_ShouldImmediatelyPropagateDispatcherCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var cancelingActivation = new CancelingActivationService<TestLease>(cancellation);
+        var skippedActivation = new RecordingActivationService<OtherTestLease>();
+        var remainingProvider = new StaticPlanProvider(
+            BuildPlan("actor-1", "projection-c", typeof(OtherTestLease)));
+        var hook = CreateHook(
+            [
+                new StaticPlanProvider(
+                    BuildPlan("actor-1", "projection-a", typeof(TestLease)),
+                    BuildPlan("actor-1", "projection-b", typeof(OtherTestLease))),
+                remainingProvider,
+            ],
+            services =>
+            {
+                services.AddSingleton<IProjectionScopeActivationService<TestLease>>(cancelingActivation);
+                services.AddSingleton<IProjectionScopeActivationService<OtherTestLease>>(skippedActivation);
+            });
+
+        var act = () => hook.BeforePublishAsync(BuildContext("actor-canceled"), cancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        cancelingActivation.Requests.Should().ContainSingle();
+        skippedActivation.Requests.Should().BeEmpty();
+        remainingProvider.Calls.Should().Be(0);
     }
 
     private static CommittedStateProjectionActivationHook CreateHook(
@@ -152,17 +249,35 @@ public sealed class CommittedStateProjectionActivationHookTests
 
     private sealed class StaticPlanProvider(params ProjectionActivationPlan[] plans) : IProjectionActivationPlanProvider
     {
+        public int Calls { get; private set; }
+
         public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)
         {
             _ = context;
+            Calls++;
             return plans;
         }
     }
 
-    private sealed class ThrowingPlanProvider : IProjectionActivationPlanProvider
+    private sealed class ThrowingPlanProvider(string message = "provider failed") : IProjectionActivationPlanProvider
     {
-        public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context) =>
-            throw new InvalidOperationException("provider failed");
+        public int Calls { get; private set; }
+
+        public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)
+        {
+            _ = context;
+            Calls++;
+            throw new InvalidOperationException(message);
+        }
+    }
+
+    private sealed class CancelingPlanProvider(CancellationToken cancellationToken) : IProjectionActivationPlanProvider
+    {
+        public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)
+        {
+            _ = context;
+            throw new OperationCanceledException(cancellationToken);
+        }
     }
 
     private sealed class ThrowingActivationService<TLease> : IProjectionScopeActivationService<TLease>
@@ -197,7 +312,48 @@ public sealed class CommittedStateProjectionActivationHookTests
         }
     }
 
+    private sealed class RecordingFailingActivationService<TLease>(params string[] failingProjectionKinds)
+        : IProjectionScopeActivationService<TLease>
+        where TLease : class, IProjectionRuntimeLease
+    {
+        private readonly HashSet<string> _failingProjectionKinds = failingProjectionKinds.ToHashSet(StringComparer.Ordinal);
+
+        public List<ProjectionScopeStartRequest> Requests { get; } = [];
+
+        public Task<TLease> EnsureAsync(ProjectionScopeStartRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            if (_failingProjectionKinds.Contains(request.ProjectionKind))
+            {
+                return Task.FromException<TLease>(
+                    new InvalidOperationException($"activation failed for {request.ProjectionKind}"));
+            }
+
+            return Task.FromResult<TLease>((Activator.CreateInstance(typeof(TLease), request.RootActorId) as TLease)!);
+        }
+    }
+
+    private sealed class CancelingActivationService<TLease>(CancellationTokenSource cancellation)
+        : IProjectionScopeActivationService<TLease>
+        where TLease : class, IProjectionRuntimeLease
+    {
+        public List<ProjectionScopeStartRequest> Requests { get; } = [];
+
+        public Task<TLease> EnsureAsync(ProjectionScopeStartRequest request, CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            cancellation.Cancel();
+            return Task.FromCanceled<TLease>(ct);
+        }
+    }
+
     private sealed class TestLease(string rootEntityId) : IProjectionRuntimeLease
+    {
+        public string RootEntityId { get; } = rootEntityId;
+    }
+
+    private sealed class OtherTestLease(string rootEntityId) : IProjectionRuntimeLease
     {
         public string RootEntityId { get; } = rootEntityId;
     }

@@ -13,6 +13,7 @@ using Aevatar.AI.Core.Hooks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Runtime.CompilerServices;
 
 namespace Aevatar.AI.Core.Tools;
@@ -49,6 +50,7 @@ internal static class ToolExecutionResultHistory
 public sealed class StreamingToolExecutor
 {
     private const string SafeToolFailureMessage = "The tool request failed.";
+    private const string SafeToolCancellationMessage = "Tool execution was cancelled.";
     private readonly ToolManager _tools;
     private readonly AgentHookPipeline? _hooks;
     private readonly AgentToolExecutionContext? _toolContext;
@@ -192,15 +194,32 @@ public sealed class StreamingToolExecutor
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(state);
+        ExceptionDispatchInfo? cancellation = null;
 
         while (true)
         {
-            await CommitFinishedToolsAsync(state, ct);
+            if (cancellation is null)
+            {
+                try
+                {
+                    await CommitFinishedToolsAsync(state, ct);
+                }
+                catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
+                {
+                    cancellation = ExceptionDispatchInfo.Capture(ex);
+                    CompleteOutstandingToolsAsCancelled(state);
+                    await CommitFinishedToolsAsync(state, CancellationToken.None);
+                }
+            }
+
             foreach (var result in GetCompletedResults(state))
                 yield return result;
 
             if (!HasRemainingTools(state))
+            {
+                cancellation?.Throw();
                 yield break;
+            }
 
             var completions = state.Tools
                 .Where(static tracked => tracked.Status == ToolStatus.Executing)
@@ -212,7 +231,16 @@ public sealed class StreamingToolExecutor
                 continue;
             }
 
-            await Task.WhenAny(completions).WaitAsync(ct);
+            try
+            {
+                await Task.WhenAny(completions).WaitAsync(ct);
+            }
+            catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
+            {
+                cancellation = ExceptionDispatchInfo.Capture(ex);
+                CompleteOutstandingToolsAsCancelled(state);
+                await CommitFinishedToolsAsync(state, CancellationToken.None);
+            }
         }
     }
 
@@ -451,6 +479,76 @@ public sealed class StreamingToolExecutor
                 IsError: true);
         }
     }
+
+    private void CompleteOutstandingToolsAsCancelled(ExecutionState state)
+    {
+        state.Discarded = true;
+        state.HasErrored = true;
+        state.DiscardCts.Cancel();
+        foreach (var tracked in state.Tools)
+        {
+            if (tracked.Status is ToolStatus.Completed or ToolStatus.Yielded)
+                continue;
+
+            tracked.Status = ToolStatus.Completed;
+            tracked.Result = BuildCancellationResult(tracked);
+        }
+    }
+
+    private ToolExecutionResult BuildCancellationResult(ToolExecutionEntry tracked)
+    {
+        var resultJson = ToolManager.BuildErrorJson(SafeToolCancellationMessage);
+        AgentToolReceipt receipt;
+        if (tracked.Tool is { } tool)
+        {
+            try
+            {
+                using var scope = AgentToolContextScope.Push(tracked.Operation.ExecutionContext);
+                receipt = AgentToolReceiptFactory.CreateError(
+                    tool,
+                    tracked.Call.Id,
+                    tracked.Call.Name,
+                    tool.GetCallSafety(tracked.Call.ArgumentsJson ?? string.Empty),
+                    resultJson,
+                    "tool_execution_cancelled",
+                    SafeToolCancellationMessage);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to classify cancelled tool {ToolName} call {CallId}; treating the terminal as mutating",
+                    tracked.Call.Name,
+                    tracked.Call.Id);
+                receipt = BuildUnclassifiedCancellationReceipt(tracked, resultJson);
+            }
+        }
+        else
+        {
+            receipt = BuildUnclassifiedCancellationReceipt(tracked, resultJson);
+        }
+
+        return new ToolExecutionResult(
+            tracked.Call.Id,
+            tracked.Call.Name,
+            resultJson,
+            IsError: true,
+            Receipt: receipt);
+    }
+
+    private static AgentToolReceipt BuildUnclassifiedCancellationReceipt(
+        ToolExecutionEntry tracked,
+        string resultJson) =>
+        new()
+        {
+            CallId = tracked.Call.Id,
+            ToolName = tracked.Call.Name,
+            Status = AgentToolReceiptStatus.Error,
+            Effect = AgentToolReceiptEffect.Mutating,
+            ErrorCode = "tool_execution_cancelled",
+            ErrorMessage = SafeToolCancellationMessage,
+            ResultJson = resultJson,
+        };
 
     private static bool HasRemainingTools(ExecutionState state) =>
         state.Tools.Any(static tracked => tracked.Status != ToolStatus.Yielded);

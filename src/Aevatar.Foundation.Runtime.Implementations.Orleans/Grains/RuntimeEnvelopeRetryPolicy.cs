@@ -80,18 +80,19 @@ internal sealed class RuntimeEnvelopeRetryPolicy
     }
 
     private bool ShouldRetry(Exception exception) =>
-        !RetryOnlyRecoverableConcurrencyFailures || ContainsRecoverableConcurrencyFailure(exception);
+        !RetryOnlyRecoverableConcurrencyFailures || ContainsDefaultRetryableFailure(exception);
 
-    private static bool ContainsRecoverableConcurrencyFailure(Exception exception)
+    private static bool ContainsDefaultRetryableFailure(Exception exception)
     {
         return exception switch
         {
+            IRuntimeEnvelopeRetryableException => true,
             EventStoreOptimisticConcurrencyException => true,
             CommittedStatePublicationException => true,
             AggregateException aggregate =>
-                aggregate.InnerExceptions.Any(ContainsRecoverableConcurrencyFailure),
+                aggregate.InnerExceptions.Any(ContainsDefaultRetryableFailure),
             _ when exception.InnerException is not null =>
-                ContainsRecoverableConcurrencyFailure(exception.InnerException),
+                ContainsDefaultRetryableFailure(exception.InnerException),
             _ => false,
         };
     }
@@ -116,6 +117,23 @@ internal sealed class RuntimeEnvelopeRetryPolicy
                 aggregate.InnerExceptions.Any(ContainsCommitConsistencyFailure),
             _ when exception.InnerException is not null =>
                 ContainsCommitConsistencyFailure(exception.InnerException),
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// True when the handler explicitly requires the same envelope to remain
+    /// unacknowledged after runtime retries are exhausted.
+    /// </summary>
+    internal static bool ContainsRuntimeEnvelopeRetryableFailure(Exception exception)
+    {
+        return exception switch
+        {
+            IRuntimeEnvelopeRetryableException => true,
+            AggregateException aggregate =>
+                aggregate.InnerExceptions.Any(ContainsRuntimeEnvelopeRetryableFailure),
+            _ when exception.InnerException is not null =>
+                ContainsRuntimeEnvelopeRetryableFailure(exception.InnerException),
             _ => false,
         };
     }

@@ -97,35 +97,74 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
-        if (_selfStreamHandle != null)
+        Exception? unsubscribeFailure = null;
+        Exception? agentCleanupFailure = null;
+
+        var selfStreamHandle = _selfStreamHandle;
+        _selfStreamHandle = null;
+        if (selfStreamHandle != null)
         {
             try
             {
-                await _selfStreamHandle.UnsubscribeAsync();
+                await selfStreamHandle.UnsubscribeAsync();
             }
             catch (Exception ex)
             {
-                if (!ShouldIgnoreSelfStreamUnsubscribeFailure(ex))
-                    throw;
-
-                _logger.LogWarning(
-                    ex,
-                    "Failed to unsubscribe self stream for actor {ActorId} during deactivation.",
-                    this.GetPrimaryKeyString());
+                if (ShouldIgnoreSelfStreamUnsubscribeFailure(ex))
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Failed to unsubscribe self stream for actor {ActorId} during deactivation.",
+                        SafeGetActorIdForLog());
+                }
+                else
+                {
+                    unsubscribeFailure = ex;
+                    _logger.LogError(
+                        ex,
+                        "Failed to unsubscribe self stream for actor {ActorId} during deactivation; agent cleanup will still run.",
+                        SafeGetActorIdForLog());
+                }
             }
-
-            _selfStreamHandle = null;
         }
 
-        if (_agent != null)
+        var agent = _agent;
+        if (agent != null)
         {
-            using var stateBinding = _stateBindingAccessor?.Bind(_state);
-            await _agent.DeactivateAsync(cancellationToken);
-            _agent = null;
-            _activeKind = null;
+            try
+            {
+                using var stateBinding = _stateBindingAccessor?.Bind(_state);
+                await agent.DeactivateAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                agentCleanupFailure = ex;
+                _logger.LogError(
+                    ex,
+                    "Agent cleanup failed for actor {ActorId} during deactivation.",
+                    SafeGetActorIdForLog());
+            }
+            finally
+            {
+                _agent = null;
+                _activeKind = null;
+            }
         }
 
         TriggerDeactivationHook();
+
+        if (unsubscribeFailure != null && agentCleanupFailure != null)
+        {
+            throw new AggregateException(
+                "Self-stream unsubscribe and agent cleanup both failed during runtime actor deactivation.",
+                unsubscribeFailure,
+                agentCleanupFailure);
+        }
+
+        if (unsubscribeFailure != null)
+            ExceptionDispatchInfo.Capture(unsubscribeFailure).Throw();
+        if (agentCleanupFailure != null)
+            ExceptionDispatchInfo.Capture(agentCleanupFailure).Throw();
     }
 
     private static bool ShouldIgnoreSelfStreamUnsubscribeFailure(Exception ex)
@@ -303,50 +342,76 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         catch (Exception ex)
         {
             scope.MarkError(ex);
+            var hasCommitConsistencyFailure =
+                RuntimeEnvelopeRetryPolicy.ContainsCommitConsistencyFailure(ex);
+            Exception? retrySchedulingFailure = null;
             try
             {
                 if (await TryScheduleRetryAsync(envelope, ex))
+                {
+                    if (hasCommitConsistencyFailure)
+                        ShedActivationAfterCommitConsistencyFailure();
                     return;
+                }
             }
-            catch
+            catch (Exception scheduleException)
             {
-                throw;
+                retrySchedulingFailure = scheduleException;
+                _logger.LogError(
+                    scheduleException,
+                    "Runtime envelope retry scheduling failed for actor {ActorId}, envelope {EnvelopeId}; preserving the original handler failure.",
+                    this.GetPrimaryKeyString(),
+                    envelope.Id);
             }
 
             _logger.LogError(
                 ex,
-                "Runtime envelope handling failed after retry exhausted (or retry disabled) for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
+                "Runtime envelope handling failed after retry exhausted, retry disabled, or retry scheduling failed for actor {ActorId}, envelope {EnvelopeId}, event type '{EventTypeUrl}'.",
                 this.GetPrimaryKeyString(),
                 envelope.Id,
                 envelope.Payload?.TypeUrl ?? "(none)");
 
+            var requiresTransportRedelivery =
+                RuntimeEnvelopeRetryPolicy.ContainsRuntimeEnvelopeRetryableFailure(ex);
+            var shouldPropagateFailure =
+                propagateFailure || requiresTransportRedelivery || retrySchedulingFailure != null;
             AgentMetrics.RecordEnvelopeTerminalFailure(
                 AgentMetrics.FailureReasonHandlerRetryExhausted,
-                ResolveTerminalFailureDisposition(propagateFailure));
+                ResolveTerminalFailureDisposition(shouldPropagateFailure));
 
-            if (RuntimeEnvelopeRetryPolicy.ContainsCommitConsistencyFailure(ex))
+            if (requiresTransportRedelivery)
             {
-                // The activation's memory and the event store disagree about the
-                // committed history. Keeping this activation alive would let it
-                // keep accepting commands whose commits can never land (the
-                // observed zombie: every write reported accepted, nothing
-                // persisted). Shed the agent and the activation so the next
-                // envelope rehydrates from the committed history, where a
-                // repaired store commits cleanly and unrepaired drift fails
-                // activation with a diagnosable error instead of a silent drop.
+                // The actor either exhausted its own retry budget or could not
+                // persist the durable wakeup. Keep the provider delivery
+                // unacknowledged and shed the activation so redelivery rehydrates
+                // committed state.
+                // Preserve _agent until OnDeactivateAsync so actor-owned background
+                // work is canceled through the normal lifecycle hook.
                 _logger.LogWarning(
-                    "Runtime actor {ActorId} is shedding its activation after a commit-consistency failure; the next envelope will rehydrate from committed state.",
+                    "Runtime actor {ActorId} requires transport redelivery after actor-owned retry was unavailable; shedding the activation without acknowledging the envelope.",
                     this.GetPrimaryKeyString());
-                _agent = null;
-                _activeKind = null;
                 DeactivateOnIdle();
             }
 
-            if (propagateFailure)
+            if (hasCommitConsistencyFailure)
+                ShedActivationAfterCommitConsistencyFailure();
+
+            if (shouldPropagateFailure)
             {
                 throw;
             }
         }
+    }
+
+    private void ShedActivationAfterCommitConsistencyFailure()
+    {
+        // The activation's memory and the event store disagree about committed
+        // history. Preserve the agent until OnDeactivateAsync so actor-owned
+        // cleanup still runs, then force the retry to rehydrate committed state.
+        _logger.LogWarning(
+            "Runtime actor {ActorId} is shedding its activation after a commit-consistency failure; the next envelope will rehydrate from committed state.",
+            this.GetPrimaryKeyString());
+        DeactivateOnIdle();
     }
 
     public async Task AddChildAsync(string childId)

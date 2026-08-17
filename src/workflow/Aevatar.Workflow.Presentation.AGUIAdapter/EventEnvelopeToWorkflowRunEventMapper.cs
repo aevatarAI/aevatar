@@ -653,6 +653,8 @@ public sealed class ToolCallRunEventEnvelopeMappingHandler : IWorkflowRunEventEn
                     {
                         ToolCallId = evt.CallId,
                         Result = evt.ResultJson,
+                        Success = evt.Success,
+                        Error = string.IsNullOrWhiteSpace(evt.Error) ? null : evt.Error,
                     },
                 },
             ];

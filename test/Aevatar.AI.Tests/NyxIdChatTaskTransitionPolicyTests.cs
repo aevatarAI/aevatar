@@ -194,6 +194,21 @@ public sealed class NyxIdChatTaskTransitionPolicyTests
         var signal = ToolSignal(
             AgentToolReceiptStatus.Success,
             NyxIdChatEffectEvidence.Confirmed);
+        signal.Tool.Receipt.ToolName = "aevatar_start_workflow";
+        signal.Tool.Receipt.SubjectId = "run-alpha";
+        signal.Tool.Receipt.MutationStage = AgentToolReceiptMutationStage.ReadModelObserved;
+        signal.Tool.Receipt.ResultJson = """
+            {
+              "run_id": "run-alpha",
+              "actor_id": "run-alpha",
+              "command_id": "call-alpha",
+              "status": "streaming",
+              "mutation_stage": "read_model_observed"
+            }
+            """;
+        signal.Tool.Receipt = NyxIdChatConversationGAgent
+            .BuildDurableReceiptEvidence(signal.Tool.Receipt)!;
+        var publicResult = signal.Tool.Receipt.ResultJson;
 
         var decision = NyxIdChatTaskTransitionPolicy.ReconcileOperation(started, signal);
 
@@ -202,6 +217,35 @@ public sealed class NyxIdChatTaskTransitionPolicyTests
         step.Status.Should().Be(NyxIdChatStepStatus.Done);
         step.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
+        var frames = NyxIdChatConversationAguiFrameBuilder.BuildReconciled(
+            decision.State.ConversationActorId,
+            decision.State.ActiveTurn.TurnId,
+            new NyxIdChatOperationReconciledEvent
+            {
+                Result = signal,
+                Task = decision.State.ActiveTask.Clone(),
+                Turn = decision.State.ActiveTurn.Clone(),
+                ProgressSequence = 8,
+                State = decision.State.Clone(),
+            });
+        frames.Should().ContainSingle(frame =>
+                frame.EventCase == AGUIEvent.EventOneofCase.ToolCallEnd)
+            .Which.ToolCallEnd.Result.Should().Be(publicResult);
+
+        var lateFrames = NyxIdChatConversationAguiFrameBuilder.BuildLateOperationEvidence(
+            new NyxIdChatLateOperationEvidenceCommittedEvent
+            {
+                Key = signal.Key.Clone(),
+                OperationPhase = NyxIdChatOperationPhase.Succeeded,
+                ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
+                ToolReceipt = signal.Tool.Receipt.Clone(),
+                ProgressSequence = 9,
+                State = decision.State.Clone(),
+            },
+            sequence: 9);
+        lateFrames.Should().ContainSingle(frame =>
+                frame.EventCase == AGUIEvent.EventOneofCase.ToolCallEnd)
+            .Which.ToolCallEnd.Result.Should().Be(publicResult);
     }
 
     [Fact]

@@ -122,17 +122,29 @@ public static class NyxIdLlmServiceCatalogParser
 
     public static NyxIdLlmServicesResult MergeObservedModelCatalog(
         NyxIdLlmServicesResult result,
-        string serviceSlug,
+        UserLlmServiceIdentity identity,
         LLMModelCatalog observedCatalog)
     {
         ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(observedCatalog);
-        var normalizedSlug = UserLlmPreferenceWriteCore.NormalizeOptional(serviceSlug);
-        if (normalizedSlug is null || observedCatalog.Certainty != LLMModelCatalogCertainty.Enumerated)
+        var normalizedUserServiceId = UserLlmPreferenceWriteCore.NormalizeOptional(identity.NyxIdUserServiceId);
+        if (identity.Authority != UserLlmIdentityAuthority.NyxIdUserServicesInventory ||
+            normalizedUserServiceId is null ||
+            observedCatalog.Certainty != LLMModelCatalogCertainty.Enumerated)
+        {
             return result;
+        }
 
         var services = result.Services
-            .Select(service => string.Equals(service.ServiceSlug, normalizedSlug, StringComparison.OrdinalIgnoreCase)
+            .Select(service => service.Identity is
+                {
+                    Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                } serviceIdentity &&
+                string.Equals(
+                    UserLlmPreferenceWriteCore.NormalizeOptional(serviceIdentity.NyxIdUserServiceId),
+                    normalizedUserServiceId,
+                    StringComparison.Ordinal)
                 ? service with { ModelCatalog = MergeModelCatalog(service.ModelCatalog, observedCatalog) }
                 : service)
             .ToArray();

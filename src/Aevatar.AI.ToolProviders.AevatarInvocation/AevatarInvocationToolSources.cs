@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -346,6 +348,8 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
     private const int MaxGraphDepth = 5;
     private const int DefaultReportWaitMs = 8000;
     private const int MaxReportWaitMs = 20000;
+    private const int MaxRunBindingCandidates = 100;
+    private const int FinalOutputDigestBufferSize = 4 * 1024;
     private static readonly TimeSpan ReportPollInterval = TimeSpan.FromMilliseconds(250);
 
     private readonly IWorkflowExecutionQueryApplicationService _queryService;
@@ -366,7 +370,8 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
 
     public string Description =>
         "Read a workflow run's projected artifact/export by workflow_run_id. " +
-        "Use this after aevatar_start_workflow returns a run_id and actor_id; always pass both as workflow_run_id and actor_id so artifact reads do not depend on eventual run-binding lookup. " +
+        "Use this after aevatar_start_workflow returns a run_id and actor_id; pass both as workflow_run_id and actor_id. " +
+        "The actor_id is only used after the run-binding projection proves that it belongs to the requested workflow_run_id. " +
         "Long workflow actor IDs are also accepted as workflow_run_id for callers that do not have a separate run ID. " +
         "For report reads, the tool waits briefly for projection materialization and returns pending if the artifact is not visible yet; do not infer the final workflow output from a pending result. " +
         "This tool reads workflow-run report/timeline/graph artifacts only and does not inspect live actor state.";
@@ -382,7 +387,7 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
             },
             "actor_id": {
               "type": "string",
-              "description": "Workflow actor ID returned by the same aevatar_start_workflow call. Always pass it when available to avoid eventual run-binding lookup."
+              "description": "Workflow actor ID returned by the same aevatar_start_workflow call. It is accepted as a lookup hint only when the run-binding projection associates it with workflow_run_id."
             },
             "view": {
               "type": "string",
@@ -477,23 +482,28 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
             });
         }
 
+        var finalOutput = report.FinalOutput ?? string.Empty;
+        var finalOutputDigest = ComputeUtf8Sha256(finalOutput);
+        var committedArtifactActorId = EmptyToNull(report.RootActorId);
         return AevatarInvocationJson.ToJson(new
         {
             workflow_run_id = args.WorkflowRunId,
-            artifact_actor_id = EmptyToNull(artifactTarget.ArtifactWorkflowRunId),
+            artifact_actor_id = committedArtifactActorId,
             artifact = "report",
             workflow_name = EmptyToNull(report.WorkflowName),
             status = report.CompletionStatus.ToString(),
             state_version = report.StateVersion,
             command_id = EmptyToNull(report.CommandId),
-            root_actor_id = EmptyToNull(report.RootActorId),
+            root_actor_id = committedArtifactActorId,
             success = report.Success,
             started_at = ToIso(report.StartedAt),
             ended_at = ToIso(report.EndedAt),
             updated_at = ToIso(report.UpdatedAt),
             duration_ms = report.DurationMs,
             input = Truncate(report.Input, 500),
-            final_output = Truncate(report.FinalOutput, 2000),
+            final_output = Truncate(finalOutput, 2000),
+            final_output_bytes = finalOutputDigest.ByteCount,
+            final_output_sha256 = finalOutputDigest.Sha256,
             final_error = EmptyToNull(report.FinalError),
             summary = new
             {
@@ -671,23 +681,33 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
     {
         var normalized = workflowRunId.Trim();
         var normalizedActorId = actorId.Trim();
-        if (!string.IsNullOrWhiteSpace(normalizedActorId))
+        if (string.Equals(normalized, normalizedActorId, StringComparison.Ordinal))
             return new WorkflowRunArtifactTarget(normalized, normalizedActorId);
 
         IReadOnlyList<WorkflowActorBinding> bindings;
         try
         {
-            bindings = await _runBindingReader.ListByRunIdAsync(normalized, take: 1, ct);
+            bindings = await _runBindingReader.ListByRunIdAsync(
+                normalized,
+                take: MaxRunBindingCandidates,
+                ct);
         }
         catch (ArgumentException)
         {
             bindings = [];
         }
 
-        var resolvedActorId = bindings
-            .Where(static binding => binding.ActorKind == WorkflowActorKind.Run)
+        var boundActorIds = bindings
+            .Where(binding =>
+                binding.ActorKind == WorkflowActorKind.Run &&
+                string.Equals(binding.RunId?.Trim(), normalized, StringComparison.Ordinal))
             .Select(static binding => binding.ActorId?.Trim() ?? string.Empty)
-            .FirstOrDefault(static value => value.Length > 0);
+            .Where(static value => value.Length > 0)
+            .ToArray();
+        var resolvedActorId = string.IsNullOrWhiteSpace(normalizedActorId)
+            ? boundActorIds.FirstOrDefault()
+            : boundActorIds.FirstOrDefault(value =>
+                string.Equals(value, normalizedActorId, StringComparison.Ordinal));
 
         return new WorkflowRunArtifactTarget(
             normalized,
@@ -718,6 +738,34 @@ internal sealed class ReadWorkflowRunArtifactTool : IAevatarInvocationReadOnlyTo
 
     private static string? ToIso(DateTimeOffset value) =>
         value == default ? null : value.UtcDateTime.ToString("O");
+
+    private static (long ByteCount, string Sha256) ComputeUtf8Sha256(string value)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var encoder = Encoding.UTF8.GetEncoder();
+        Span<byte> buffer = stackalloc byte[FinalOutputDigestBufferSize];
+        var remaining = value.AsSpan();
+        long byteCount = 0;
+        bool completed;
+
+        do
+        {
+            encoder.Convert(
+                remaining,
+                buffer,
+                flush: true,
+                out var charsUsed,
+                out var bytesUsed,
+                out completed);
+            hash.AppendData(buffer[..bytesUsed]);
+            byteCount += bytesUsed;
+            remaining = remaining[charsUsed..];
+        } while (!completed);
+
+        return (
+            byteCount,
+            Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
+    }
 
     private static TimeSpan Min(TimeSpan left, TimeSpan right) =>
         left <= right ? left : right;

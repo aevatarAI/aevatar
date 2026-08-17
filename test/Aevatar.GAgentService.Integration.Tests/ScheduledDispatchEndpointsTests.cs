@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -1696,10 +1697,10 @@ public sealed class ScheduledDispatchEndpointsTests
             ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
             ownerScopeId: "scope-alpha");
 
-        var http = CreateHttpContext();
-        await result.ExecuteAsync(http);
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        statusCode.Should().Be(StatusCodes.Status403Forbidden);
+        json.GetProperty("code").GetString().Should().Be("SCOPE_ACCESS_DENIED");
         service.LastListQuery.Should().BeNull();
     }
 
@@ -1748,12 +1749,16 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task List_WhenScopeIdMissing_ShouldUseGenericListPath()
+    public async Task List_WhenOwnerQueryMissingAndCallerIsAdmin_ShouldUseGenericListPath()
     {
         var service = new RecordingScheduledDispatchApplicationService();
 
         var result = await ScheduledDispatchEndpoints.List(
-            CreateHttpContext(),
+            CreateHttpContext(
+                scopeId: "scope-alpha",
+                authenticationEnabled: true,
+                adminAuthorizer: new StaticPlatformAdminAuthorizer(isElevated: true),
+                authorizationHeader: "Bearer admin-token"),
             service,
             scopeId: null,
             take: 25,
@@ -1768,6 +1773,47 @@ public sealed class ScheduledDispatchEndpointsTests
             Take: 25,
             Cursor: "cursor-1",
             IncludeTotalCount: true));
+    }
+
+    [Fact]
+    public async Task List_WhenOwnerQueryMissingAndCallerIsNotAdmin_ShouldRejectBeforeQuery()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(
+                scopeId: "scope-alpha",
+                authenticationEnabled: true,
+                adminAuthorizer: new StaticPlatformAdminAuthorizer(isElevated: false),
+                authorizationHeader: "Bearer user-token"),
+            service);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status403Forbidden);
+        json.GetProperty("code").GetString().Should().Be(
+            "SCHEDULE_ADMIN_ACCESS_REQUIRED");
+        service.LastListQuery.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task List_WhenOwnerQueryMissingAndAdminAuthorizerUnavailable_ShouldRejectBeforeQuery()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(
+                scopeId: "scope-alpha",
+                authenticationEnabled: true,
+                authorizationHeader: "Bearer user-token"),
+            service);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        json.GetProperty("code").GetString().Should().Be(
+            "SCHEDULE_ADMIN_AUTHORIZATION_UNAVAILABLE");
+        service.LastListQuery.Should().BeNull();
     }
 
     [Fact]
@@ -2929,7 +2975,9 @@ public sealed class ScheduledDispatchEndpointsTests
         string? sub = null,
         string? nameIdentifier = null,
         string? userId = null,
-        bool authenticationEnabled = false)
+        bool authenticationEnabled = false,
+        IPlatformAdminAuthorizer? adminAuthorizer = null,
+        string? authorizationHeader = null)
     {
         var services = new ServiceCollection()
             .AddLogging()
@@ -2941,6 +2989,8 @@ public sealed class ScheduledDispatchEndpointsTests
             })
             .Build());
         services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+        if (adminAuthorizer != null)
+            services.AddSingleton(adminAuthorizer);
 
         var http = new DefaultHttpContext
         {
@@ -2966,6 +3016,8 @@ public sealed class ScheduledDispatchEndpointsTests
         }
 
         http.Response.Body = new MemoryStream();
+        if (!string.IsNullOrWhiteSpace(authorizationHeader))
+            http.Request.Headers.Authorization = authorizationHeader;
         return http;
     }
 
@@ -2978,6 +3030,17 @@ public sealed class ScheduledDispatchEndpointsTests
         public string ContentRootPath { get; set; } = Directory.GetCurrentDirectory();
 
         public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
+    }
+
+    private sealed class StaticPlatformAdminAuthorizer(bool isElevated) : IPlatformAdminAuthorizer
+    {
+        public Task<PlatformCaller> ResolveCallerAsync(string bearerToken, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(isElevated
+                ? new PlatformCaller(true, "admin", "admin@example.test", "admin-1")
+                : PlatformCaller.NotElevated);
+        }
     }
 
     private sealed class ScheduleEndpointTestHost : IAsyncDisposable

@@ -14,6 +14,8 @@ public static class WorkflowRunEventTypes
     public const string StateSnapshot = "STATE_SNAPSHOT";
     public const string ToolCallStart = "TOOL_CALL_START";
     public const string ToolCallEnd = "TOOL_CALL_END";
+    public const string ModelCallStart = "MODEL_CALL_START";
+    public const string ModelCallEnd = "MODEL_CALL_END";
     public const string Usage = "USAGE";
     public const string Custom = "CUSTOM";
 
@@ -35,6 +37,8 @@ public static class WorkflowRunEventTypes
             WorkflowRunEventEnvelope.EventOneofCase.StateSnapshot => StateSnapshot,
             WorkflowRunEventEnvelope.EventOneofCase.ToolCallStart => ToolCallStart,
             WorkflowRunEventEnvelope.EventOneofCase.ToolCallEnd => ToolCallEnd,
+            WorkflowRunEventEnvelope.EventOneofCase.ModelCallStart => ModelCallStart,
+            WorkflowRunEventEnvelope.EventOneofCase.ModelCallEnd => ModelCallEnd,
             WorkflowRunEventEnvelope.EventOneofCase.Usage => Usage,
             WorkflowRunEventEnvelope.EventOneofCase.Custom => Custom,
             _ => string.Empty,

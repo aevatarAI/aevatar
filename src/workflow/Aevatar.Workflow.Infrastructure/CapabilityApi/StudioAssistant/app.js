@@ -1,4 +1,4 @@
-import "./transport.js?v=20260807-m40-thread-polish";
+import "./transport.js?v=20260817-m55-operation-auth-trajectory";
 import {
   consumeSse,
   mergeUsage,
@@ -9,23 +9,25 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260807-m40-thread-polish";
+} from "./protocol.js?v=20260817-m55-operation-auth-trajectory";
 import {
   buildConnectCardBlock,
-  connectCardSteps,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260807-m40-thread-polish";
+} from "./blocks.js?v=20260817-m55-operation-auth-trajectory";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260807-m40-thread-polish";
-import { describeReadinessFailure } from "./readiness.js?v=20260807-m40-thread-polish";
+} from "./actor-state.js?v=20260817-m55-operation-auth-trajectory";
+import { describeReadinessFailure } from "./readiness.js?v=20260817-m55-operation-auth-trajectory";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
+const SERVICE_ACCESS_REVIEW_KEY = "aevatar-studio:pending-service-access-review:v1";
+const ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED_CODE =
+  "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 const surfaceLabels = {
@@ -56,6 +58,7 @@ const dom = {
   commandFact: $("#commandFact"),
   commandFactRow: $("#commandFactRow"),
   composerForm: $("#composerForm"),
+  composerWrap: $("#composerWrap"),
   composerInputOptions: $("#composerInputOptions"),
   composerInputPrompt: $("#composerInputPrompt"),
   composerInputRequest: $("#composerInputRequest"),
@@ -68,6 +71,7 @@ const dom = {
   connectionDot: $("#connectionDot"),
   connectionTest: $("#connectionTest"),
   connectionText: $("#connectionText"),
+  conversationViewButton: $("#conversationViewButton"),
   conversationTitle: $("#conversationTitle"),
   accountAvatar: $("#accountAvatar"),
   accountEmail: $("#accountEmail"),
@@ -103,12 +107,19 @@ const dom = {
   refreshComposerServicesButton: $("#refreshComposerServicesButton"),
   recentGroup: $("#recentGroup"),
   recentSessionsList: $("#recentSessionsList"),
+  requestTraceCount: $("#requestTraceCount"),
+  requestTraceEmpty: $("#requestTraceEmpty"),
+  requestTraceLive: $("#requestTraceLive"),
+  requestTraceList: $("#requestTraceList"),
+  requestTracePanel: $("#requestTracePanel"),
+  requestTraceRailCount: $("#requestTraceRailCount"),
   needsYouCount: $("#needsYouCount"),
   needsYouFilterButton: $("#needsYouFilterButton"),
   removeAttachmentButton: $("#removeAttachmentButton"),
   routeClientState: $("#routeClientState"),
   routeLabel: $("#routeLabel"),
   routeOrnnState: $("#routeOrnnState"),
+  routeSection: $("#routeSection"),
   routeSurfaceValue: $("#routeSurfaceValue"),
   routeTransportValue: $("#routeTransportValue"),
   routeUpstreamState: $("#routeUpstreamState"),
@@ -125,6 +136,8 @@ const dom = {
   servicesCount: $("#servicesCount"),
   runIdentityFact: $("#runIdentityFact"),
   runIdentityLabel: $("#runIdentityLabel"),
+  inspectorEyebrow: $("#inspectorEyebrow"),
+  inspectorTitle: $("#inspectorTitle"),
   settingsButton: $("#settingsButton"),
   settingsDialog: $("#settingsDialog"),
   settingsForm: $("#settingsForm"),
@@ -145,6 +158,32 @@ const dom = {
   thread: $("#thread"),
   toast: $("#toast"),
   toastText: $("#toastText"),
+  traceClientRequestFact: $("#traceClientRequestFact"),
+  traceDurationFact: $("#traceDurationFact"),
+  traceEventFact: $("#traceEventFact"),
+  traceInputFact: $("#traceInputFact"),
+  traceOperationCount: $("#traceOperationCount"),
+  traceOperationDurationFact: $("#traceOperationDurationFact"),
+  traceOperationEmpty: $("#traceOperationEmpty"),
+  traceOperationIdFact: $("#traceOperationIdFact"),
+  traceOperationInputFact: $("#traceOperationInputFact"),
+  traceOperationInputSection: $("#traceOperationInputSection"),
+  traceOperationKindFact: $("#traceOperationKindFact"),
+  traceOperationList: $("#traceOperationList"),
+  traceOperationOutputFact: $("#traceOperationOutputFact"),
+  traceOperationOutputSection: $("#traceOperationOutputSection"),
+  traceOperationOverview: $("#traceOperationOverview"),
+  traceOperationSection: $("#traceOperationSection"),
+  traceOperationStartedFact: $("#traceOperationStartedFact"),
+  traceOperationStatusFact: $("#traceOperationStatusFact"),
+  traceOperationTitleFact: $("#traceOperationTitleFact"),
+  traceOutputFact: $("#traceOutputFact"),
+  traceOutputSection: $("#traceOutputSection"),
+  traceReadonlyNotice: $("#traceReadonlyNotice"),
+  traceStartedFact: $("#traceStartedFact"),
+  traceStatusFact: $("#traceStatusFact"),
+  traceToolFact: $("#traceToolFact"),
+  traceViewButton: $("#traceViewButton"),
   usageElapsed: $("#usageElapsed"),
   usageModel: $("#usageModel"),
   usageTokens: $("#usageTokens"),
@@ -188,6 +227,7 @@ const state = {
   historyRequestSequence: 0,
   historyRefreshTimer: null,
   run: createRunState(),
+  traceRenderFrame: null,
   toastTimer: null,
 };
 
@@ -218,6 +258,7 @@ function createRunState() {
     cardElements: new Map(),
     actionCardsElement: null,
     eventSequence: 0,
+    clientRequestId: null,
     request: null,
   };
 }
@@ -233,11 +274,20 @@ function createConversationState({ actorId = null, meta = null, title = "新会�
     workflowSessionId: createId("workflow-session"),
     actorProjection: createActorProjection(actorId),
     stateReloadInFlight: null,
+    actionActorProjections: new Map(),
+    actionStateReloads: new Map(),
+    actionStateNotices: new Map(),
+    actionStateRefreshTimers: new Map(),
+    actionActorTaskElements: new Map(),
+    actionActorControlReceipts: new Map(),
     actionFrameCache: new Map(),
     actorStateNotice: "",
     actorTaskElement: null,
     actorControlReceipt: null,
     actorStateRefreshTimer: null,
+    actorStateRefreshGeneration: 0,
+    actionStateRefreshGenerations: new Map(),
+    historyRecoveredTurnId: null,
     needsYouDrafts: new Map(),
     needsYouSubmissions: new Map(),
     approvalConfirmRequestId: null,
@@ -246,6 +296,11 @@ function createConversationState({ actorId = null, meta = null, title = "新会�
     draft: "",
     attachment: null,
     run: createRunState(),
+    traces: new Map(),
+    traceOrder: [],
+    currentTraceKey: null,
+    selectedTraceKey: null,
+    mainView: "conversation",
     controller: null,
     controllers: new Set(),
     thread,
@@ -259,6 +314,936 @@ function createConversationState({ actorId = null, meta = null, title = "新会�
   state.conversationStates.set(entry.key, entry);
   dom.threadViewport.append(thread);
   return entry;
+}
+
+function createRequestTrace(entry, run) {
+  const key = String(run?.clientRequestId || "").trim();
+  if (!entry || !key) return null;
+  const existing = entry.traces.get(key);
+  if (existing) return existing;
+  entry.currentTraceKey = key;
+  const trace = {
+    key,
+    clientRequestId: key,
+    serverRunId: null,
+    serverTurnId: null,
+    run,
+    records: [],
+    recordIndex: new Map(),
+    selectedOperationKey: null,
+    activeModelOperationKey: null,
+    followLatestOperation: true,
+    nextOperationSequence: 0,
+    element: null,
+    fields: null,
+  };
+  entry.traces.set(key, trace);
+  entry.traceOrder.unshift(key);
+  entry.selectedTraceKey = key;
+  createInputTraceOperation(trace);
+  return trace;
+}
+
+function currentRequestTrace(entry = state.activeConversation) {
+  const key = String(entry?.currentTraceKey || entry?.run?.clientRequestId || "").trim();
+  return key ? entry?.traces?.get(key) || null : null;
+}
+
+function selectedRequestTrace(entry = state.activeConversation) {
+  if (!entry?.selectedTraceKey) return null;
+  return entry.traces.get(entry.selectedTraceKey) || null;
+}
+
+function traceForRun(entry, run) {
+  const key = String(run?.clientRequestId || "").trim();
+  return key ? entry?.traces?.get(key) || null : null;
+}
+
+function currentRequestRun(entry = state.activeConversation) {
+  return currentRequestTrace(entry)?.run || entry?.run || null;
+}
+
+function attachRequestTraceServerFacts(entry, run, event) {
+  const trace = traceForRun(entry, run);
+  if (!trace || !event) return trace;
+  trace.serverRunId = event.runId || trace.serverRunId;
+  trace.serverTurnId = event.turnId || trace.serverTurnId;
+  return trace;
+}
+
+function isReviewingHistoricalTrace(entry = state.activeConversation) {
+  const selected = selectedRequestTrace(entry);
+  return Boolean(selected && selected !== currentRequestTrace(entry));
+}
+
+function ensureTraceOperationState(trace) {
+  if (!trace) return null;
+  if (!Array.isArray(trace.records)) trace.records = [];
+  if (!(trace.recordIndex instanceof Map)) {
+    trace.recordIndex = new Map(trace.records.map((record) => [record.key, record]));
+  }
+  if (!Number.isSafeInteger(trace.nextOperationSequence)) {
+    trace.nextOperationSequence = trace.records.reduce(
+      (maximum, record) => Math.max(maximum, Number(record.sequence) || 0),
+      0,
+    );
+  }
+  if (typeof trace.followLatestOperation !== "boolean") trace.followLatestOperation = true;
+  if (typeof trace.typedModelLifecycleObserved !== "boolean") {
+    trace.typedModelLifecycleObserved = false;
+  }
+  return trace;
+}
+
+function orderedTraceOperations(trace) {
+  ensureTraceOperationState(trace);
+  return [...(trace?.records || [])].sort((left, right) => {
+    if (left.kind === "input" && right.kind !== "input") return -1;
+    if (right.kind === "input" && left.kind !== "input") return 1;
+    const leftHasServerSequence = Number.isSafeInteger(left.serverSequence);
+    const rightHasServerSequence = Number.isSafeInteger(right.serverSequence);
+    if (leftHasServerSequence !== rightHasServerSequence) return leftHasServerSequence ? -1 : 1;
+    if (leftHasServerSequence && left.serverSequence !== right.serverSequence) {
+      return left.serverSequence - right.serverSequence;
+    }
+    const localOrder = (Number(left.sequence) || 0) - (Number(right.sequence) || 0);
+    return localOrder || String(left.key).localeCompare(String(right.key));
+  });
+}
+
+function traceOperationKey(kind, id) {
+  const normalizedKind = String(kind || "operation").trim().toLowerCase() || "operation";
+  const normalizedId = String(id || "").trim();
+  return `${normalizedKind}:${normalizedId || createId(normalizedKind)}`;
+}
+
+function upsertTraceOperation(trace, patch) {
+  ensureTraceOperationState(trace);
+  if (!trace || !patch?.kind) return null;
+  const key = String(patch.key || traceOperationKey(patch.kind, patch.id)).trim();
+  let record = trace.recordIndex.get(key);
+  const created = !record;
+  if (!record) {
+    trace.nextOperationSequence += 1;
+    record = {
+      key,
+      id: String(patch.id || key.slice(key.indexOf(":") + 1)),
+      kind: String(patch.kind).toLowerCase(),
+      title: "Operation",
+      status: "running",
+      input: "",
+      output: "",
+      reasoning: "",
+      model: "",
+      provider: "",
+      tools: [],
+      round: null,
+      sessionId: "",
+      finishReason: "",
+      error: "",
+      usage: null,
+      startedAt: null,
+      completedAt: null,
+      timingClock: null,
+      sequence: trace.nextOperationSequence,
+      serverSequence: null,
+      element: null,
+      fields: null,
+      barElement: null,
+    };
+    trace.records.push(record);
+    trace.recordIndex.set(key, record);
+  }
+
+  for (const field of [
+    "title", "status", "input", "output", "reasoning", "model", "provider", "round",
+    "sessionId", "finishReason", "error",
+  ]) {
+    if (patch[field] !== undefined && patch[field] !== null) record[field] = patch[field];
+  }
+  if (Array.isArray(patch.tools)) record.tools = [...patch.tools];
+  const serverSequence = Number(patch.serverSequence);
+  if (Number.isSafeInteger(serverSequence) && serverSequence > 0) {
+    record.serverSequence = Number.isSafeInteger(record.serverSequence)
+      ? Math.min(record.serverSequence, serverSequence)
+      : serverSequence;
+  }
+  if (patch.usage) record.usage = mergeUsage(record.usage, patch.usage);
+  if (patch.id) record.id = String(patch.id);
+  if (created && trace.followLatestOperation) trace.selectedOperationKey = key;
+  return record;
+}
+
+function createInputTraceOperation(trace) {
+  if (!trace?.run) return null;
+  const startedAt = Number(trace.run.startedAt);
+  const record = upsertTraceOperation(trace, {
+    key: traceOperationKey("input", trace.clientRequestId),
+    id: trace.clientRequestId,
+    kind: "input",
+    title: "Input",
+    status: "done",
+    input: requestTraceInput(trace),
+  });
+  if (record && Number.isFinite(startedAt) && startedAt > 0 && record.startedAt == null) {
+    record.startedAt = startedAt;
+    record.timingClock = "client";
+  }
+  return record;
+}
+
+function selectedTraceOperation(trace) {
+  ensureTraceOperationState(trace);
+  if (!trace?.records.length) return null;
+  const selected = trace.recordIndex.get(trace.selectedOperationKey);
+  if (selected) return selected;
+  const fallback = orderedTraceOperations(trace).at(-1);
+  trace.selectedOperationKey = fallback.key;
+  return fallback;
+}
+
+function traceServerTimestamp(value) {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return value < 1e12 ? value * 1000 : value;
+  }
+  if (typeof value === "string") {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof value === "object") {
+    const seconds = Number(value.seconds ?? value.Seconds);
+    const nanos = Number(value.nanos ?? value.Nanos ?? 0);
+    return Number.isFinite(seconds) && seconds > 0
+      ? seconds * 1000 + (Number.isFinite(nanos) ? nanos / 1e6 : 0)
+      : null;
+  }
+  return null;
+}
+
+function traceEventTiming(event) {
+  const serverAt = traceServerTimestamp(
+    event?.timestamp ?? event?.terminalTime ?? event?.terminal_time ?? event?.raw?.timestamp,
+  );
+  return { serverAt };
+}
+
+function traceModelOperation(trace, event, { create = false } = {}) {
+  ensureTraceOperationState(trace);
+  if (!trace) return null;
+  const rawId = String(event?.operationId || event?.messageId || event?.sessionId || "").trim();
+  const id = rawId.startsWith("msg:") ? rawId.slice(4) : rawId;
+  const explicitKey = id ? traceOperationKey("model", id) : null;
+  let record = explicitKey ? trace.recordIndex.get(explicitKey) : null;
+  if (!record && !explicitKey && trace.activeModelOperationKey) {
+    record = trace.recordIndex.get(trace.activeModelOperationKey) || null;
+  }
+  if (record || !create) return record;
+  const resolvedId = id || createId("model-response");
+  record = upsertTraceOperation(trace, {
+    key: traceOperationKey("model", resolvedId),
+    id: resolvedId,
+    kind: "model",
+    title: "LLM response",
+    status: "running",
+  });
+  trace.activeModelOperationKey = record?.key || null;
+  return record;
+}
+
+function traceStreamingModelOperation(trace, event, { create = false } = {}) {
+  if (trace?.activeModelOperationKey) {
+    const active = trace.recordIndex.get(trace.activeModelOperationKey);
+    if (active) return active;
+  }
+  const explicit = traceModelOperation(trace, event);
+  if (explicit) return explicit;
+  if (create && trace?.typedModelLifecycleObserved) return null;
+  return create ? traceModelOperation(trace, event, { create: true }) : null;
+}
+
+function traceOperationRound(value, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const round = Number(value);
+  return Number.isSafeInteger(round) ? round : fallback;
+}
+
+function traceToolOperation(trace, event, { create = false } = {}) {
+  ensureTraceOperationState(trace);
+  if (!trace) return null;
+  const id = String(event?.toolCallId || event?.callId || "").trim();
+  const key = id ? traceOperationKey("tool", id) : null;
+  const existing = key ? trace.recordIndex.get(key) : null;
+  if (existing || !create) return existing;
+  const resolvedId = id || createId("tool-call");
+  return upsertTraceOperation(trace, {
+    key: traceOperationKey("tool", resolvedId),
+    id: resolvedId,
+    kind: "tool",
+    title: event?.toolName || "tool",
+    status: "running",
+  });
+}
+
+function traceTerminalOperationStatus(event) {
+  if (event?.success == null && !event?.status && !event?.outcome && !event?.error) return "closed";
+  const status = String(event?.status || event?.outcome || "").toUpperCase();
+  return event?.success === false || /(ERROR|FAILED|DENIED)/.test(status) ? "error" : "done";
+}
+
+function closeUnfinishedTraceOperations(trace, status) {
+  ensureTraceOperationState(trace);
+  for (const record of trace?.records || []) {
+    if (record.status !== "running") continue;
+    record.status = status;
+  }
+  trace.activeModelOperationKey = null;
+}
+
+function applyRoleChatTraceSnapshot(trace, event) {
+  const existingModels = orderedTraceOperations(trace).filter((record) => record.kind === "model");
+  const model = existingModels.at(-1) || traceModelOperation(trace, event, { create: true });
+  if (model) {
+    if (!model.output && event.content) model.output = String(event.content);
+    if (event.model) {
+      model.model = String(event.model);
+      model.title = String(event.model);
+    }
+    if (event.usage) model.usage = mergeUsage(model.usage, event.usage);
+    if (model.status === "running") model.status = traceTerminalOperationStatus(event);
+  }
+
+  const calls = Array.isArray(event.toolCalls) ? event.toolCalls : [];
+  const receipts = Array.isArray(event.toolReceipts) ? event.toolReceipts : [];
+  const receiptsById = new Map(receipts.map((receipt) => [receipt.callId, receipt]));
+  for (const call of calls) {
+    const receipt = receiptsById.get(call.callId);
+    const tool = traceToolOperation(trace, {
+      toolCallId: call.callId,
+      toolName: call.toolName,
+    }, { create: true });
+    if (!tool) continue;
+    tool.title = call.toolName || tool.title;
+    if (!tool.input && call.argumentsJson) tool.input = String(call.argumentsJson);
+    if (!tool.output && receipt?.resultJson) tool.output = String(receipt.resultJson);
+    if (receipt) tool.status = traceTerminalOperationStatus(receipt);
+  }
+  for (const receipt of receipts) {
+    const tool = traceToolOperation(trace, {
+      toolCallId: receipt.callId,
+      toolName: receipt.toolName,
+    }, { create: true });
+    if (!tool) continue;
+    tool.title = receipt.toolName || tool.title;
+    if (!tool.output && receipt.resultJson) tool.output = String(receipt.resultJson);
+    tool.status = traceTerminalOperationStatus(receipt);
+  }
+}
+
+function applyRequestTraceEvent(entry, run, event) {
+  const trace = traceForRun(entry, run);
+  if (!trace || !event) return;
+  const timing = traceEventTiming(event);
+  switch (event.type) {
+    case "model_start": {
+      trace.typedModelLifecycleObserved = true;
+      const model = traceModelOperation(trace, event, { create: true });
+      if (!model) break;
+      const round = traceOperationRound(event.round, model.round);
+      upsertTraceOperation(trace, {
+        key: model.key,
+        kind: "model",
+        title: event.model || (round == null ? "LLM response" : `Model response ${round}`),
+        model: event.model || model.model,
+        provider: event.provider || model.provider,
+        input: event.inputSummary || model.input,
+        tools: Array.isArray(event.availableToolNames) ? event.availableToolNames : model.tools,
+        round,
+        sessionId: event.sessionId || model.sessionId,
+        serverSequence: event.sequence,
+      });
+      const terminal = isTraceOperationTerminal(model.status);
+      if (!terminal) model.status = "running";
+      startTraceOperation(model, timing);
+      if (!terminal) trace.activeModelOperationKey = model.key;
+      break;
+    }
+    case "model_end": {
+      trace.typedModelLifecycleObserved = true;
+      const model = traceModelOperation(trace, event, { create: true });
+      if (!model) break;
+      upsertTraceOperation(trace, {
+        key: model.key,
+        kind: "model",
+        title: event.model || model.title,
+        model: event.model || model.model,
+        output: event.content ?? model.output,
+        reasoning: event.reasoningContent ?? model.reasoning,
+        round: traceOperationRound(event.round, model.round),
+        sessionId: event.sessionId || model.sessionId,
+        finishReason: event.finishReason || model.finishReason,
+        error: event.error || model.error,
+        usage: event.usage,
+        serverSequence: event.sequence,
+      });
+      model.status = traceTerminalOperationStatus(event);
+      finishTraceOperation(model, timing);
+      if (trace.activeModelOperationKey === model.key) trace.activeModelOperationKey = null;
+      break;
+    }
+    case "text_start": {
+      const model = traceStreamingModelOperation(trace, event);
+      if (!model) break;
+      if (!isTraceOperationTerminal(model.status)) model.status = "running";
+      startTraceOperation(model, timing);
+      break;
+    }
+    case "text_delta": {
+      const model = traceStreamingModelOperation(trace, event, { create: true });
+      if (!model) break;
+      model.output += String(event.delta || "");
+      break;
+    }
+    case "text_end": {
+      const model = traceStreamingModelOperation(trace, event);
+      if (!model) break;
+      if (!isTraceOperationTerminal(model.status)) {
+        model.status = "done";
+        finishTraceOperation(model, timing);
+      }
+      if (trace.activeModelOperationKey === model.key) trace.activeModelOperationKey = null;
+      break;
+    }
+    case "tool_start": {
+      const tool = traceToolOperation(trace, event, { create: true });
+      if (!tool) break;
+      tool.title = event.toolName || tool.title;
+      upsertTraceOperation(trace, {
+        key: tool.key,
+        kind: "tool",
+        sessionId: event.sessionId || tool.sessionId,
+        serverSequence: event.sequence,
+      });
+      if (!isTraceOperationTerminal(tool.status)) tool.status = "running";
+      startTraceOperation(tool, timing);
+      break;
+    }
+    case "tool_end": {
+      const tool = traceToolOperation(trace, event, { create: true });
+      if (!tool) break;
+      tool.title = event.toolName || tool.title;
+      if (event.argumentsJson) tool.input = String(event.argumentsJson);
+      if (event.result !== undefined && event.result !== null) tool.output = String(event.result);
+      else if (event.error) tool.output = String(event.error);
+      tool.error = String(event.error || "");
+      upsertTraceOperation(trace, {
+        key: tool.key,
+        kind: "tool",
+        sessionId: event.sessionId || tool.sessionId,
+        serverSequence: event.sequence,
+      });
+      tool.status = traceTerminalOperationStatus(event);
+      finishTraceOperation(tool, timing);
+      break;
+    }
+    case "usage": {
+      const model = traceModelOperation(trace, event) ||
+        [...trace.records].reverse().find((record) => record.kind === "model");
+      if (!model) break;
+      model.usage = mergeUsage(model.usage, event);
+      if (event.model) {
+        model.model = String(event.model);
+        model.title = String(event.model);
+      }
+      break;
+    }
+    case "role_chat_completed":
+      applyRoleChatTraceSnapshot(trace, event);
+      {
+        const model = traceModelOperation(trace, event) ||
+          [...trace.records].reverse().find((record) => record.kind === "model");
+        if (model) {
+          const terminal = traceServerTimestamp(event.terminalTime ?? event.terminal_time);
+          if (terminal != null && model.startedAt != null && model.timingClock === "server" && terminal >= model.startedAt) {
+            model.completedAt = terminal;
+          }
+        }
+      }
+      break;
+    case "run_finished":
+      closeUnfinishedTraceOperations(trace, "closed");
+      break;
+    case "run_stopped":
+      closeUnfinishedTraceOperations(trace, "stopped");
+      break;
+    case "run_error":
+    case "protocol_error":
+      closeUnfinishedTraceOperations(trace, "error");
+      break;
+    default:
+      break;
+  }
+}
+
+function startTraceOperation(record, timing) {
+  if (!record || record.startedAt != null) return;
+  if (timing?.serverAt != null) {
+    record.startedAt = timing.serverAt;
+    record.timingClock = "server";
+  }
+}
+
+function finishTraceOperation(record, timing) {
+  if (!record || record.completedAt != null) return;
+  const completedAt = timing?.serverAt;
+  if (!Number.isFinite(completedAt)) return;
+  record.completedAt = completedAt;
+  record.timingClock ||= "server";
+}
+
+function isTraceOperationTerminal(status) {
+  return ["done", "error", "stopped", "closed", "blocked"].includes(String(status || ""));
+}
+
+function traceOperationDurationMs(record) {
+  if (!Number.isFinite(record?.startedAt) || !Number.isFinite(record?.completedAt)) return null;
+  if (record.completedAt < record.startedAt) return null;
+  return record.completedAt - record.startedAt;
+}
+
+function traceOperationDuration(record) {
+  const duration = traceOperationDurationMs(record);
+  if (duration != null) return formatDuration(duration);
+  return record?.status === "running" ? "进行中 · Duration 不可用" : "Duration 不可用";
+}
+
+function traceOperationStartedAt(record) {
+  if (!Number.isFinite(record?.startedAt)) return "—";
+  return new Date(record.startedAt).toLocaleTimeString("zh-CN", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
+  });
+}
+
+function traceOperationKindLabel(kind) {
+  return { input: "INPUT", model: "MODEL", tool: "TOOL" }[kind] || "OPERATION";
+}
+
+function traceOperationStatusLabel(status) {
+  return {
+    running: "进行中",
+    done: "已完成",
+    error: "失败",
+    stopped: "已停止",
+    closed: "已结束",
+    blocked: "已阻塞",
+  }[String(status || "").toLowerCase()] || "状态未知";
+}
+
+function traceOperationPreview(record) {
+  const value = record?.kind === "input" ? record.input : record?.output || record?.input;
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 180) ||
+    (record?.status === "running" ? "等待结果" : "未上报内容");
+}
+
+function traceOperationIcon(kind) {
+  return { input: "corner-down-right", model: "sparkles", tool: "wrench" }[kind] || "circle";
+}
+
+function createTraceOperationRow(entry, trace, record) {
+  const row = el("button", `trace-operation-row ${record.kind}`);
+  row.type = "button";
+  row.setAttribute("role", "option");
+  row.dataset.operationKey = record.key;
+  const marker = el("span", "trace-operation-marker");
+  marker.append(iconNode(traceOperationIcon(record.kind)));
+  const copy = el("span", "trace-operation-copy");
+  const heading = el("span", "trace-operation-heading");
+  const kind = el("small", "trace-operation-kind", traceOperationKindLabel(record.kind));
+  const title = el("strong", "trace-operation-title");
+  heading.append(kind, title);
+  const preview = el("small", "trace-operation-preview");
+  copy.append(heading, preview);
+  const timing = el("span", "trace-operation-timing");
+  const status = el("small", "trace-operation-status");
+  const duration = el("strong", "trace-operation-duration mono");
+  timing.append(status, duration);
+  row.append(marker, copy, timing, iconNode("chevron-right"));
+  record.element = row;
+  record.fields = { kind, title, preview, status, duration };
+  row.addEventListener("click", () => selectTraceOperation(entry, trace, record.key, { openDetails: true }));
+  row.addEventListener("keydown", (event) => moveTraceOperationSelection(event, entry, trace, record.key));
+  return row;
+}
+
+function updateTraceOperationRow(entry, trace, record) {
+  const row = record.element || createTraceOperationRow(entry, trace, record);
+  const selected = trace.selectedOperationKey === record.key;
+  row.className = `trace-operation-row ${record.kind} ${record.status || "running"}${selected ? " selected" : ""}`;
+  row.setAttribute("aria-selected", String(selected));
+  row.tabIndex = selected ? 0 : -1;
+  record.fields.title.textContent = record.title || traceOperationKindLabel(record.kind);
+  record.fields.preview.textContent = traceOperationPreview(record);
+  record.fields.status.textContent = traceOperationStatusLabel(record.status);
+  record.fields.duration.textContent = traceOperationDuration(record);
+  return row;
+}
+
+function selectTraceOperation(entry, trace, key, { openDetails = false, focusRow = false } = {}) {
+  ensureTraceOperationState(trace);
+  if (!entry || !trace?.recordIndex.has(key)) return;
+  entry.selectedTraceKey = trace.key;
+  trace.selectedOperationKey = key;
+  trace.followLatestOperation = false;
+  if (entry !== state.activeConversation) return;
+  renderRequestTraces(entry);
+  renderInspector();
+  setInspectorTab("run");
+  if (openDetails) openMobilePanel("inspector");
+  if (focusRow) trace.recordIndex.get(key)?.element?.focus();
+}
+
+function moveTraceOperationSelection(event, entry, trace, key) {
+  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const keys = orderedTraceOperations(trace).map((record) => record.key);
+  const index = Math.max(0, keys.indexOf(key));
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? keys.length - 1
+      : event.key === "ArrowUp"
+        ? Math.max(0, index - 1)
+        : Math.min(keys.length - 1, index + 1);
+  selectTraceOperation(entry, trace, keys[nextIndex], { openDetails: true, focusRow: true });
+}
+
+function traceOperationOverviewRange(trace) {
+  ensureTraceOperationState(trace);
+  const serverRecords = trace.records.filter((record) =>
+    record.timingClock === "server" && Number.isFinite(record.startedAt));
+  const comparable = serverRecords.length
+    ? serverRecords
+    : trace.records.filter((record) => Number.isFinite(record.startedAt));
+  if (!comparable.length) return null;
+  const start = Math.min(...comparable.map((record) => record.startedAt));
+  const knownEnds = comparable.flatMap((record) =>
+    Number.isFinite(record.completedAt) ? [record.completedAt] : [record.startedAt]);
+  const end = Math.max(start + 1, ...knownEnds);
+  return { start, end, clock: serverRecords.length ? "server" : comparable[0].timingClock };
+}
+
+function createTraceOperationBar(trace, record, range) {
+  const selected = trace.selectedOperationKey === record.key;
+  const bar = el(
+    "button",
+    `trace-operation-duration-bar ${record.kind} ${record.status || "running"}${selected ? " selected" : ""}`,
+  );
+  bar.type = "button";
+  const comparable = range && record.timingClock === range.clock && Number.isFinite(record.startedAt);
+  const duration = traceOperationDurationMs(record);
+  const rangeDuration = range ? Math.max(1, range.end - range.start) : 1;
+  const orderedRecords = orderedTraceOperations(trace);
+  const sequenceDenominator = Math.max(1, orderedRecords.length - 1);
+  const sequenceIndex = Math.max(0, orderedRecords.findIndex((candidate) => candidate.key === record.key));
+  const sequenceLeft = orderedRecords.length === 1 ? 0 : sequenceIndex / sequenceDenominator * 100;
+  const left = comparable ? (record.startedAt - range.start) / rangeDuration * 100 : sequenceLeft;
+  const width = comparable && duration != null ? duration / rangeDuration * 100 : 0;
+  bar.style.setProperty("--trace-operation-left", `${Math.max(0, Math.min(100, left))}%`);
+  bar.style.setProperty("--trace-operation-width", `${Math.max(0, Math.min(100 - left, width))}%`);
+  bar.dataset.timingRecorded = String(duration != null);
+  bar.dataset.operationKey = record.key;
+  bar.title = `${traceOperationKindLabel(record.kind)} · ${record.title} · ${traceOperationDuration(record)}`;
+  bar.setAttribute("aria-label", bar.title);
+  bar.setAttribute("aria-pressed", String(selected));
+  bar.addEventListener("click", () => {
+    const entry = state.activeConversation;
+    const selectedTrace = selectedRequestTrace(entry);
+    if (entry && selectedTrace === trace) selectTraceOperation(entry, trace, record.key, { openDetails: true });
+  });
+  record.barElement = bar;
+  return bar;
+}
+
+function renderTraceOperationOverview(trace) {
+  if (!dom.traceOperationOverview) return;
+  ensureTraceOperationState(trace);
+  if (!trace?.records.length) {
+    dom.traceOperationOverview.replaceChildren();
+    return;
+  }
+  const range = traceOperationOverviewRange(trace);
+  const lanes = [
+    ["input", "Input"],
+    ["model", "Model"],
+    ["tool", "Tools"],
+  ].map(([kind, label]) => {
+    const lane = el("div", `trace-operation-lane ${kind}`);
+    const laneLabel = el("span", "trace-operation-lane-label", label);
+    const track = el("div", "trace-operation-lane-track");
+    for (const record of orderedTraceOperations(trace).filter((candidate) => candidate.kind === kind)) {
+      track.append(createTraceOperationBar(trace, record, range));
+    }
+    lane.append(laneLabel, track);
+    return lane;
+  });
+  dom.traceOperationOverview.replaceChildren(...lanes);
+}
+
+function renderTraceOperations(entry, trace) {
+  if (!dom.traceOperationList) return;
+  ensureTraceOperationState(trace);
+  const records = orderedTraceOperations(trace);
+  if (dom.traceOperationCount) dom.traceOperationCount.textContent = String(records.length);
+  if (!records.length) {
+    dom.traceOperationEmpty?.classList.remove("hidden");
+    if (dom.traceOperationEmpty &&
+        (dom.traceOperationList.firstElementChild !== dom.traceOperationEmpty ||
+         dom.traceOperationList.childElementCount !== 1)) {
+      dom.traceOperationList.replaceChildren(dom.traceOperationEmpty);
+    }
+    renderTraceOperationOverview(trace);
+    return;
+  }
+  dom.traceOperationEmpty?.classList.add("hidden");
+  if (!trace.recordIndex.has(trace.selectedOperationKey)) {
+    trace.selectedOperationKey = records.at(-1).key;
+  }
+  const needsIcons = records.some((record) => !record.element);
+  const rows = records.map((record) => updateTraceOperationRow(entry, trace, record));
+  rows.forEach((row, index) => {
+    const current = dom.traceOperationList.children[index];
+    if (current !== row) dom.traceOperationList.insertBefore(row, current || null);
+  });
+  while (dom.traceOperationList.childElementCount > rows.length) {
+    dom.traceOperationList.lastElementChild.remove();
+  }
+  if (needsIcons) refreshIcons(dom.traceOperationList);
+  renderTraceOperationOverview(trace);
+}
+
+function requestTraceInput(trace) {
+  const prompt = String(trace?.run?.request?.prompt || "").trim();
+  const attachmentName = String(trace?.run?.request?.attachment?.name || "").trim();
+  if (prompt && attachmentName) return `${prompt} · 附件 ${attachmentName}`;
+  return prompt || (attachmentName ? `附件 ${attachmentName}` : "空请求");
+}
+
+function requestTraceOutput(run) {
+  return String(run?.assistantText || "").trim();
+}
+
+function requestTraceStatusLabel(status) {
+  return {
+    idle: "待命",
+    running: "进行中",
+    complete: "已完成",
+    blocked: "已阻塞",
+    error: "失败",
+    stopped: "已停止",
+    closed: "已结束",
+  }[String(status || "idle").toLowerCase()] || "状态未知";
+}
+
+function requestTraceStatusEnglish(status) {
+  return {
+    idle: "Ready",
+    running: "Running",
+    complete: "Complete",
+    blocked: "Blocked",
+    error: "Error",
+    stopped: "Stopped",
+    closed: "Closed",
+  }[String(status || "idle").toLowerCase()] || "Unknown";
+}
+
+function requestTraceDuration(trace) {
+  const run = trace?.run;
+  if (!run?.startedAt) return "—";
+  if (!run.completedAt) return run.status === "running" ? "进行中" : "—";
+  return formatDuration(Math.max(0, run.completedAt - run.startedAt));
+}
+
+function requestTraceStartTime(trace, { detailed = false } = {}) {
+  const startedAt = trace?.run?.startedAt;
+  if (!startedAt) return "—";
+  const date = new Date(startedAt);
+  if (Number.isNaN(date.getTime())) return "—";
+  return detailed
+    ? date.toLocaleString("zh-CN", { hour12: false })
+    : date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function createRequestTraceRow(entry, trace) {
+  const row = el("button", "request-trace-row");
+  row.type = "button";
+  row.setAttribute("role", "option");
+  row.dataset.traceKey = trace.key;
+  const marker = el("span", "request-trace-marker");
+  marker.append(iconNode("waypoints"));
+  const copy = el("span", "request-trace-copy");
+  const input = el("strong", "request-trace-prompt");
+  const identity = el("small", "request-trace-identity mono");
+  copy.append(input, identity);
+  const metrics = el("span", "request-trace-row-metrics");
+  const status = el("span", "request-trace-row-status");
+  const counts = el("span", "request-trace-row-counts");
+  const timing = el("span", "request-trace-row-timing");
+  metrics.append(status, counts, timing);
+  row.append(marker, copy, metrics, iconNode("chevron-right"));
+  trace.element = row;
+  trace.fields = { marker, input, identity, status, counts, timing };
+  row.addEventListener("click", () => selectRequestTrace(entry, trace.key, { openDetails: true }));
+  row.addEventListener("keydown", (event) => moveRequestTraceSelection(event, entry, trace.key));
+  return row;
+}
+
+function updateRequestTraceRow(entry, trace) {
+  const row = trace.element || createRequestTraceRow(entry, trace);
+  const run = trace.run;
+  const selected = entry.selectedTraceKey === trace.key;
+  row.className = `request-trace-row ${run.status || "idle"}${selected ? " selected" : ""}`;
+  row.setAttribute("aria-selected", String(selected));
+  row.tabIndex = selected ? 0 : -1;
+  trace.fields.input.textContent = requestTraceInput(trace);
+  const serverRunId = trace.serverRunId || run.context?.runId || "";
+  trace.fields.identity.textContent = serverRunId
+    ? `request ${trace.clientRequestId} · run ${serverRunId}`
+    : `request ${trace.clientRequestId}`;
+  trace.fields.status.textContent = requestTraceStatusLabel(run.status);
+  trace.fields.counts.textContent = `${run.events.length} 事件 · ${run.tools.size} 工具`;
+  trace.fields.timing.textContent = `${requestTraceStartTime(trace)} · ${requestTraceDuration(trace)}`;
+  return row;
+}
+
+function renderRequestTraces(entry = state.activeConversation) {
+  if (!entry || entry !== state.activeConversation || !dom.requestTraceList) return;
+  const traces = entry.traceOrder
+    .map((key) => entry.traces.get(key))
+    .filter(Boolean);
+  dom.requestTraceCount.textContent = String(traces.length);
+  if (dom.requestTraceRailCount) dom.requestTraceRailCount.textContent = String(traces.length);
+  const activeTrace = currentRequestTrace(entry);
+  const receiving = Boolean(entry.controllers?.size && activeTrace?.run?.status === "running");
+  const liveCopy = receiving
+    ? "SSE 实时更新"
+    : activeTrace?.run?.startedAt
+      ? "SSE 已结束"
+      : "本页会话";
+  dom.requestTraceLive.classList.toggle("active", receiving);
+  dom.requestTraceLive.querySelector("span").textContent = liveCopy;
+  if (!traces.length) {
+    entry.selectedTraceKey = null;
+    if (dom.requestTraceList.firstElementChild !== dom.requestTraceEmpty || dom.requestTraceList.childElementCount !== 1) {
+      dom.requestTraceList.replaceChildren(dom.requestTraceEmpty);
+    }
+    dom.requestTraceEmpty.classList.remove("hidden");
+    if (dom.traceOperationCount) dom.traceOperationCount.textContent = "0";
+    if (dom.traceOperationOverview) dom.traceOperationOverview.replaceChildren();
+    if (dom.traceOperationList && dom.traceOperationEmpty) {
+      dom.traceOperationEmpty.classList.remove("hidden");
+      dom.traceOperationList.replaceChildren(dom.traceOperationEmpty);
+    }
+    refreshIcons(dom.requestTraceEmpty);
+    return;
+  }
+  dom.requestTraceEmpty.classList.add("hidden");
+  if (!entry.traces.has(entry.selectedTraceKey)) entry.selectedTraceKey = traces[0].key;
+  const needsIcons = traces.some((trace) => !trace.element);
+  const rows = traces.map((trace) => updateRequestTraceRow(entry, trace));
+  rows.forEach((row, index) => {
+    const current = dom.requestTraceList.children[index];
+    if (current !== row) dom.requestTraceList.insertBefore(row, current || null);
+  });
+  while (dom.requestTraceList.childElementCount > rows.length) {
+    dom.requestTraceList.lastElementChild.remove();
+  }
+  if (needsIcons) refreshIcons(dom.requestTraceList);
+  renderTraceOperations(entry, selectedRequestTrace(entry) || traces[0]);
+}
+
+function selectRequestTrace(entry, key, { openDetails = false, focusRow = false } = {}) {
+  if (!entry?.traces?.has(key)) return;
+  entry.selectedTraceKey = key;
+  ensureTraceOperationState(entry.traces.get(key));
+  if (entry !== state.activeConversation) return;
+  renderRequestTraces(entry);
+  renderInspector();
+  renderEventLog();
+  setInspectorTab("run");
+  if (openDetails) openMobilePanel("inspector");
+  if (focusRow) entry.traces.get(key)?.element?.focus();
+}
+
+function moveRequestTraceSelection(event, entry, key) {
+  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const keys = entry.traceOrder.filter((candidate) => entry.traces.has(candidate));
+  const index = Math.max(0, keys.indexOf(key));
+  const nextIndex = event.key === "Home"
+    ? 0
+    : event.key === "End"
+      ? keys.length - 1
+      : event.key === "ArrowUp"
+        ? Math.max(0, index - 1)
+        : Math.min(keys.length - 1, index + 1);
+  selectRequestTrace(entry, keys[nextIndex], { openDetails: true, focusRow: true });
+}
+
+function queueRequestTraceRender(entry = conversationContext || state.activeConversation) {
+  if (!entry || entry !== state.activeConversation || state.traceRenderFrame != null) return;
+  state.traceRenderFrame = requestAnimationFrame(() => {
+    state.traceRenderFrame = null;
+    const activeEntry = state.activeConversation;
+    renderRequestTraces(activeEntry);
+    renderInspector();
+    if (!dom.eventsPanel?.classList.contains("hidden")) renderEventLog();
+  });
+}
+
+function switchWorkspaceView(view, { focusButton = false } = {}) {
+  const entry = state.activeConversation;
+  if (!entry) return;
+  const traceView = view === "traces";
+  entry.mainView = traceView ? "traces" : "conversation";
+  if (traceView && !entry.traces.has(entry.selectedTraceKey)) {
+    entry.selectedTraceKey = entry.traceOrder.find((key) => entry.traces.has(key)) || null;
+  }
+  if (!traceView) {
+    entry.selectedTraceKey = currentRequestTrace(entry)?.key || null;
+  }
+  dom.threadViewport.classList.toggle("hidden", traceView);
+  dom.requestTracePanel.classList.toggle("hidden", !traceView);
+  dom.composerWrap.classList.toggle("hidden", traceView);
+  dom.conversationViewButton.classList.toggle("active", !traceView);
+  dom.traceViewButton.classList.toggle("active", traceView);
+  dom.conversationViewButton.setAttribute("aria-selected", String(!traceView));
+  dom.traceViewButton.setAttribute("aria-selected", String(traceView));
+  dom.conversationViewButton.tabIndex = traceView ? -1 : 0;
+  dom.traceViewButton.tabIndex = traceView ? 0 : -1;
+  renderRequestTraces(entry);
+  renderInspector();
+  renderEventLog();
+  renderActorControlUi();
+  if (!traceView) {
+    requestAnimationFrame(() => {
+      dom.threadViewport.scrollTop = entry.scrollTop;
+    });
+  }
+  if (focusButton) (traceView ? dom.traceViewButton : dom.conversationViewButton).focus();
+}
+
+function moveWorkspaceView(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const traces = event.key === "ArrowRight" || event.key === "End";
+  switchWorkspaceView(traces ? "traces" : "conversation", { focusButton: true });
 }
 
 function persistConversationState(entry = state.activeConversation) {
@@ -279,7 +1264,7 @@ function restoreConversationState(entry) {
   state.workflowSessionId = entry.workflowSessionId;
   state.currentConversationMeta = entry.meta;
   state.attachment = entry.attachment;
-  state.run = entry.run;
+  state.run = currentRequestRun(entry) || entry.run;
   state.activeController = entry.controller;
 }
 
@@ -360,6 +1345,7 @@ function activateConversationState(entry) {
   dom.promptInput.value = entry.draft;
   autoResizeComposer();
   renderAttachment();
+  switchWorkspaceView(entry.mainView);
   requestAnimationFrame(() => {
     dom.threadViewport.scrollTop = entry.scrollTop;
   });
@@ -387,6 +1373,111 @@ function initializeConversationStates() {
 function createId(prefix) {
   const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
   return `${prefix}-${id}`;
+}
+
+function conversationStateVersion(entry) {
+  const projectionVersion = Number.isSafeInteger(entry?.actorProjection?.stateVersion) && entry.actorProjection.stateVersion > 0
+    ? entry.actorProjection.stateVersion
+    : 0;
+  const metaVersion = Number.isSafeInteger(entry?.meta?.stateVersion) && entry.meta.stateVersion > 0
+    ? entry.meta.stateVersion
+    : 0;
+  return Math.max(projectionVersion, metaVersion);
+}
+
+function ensureConversationProjectionVersion(entry) {
+  if (!entry) return null;
+  const projection = entry.actorProjection || createActorProjection(entry.actorId || null);
+  const projectionVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0
+    ? projection.stateVersion
+    : 0;
+  const metaVersion = Number.isSafeInteger(entry.meta?.stateVersion) && entry.meta.stateVersion > 0
+    ? entry.meta.stateVersion
+    : 0;
+  const nextVersion = Math.max(projectionVersion, metaVersion);
+  if (nextVersion > projectionVersion) projection.stateVersion = nextVersion;
+  entry.actorProjection = projection;
+  return projection;
+}
+
+function reliableConversationStateVersion(entry) {
+  return conversationStateVersion(entry);
+}
+
+function actorProjectionFor(entry, actorId = entry?.actorId) {
+  if (!entry) return null;
+  if (!actorId || actorId === entry.actorId) {
+    if (!entry.actorProjection || (!entry.actorProjection.actorId && actorId)) {
+      entry.actorProjection = createActorProjection(actorId || null);
+    }
+    return entry.actorProjection;
+  }
+  entry.actionActorProjections ||= new Map();
+  let projection = entry.actionActorProjections.get(actorId);
+  if (!projection) {
+    projection = createActorProjection(actorId);
+    entry.actionActorProjections.set(actorId, projection);
+  }
+  return projection;
+}
+
+function setActorProjectionFor(entry, actorId, projection) {
+  if (!entry || !projection) return projection;
+  if (!actorId || actorId === entry.actorId) {
+    entry.actorProjection = projection;
+  } else {
+    entry.actionActorProjections ||= new Map();
+    entry.actionActorProjections.set(actorId, projection);
+  }
+  return projection;
+}
+
+function actorIdForEvent(entry, event, { streamActorId = null } = {}) {
+  if (event?.type === "action_request") return event.actionRequest?.actorId || null;
+  return streamActorId || event?.payload?.actorId || entry?.actorId || null;
+}
+
+function reduceActorEventForEntry(entry, event, options = {}) {
+  const actorId = actorIdForEvent(entry, event, options);
+  if (!entry || !actorId) return null;
+  const projection = actorProjectionFor(entry, actorId);
+  const routedEvent = event.type === "action_request" && actorId !== entry.actorId
+    ? { ...event, sequence: projection.progressSequence }
+    : event;
+  const next = reduceActorEvent(projection, routedEvent);
+  setActorProjectionFor(entry, actorId, next);
+  return { actorId, projection: next };
+}
+
+function adoptRunStartedConversationActor(
+  entry,
+  actorId,
+  { preserveConversationActor = false } = {},
+) {
+  if (!entry || !actorId || preserveConversationActor) return false;
+  entry.actorId = actorId;
+  state.actorId = actorId;
+  if (!entry.actorProjection?.actorId) entry.actorProjection = createActorProjection(actorId);
+  return true;
+}
+
+function actorStateVersion(entry, actorId = entry?.actorId) {
+  const projection = actorProjectionFor(entry, actorId);
+  const projectionVersion = Number.isSafeInteger(projection?.stateVersion) && projection.stateVersion > 0
+    ? projection.stateVersion
+    : 0;
+  return actorId === entry?.actorId
+    ? Math.max(projectionVersion, conversationStateVersion(entry))
+    : projectionVersion;
+}
+
+function actorProjections(entry) {
+  if (!entry) return [];
+  const projections = [actorProjectionFor(entry, entry.actorId)];
+  for (const projection of entry.actionActorProjections?.values?.() || []) {
+    if (projection && projection !== projections[0]) projections.push(projection);
+  }
+  return projections.filter(Boolean);
 }
 
 initializeConversationStates();
@@ -429,6 +1520,10 @@ async function init() {
 }
 
 function bindEvents() {
+  dom.conversationViewButton.addEventListener("click", () => switchWorkspaceView("conversation"));
+  dom.traceViewButton.addEventListener("click", () => switchWorkspaceView("traces"));
+  dom.conversationViewButton.addEventListener("keydown", moveWorkspaceView);
+  dom.traceViewButton.addEventListener("keydown", moveWorkspaceView);
   dom.composerForm.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitComposer();
@@ -548,6 +1643,14 @@ function writeStorage(key, value) {
     localStorage.setItem(key, value);
   } catch {
     // Storage may be disabled; the demo remains usable for the current page.
+  }
+}
+
+function removeStorage(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Storage may be disabled; the current page can still finish the live journey.
   }
 }
 
@@ -878,9 +1981,13 @@ function actionCacheKey(actorId, actionRequestId) {
   return `nyxid-chat:v4-action:${actorId}:${actionRequestId}`;
 }
 
+function actionEntryKey(actorId, actionRequestId) {
+  return `${actorId}:${actionRequestId}`;
+}
+
 function cacheActionRequest(entry, request) {
   if (!entry || !request) return;
-  entry.actionFrameCache.set(request.actionRequestId, request);
+  entry.actionFrameCache.set(actionEntryKey(request.actorId, request.actionRequestId), request);
   try {
     sessionStorage.setItem(
       actionCacheKey(request.actorId, request.actionRequestId),
@@ -891,30 +1998,25 @@ function cacheActionRequest(entry, request) {
   }
 }
 
-function invalidateActionRequestCache(entry, actionRequestId) {
-  if (!entry || !actionRequestId) return;
-  entry.actionFrameCache.delete(actionRequestId);
+function invalidateActionRequestCache(entry, actorId, actionRequestId) {
+  if (!entry || !actorId || !actionRequestId) return;
+  entry.actionFrameCache.delete(actionEntryKey(actorId, actionRequestId));
   try {
-    sessionStorage.removeItem(actionCacheKey(
-      entry.actorProjection?.actorId || entry.actorId,
-      actionRequestId,
-    ));
+    sessionStorage.removeItem(actionCacheKey(actorId, actionRequestId));
   } catch {
     // Session cache is optional; the conflicted projection remains disabled.
   }
 }
 
-function restoreProjectionActionCaches(entry) {
-  let projection = entry?.actorProjection;
+function restoreProjectionActionCaches(entry, actorId = entry?.actorId) {
+  let projection = actorProjectionFor(entry, actorId);
   if (!projection?.actions?.size) return projection;
   for (const summary of projection.actions.values()) {
-    let cached = entry.actionFrameCache.get(summary.actionRequestId) || null;
+    const cacheActorId = projection.actorId || actorId;
+    let cached = entry.actionFrameCache.get(actionEntryKey(cacheActorId, summary.actionRequestId)) || null;
     if (!cached) {
       try {
-        const raw = sessionStorage.getItem(actionCacheKey(
-          projection.actorId || entry.actorId,
-          summary.actionRequestId,
-        ));
+        const raw = sessionStorage.getItem(actionCacheKey(cacheActorId, summary.actionRequestId));
         cached = raw ? JSON.parse(raw) : null;
       } catch {
         cached = null;
@@ -922,18 +2024,18 @@ function restoreProjectionActionCaches(entry) {
     }
     const request = restoreCachedAction(summary, cached);
     if (!request) continue;
-    entry.actionFrameCache.set(request.actionRequestId, request);
+    entry.actionFrameCache.set(actionEntryKey(request.actorId, request.actionRequestId), request);
     projection = reduceActorEvent(projection, {
       type: "action_request",
       sequence: projection.progressSequence,
       actionRequest: request,
     });
   }
-  entry.actorProjection = projection;
+  setActorProjectionFor(entry, actorId, projection);
   return projection;
 }
 
-function createConnectCard(action, { conversation = null } = {}) {
+function createConnectCard(action, { conversation = null, projection = null } = {}) {
   const request = action?.request || null;
   if (!request) return null;
   const block = buildConnectCardBlock(request, state.connectors);
@@ -941,10 +2043,11 @@ function createConnectCard(action, { conversation = null } = {}) {
     action,
     request,
     conversation,
+    projectionActorId: projection?.actorId || request.actorId,
     slug: block.catalog_slug,
     root: el("section", "connect-card"),
     block,
-    status: action.conflicted ? "conflicted" : "needs_connection",
+    status: action.conflicted ? "conflicted" : block.state,
     keyInputOpen: false,
     busy: false,
     error: "",
@@ -959,11 +2062,6 @@ function createConnectCard(action, { conversation = null } = {}) {
   card.root.dataset.taskId = request.taskId;
   card.root.dataset.stepId = request.stepId;
   if (card.slug) card.root.dataset.slug = card.slug;
-  card.block = {
-    ...card.block,
-    state: "needs_connection",
-    steps: connectCardSteps(card.block.service_name, card.block.auth_kind),
-  };
   renderConnectCard(card);
   liveConnectCards.add(card);
   return card;
@@ -971,34 +2069,47 @@ function createConnectCard(action, { conversation = null } = {}) {
 
 function renderActionCards(entry = conversationContext || state.activeConversation) {
   if (!entry) return;
-  const projection = entry.actorProjection;
-  if (!projection?.actions?.size && !entry.run.cardElements.size) return;
+  const projections = actorProjections(entry);
+  if (!projections.some((projection) => projection.actions?.size) && !entry.run.cardElements.size) return;
   const container = entry.run.actionCardsElement || el("div", "action-card-list");
   entry.run.actionCardsElement = container;
 
-  for (const action of projection?.actions?.values?.() || []) {
-    if (action.action !== "service.connect" || !action.request) continue;
-    let card = entry.run.cardElements.get(action.actionRequestId);
-    if (!card) {
-      card = createConnectCard(action, { conversation: entry });
-      if (!card) continue;
-      entry.run.cardElements.set(action.actionRequestId, card);
-    } else {
-      card.action = action;
-      card.request = action.request;
-      if (action.conflicted) {
-        card.status = "conflicted";
-        card.error = "Action identity conflict；该 browser journey 已禁用。";
-      } else {
-        applyActorActionProof(card, action, projection);
+  for (const projection of projections) {
+    if (!actionActorJourneyReady(entry, projection)) continue;
+    for (const action of projection.actions?.values?.() || []) {
+      if (!["service.connect", "service.access_review"].includes(action.action) || !action.request) {
+        continue;
       }
-      renderConnectCard(card);
+      const key = actionEntryKey(action.request.actorId, action.actionRequestId);
+      let card = entry.run.cardElements.get(key);
+      if (!card) {
+        card = createConnectCard(action, { conversation: entry, projection });
+        if (!card) continue;
+        entry.run.cardElements.set(key, card);
+      } else {
+        card.action = action;
+        card.request = action.request;
+        card.projectionActorId = projection.actorId || action.request.actorId;
+        if (action.conflicted) {
+          card.status = "conflicted";
+          card.error = "Action identity conflict；该 browser journey 已禁用。";
+        } else {
+          applyActorActionProof(card, action, projection);
+        }
+        renderConnectCard(card);
+      }
     }
   }
 
   container.replaceChildren(...[...entry.run.cardElements.values()].map((card) => card.root));
   if (!container.isConnected) ensureAssistantBody().append(container);
   scrollThread();
+}
+
+function actionActorJourneyReady(entry, projection) {
+  if (!entry || !projection) return false;
+  if (projection.actorId === entry.actorId) return true;
+  return actorStateVersion(entry, projection.actorId) > 0 && Boolean(projection.task);
 }
 
 function actionResourceUserServiceId(resource) {
@@ -1121,6 +2232,280 @@ function clearExternalJourneyTimer(card) {
   card.externalExpiryTimer = null;
 }
 
+async function refreshNyxIdAuthorizationCatalog(userServiceId) {
+  const requiredUserServiceId = String(userServiceId || "").trim();
+  if (!requiredUserServiceId) {
+    const error = new Error("NyxID UserService.id is required before refreshing the authorization catalog.");
+    error.code = "NYXID_USER_SERVICE_ID_MISSING";
+    throw error;
+  }
+  const response = await fetch("/api/auth/nyxid/authorization-catalog:refresh", {
+    method: "POST",
+    headers: demoHeaders(),
+    body: JSON.stringify({ requiredUserServiceIds: [requiredUserServiceId] }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.ok && payload?.ready === true) return payload;
+
+  const refreshStatus = String(payload?.refreshStatus || "").trim();
+  const visibilityStatus = String(payload?.visibilityStatus || "").trim();
+  const failureCode = String(
+    payload?.visibilityFailureCode || payload?.refreshFailureCode || payload?.code || "",
+  ).trim();
+  const requiredStateVersion = Number(payload?.requiredStateVersion || 0);
+  const visibleStateVersion = Number(payload?.visibleStateVersion || 0);
+  const versionDetail = requiredStateVersion > 0
+    ? `（可见版本 ${visibleStateVersion}/${requiredStateVersion}）`
+    : "";
+  const statusDetail = [
+    refreshStatus ? `refresh=${refreshStatus}` : "",
+    visibilityStatus ? `visibility=${visibilityStatus}` : "",
+    failureCode ? `code=${failureCode}` : "",
+  ].filter(Boolean).join(", ");
+  const pending = response.status === 202 || visibilityStatus === "projection_pending";
+  const error = new Error(pending
+    ? `NyxID 授权目录尚未可见${versionDetail}，请稍后点击“我已连接，刷新状态”重试。`
+    : `无法刷新 NyxID 授权目录${statusDetail ? `（${statusDetail}）` : ""}，请稍后重试。`);
+  error.code = "NYXID_AUTHORIZATION_CATALOG_NOT_READY";
+  throw error;
+}
+
+async function completeServiceConnectAction(card, userServiceId) {
+  const requiredUserServiceId = String(userServiceId || "").trim();
+  if (!requiredUserServiceId) {
+    const error = new Error("NyxID UserService.id is required before completing the connection action.");
+    error.code = "NYXID_USER_SERVICE_ID_MISSING";
+    throw error;
+  }
+  await refreshNyxIdAuthorizationCatalog(requiredUserServiceId);
+  await submitActionContinuation(card, "completed", {
+    userService: { userServiceId: requiredUserServiceId },
+  });
+  return true;
+}
+
+function proxyCatalogContainsService(catalog, userServiceId, serviceSlug, resourceUri = "") {
+  const expectedUserServiceId = String(userServiceId || "").trim();
+  const expectedServiceSlug = String(serviceSlug || "").trim();
+  const expectedResourceUri = String(resourceUri || "").trim();
+  if (!expectedUserServiceId || !expectedServiceSlug || !expectedResourceUri) return false;
+  const matches = (Array.isArray(catalog?.services) ? catalog.services : []).filter((service) =>
+    String(service?.userServiceId || "").trim() === expectedUserServiceId &&
+    String(service?.serviceSlug || "").trim() === expectedServiceSlug &&
+    String(service?.resourceUri || "").trim() === expectedResourceUri);
+  return matches.length === 1;
+}
+
+function serviceAccessReviewParams(card) {
+  const value = card?.request?.params?.serviceAccessReview || null;
+  const params = {
+    userServiceId: String(value?.userServiceId || "").trim(),
+    serviceSlug: String(value?.serviceSlug || "").trim(),
+    resourceUri: String(value?.resourceUri || "").trim(),
+  };
+  if (!params.userServiceId || !params.serviceSlug || !params.resourceUri) {
+    const error = new Error("Typed NyxID service access review params are incomplete.");
+    error.code = "NYXID_SERVICE_ACCESS_REVIEW_PARAMS_INVALID";
+    throw error;
+  }
+  return params;
+}
+
+function actionContinuationCredentialRefreshParams(card, resource) {
+  const review = card?.request?.params?.serviceAccessReview || null;
+  const userServiceId = String(
+    actionResourceUserServiceId(resource) || review?.userServiceId || "",
+  ).trim();
+  const serviceSlug = String(
+    review?.serviceSlug ||
+    card?.request?.params?.catalogService?.serviceSlug ||
+    card?.block?.catalog_slug ||
+    "",
+  ).trim();
+  const resourceUri = String(
+    review?.resourceUri ||
+    globalThis.AevatarStudioAuth.serviceResourceUri?.(serviceSlug) ||
+    "",
+  ).trim();
+  if (!userServiceId || !serviceSlug || !resourceUri) {
+    const error = new Error("Cannot resolve the exact NyxID service authorization for this action continuation.");
+    error.code = "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_PARAMS_INVALID";
+    throw error;
+  }
+  return { userServiceId, serviceSlug, resourceUri };
+}
+
+async function beginActionContinuationCredentialRefresh(card, disposition, resource) {
+  try {
+    const params = actionContinuationCredentialRefreshParams(card, resource);
+    const conversationId = String(card?.conversation?.actorId || "").trim();
+    const actorId = String(card?.request?.actorId || "").trim();
+    const originTurnId = String(card?.request?.originTurnId || "").trim();
+    const actionRequestId = String(card?.request?.actionRequestId || "").trim();
+    const action = String(card?.request?.action || "").trim();
+    if (!conversationId || !actorId || !originTurnId || !actionRequestId || !action) {
+      const error = new Error("Cannot preserve the browser action identity for NyxID consent review.");
+      error.code = "NYXID_ACTION_IDENTITY_MISSING";
+      throw error;
+    }
+
+    const continuation = continuationIntent(card, disposition, resource);
+    const report = continuation.actions[0];
+    const pending = {
+      schemaVersion: 3,
+      action,
+      conversationId,
+      actorId,
+      originTurnId,
+      actionRequestId,
+      disposition: report.disposition,
+      resource: report.resource,
+      serviceSlug: params.serviceSlug,
+      userServiceId: params.userServiceId,
+      resourceUri: params.resourceUri,
+      clientRequestId: continuation.clientRequestId,
+      createdAt: Date.now(),
+    };
+
+    globalThis.AevatarStudioAuth.clearServiceAccessReviewToken?.();
+    writeStorage(SERVICE_ACCESS_REVIEW_KEY, JSON.stringify(pending));
+    card.authorizationRefresh = {
+      disposition: report.disposition,
+      resource: report.resource,
+    };
+    card.busy = false;
+    card.status = "reauthorizing";
+    card.error = "";
+    card.note = `当前 NyxID 登录仍有效；正在更新 NyxID 服务授权以继续 ${card.block.service_name} action。`;
+    renderConnectCard(card);
+    await globalThis.AevatarStudioAuth.beginServiceAccessReview([params.resourceUri]);
+    return true;
+  } catch (error) {
+    card.busy = false;
+    card.status = "reauthorizing";
+    card.error = error?.message || "无法开始 NyxID 服务访问审查。";
+    card.note = "原 action 和会话状态已保留；可重试更新 NyxID 服务授权。";
+    renderConnectCard(card);
+    return false;
+  }
+}
+
+async function beginServiceAccessReviewAction(card) {
+  const params = serviceAccessReviewParams(card);
+  return beginActionContinuationCredentialRefresh(
+    card,
+    "completed",
+    { userService: { userServiceId: params.userServiceId } },
+  );
+}
+
+async function loadServiceAccessReviewCatalog() {
+  const response = await globalThis.AevatarStudioAuth.fetchServiceAccessReviewCatalog();
+  if (!response.ok) throw await responseError(response);
+  const payload = await response.json();
+  return {
+    proxyBaseUrl: String(payload?.proxyBaseUrl || "").trim().replace(/\/+$/, ""),
+    resources: Array.isArray(payload?.resources) ? payload.resources : [],
+    services: Array.isArray(payload?.services) ? payload.services : [],
+  };
+}
+
+async function resumePendingServiceAccessReview() {
+  const pending = readJsonStorage(SERVICE_ACCESS_REVIEW_KEY);
+  if (!pending) return false;
+  const valid = pending.schemaVersion === 3 &&
+    typeof pending.action === "string" && pending.action &&
+    typeof pending.conversationId === "string" && pending.conversationId &&
+    typeof pending.actorId === "string" && pending.actorId &&
+    typeof pending.originTurnId === "string" && pending.originTurnId &&
+    typeof pending.actionRequestId === "string" && pending.actionRequestId &&
+    pending.disposition === "completed" &&
+    actionResourceUserServiceId(pending.resource) === pending.userServiceId &&
+    typeof pending.serviceSlug === "string" && pending.serviceSlug &&
+    typeof pending.userServiceId === "string" && pending.userServiceId &&
+    typeof pending.resourceUri === "string" && pending.resourceUri &&
+    typeof pending.clientRequestId === "string" && pending.clientRequestId;
+  if (!valid) {
+    removeStorage(SERVICE_ACCESS_REVIEW_KEY);
+    globalThis.AevatarStudioAuth.clearServiceAccessReviewToken?.();
+    return false;
+  }
+
+  try {
+    const catalog = await loadServiceAccessReviewCatalog();
+    if (!proxyCatalogContainsService(
+      catalog,
+      pending.userServiceId,
+      pending.serviceSlug,
+      pending.resourceUri,
+    )) {
+      return false;
+    }
+    const conversation = state.conversations.find((item) => item.id === pending.conversationId);
+    if (!conversation) return false;
+    await loadConversation(conversation);
+    const entry = findConversationState(pending.conversationId);
+    if (!entry) return false;
+    await refreshActionActorState(entry, pending.actorId, { uncursored: true });
+    renderActionCards(entry);
+    const card = entry.run?.cardElements?.get(
+      actionEntryKey(pending.actorId, pending.actionRequestId),
+    );
+    if (!card?.request || card.request.action !== pending.action) return false;
+    const params = actionContinuationCredentialRefreshParams(card, pending.resource);
+    if (params.userServiceId !== pending.userServiceId ||
+        params.serviceSlug !== pending.serviceSlug ||
+        params.resourceUri !== pending.resourceUri) {
+      return false;
+    }
+
+    const continuation = validateActionContinuation({
+      type: "action.continue",
+      clientRequestId: pending.clientRequestId,
+      originTurnId: pending.originTurnId,
+      actions: [{
+        actionRequestId: pending.actionRequestId,
+        originTurnId: pending.originTurnId,
+        disposition: pending.disposition,
+        resource: pending.resource,
+      }],
+    }, { expectedAction: card.request.action });
+    card.conversation = entry;
+    card.continuation = continuation;
+    card.report = continuation.actions[0];
+    card.authorizationRefresh = {
+      disposition: pending.disposition,
+      resource: pending.resource,
+    };
+    card.status = "reauthorizing";
+    card.note = "NyxID 服务授权已更新；正在恢复原 browser action 和会话。";
+    renderConnectCard(card);
+    const result = await submitActionContinuation(
+      card,
+      pending.disposition,
+      pending.resource,
+      { credential: "serviceAccessReview" },
+    );
+    if (result?.verified !== true || result?.terminalObserved !== true) return false;
+    removeStorage(SERVICE_ACCESS_REVIEW_KEY);
+    globalThis.AevatarStudioAuth.clearServiceAccessReviewToken();
+    return true;
+  } catch (error) {
+    const entry = findConversationState(pending.conversationId);
+    const card = entry?.run?.cardElements?.get(
+      actionEntryKey(pending.actorId, pending.actionRequestId),
+    );
+    if (card) {
+      card.busy = false;
+      card.status = "reauthorizing";
+      card.error = error?.message || "恢复 NyxID browser action 失败。";
+      card.note = "原卡片、会话和 clientRequestId 已保留；刷新页面后会重试。";
+      renderConnectCard(card);
+    }
+    return false;
+  }
+}
+
 async function submitConnectCredential(card, credential, input = null) {
   const value = String(credential || "").trim();
   if (!value) {
@@ -1132,6 +2517,9 @@ async function submitConnectCredential(card, credential, input = null) {
   card.error = "";
   renderConnectCard(card);
   try {
+    if (!(card.externalBaseline instanceof Set)) {
+      card.externalBaseline = matchingUserServiceIds(card);
+    }
     let response;
     try {
       response = await fetch("/api/nyxid/keys", {
@@ -1155,15 +2543,17 @@ async function submitConnectCredential(card, credential, input = null) {
       throw error;
     }
     card.keyInputOpen = false;
-    await submitActionContinuation(card, "completed", {
-      userService: { userServiceId },
-    });
-    void loadServices();
+    const completed = await completeServiceConnectAction(card, userServiceId);
+    if (completed) void loadServices();
   } catch (error) {
     card.busy = false;
     card.error = error.message || "连接失败，请重试。";
-    if (error.code === "NYXID_USER_SERVICE_ID_MISSING") {
+    if (error.code === "NYXID_USER_SERVICE_ID_MISSING" ||
+        error.code === "NYXID_AUTHORIZATION_CATALOG_NOT_READY") {
       card.status = "error";
+      if (error.code === "NYXID_AUTHORIZATION_CATALOG_NOT_READY") {
+        card.note = "API key 已保存；授权目录就绪后可直接刷新状态，无需再次提交 key。";
+      }
       renderConnectCard(card);
     } else {
       await submitActionContinuation(card, "failed");
@@ -1196,11 +2586,35 @@ function continuationMatches(card, disposition, resource = null) {
     JSON.stringify(card.continuation.actions[0]?.resource || null) === JSON.stringify(resource));
 }
 
-async function submitActionContinuation(card, disposition, resource = null) {
+function actionContinuationReconciliationFrame(event) {
+  return [
+    "run_started",
+    "task_snapshot",
+    "task_step_changed",
+    "continuation_changed",
+    "run_finished",
+    "run_error",
+    "keepalive",
+  ].includes(event?.type);
+}
+
+async function reconcileActionContinuation(card, conversation) {
+  if (card.status === "verified") return true;
+  const refreshed = await refreshActionActorState(conversation, card.request.actorId);
+  return withConversationState(conversation, () => {
+    const projection = refreshed || actorProjectionFor(conversation, card.request.actorId);
+    const projected = projection?.actions?.get(card.request.actionRequestId);
+    const verified = applyActorActionProof(card, projected || card.action, projection);
+    if (verified) renderConnectCard(card);
+    return verified || card.status === "verified";
+  });
+}
+
+async function submitActionContinuation(card, disposition, resource = null, options = {}) {
   const conversation = card.conversation;
   if (!conversation || card.status === "conflicted") return;
   if (card.continuation && !continuationMatches(card, disposition, resource)) {
-    const refreshed = await refreshActorState(conversation);
+    const refreshed = await refreshActionActorState(conversation, card.request.actorId);
     const pending = refreshed?.actions?.get(card.request.actionRequestId);
     if (!pending || !restoreCachedAction(pending, card.request)) {
       card.busy = false;
@@ -1234,17 +2648,27 @@ async function submitActionContinuation(card, disposition, resource = null) {
   card.error = "";
   card.note = "正在向 Aevatar 报告 browser journey 结果。";
   renderConnectCard(card);
+  let terminalObserved = false;
   try {
-    const response = await fetch("/api/demo/chat", {
-      method: "POST",
-      headers: demoHeaders(),
-      signal: controller.signal,
-      body: JSON.stringify({
-        surface: "nyxid-chat",
-        ...continuation,
-        conversationId: card.request.actorId,
-      }),
-    });
+    const body = {
+      surface: "nyxid-chat",
+      ...continuation,
+      conversationId: card.request.actorId,
+    };
+    const useServiceAccessReviewCredential =
+      options?.credential === "serviceAccessReview" ||
+      (card.request.action === "service.access_review" && disposition === "completed");
+    const response = useServiceAccessReviewCredential
+      ? await globalThis.AevatarStudioAuth.continueServiceAccessReview(body, {
+        headers: demoHeaders(),
+        signal: controller.signal,
+      })
+      : await fetch("/api/demo/chat", {
+        method: "POST",
+        headers: demoHeaders(),
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      });
     if (!response.ok) throw await responseError(response);
     card.status = disposition === "completed" ? "awaiting_verification" : "reported";
     card.note = disposition === "completed"
@@ -1252,12 +2676,20 @@ async function submitActionContinuation(card, disposition, resource = null) {
       : `Browser journey 已报告 ${disposition}；等待 actor 状态确认。`;
     renderConnectCard(card);
     await consumeSse(response, async (raw) => {
-      withConversationState(conversation, () => handleFrame(raw));
+      const event = withConversationState(conversation, () => handleFrame(raw, {
+        streamActorId: card.request.actorId,
+        preserveConversationActor: true,
+      }));
+      if (disposition === "completed" && actionContinuationReconciliationFrame(event)) {
+        await reconcileActionContinuation(card, conversation);
+      }
+      terminalObserved = ["run_finished", "run_error", "run_stopped"].includes(event?.type);
+      return terminalObserved ? false : undefined;
     });
-    await refreshActorState(conversation);
+    if (card.status !== "verified") {
+      await reconcileActionContinuation(card, conversation);
+    }
     withConversationState(conversation, () => {
-      const projected = conversation.actorProjection.actions.get(card.request.actionRequestId);
-      applyActorActionProof(card, projected || card.action, conversation.actorProjection);
       if (card.status !== "verified") {
         card.status = disposition === "completed" ? "awaiting_verification" : "reported";
         card.note = disposition === "completed"
@@ -1267,7 +2699,24 @@ async function submitActionContinuation(card, disposition, resource = null) {
       card.busy = false;
       renderConnectCard(card);
     });
+    return {
+      verified: card.status === "verified",
+      terminalObserved,
+    };
   } catch (error) {
+    if (error.code === ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED_CODE &&
+        disposition === "completed" && actionResourceUserServiceId(resource)) {
+      const credentialRefreshStarted = await beginActionContinuationCredentialRefresh(
+        card,
+        disposition,
+        resource,
+      );
+      return {
+        verified: false,
+        terminalObserved,
+        credentialRefreshStarted,
+      };
+    }
     withConversationState(conversation, () => {
       card.busy = false;
       card.status = "error";
@@ -1276,6 +2725,10 @@ async function submitActionContinuation(card, disposition, resource = null) {
         : error.message || "Action continuation 提交失败。";
       renderConnectCard(card);
     });
+    return {
+      verified: false,
+      terminalObserved,
+    };
   } finally {
     withConversationState(conversation, () => {
       releaseConversationController(conversation, controller);
@@ -1310,10 +2763,21 @@ async function refreshConnectCard(card) {
     renderConnectCard(card);
     return;
   }
-  await submitActionContinuation(card, "completed", {
-    userService: { userServiceId: candidates[0] },
-  });
-  void loadServices();
+  card.busy = true;
+  card.note = "已检测到新的 UserService；正在检查当前 NyxID OAuth 服务范围。";
+  renderConnectCard(card);
+  const userServiceId = candidates[0];
+  try {
+    const completed = await completeServiceConnectAction(card, userServiceId);
+    if (completed) void loadServices();
+  } catch (error) {
+    card.busy = false;
+    card.status = "error";
+    card.error = error.message || "无法刷新 NyxID 授权目录，请稍后重试。";
+    card.note = "连接已存在于 NyxID；授权目录就绪前不会向 Actor 报告完成。";
+    renderConnectCard(card);
+    return;
+  }
 }
 
 function updateLiveConnectCards() {
@@ -1322,7 +2786,7 @@ function updateLiveConnectCards() {
       liveConnectCards.delete(card);
       continue;
     }
-    if (["reporting", "awaiting_verification", "verified", "conflicted"].includes(card.status)) {
+    if (["reauthorizing", "reporting", "awaiting_verification", "verified", "conflicted"].includes(card.status)) {
       continue;
     }
     if (!card.keyInputOpen && !card.busy) {
@@ -1340,7 +2804,9 @@ function updateLiveConnectCards() {
 function connectCardPill(card) {
   const labels = {
     needs_connection: "未连接",
+    needs_review: "需要授权",
     waiting_for_user: "等待连接",
+    reauthorizing: "正在更新授权",
     reporting: "正在报告",
     awaiting_verification: "等待 Actor 验证",
     reported: "等待 Actor 确认",
@@ -1374,8 +2840,10 @@ function renderConnectCard(card) {
   brandCopy.append(el("div", "cc-title", block.service_name));
   const subtitle = card.status === "conflicted"
     ? "同一个 actionRequestId 出现了不一致的 authoritative params"
+    : card.status === "reauthorizing"
+    ? "正在更新 NyxID 服务授权；原 action 与会话保持不变"
     : card.status === "verified"
-    ? "Actor 已验证精确的连接 postcondition"
+    ? "Actor 已验证精确的 typed postcondition"
     : ["reporting", "awaiting_verification", "reported"].includes(card.status)
       ? "Browser journey 不是成功证明；正在等待 actor 状态"
     : block.subtitle || (block.known ? "连接后 Agent 可通过 NyxID proxy 调用" : "该服务不在 NyxID 目录中，可在 NyxID 里手动添加");
@@ -1431,9 +2899,10 @@ function renderConnectCardActions(card) {
     wrap.append(el("div", "cc-hint", card.note));
   }
   const actions = el("div", "cc-actions");
+  const serviceAccessReview = card.request.action === "service.access_review";
   const apiKeyFlow = card.block.known && card.block.auth_kind === "api_key";
 
-  if (card.status === "error" && card.continuation && card.report) {
+  if (card.status === "error" && card.continuation && card.report && !card.authorizationRefresh) {
     const retryReport = el("button", "cc-btn primary cc-retry-report", "重试报告");
     retryReport.type = "button";
     retryReport.disabled = card.busy;
@@ -1443,6 +2912,47 @@ function renderConnectCardActions(card) {
       card.report.resource || null,
     ));
     actions.append(retryReport);
+  }
+
+  if (!serviceAccessReview && card.authorizationRefresh &&
+      ["reauthorizing", "error"].includes(card.status)) {
+    const review = el("button", "cc-btn primary", "");
+    review.type = "button";
+    review.append(
+      iconNode("shield-check"),
+      el("span", "", card.error ? "重试更新 NyxID 服务授权" : "更新 NyxID 服务授权"),
+    );
+    review.disabled = card.busy || card.status === "conflicted";
+    review.addEventListener("click", () => void beginActionContinuationCredentialRefresh(
+      card,
+      card.authorizationRefresh.disposition,
+      card.authorizationRefresh.resource,
+    ));
+    actions.append(review);
+    wrap.append(actions);
+    return wrap;
+  }
+
+  if (serviceAccessReview) {
+    const review = el("button", "cc-btn primary", "");
+    review.type = "button";
+    review.append(
+      iconNode("shield-check"),
+      el("span", "", card.status === "reauthorizing"
+        ? "重新打开 NyxID 授权"
+        : "更新 OAuth client 访问"),
+    );
+    review.disabled = card.busy || card.status === "conflicted";
+    review.addEventListener("click", () => void beginServiceAccessReviewAction(card));
+    actions.append(review);
+
+    const decline = el("button", "cc-btn ghost cc-decline", "拒绝授权");
+    decline.type = "button";
+    decline.disabled = card.busy || card.status === "conflicted";
+    decline.addEventListener("click", () => void submitActionContinuation(card, "declined"));
+    actions.append(decline);
+    wrap.append(actions);
+    return wrap;
   }
 
   if (card.keyInputOpen && apiKeyFlow) {
@@ -1776,6 +3286,7 @@ async function refreshRuntimeData() {
   if (!state.auth.authenticated) return;
   await checkConnection(state.config, false);
   await loadConversations();
+  await resumePendingServiceAccessReview();
 }
 
 function updateConfigUi() {
@@ -1955,7 +3466,9 @@ async function loadConversations({ silent = false } = {}) {
       const entry = findConversationState(conversation.id);
       if (!entry) continue;
       entry.meta = conversation;
+      if (conversation.stateVersion > 0) ensureConversationProjectionVersion(entry);
       if (!entry.controller) entry.title = conversation.title;
+      if (entry === state.activeConversation) renderActorProjection(entry);
     }
     const current = state.conversations.find((item) => item.id === state.actorId);
     if (current) {
@@ -2069,7 +3582,9 @@ async function loadConversation(conversation) {
   if (cached) {
     cached.meta = conversation;
     cached.title = conversation.title;
+    if (conversation.stateVersion > 0) ensureConversationProjectionVersion(cached);
     activateConversationState(cached);
+    renderActorProjection(cached);
     renderActiveConversationState();
     closeMobilePanels();
     void refreshActorState(cached);
@@ -2098,7 +3613,9 @@ async function loadConversation(conversation) {
       meta: conversation,
       title: conversation.title,
     });
+    if (conversation.stateVersion > 0) ensureConversationProjectionVersion(entry);
     activateConversationState(entry);
+    renderActorProjection(entry);
     state.run.context = {
       actorId: conversation.id,
     };
@@ -2128,12 +3645,30 @@ function actorStateTurnId(projection) {
 }
 
 async function refreshActorState(entry, { uncursored = false } = {}) {
-  if (!entry?.actorId) return null;
-  if (entry.stateReloadInFlight && !uncursored) return entry.stateReloadInFlight;
+  return refreshActorStateFor(entry, entry?.actorId, { uncursored });
+}
+
+async function refreshActionActorState(entry, actorId, { uncursored = false } = {}) {
+  if (!entry || !actorId || actorId === entry.actorId) {
+    return refreshActorState(entry, { uncursored });
+  }
+  return refreshActorStateFor(entry, actorId, { uncursored });
+}
+
+async function refreshActorStateFor(entry, actorId, { uncursored = false } = {}) {
+  if (!entry || !actorId) return null;
+  const isConversationActor = actorId === entry.actorId;
+  entry.actionStateReloads ||= new Map();
+  const inFlight = isConversationActor
+    ? entry.stateReloadInFlight
+    : entry.actionStateReloads.get(actorId);
+  if (inFlight && !uncursored) return inFlight;
 
   const request = (async () => {
     const params = new URLSearchParams();
-    const projection = entry.actorProjection || createActorProjection(entry.actorId);
+    const projection = isConversationActor
+      ? ensureConversationProjectionVersion(entry) || createActorProjection(actorId)
+      : actorProjectionFor(entry, actorId);
     const turnId = actorStateTurnId(projection);
     if (!uncursored && projection.stateVersion > 0 && turnId) {
       params.set("afterStateVersion", String(projection.stateVersion));
@@ -2142,45 +3677,68 @@ async function refreshActorState(entry, { uncursored = false } = {}) {
     const query = params.size ? `?${params}` : "";
     try {
       const response = await fetch(
-        `/api/demo/conversations/${encodeURIComponent(entry.actorId)}/state${query}`,
+        `/api/demo/conversations/${encodeURIComponent(actorId)}/state${query}`,
         { headers: demoHeaders(), cache: "no-store" },
       );
       if (!response.ok) throw await responseError(response);
       const result = applyCurrentStateResult(projection, await response.json());
-      entry.actorProjection = result.projection;
+      setActorProjectionFor(entry, actorId, result.projection);
       if (result.reloadWithoutCursor) {
-        if (!uncursored) return refreshActorState(entry, { uncursored: true });
-        entry.actorStateNotice = "Actor 要求重新加载状态，请稍后重试。";
+        if (!uncursored) return refreshActorStateFor(entry, actorId, { uncursored: true });
+        setActorStateNotice(entry, actorId, "Actor 要求重新加载状态，请稍后重试。");
       } else if (result.projection.stateVersion === 0 && !result.projection.task) {
-        entry.actorStateNotice = "该会话没有可恢复的 actor 状态。";
+        setActorStateNotice(entry, actorId, "该会话没有可恢复的 actor 状态。");
       } else {
-        entry.actorStateNotice = "";
+        setActorStateNotice(entry, actorId, "");
       }
-      restoreProjectionActionCaches(entry);
-      renderActorProjection(entry);
+      restoreProjectionActionCaches(entry, actorId);
+      renderActorProjection(entry, actorId);
       renderActionCards(entry);
       if (entry === state.activeConversation) renderActiveConversationState();
-      return entry.actorProjection;
+      return actorProjectionFor(entry, actorId);
     } catch (error) {
-      entry.actorStateNotice = `无法恢复 actor 状态：${String(error?.message || "unknown error").slice(0, 300)}`;
-      renderActorProjection(entry);
+      setActorStateNotice(
+        entry,
+        actorId,
+        `无法恢复 actor 状态：${String(error?.message || "unknown error").slice(0, 300)}`,
+      );
+      renderActorProjection(entry, actorId);
       return null;
     }
   })();
 
-  entry.stateReloadInFlight = request;
+  if (isConversationActor) entry.stateReloadInFlight = request;
+  else entry.actionStateReloads.set(actorId, request);
   try {
     return await request;
   } finally {
-    if (entry.stateReloadInFlight === request) entry.stateReloadInFlight = null;
+    if (isConversationActor) {
+      if (entry.stateReloadInFlight === request) entry.stateReloadInFlight = null;
+    } else if (entry.actionStateReloads.get(actorId) === request) {
+      entry.actionStateReloads.delete(actorId);
+    }
   }
+}
+
+function actorStateNotice(entry, actorId) {
+  if (!entry || !actorId || actorId === entry.actorId) return entry?.actorStateNotice || "";
+  return entry.actionStateNotices?.get(actorId) || "";
+}
+
+function setActorStateNotice(entry, actorId, message) {
+  if (!entry || !actorId || actorId === entry.actorId) {
+    if (entry) entry.actorStateNotice = message;
+    return;
+  }
+  entry.actionStateNotices ||= new Map();
+  if (message) entry.actionStateNotices.set(actorId, message);
+  else entry.actionStateNotices.delete(actorId);
 }
 
 function entryActorProjection(entry = state.activeConversation) {
   if (!entry) return null;
-  if (!entry.actorProjection || (!entry.actorProjection.actorId && entry.actorId)) {
-    entry.actorProjection = createActorProjection(entry.actorId || null);
-  }
+  actorProjectionFor(entry, entry.actorId);
+  ensureConversationProjectionVersion(entry);
   return entry.actorProjection;
 }
 
@@ -2315,54 +3873,31 @@ function renderActorRecovery(projection) {
   return recovery.childElementCount ? recovery : null;
 }
 
-// The gate status is actor-owned. An absent status is rendered as unknown rather than as
-// satisfied, so a decoder that has not seen the fact never implies the plan may run.
-function actorPlanGateStatus(task) {
-  const status = String(task?.gate?.status || "").toLowerCase();
-  return status === "pending" || status === "satisfied" || status === "rejected" ? status : "";
-}
-
-function actorPlanGateCopy(status) {
-  return {
-    pending: "待确认",
-    satisfied: "已确认",
-    rejected: "已拒绝",
-  }[status] || "需确认";
-}
-
-// A plan gate decision is an Aevatar-scoped local admission, not a NyxID authorization: it
-// admits the already-communicated plan and never grants service access, approves a tool
-// request, or proves an external effect.
-function actorPendingPlanGate(projection) {
-  const gate = projection?.task?.gate;
-  if (!gate || actorPlanGateStatus(projection.task) !== "pending") return null;
-  const identified = (value) => typeof value === "string" && value.trim().length > 0;
-  if (!identified(gate.requestId) || !identified(projection.task.taskId)) return null;
-  return gate;
-}
-
-function needsYouKey(kind, requestId) {
-  return `${kind}:${requestId}`;
+function needsYouKey(kind, requestId, actorId = "") {
+  return `${actorId}:${kind}:${requestId}`;
 }
 
 function pruneNeedsYouState(entry, projection) {
+  const actorId = projection?.actorId || entry?.actorId || "";
+  const actorPrefix = `${actorId}:`;
   const activeKeys = new Set();
   if (projection.pendingInput?.requestId) {
-    activeKeys.add(needsYouKey("input", projection.pendingInput.requestId));
+    activeKeys.add(needsYouKey("input", projection.pendingInput.requestId, actorId));
   }
   if (projection.pendingApproval?.approvalRequestId) {
-    activeKeys.add(needsYouKey("approval", projection.pendingApproval.approvalRequestId));
+    activeKeys.add(needsYouKey("approval", projection.pendingApproval.approvalRequestId, actorId));
   }
-  const pendingGate = actorPendingPlanGate(projection);
-  if (pendingGate) activeKeys.add(needsYouKey("plan", pendingGate.requestId));
   for (const key of entry.needsYouDrafts.keys()) {
-    if (!activeKeys.has(key)) entry.needsYouDrafts.delete(key);
+    if (key.startsWith(actorPrefix) && !activeKeys.has(key)) entry.needsYouDrafts.delete(key);
   }
   for (const key of entry.needsYouSubmissions.keys()) {
-    if (!activeKeys.has(key)) entry.needsYouSubmissions.delete(key);
+    if (key.startsWith(actorPrefix) && !activeKeys.has(key)) entry.needsYouSubmissions.delete(key);
   }
+  const approvalKey = projection.pendingApproval?.approvalRequestId
+    ? needsYouKey("approval", projection.pendingApproval.approvalRequestId, actorId)
+    : null;
   if (!projection.pendingApproval ||
-      entry.approvalConfirmRequestId !== projection.pendingApproval.approvalRequestId) {
+      entry.approvalConfirmRequestId !== approvalKey) {
     entry.approvalConfirmRequestId = null;
   }
 }
@@ -2381,7 +3916,7 @@ function renderComposerInputRequest(entry, projection) {
     return;
   }
 
-  const key = needsYouKey("input", pending.requestId);
+  const key = needsYouKey("input", pending.requestId, projection.actorId || entry.actorId);
   const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
   entry.needsYouDrafts.set(key, draft);
   const submission = entry.needsYouSubmissions.get(key);
@@ -2426,7 +3961,7 @@ function renderComposerInputRequest(entry, projection) {
 function renderPendingInput(entry, projection) {
   const pending = projection.pendingInput;
   if (!pending?.requestId) return null;
-  const key = needsYouKey("input", pending.requestId);
+  const key = needsYouKey("input", pending.requestId, projection.actorId || entry.actorId);
   const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
   entry.needsYouDrafts.set(key, draft);
   const submission = entry.needsYouSubmissions.get(key);
@@ -2452,95 +3987,20 @@ function renderPendingInput(entry, projection) {
   return section;
 }
 
-function renderPlanGateDecision(entry, projection) {
-  const gate = actorPendingPlanGate(projection);
-  if (!gate) return null;
-  const requestId = gate.requestId;
-  const key = needsYouKey("plan", requestId);
-  const submission = entry.needsYouSubmissions.get(key);
-  const locked = submission?.status === "pending" || submission?.status === "accepted";
-  const reliableVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0;
-  const section = el("section", "needs-you-panel plan-gate-required");
-  section.dataset.requestId = requestId;
-  const heading = el("div", "needs-you-heading");
-  heading.append(iconNode("list-checks"), el("strong", "", "需要你确认计划"));
-  section.append(heading);
-
-  section.append(el(
-    "p",
-    "needs-you-boundary",
-    "确认后 Actor 才会执行已说明的计划。这是 Aevatar 本地准入，不授予 NyxID 访问权限，" +
-    "也不代表外部变更已经发生。",
-  ));
-  if (gate.reason) section.append(el("p", "actor-plan-gate-reason", gate.reason));
-
-  const facts = el("dl", "approval-facts");
-  const appendFact = (label, value) => {
-    if (!value) return;
-    facts.append(el("dt", "", label), el("dd", "", value));
-  };
-  appendFact("计划", gate.planId || projection.task.planId);
-  appendFact("修订", Number.isSafeInteger(gate.planRevision) && gate.planRevision > 0
-    ? `Revision ${gate.planRevision}`
-    : "");
-  // Admissions are the exact operations this decision admits. Naming them keeps the
-  // confirmation specific instead of a blanket "go ahead".
-  const admissions = Array.isArray(gate.admissions) ? gate.admissions : [];
-  appendFact("准入操作", admissions.length ? String(admissions.length) : "");
-  if (facts.childElementCount) section.append(facts);
-
-  for (const admission of admissions.slice(0, 8)) {
-    const label = admission?.toolName || admission?.stepId;
-    if (!label) continue;
-    section.append(el("div", "actor-plan-admission mono", label));
-  }
-
-  const footer = el("div", "needs-you-actions");
-  const confirm = el("button", "needs-you-primary", "确认执行");
-  confirm.type = "button";
-  confirm.disabled = locked || !reliableVersion;
-  confirm.addEventListener("click", () => void submitPlanGateDecision(entry, gate, true));
-  const reject = el("button", "needs-you-secondary", "拒绝");
-  reject.type = "button";
-  reject.disabled = locked || !reliableVersion;
-  reject.addEventListener("click", () => void submitPlanGateDecision(entry, gate, false));
-  const status = el("span", `needs-you-state ${submission?.status || ""}`,
-    submission?.message || (!reliableVersion ? "正在同步 Actor 状态…" : ""));
-  footer.append(confirm, reject, status);
-  section.append(footer);
-  // Free-text objection is steering, not a gate decision: the composer already routes a
-  // message during an active task to task.steer, which re-plans instead of admitting.
-  section.append(el(
-    "p",
-    "needs-you-hint",
-    "想改计划就直接发消息，Actor 会按调整重新规划。",
-  ));
-  return section;
-}
-
-function submitPlanGateDecision(entry, gate, confirmed) {
-  return submitNeedsYouDecision(entry, "plan", gate.requestId, {
-    type: "plan.resolve",
-    confirmed,
-    taskId: entryActorProjection(entry)?.task?.taskId,
-    planId: gate.planId,
-    planRevision: gate.planRevision,
-  });
-}
-
 function renderPendingApproval(entry, projection) {
   const pending = projection.pendingApproval;
   if (!pending?.approvalRequestId) return null;
   const requestId = pending.approvalRequestId;
-  const key = needsYouKey("approval", requestId);
+  const actorId = projection.actorId || entry.actorId;
+  const key = needsYouKey("approval", requestId, actorId);
   const draft = entry.needsYouDrafts.get(key) || { reason: "" };
   entry.needsYouDrafts.set(key, draft);
   const submission = entry.needsYouSubmissions.get(key);
   const locked = submission?.status === "pending" || submission?.status === "accepted";
-  const reliableVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0;
+  const reliableVersion = actorStateVersion(entry, actorId);
   const outsideGrant = pending.grantBoundary !== "within_grant";
   const irreversible = pending.reversibility === "irreversible";
-  const confirming = irreversible && entry.approvalConfirmRequestId === requestId;
+  const confirming = irreversible && entry.approvalConfirmRequestId === key;
   const section = el("section", `needs-you-panel approval-required${irreversible ? " dangerous" : ""}`);
   section.dataset.requestId = requestId;
   const heading = el("div", "needs-you-heading");
@@ -2593,55 +4053,68 @@ function renderPendingApproval(entry, projection) {
     confirming ? "确认批准" : irreversible ? "审查并批准" : "批准",
   );
   approve.type = "button";
-  approve.disabled = locked || !reliableVersion;
+  approve.disabled = locked || reliableVersion <= 0;
   approve.addEventListener("click", () => {
     if (irreversible && !confirming) {
-      entry.approvalConfirmRequestId = requestId;
-      renderActorProjection(entry);
+      entry.approvalConfirmRequestId = key;
+      renderActorProjection(entry, actorId);
       return;
     }
     void submitNeedsYouDecision(entry, "approval", requestId, {
       type: "approval.resolve",
       approved: true,
       reason: draft.reason.trim(),
-    });
+    }, { actorId, projection });
   });
   const reject = el("button", "needs-you-secondary", "拒绝");
   reject.type = "button";
-  reject.disabled = locked || !reliableVersion;
+  reject.disabled = locked || reliableVersion <= 0;
   reject.addEventListener("click", () => void submitNeedsYouDecision(entry, "approval", requestId, {
     type: "approval.resolve",
     approved: false,
     reason: draft.reason.trim(),
-  }));
+  }, { actorId, projection }));
   const status = el("span", `needs-you-state ${submission?.status || ""}`,
-    submission?.message || (!reliableVersion ? "正在同步 Actor 状态…" : ""));
+    submission?.message || (reliableVersion <= 0 ? "正在同步 Actor 状态…" : ""));
   footer.append(approve, reject, status);
   section.append(footer);
   return section;
 }
 
-async function submitNeedsYouDecision(entry, kind, requestId, payload) {
-  const projection = entryActorProjection(entry);
-  if (!entry?.actorId || !projection || !requestId ||
-      !Number.isSafeInteger(projection.stateVersion) || projection.stateVersion <= 0) return false;
-  const key = needsYouKey(kind, requestId);
+async function submitNeedsYouDecision(
+  entry,
+  kind,
+  requestId,
+  payload,
+  { actorId = entry?.actorId, projection = actorProjectionFor(entry, actorId) } = {},
+) {
+  if (!actorId || !projection || !requestId) return false;
+  const key = needsYouKey(kind, requestId, actorId);
   const existing = entry.needsYouSubmissions.get(key);
   if (existing?.status === "pending" || existing?.status === "accepted") return false;
   const clientRequestId = createId(`client-${kind}`);
-  entry.needsYouSubmissions.set(key, { status: "pending", message: "正在提交…" });
-  renderActorProjection(entry);
+  entry.needsYouSubmissions.set(key, { status: "pending", message: "正在同步 Actor 状态…" });
+  renderActorProjection(entry, actorId);
   try {
+    const refreshedProjection = await refreshActorStateFor(
+      entry,
+      actorId,
+      { uncursored: true },
+    );
+    const reliableVersion = actorStateVersion(entry, actorId);
+    if (!refreshedProjection || reliableVersion <= 0) {
+      throw new Error("无法同步最新 Actor 状态。");
+    }
     const response = await fetch("/api/demo/chat", {
       method: "POST",
       headers: demoHeaders(),
       body: JSON.stringify({
         surface: "nyxid-chat",
         ...payload,
-        conversationId: entry.actorId,
+        conversationId: actorId,
         requestId,
         clientRequestId,
-        expectedStateVersion: projection.stateVersion,
+        expectedStateVersion: reliableVersion,
       }),
     });
     if (!response.ok) throw await responseError(response);
@@ -2650,45 +4123,296 @@ async function submitNeedsYouDecision(entry, kind, requestId, payload) {
       status: "accepted",
       message: "已受理，等待 Actor 确认。",
     });
-    renderActorProjection(entry);
-    await refreshActorState(entry);
-    if (entry.actorStateRefreshTimer) window.clearTimeout(entry.actorStateRefreshTimer);
-    entry.actorStateRefreshTimer = window.setTimeout(() => {
-      entry.actorStateRefreshTimer = null;
-      void refreshActorState(entry);
-      void loadConversations({ silent: true });
-    }, 500);
+    renderActorProjection(entry, actorId);
+    await refreshActorStateFor(entry, actorId);
+    scheduleActorStateRefresh(entry, actorId, 500);
     return true;
   } catch (error) {
     entry.needsYouSubmissions.set(key, {
       status: "error",
       message: `提交失败：${String(error?.message || "unknown error").slice(0, 240)}`,
     });
-    renderActorProjection(entry);
-    await refreshActorState(entry, { uncursored: true });
+    renderActorProjection(entry, actorId);
+    await refreshActorStateFor(entry, actorId, { uncursored: true });
     return false;
   }
 }
 
-function renderActorProjection(entry) {
-  if (!entry?.thread) return;
-  const projection = entry.actorProjection || createActorProjection(entry.actorId);
-  const hasProjection = Boolean(
-    projection.task || projection.pendingInput || projection.pendingApproval ||
-    projection.actions.size || projection.conflicts.length || entry.actorStateNotice,
-  );
-  if (!hasProjection) {
+function terminalConversationHistoryReady(messages, turnId) {
+  if (!Array.isArray(messages) || !messages.length) return false;
+  const expectedTurnId = String(turnId || "").trim();
+  if (!expectedTurnId) return false;
+  const last = messages.at(-1);
+  return last?.role === "assistant" &&
+    String(last.turnId || "").trim() === expectedTurnId &&
+    Boolean(String(last.content || last.error || "").trim());
+}
+
+function replaceConversationHistory(
+  entry,
+  messages,
+  projection,
+  terminalStatus,
+  expectedRun = entry?.run,
+) {
+  if (!entry?.thread || entry.controller || entry.run !== expectedRun ||
+      !terminalConversationHistoryReady(messages, actorStateTurnId(projection))) {
+    return false;
+  }
+  withConversationState(entry, () => {
+    const recoveredRun = createRunState();
+    recoveredRun.surface = "nyxid-chat";
+    recoveredRun.status = terminalStatus;
+    recoveredRun.completedAt = Date.now();
+    recoveredRun.context = {
+      actorId: entry.actorId,
+      turnId: actorStateTurnId(projection),
+    };
+    state.run = recoveredRun;
+    entry.run = recoveredRun;
     entry.actorTaskElement?.remove();
     entry.actorTaskElement = null;
+    for (const element of entry.actionActorTaskElements?.values?.() || []) element.remove();
+    entry.actionActorTaskElements?.clear?.();
+    dom.thread.replaceChildren();
+    for (const message of messages) renderStoredMessage(message);
+    if (entry.meta) {
+      entry.meta = {
+        ...entry.meta,
+        messageCount: messages.length,
+      };
+    }
+    renderActorProjection(entry);
     if (entry === state.activeConversation) {
+      renderActiveConversationState();
+      scrollThread();
+    }
+    refreshIcons(entry.thread);
+  });
+  return true;
+}
+
+async function recoverTerminalConversation(entry, projection, terminalStatus) {
+  if (!entry?.actorId || !projection) return false;
+  if (entry.controller) return true;
+  const turnId = actorStateTurnId(projection);
+  if (!turnId) return false;
+  if (entry.historyRecoveredTurnId === turnId) return true;
+  const recoveryRun = entry.run;
+  try {
+    await loadConversations({ silent: true });
+    if (entry.controller || entry.run !== recoveryRun) return true;
+    const response = await fetch(historyUrl(entry.actorId), {
+      headers: demoHeaders(),
+      cache: "no-store",
+    });
+    if (!response.ok) throw await responseError(response);
+    const messages = normalizeStoredMessages(await response.json());
+    if (entry.controller || entry.run !== recoveryRun) return true;
+    if (!terminalConversationHistoryReady(messages, turnId)) return false;
+    if (!replaceConversationHistory(entry, messages, projection, terminalStatus, recoveryRun)) {
+      return Boolean(entry.controller || entry.run !== recoveryRun);
+    }
+    entry.historyRecoveredTurnId = turnId;
+    setActorStateNotice(entry, entry.actorId, "");
+    return true;
+  } catch (error) {
+    if (entry.controller || entry.run !== recoveryRun) return true;
+    setActorStateNotice(
+      entry,
+      entry.actorId,
+      `Actor 已到终态，但最终回复恢复失败：${String(error?.message || "unknown error").slice(0, 240)}`,
+    );
+    renderActorProjection(entry);
+    return false;
+  }
+}
+
+function actorStateFollowNeeded(entry, actorId, projection) {
+  if (!entry || !actorId || !projection || actorTerminalRunStatus(projection)) return false;
+  const attention = projection.pendingInput?.requestId
+    ? ["input", projection.pendingInput.requestId]
+    : projection.pendingApproval?.approvalRequestId
+      ? ["approval", projection.pendingApproval.approvalRequestId]
+      : null;
+  if (attention) {
+    const submission = entry.needsYouSubmissions.get(needsYouKey(attention[0], attention[1], actorId));
+    if (!submission || !["pending", "accepted"].includes(submission.status)) return false;
+  }
+  const status = String(
+    projection.task?.status || projection.taskStatus || projection.activeTurn?.status || "",
+  ).toLowerCase();
+  return ["active", "running", "waiting", "planned"].includes(status);
+}
+
+function markActorRunFollowing(entry, actorId) {
+  if (!entry?.run || actorId !== entry.actorId) return;
+  entry.run.status = "running";
+  entry.run.completedAt = null;
+  if (entry === state.activeConversation) renderActiveConversationState();
+}
+
+function actorStateFollowGeneration(entry, actorId) {
+  if (!entry || !actorId) return 0;
+  if (actorId === entry.actorId) {
+    return Number.isSafeInteger(entry.actorStateRefreshGeneration)
+      ? entry.actorStateRefreshGeneration
+      : 0;
+  }
+  entry.actionStateRefreshGenerations ||= new Map();
+  const generation = entry.actionStateRefreshGenerations.get(actorId);
+  return Number.isSafeInteger(generation) ? generation : 0;
+}
+
+function advanceActorStateFollowGeneration(entry, actorId) {
+  const generation = actorStateFollowGeneration(entry, actorId) + 1;
+  if (actorId === entry.actorId) {
+    entry.actorStateRefreshGeneration = generation;
+  } else {
+    entry.actionStateRefreshGenerations ||= new Map();
+    entry.actionStateRefreshGenerations.set(actorId, generation);
+  }
+  return generation;
+}
+
+function actorStateFollowIsCurrent(entry, actorId, generation) {
+  return actorStateFollowGeneration(entry, actorId) === generation;
+}
+
+async function followActorStateRefresh(entry, actorId, attemptsRemaining, generation) {
+  if (!actorStateFollowIsCurrent(entry, actorId, generation)) return;
+  const projection = actorId === entry.actorId
+    ? await refreshActorState(entry)
+    : await refreshActionActorState(entry, actorId);
+  if (!actorStateFollowIsCurrent(entry, actorId, generation)) return;
+  if (!projection) {
+    if (attemptsRemaining > 1) {
+      scheduleActorStateRefresh(entry, actorId, 1000, attemptsRemaining - 1, generation);
+    }
+    return;
+  }
+
+  const terminalStatus = actorTerminalRunStatus(projection);
+  if (terminalStatus) {
+    if (actorId !== entry.actorId) return;
+    const turnId = actorStateTurnId(projection);
+    const liveTerminalReply = terminalStatus === "complete" &&
+      entry.run?.status === "complete" && Boolean(entry.run.assistantText?.trim()) &&
+      (!turnId || entry.run?.context?.turnId === turnId);
+    const alreadyRecovered = Boolean(turnId) && entry.historyRecoveredTurnId === turnId;
+    if (liveTerminalReply || alreadyRecovered) {
+      entry.run.status = terminalStatus;
+      entry.run.completedAt ||= Date.now();
+      if (entry === state.activeConversation) renderActiveConversationState();
+      return;
+    }
+    const recovered = await recoverTerminalConversation(entry, projection, terminalStatus);
+    if (!actorStateFollowIsCurrent(entry, actorId, generation)) return;
+    if (!recovered && attemptsRemaining > 1) {
+      setActorStateNotice(entry, actorId, "Actor 已到终态，正在恢复最终回复…");
+      renderActorProjection(entry, actorId);
+      scheduleActorStateRefresh(entry, actorId, 750, attemptsRemaining - 1, generation);
+    } else if (!recovered) {
+      setActorStateNotice(
+        entry,
+        actorId,
+        "Actor 已到终态，但最终回复尚未进入会话历史。重新打开会话可继续恢复。",
+      );
+      renderActorProjection(entry, actorId);
+    }
+    return;
+  }
+
+  markActorRunFollowing(entry, actorId);
+  if (!actorStateFollowNeeded(entry, actorId, projection)) return;
+  if (attemptsRemaining > 1) {
+    scheduleActorStateRefresh(entry, actorId, 1000, attemptsRemaining - 1, generation);
+  } else {
+    setActorStateNotice(entry, actorId, "Actor 仍在执行，但自动状态跟随已超时。重新打开会话可继续恢复。");
+    renderActorProjection(entry, actorId);
+  }
+}
+
+function scheduleActorStateRefresh(
+  entry,
+  actorId,
+  delayMs = 500,
+  attemptsRemaining = 300,
+  generation = null,
+) {
+  if (!entry || !actorId || attemptsRemaining <= 0) return;
+  const followGeneration = Number.isSafeInteger(generation) && generation > 0
+    ? generation
+    : advanceActorStateFollowGeneration(entry, actorId);
+  if (!actorStateFollowIsCurrent(entry, actorId, followGeneration)) return;
+  if (actorId === entry.actorId) {
+    if (entry.actorStateRefreshTimer) window.clearTimeout(entry.actorStateRefreshTimer);
+    const timer = window.setTimeout(async () => {
+      if (entry.actorStateRefreshTimer !== timer ||
+          !actorStateFollowIsCurrent(entry, actorId, followGeneration)) {
+        return;
+      }
+      entry.actorStateRefreshTimer = null;
+      await followActorStateRefresh(entry, actorId, attemptsRemaining, followGeneration);
+    }, delayMs);
+    entry.actorStateRefreshTimer = timer;
+    return;
+  }
+  entry.actionStateRefreshTimers ||= new Map();
+  const current = entry.actionStateRefreshTimers.get(actorId);
+  if (current) window.clearTimeout(current);
+  const timer = window.setTimeout(async () => {
+    if (entry.actionStateRefreshTimers.get(actorId) !== timer ||
+        !actorStateFollowIsCurrent(entry, actorId, followGeneration)) {
+      return;
+    }
+    entry.actionStateRefreshTimers.delete(actorId);
+    await followActorStateRefresh(entry, actorId, attemptsRemaining, followGeneration);
+  }, delayMs);
+  entry.actionStateRefreshTimers.set(actorId, timer);
+}
+
+function actorTaskElementFor(entry, actorId) {
+  if (!entry || !actorId || actorId === entry.actorId) return entry?.actorTaskElement || null;
+  return entry.actionActorTaskElements?.get(actorId) || null;
+}
+
+function setActorTaskElement(entry, actorId, element) {
+  if (!entry || !actorId || actorId === entry.actorId) {
+    if (entry) entry.actorTaskElement = element;
+    return;
+  }
+  entry.actionActorTaskElements ||= new Map();
+  if (element) entry.actionActorTaskElements.set(actorId, element);
+  else entry.actionActorTaskElements.delete(actorId);
+}
+
+function actorControlReceiptFor(entry, actorId) {
+  if (!entry || !actorId || actorId === entry.actorId) return entry?.actorControlReceipt || null;
+  return entry.actionActorControlReceipts?.get(actorId) || null;
+}
+
+function renderActorProjection(entry, actorId = entry?.actorId) {
+  if (!entry?.thread) return;
+  const projection = actorProjectionFor(entry, actorId) || createActorProjection(actorId);
+  const notice = actorStateNotice(entry, actorId);
+  const isConversationActor = actorId === entry.actorId;
+  const hasProjection = Boolean(
+    projection.task || projection.pendingInput || projection.pendingApproval ||
+    projection.actions.size || projection.conflicts.length || notice,
+  );
+  if (!hasProjection) {
+    actorTaskElementFor(entry, actorId)?.remove();
+    setActorTaskElement(entry, actorId, null);
+    if (isConversationActor && entry === state.activeConversation) {
       renderComposerInputRequest(entry, projection);
       renderInspector();
     }
     return;
   }
 
-  const root = entry.actorTaskElement || el("section", "actor-task");
-  entry.actorTaskElement = root;
+  const root = actorTaskElementFor(entry, actorId) || el("section", "actor-task");
+  setActorTaskElement(entry, actorId, root);
   if (root.dataset.collapsed !== "true" && root.dataset.collapsed !== "false") {
     root.dataset.collapsed = "false";
   }
@@ -2697,9 +4421,9 @@ function renderActorProjection(entry) {
   const status = String(
     task?.status || projection.taskStatus || projection.latestTurn?.status || "unknown",
   ).toLowerCase();
-  root.className = `actor-task ${status}`;
+  root.className = `actor-task ${status}${isConversationActor ? "" : " action-actor-task"}`;
   root.classList.toggle("collapsed", root.dataset.collapsed === "true");
-  root.dataset.actorId = projection.actorId || entry.actorId || "";
+  root.dataset.actorId = projection.actorId || actorId || "";
   if (task?.taskId) root.dataset.taskId = task.taskId;
   if (task?.turnId) root.dataset.turnId = task.turnId;
   if (task?.planId) root.dataset.planId = task.planId;
@@ -2762,25 +4486,12 @@ function renderActorProjection(entry) {
       planId.title = task.planId;
       meta.append(planId);
     }
-    const gateMode = String(task.gate?.mode || "auto").toLowerCase();
-    const gateStatus = actorPlanGateStatus(task);
-    const gate = el(
-      "span",
-      `actor-plan-gate ${gateMode}${gateStatus ? ` ${gateStatus}` : ""}`,
-      gateMode === "confirm" ? actorPlanGateCopy(gateStatus) : "自动执行",
-    );
-    if (task.gate?.reason) gate.title = task.gate.reason;
-    meta.append(gate);
     root.append(meta);
-    if (task.gate?.reason) root.append(el("p", "actor-plan-gate-reason", task.gate.reason));
   }
 
   pruneNeedsYouState(entry, projection);
-  // The plan gate is the "may I start" decision, so it precedes the per-step decisions.
-  const planGate = renderPlanGateDecision(entry, projection);
   const pendingInput = renderPendingInput(entry, projection);
   const pendingApproval = renderPendingApproval(entry, projection);
-  if (planGate) root.append(planGate);
   if (pendingInput) root.append(pendingInput);
   if (pendingApproval) root.append(pendingApproval);
 
@@ -2908,11 +4619,12 @@ function renderActorProjection(entry) {
       `Actor projection conflict: ${projection.conflicts.at(-1).code}`,
     ));
   }
-  if (entry.actorStateNotice) {
-    root.append(el("div", "actor-state-notice", entry.actorStateNotice));
+  if (notice) {
+    root.append(el("div", "actor-state-notice", notice));
   }
-  if (entry.actorControlReceipt) {
-    const receipt = entry.actorControlReceipt;
+  const controlReceipt = actorControlReceiptFor(entry, actorId);
+  if (controlReceipt) {
+    const receipt = controlReceipt;
     root.append(el(
       "div",
       `actor-control-receipt ${receipt.status === "error" ? "actor-control-error" : ""}`,
@@ -2920,7 +4632,7 @@ function renderActorProjection(entry) {
     ));
   }
   mountActorTask(entry.thread, root);
-  if (entry === state.activeConversation) {
+  if (isConversationActor && entry === state.activeConversation) {
     renderComposerInputRequest(entry, projection);
     renderInspector();
   }
@@ -2940,6 +4652,10 @@ function mountActorTask(thread, root) {
 }
 
 async function submitActorControl(kind, step = null, instruction = null) {
+  if (isReviewingHistoricalTrace()) {
+    showToast("历史轨迹仅供查看；请返回当前轨迹后再执行控制。");
+    return;
+  }
   const entry = state.activeConversation;
   const projection = entryActorProjection(entry);
   if (!entry?.actorId || !projection) return;
@@ -2948,7 +4664,8 @@ async function submitActorControl(kind, step = null, instruction = null) {
   if (kind === "steer" && !String(instruction || "").trim()) return;
 
   const turnId = actorControlTurnId(projection);
-  if (!turnId || !Number.isSafeInteger(projection.stateVersion) || projection.stateVersion < 0) {
+  const reliableVersion = reliableConversationStateVersion(entry);
+  if (!turnId || reliableVersion <= 0) {
     entry.actorControlReceipt = {
       status: "error",
       message: "Actor control 缺少可靠的 turn/state identity。",
@@ -2972,7 +4689,7 @@ async function submitActorControl(kind, step = null, instruction = null) {
       turnId,
       stopRequestId: createId("stop"),
       clientRequestId: createId("client-stop"),
-      expectedStateVersion: projection.stateVersion,
+      expectedStateVersion: reliableVersion,
     };
   } else if (kind === "steer") {
     body = {
@@ -2983,7 +4700,7 @@ async function submitActorControl(kind, step = null, instruction = null) {
       steeringId: createId("steering"),
       clientRequestId: createId("client-steering"),
       instruction: String(instruction).trim(),
-      expectedStateVersion: projection.stateVersion,
+      expectedStateVersion: reliableVersion,
     };
   } else {
     const generation = actorOperationGeneration(step);
@@ -3005,7 +4722,7 @@ async function submitActorControl(kind, step = null, instruction = null) {
       [`${kind}RequestId`]: createId(kind),
       clientRequestId: createId(`client-${kind}`),
       expectedOperationGeneration: generation,
-      expectedStateVersion: projection.stateVersion,
+      expectedStateVersion: reliableVersion,
     };
   }
 
@@ -3086,6 +4803,7 @@ function renderActiveConversationState() {
   else applyHealthRouteState();
   renderInspector();
   renderEventLog();
+  renderRequestTraces(entry);
   renderHistoryList();
   renderAttachment();
   refreshIcons(entry.thread);
@@ -3151,6 +4869,7 @@ function scheduleHistoryRefresh() {
 
 function focusCurrentConversation() {
   closeMobilePanels();
+  switchWorkspaceView("conversation");
   dom.threadViewport.scrollTo({ top: dom.threadViewport.scrollHeight, behavior: "smooth" });
   dom.promptInput.focus();
 }
@@ -3170,7 +4889,7 @@ function activePendingInputContext() {
   const projection = entryActorProjection(entry);
   const pending = projection?.pendingInput;
   if (!entry || !pending?.requestId) return null;
-  const key = needsYouKey("input", pending.requestId);
+  const key = needsYouKey("input", pending.requestId, projection.actorId || entry.actorId);
   const draft = entry.needsYouDrafts.get(key) || { selectedOptionIds: new Set(), freeText: "" };
   entry.needsYouDrafts.set(key, draft);
   return { entry, projection, pending, key, draft };
@@ -3255,6 +4974,11 @@ async function sendPrompt(overridePrompt, options = {}) {
   state.run.startedAt = Date.now();
   state.run.request = { prompt, attachment };
   state.run.clientRequestId = options.clientRequestId || createId("client-text");
+  // Make the owning conversation point at the new request before the first render. Otherwise the
+  // freshly selected trace is briefly mistaken for a historical trace until persistConversationState runs.
+  conversation.run = state.run;
+  createRequestTrace(conversation, state.run);
+  renderRequestTraces(conversation);
   const controller = new AbortController();
   const run = state.run;
   const runSurface = state.config.surface;
@@ -3379,6 +5103,7 @@ async function sendPrompt(overridePrompt, options = {}) {
       renderInspector();
     });
     renderHistoryList();
+    queueRequestTraceRender(conversation);
     if (runSurface === "nyxid-chat") scheduleHistoryRefresh();
   }
 }
@@ -3401,29 +5126,37 @@ async function responseError(response) {
   }
 }
 
-function handleFrame(raw) {
+function handleFrame(raw, { streamActorId = null, preserveConversationActor = false } = {}) {
   const event = normalizeFrame(raw);
+  applyRequestTraceEvent(conversationContext || state.activeConversation, state.run, event);
   recordEvent(event, raw);
   switch (event.type) {
     case "run_context":
       state.run.context = { ...state.run.context, ...pickContext(event) };
+      if (typeof attachRequestTraceServerFacts === "function") {
+        attachRequestTraceServerFacts(conversationContext || state.activeConversation, state.run, event);
+      }
       updateRunProgress("运行上下文已建立，Agent 正在分析请求…");
       break;
     case "run_started":
       state.run.context.actorId = event.actorId || event.threadId || state.run.context.actorId;
       state.run.context.runId = event.runId || state.run.context.runId;
       state.run.context.turnId = event.turnId || state.run.context.turnId;
-      state.actorId = state.run.surface === "nyxid-chat"
-        ? state.run.context.actorId || state.actorId
-        : state.actorId;
+      if (typeof attachRequestTraceServerFacts === "function") {
+        attachRequestTraceServerFacts(conversationContext || state.activeConversation, state.run, event);
+      }
       if (state.run.surface === "nyxid-chat") {
         const owner = conversationContext || state.activeConversation;
-        if (owner) {
-          owner.actorId = state.actorId;
+        const adopted = adoptRunStartedConversationActor(
+          owner,
+          state.run.context.actorId,
+          { preserveConversationActor },
+        );
+        if (adopted) {
           entryActorProjection(owner);
+          renderHistoryList();
+          scheduleHistoryRefresh();
         }
-        renderHistoryList();
-        scheduleHistoryRefresh();
       }
       updateRunProgress("Agent 已启动，正在分析请求…");
       setRunStatus("running", "Running");
@@ -3440,34 +5173,28 @@ function handleFrame(raw) {
     case "action_request": {
       const entry = conversationContext || state.activeConversation;
       if (!entry) break;
-      const projection = entryActorProjection(entry);
-      entry.actorProjection = reduceActorEvent(projection, event);
+      const routed = reduceActorEventForEntry(entry, event, { streamActorId });
+      if (!routed) break;
+      const { actorId, projection } = routed;
       if (event.type === "action_request" && event.actionRequest) {
-        const action = entry.actorProjection.actions.get(event.actionRequest.actionRequestId);
+        const action = projection.actions.get(event.actionRequest.actionRequestId);
         if (action?.conflicted) {
-          invalidateActionRequestCache(entry, event.actionRequest.actionRequestId);
+          invalidateActionRequestCache(entry, actorId, event.actionRequest.actionRequestId);
         } else if (action?.request) {
           cacheActionRequest(entry, action.request);
         }
+        void refreshActionActorState(entry, actorId);
       }
       if (event.type === "approval_requested") {
         state.run.approvalCard?.card?.remove();
         state.run.approvalCard = null;
         state.run.pendingApproval = null;
       }
-      renderActorProjection(entry);
+      renderActorProjection(entry, actorId);
       renderActionCards(entry);
       if (entry === state.activeConversation) renderActiveConversationState();
-      const needsStateRefresh =
-        ["input_requested", "input_changed", "approval_requested", "approval_changed"].includes(event.type) ||
-        (event.type === "task_snapshot" && actorPendingPlanGate(entry.actorProjection));
-      if (needsStateRefresh) {
-        if (entry.actorStateRefreshTimer) window.clearTimeout(entry.actorStateRefreshTimer);
-        entry.actorStateRefreshTimer = window.setTimeout(() => {
-          entry.actorStateRefreshTimer = null;
-          void refreshActorState(entry);
-          void loadConversations({ silent: true });
-        }, 300);
+      if (["input_requested", "input_changed", "approval_requested", "approval_changed"].includes(event.type)) {
+        scheduleActorStateRefresh(entry, actorId, 300);
       }
       break;
     }
@@ -3569,7 +5296,10 @@ function handleFrame(raw) {
     default:
       break;
   }
-  renderInspector();
+  const owner = conversationContext || state.activeConversation;
+  if (typeof queueRequestTraceRender === "function") queueRequestTraceRender(owner);
+  else renderInspector();
+  return event;
 }
 
 function pickContext(event) {
@@ -3595,7 +5325,11 @@ function recordEvent(event, raw) {
     raw: safeRaw,
   });
   if (state.run.events.length > 120) state.run.events.shift();
-  renderEventLog();
+  if (typeof queueRequestTraceRender === "function") {
+    queueRequestTraceRender(conversationContext || state.activeConversation);
+  } else {
+    renderEventLog();
+  }
 }
 
 function addUserMessage(prompt, attachment) {
@@ -4364,31 +6098,147 @@ function completeRun(actorStatus) {
   );
 }
 
+function inspectorRequestTrace(entry = state.activeConversation) {
+  return selectedRequestTrace(entry) || currentRequestTrace(entry);
+}
+
+function inspectorRunState(entry = state.activeConversation) {
+  return inspectorRequestTrace(entry)?.run || entry?.run || state.run;
+}
+
+function inspectorTraceOperation(entry = state.activeConversation, trace = inspectorRequestTrace(entry)) {
+  return entry?.mainView === "traces" ? selectedTraceOperation(trace) : null;
+}
+
+function renderTraceOperationInspector(trace) {
+  if (!dom.traceOperationSection) return;
+  const record = inspectorTraceOperation(state.activeConversation, trace);
+  dom.traceOperationSection.classList.toggle("hidden", !record);
+  if (!record) return;
+  dom.traceOperationKindFact.textContent = traceOperationKindLabel(record.kind);
+  dom.traceOperationKindFact.className = `trace-operation-kind ${record.kind}`;
+  dom.traceOperationTitleFact.textContent = record.title || traceOperationKindLabel(record.kind);
+  dom.traceOperationIdFact.textContent = record.id || record.key;
+  dom.traceOperationIdFact.title = record.id || record.key;
+  dom.traceOperationStatusFact.textContent = traceOperationStatusLabel(record.status);
+  dom.traceOperationStartedFact.textContent = traceOperationStartedAt(record);
+  dom.traceOperationDurationFact.textContent = traceOperationDuration(record);
+  const modelFacts = record.kind === "model"
+      ? [
+        record.model ? `Model: ${record.model}` : "",
+        record.provider ? `Provider: ${record.provider}` : "",
+        record.round != null ? `Round: ${record.round}` : "",
+        record.sessionId ? `Session: ${record.sessionId}` : "",
+        record.finishReason ? `Finish reason: ${record.finishReason}` : "",
+        record.usage?.promptTokens != null ? `Input tokens: ${record.usage.promptTokens}` : "",
+        record.usage?.completionTokens != null ? `Output tokens: ${record.usage.completionTokens}` : "",
+        record.usage?.totalTokens != null ? `Total tokens: ${record.usage.totalTokens}` : "",
+      ].filter(Boolean).join("\n")
+    : "";
+  const toolCatalog = record.kind === "model" && record.tools?.length
+    ? `Available tools:\n${record.tools.join("\n")}`
+    : "";
+  const outputValue = [
+    String(record.output || ""),
+    record.reasoning ? `Reasoning:\n${record.reasoning}` : "",
+    record.error ? `Error:\n${record.error}` : "",
+    modelFacts,
+  ].filter(Boolean).join("\n\n");
+  const inputValue = [String(record.input || ""), toolCatalog].filter(Boolean).join("\n\n");
+  const hasInput = inputValue.length > 0;
+  const hasOutput = outputValue.length > 0;
+  dom.traceOperationInputSection?.classList.toggle("hidden", !hasInput);
+  dom.traceOperationOutputSection?.classList.toggle("hidden", !hasOutput);
+  if (dom.traceOperationInputFact) dom.traceOperationInputFact.textContent = inputValue;
+  if (dom.traceOperationOutputFact) dom.traceOperationOutputFact.textContent = outputValue;
+}
+
+function paintRunStatus(status, label = requestTraceStatusEnglish(status)) {
+  dom.runStatus.className = `run-status ${status || "idle"}`;
+  dom.runStatus.querySelector("strong").textContent = label;
+}
+
 function renderInspector() {
   if (!isActiveConversationContext()) return;
-  const context = state.run.context;
-  const projection = entryActorProjection(state.activeConversation);
+  const entry = state.activeConversation;
+  const trace = inspectorRequestTrace(entry);
+  const run = inspectorRunState(entry);
+  const context = run.context || {};
+  const historical = isReviewingHistoricalTrace(entry);
+  const projection = entryActorProjection(entry);
   const isNyxid = state.config.surface === "nyxid-chat";
-  const actorTurnId = projection?.activeTurn?.turnId || projection?.latestTurn?.turnId ||
-    projection?.task?.turnId || context.turnId;
-  dom.actorFact.textContent = context.actorId || state.actorId || "—";
+  const projectionTurnId = projection?.activeTurn?.turnId || projection?.latestTurn?.turnId ||
+    projection?.task?.turnId;
+  const actorTurnId = historical ? context.turnId : context.turnId || projectionTurnId;
+  const projectionStatus = !historical && context.turnId && projectionTurnId === context.turnId
+    ? actorTerminalRunStatus(projection)
+    : null;
+  const visibleStatus = projectionStatus || run.status || "idle";
+  const operation = inspectorTraceOperation(entry, trace);
+  dom.inspectorEyebrow.textContent = operation ? traceOperationKindLabel(operation.kind) : trace ? "Request trace" : "Current run";
+  dom.inspectorTitle.textContent = operation ? operation.title || "操作详情" : trace ? "轨迹详情" : "运行详情";
+  paintRunStatus(visibleStatus);
+  renderTraceOperationInspector(trace);
+  dom.traceClientRequestFact.textContent = trace?.clientRequestId || run.clientRequestId || "—";
+  dom.traceClientRequestFact.title = trace?.clientRequestId || run.clientRequestId || "";
+  dom.traceInputFact.textContent = trace
+    ? requestTraceInput(trace)
+    : run.request?.prompt || (run.request?.attachment?.name ? `附件 ${run.request.attachment.name}` : "尚未发送请求");
+  dom.traceStatusFact.textContent = requestTraceStatusLabel(visibleStatus);
+  dom.traceEventFact.textContent = String(run.events.length);
+  dom.traceToolFact.textContent = String(run.tools.size);
+  dom.traceStartedFact.textContent = trace
+    ? requestTraceStartTime(trace, { detailed: true })
+    : run.startedAt ? new Date(run.startedAt).toLocaleString("zh-CN", { hour12: false }) : "—";
+  dom.traceDurationFact.textContent = trace
+    ? requestTraceDuration(trace)
+    : run.startedAt && !run.completedAt && run.status === "running"
+      ? "进行中"
+      : run.startedAt && run.completedAt
+        ? formatDuration(run.completedAt - run.startedAt)
+        : "—";
+  dom.traceReadonlyNotice.classList.toggle("hidden", !historical);
+  const output = requestTraceOutput(run);
+  dom.traceOutputFact.classList.toggle("empty", !output);
+  if (output) {
+    renderMarkdown(dom.traceOutputFact, output);
+  } else {
+    dom.traceOutputFact.textContent = visibleStatus === "running"
+      ? "等待响应"
+      : run.startedAt ? "未返回可展示的文本" : "尚无输出";
+  }
+  dom.routeSection.classList.toggle("hidden", historical);
+  dom.eventCount.textContent = String(run.events.length);
+  dom.clearEventsButton.disabled = historical;
+  dom.actorFact.textContent = context.actorId || (!historical ? state.actorId : "—") || "—";
   dom.runFact.textContent = context.runId || "—";
   dom.commandFact.textContent = context.commandId || "—";
   dom.runIdentityLabel.textContent = isNyxid ? "Turn" : "Session";
   dom.runIdentityFact.textContent = isNyxid
     ? actorTurnId || "—"
     : context.workflowSessionId || state.workflowSessionId;
-  dom.usageTokens.textContent = state.run.usage?.totalTokens ?? "—";
-  const model = state.run.usage?.model || state.currentConversationMeta?.llmModel;
-  const hasConversationData = Boolean(state.run.startedAt || state.currentConversationMeta);
+  dom.usageTokens.textContent = run.usage?.totalTokens ?? "—";
+  const model = run.usage?.model || state.currentConversationMeta?.llmModel;
+  const hasConversationData = Boolean(run.startedAt || state.currentConversationMeta);
   dom.usageModel.textContent = model || (hasConversationData ? "not reported" : "—");
-  renderSteps();
+  renderSteps(run, { trace, allowActorProjection: !historical });
   renderActorControlUi();
-  updateElapsed();
+  updateElapsed(run);
 }
 
 function renderActorControlUi() {
   if (!isActiveConversationContext()) return;
+  if (isReviewingHistoricalTrace()) {
+    dom.sendButton.classList.add("hidden");
+    dom.steerButton.classList.add("hidden");
+    dom.stopButton.classList.add("hidden");
+    dom.observationDisconnectButton.classList.add("hidden");
+    dom.promptInput.disabled = true;
+    dom.attachButton.disabled = true;
+    dom.composerServicesButton.disabled = true;
+    dom.composerStatus.textContent = "正在查看历史轨迹；返回当前轨迹后可继续操作";
+    return;
+  }
   const projection = entryActorProjection(state.activeConversation);
   const nyxid = state.config.surface === "nyxid-chat";
   const authoritativeStop = nyxid && actorCan(projection, "stop");
@@ -4399,12 +6249,12 @@ function renderActorControlUi() {
   if (pendingInput) {
     const submission = pendingInput.entry.needsYouSubmissions.get(pendingInput.key);
     const locked = submission?.status === "pending" || submission?.status === "accepted";
-    const reliableVersion = Number.isSafeInteger(projection?.stateVersion) && projection.stateVersion > 0;
+    const reliableVersion = reliableConversationStateVersion(state.activeConversation);
     const hasAnswer = Boolean(
       dom.promptInput.value.trim() || pendingInput.draft.selectedOptionIds.size,
     );
     dom.sendButton.classList.remove("hidden");
-    dom.sendButton.disabled = !state.auth.authenticated || locked || !reliableVersion || !hasAnswer;
+    dom.sendButton.disabled = !state.auth.authenticated || locked || reliableVersion <= 0 || !hasAnswer;
     dom.sendButton.setAttribute("aria-label", "提交回答");
     dom.sendButton.title = "提交回答";
     dom.steerButton.classList.add("hidden");
@@ -4416,7 +6266,7 @@ function renderActorControlUi() {
     dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
     dom.composerStatus.textContent = locked
       ? submission.message || "回答已受理，等待 Actor 确认。"
-      : reliableVersion
+      : reliableVersion > 0
         ? "一次回答全部缺口；提交后 Actor 将继续当前任务"
         : "正在同步 Actor 状态…";
     return;
@@ -4442,13 +6292,17 @@ function renderActorControlUi() {
   dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
 }
 
-function renderSteps() {
+function renderSteps(run = inspectorRunState(), { trace = null, allowActorProjection = true } = {}) {
   dom.stepList.replaceChildren();
   const projection = entryActorProjection(state.activeConversation);
-  const actorSteps = state.config.surface === "nyxid-chat" && projection?.task
+  const traceTurnId = trace?.serverTurnId || run.context?.turnId || "";
+  const projectionMatchesTrace = !trace || !run.startedAt ||
+    (traceTurnId && projection?.task?.turnId === traceTurnId);
+  const actorSteps = allowActorProjection && projectionMatchesTrace &&
+    state.config.surface === "nyxid-chat" && projection?.task
     ? [...projection.steps.values()]
     : null;
-  const steps = actorSteps || Array.from(state.run.steps.values());
+  const steps = actorSteps || Array.from(run.steps.values());
   dom.stepCount.textContent = String(steps.length);
   if (!steps.length) {
     dom.stepList.className = "step-list empty-list";
@@ -4463,9 +6317,9 @@ function renderSteps() {
         stopped: "停止接收前没有收到工具事件",
         closed: "流关闭前没有收到工具事件",
       };
-      dom.stepList.textContent = labels[state.run.status] || "没有可展示的工具步骤";
+      dom.stepList.textContent = labels[run.status] || "没有可展示的工具步骤";
     } else {
-      dom.stepList.textContent = state.run.status === "idle"
+      dom.stepList.textContent = run.status === "idle"
         ? "发送消息后显示 Workflow 步骤"
         : "尚未收到 Workflow 步骤事件";
     }
@@ -4492,13 +6346,18 @@ function renderSteps() {
 
 function renderEventLog() {
   if (!isActiveConversationContext() || !dom.eventCount || !dom.eventList) return;
-  dom.eventCount.textContent = String(state.run.events.length);
-  dom.eventList.replaceChildren();
-  if (!state.run.events.length) {
-    dom.eventList.append(el("div", "event-empty", "尚无事件"));
+  const run = inspectorRunState();
+  const events = run.events;
+  dom.eventCount.textContent = String(events.length);
+  dom.clearEventsButton.disabled = isReviewingHistoricalTrace();
+  if (!events.length) {
+    if (dom.eventList.childElementCount !== 1 || !dom.eventList.firstElementChild?.classList.contains("event-empty")) {
+      dom.eventList.replaceChildren(el("div", "event-empty", "尚无事件"));
+    }
     return;
   }
-  for (const event of [...state.run.events].reverse()) {
+  const rows = [...events].reverse().map((event) => {
+    if (event.element) return event.element;
     const details = el("details", "event-row");
     const summary = document.createElement("summary");
     summary.append(
@@ -4507,13 +6366,22 @@ function renderEventLog() {
       el("span", "mono", event.at.toLocaleTimeString("zh-CN", { hour12: false })),
     );
     details.append(summary, el("pre", "", safeJson(event.raw)));
-    dom.eventList.append(details);
-  }
+    event.element = details;
+    return details;
+  });
+  rows.forEach((row, index) => {
+    const current = dom.eventList.children[index];
+    if (current !== row) dom.eventList.insertBefore(row, current || null);
+  });
+  while (dom.eventList.childElementCount > rows.length) dom.eventList.lastElementChild.remove();
 }
 
 function clearEvents() {
-  state.run.events = [];
+  if (isReviewingHistoricalTrace()) return;
+  inspectorRunState().events = [];
   renderEventLog();
+  renderRequestTraces();
+  renderInspector();
 }
 
 function configureWireInspector() {
@@ -4523,21 +6391,27 @@ function configureWireInspector() {
   if (!enabled) setInspectorTab("run");
 }
 
-function updateElapsed() {
-  const start = state.run.startedAt;
+function updateElapsed(run = inspectorRunState()) {
+  const start = run.startedAt;
   if (!start) {
     dom.usageElapsed.textContent = "00:00";
     return;
   }
-  const end = state.run.completedAt || Date.now();
+  if (!run.completedAt) {
+    dom.usageElapsed.textContent = run.status === "running" ? "进行中" : "—";
+    if (dom.traceDurationFact) dom.traceDurationFact.textContent = run.status === "running" ? "进行中" : "—";
+    return;
+  }
+  const end = run.completedAt;
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
   dom.usageElapsed.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  if (dom.traceDurationFact) dom.traceDurationFact.textContent = formatDuration(end - start);
 }
 
 function setRunStatus(status, label) {
   if (!isActiveConversationContext()) return;
-  dom.runStatus.className = `run-status ${status}`;
-  dom.runStatus.querySelector("strong").textContent = label;
+  if (isReviewingHistoricalTrace()) return;
+  paintRunStatus(status, label);
 }
 
 function setRunningUi(running) {
@@ -4565,6 +6439,7 @@ function setRunningUi(running) {
 }
 
 function cancelRun() {
+  if (isReviewingHistoricalTrace()) return;
   if (!state.activeController) return;
   dom.stopButton.disabled = true;
   dom.composerStatus.textContent = "正在停止当前页面接收…";
@@ -4572,6 +6447,7 @@ function cancelRun() {
 }
 
 function cancelObservation() {
+  if (isReviewingHistoricalTrace()) return;
   if (!state.activeController) return;
   dom.observationDisconnectButton.disabled = true;
   dom.composerStatus.textContent = "正在停止当前页面观察…";

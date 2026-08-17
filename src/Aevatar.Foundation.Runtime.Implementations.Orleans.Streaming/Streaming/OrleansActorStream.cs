@@ -140,6 +140,7 @@ internal sealed class OrleansActorStream : IStream
     {
         var queue = new Queue<(string SourceStreamId, EventEnvelope Envelope)>();
         var visitedSources = new HashSet<string>(StringComparer.Ordinal);
+        List<Exception>? publishFailures = null;
         queue.Enqueue((sourceStreamId, envelope));
 
         while (queue.Count > 0)
@@ -172,8 +173,14 @@ internal sealed class OrleansActorStream : IStream
                 {
                     await PublishToStreamAsync(binding.TargetStreamId, forwarded);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
+                    publishFailures ??= [];
+                    publishFailures.Add(ex);
                     _logger.LogWarning(
                         ex,
                         "Orleans stream relay publish failed. source={SourceStreamId}, target={TargetStreamId}",
@@ -181,6 +188,13 @@ internal sealed class OrleansActorStream : IStream
                         binding.TargetStreamId);
                 }
             }
+        }
+
+        if (publishFailures is { Count: > 0 })
+        {
+            throw new AggregateException(
+                "One or more Orleans stream relay publishes failed.",
+                publishFailures);
         }
     }
 

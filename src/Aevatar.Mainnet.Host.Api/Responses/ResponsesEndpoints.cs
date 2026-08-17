@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -650,18 +651,18 @@ internal static partial class ResponsesApiEndpoints
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
-    /// <summary>OpenAI-spec `GET /v1/models`. Fans out across every NyxID-routed service the caller
-    /// can reach (gateway providers + proxy-plane LLM services) and returns the union, with
-    /// `vendor/model`-prefixed ids for non-gateway routes so the create handler can recover the
-    /// route via <see cref="ResponsesModelRouteParser"/>. Gateway models stay bare for back-compat
-    /// with existing callers that send plain `gpt-5.4` / `claude-3-5-sonnet-...`.</summary>
+    /// <summary>OpenAI-compatible `GET /v1/models`. Reads the caller scope's effective model
+    /// catalog policy projection and returns its explicit model IDs as exact
+    /// `service-slug/model-id` routes.</summary>
     internal static async Task<IResult> HandleListModelsAsync(
         HttpContext http,
-        [FromServices] IResponsesModelsAggregator aggregator,
+        [FromServices] ILLMModelDiscoveryApplicationService modelDiscoveryService,
+        [FromServices] IResponsesCallerScopeResolver callerScopeResolver,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
-        ArgumentNullException.ThrowIfNull(aggregator);
+        ArgumentNullException.ThrowIfNull(modelDiscoveryService);
+        ArgumentNullException.ThrowIfNull(callerScopeResolver);
 
         var bearerToken = ExtractBearerToken(http);
         if (string.IsNullOrWhiteSpace(bearerToken))
@@ -672,7 +673,47 @@ internal static partial class ResponsesApiEndpoints
                 "Authorization bearer token is required.");
         }
 
-        var entries = await aggregator.AggregateAsync(bearerToken, ct).ConfigureAwait(false);
-        return Results.Json(new ResponsesModelsListResponse { Data = entries });
+        try
+        {
+            var callerScope = await callerScopeResolver
+                .ResolveAsync(BuildCallerScopeResolutionContext(http, bearerToken), ct)
+                .ConfigureAwait(false);
+            var models = await modelDiscoveryService
+                .ListModelsAsync(callerScope.ScopeId, ct)
+                .ConfigureAwait(false);
+            var entries = models.Select(static model => new ResponsesModelEntry
+            {
+                Id = model.Id,
+                Created = model.Created,
+                OwnedBy = model.OwnedBy,
+                Group = model.Group,
+                ContextLength = model.ContextLength,
+                MaxOutputTokens = model.MaxOutputTokens,
+                DisplayName = model.DisplayName,
+                Description = model.Description,
+            }).ToArray();
+            return Results.Json(new ResponsesModelsListResponse { Data = entries });
+        }
+        catch (ResponsesCallerScopeUnavailableException ex)
+        {
+            return ToErrorResult(
+                StatusCodes.Status401Unauthorized,
+                "authentication_failed",
+                ex.Message);
+        }
+        catch (LLMModelCatalogApplicationException ex)
+        {
+            if (ex.Kind == LLMModelCatalogApplicationErrorKind.AuthenticationRejected)
+            {
+                return ToErrorResult(
+                    StatusCodes.Status401Unauthorized,
+                    "authentication_failed",
+                    "NyxID rejected the caller authentication.");
+            }
+            return ToErrorResult(
+                StatusCodes.Status503ServiceUnavailable,
+                "model_catalog_unavailable",
+                "The model catalog is temporarily unavailable.");
+        }
     }
 }

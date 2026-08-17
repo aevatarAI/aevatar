@@ -30,6 +30,7 @@ using Aevatar.BackendConsole.Hosting;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Configuration;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Application.AgentProfiles;
@@ -62,6 +63,7 @@ using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.ManagedCodex;
+using Aevatar.Mainnet.Host.Api.ModelCatalog;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.ProjectionRecovery;
 using Aevatar.Mainnet.Host.Api.Responses;
@@ -74,6 +76,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -102,7 +105,7 @@ public static class MainnetHostBuilderExtensions
         "AgentToolAdmission:KeyPrefix";
     internal const string DefaultAgentToolAdmissionKeyPrefix =
         "aevatar:mainnet:agent-tool-admission:v1:";
-    private const string NyxIdAuthorityKey = "Aevatar:NyxId:Authority";
+    private const string NyxIdApiBaseUrlKey = "Aevatar:NyxId:ApiBaseUrl";
     private const string DeviceInboundDirectExternalEventTypeUrl =
         "type.googleapis.com/aevatar.gagents.household.DeviceInbound";
 
@@ -149,6 +152,13 @@ public static class MainnetHostBuilderExtensions
             // Secrets must come from AEVATAR_-prefixed environment variables;
             // Set/Remove on the secrets store will throw at the call site.
             options.AllowLocalFileSecretsStore = false;
+        });
+        builder.Services.PostConfigure<WorkflowDefinitionFileSourceOptions>(options =>
+        {
+            if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+            {
+                options.SkipSourceCredentialRequiredDefinitionsOnStartup = true;
+            }
         });
         builder.AddAevatarHostObservability("Aevatar.Mainnet.Host.Api");
         builder.AddMainnetDistributedOrleansHost();
@@ -291,26 +301,10 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.Services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
-        builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
         //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
         //   New principle: Resolve model route from the current catalog read in the request flow; do not store user route facts in singleton process memory.
         builder.Services.TryAddSingleton<IResponsesRouteResolver, ResponsesRouteResolver>();
-        builder.Services.Configure<ResponsesModelMetadataFallbackOptions>(options =>
-        {
-            // Bind a flat slug-or-slug/model → fallback dictionary from
-            // `Aevatar:Responses:ModelMetadataFallbacks` directly so deployments can
-            // express it with the natural shape `{slug: {context_length, ...}}` instead
-            // of the wrapped `{Entries: {…}}` shape that automatic-binding would force.
-            var section = builder.Configuration.GetSection(ResponsesModelMetadataFallbackOptions.SectionName);
-            foreach (var entry in section.GetChildren())
-            {
-                if (string.IsNullOrWhiteSpace(entry.Key)) continue;
-                var fallback = entry.Get<ResponsesModelMetadataFallback>();
-                if (fallback is null) continue;
-                options.Entries[entry.Key] = fallback;
-            }
-        });
         builder.Services.AddHttpClient();
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesUserSkillsToolProvider>());
@@ -346,19 +340,8 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChronoSandboxCodexExecution(
             builder.Configuration,
             builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"));
-        builder.Services.AddNyxIdTools(o =>
+        builder.Services.AddNyxIdTools(builder.Configuration, o =>
         {
-            // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
-            // non-empty value; an absent/empty config key must NOT clobber the default to null.
-            var nyxTransportBaseUrl = FirstConfiguredValue(
-                builder.Configuration,
-                "Aevatar:NyxId:InternalApiBaseUrl",
-                "Aevatar:NyxId:ApiBaseUrl",
-                "Aevatar:NyxId:Authority",
-                "Cli:App:NyxId:Authority",
-                "Aevatar:Authentication:Authority");
-            if (nyxTransportBaseUrl is not null)
-                o.BaseUrl = nyxTransportBaseUrl;
             // SSH-backed tools are disabled unless the deployment opts in explicitly.
             // Even when exposed, their contract always requires a durable actor-owned grant.
             if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
@@ -498,13 +481,9 @@ public static class MainnetHostBuilderExtensions
         builder.Services.Replace(ServiceDescriptor.Singleton(new WebToolOptions
         {
             NyxIdBaseUrl = FirstConfiguredValue(
-                builder.Configuration,
-                "Aevatar:Web:NyxIdBaseUrl",
-                "Aevatar:NyxId:InternalApiBaseUrl",
-                "Aevatar:NyxId:ApiBaseUrl",
-                "Aevatar:NyxId:Authority",
-                "Cli:App:NyxId:Authority",
-                "Aevatar:Authentication:Authority"),
+                    builder.Configuration,
+                    "Aevatar:Web:NyxIdBaseUrl")
+                ?? NyxIdEndpointResolver.ResolvePublicApiBaseUrl(builder.Configuration),
             // Mainnet Milestone 40 has one admitted search capability. Stale deployment
             // overrides must not silently route the mounted web_search tool to another service.
             NyxIdSearchSlug = "tavily-search",
@@ -605,12 +584,14 @@ public static class MainnetHostBuilderExtensions
         app.MapNyxIdChatPublicEndpoints();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
+        app.MapLLMModelCatalogEndpoints();
         app.MapAgentProfileEndpoints();
         app.MapDefaultVoiceAgentEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();
         app.MapAutoConsoleCallbackEndpoints();
         app.MapAdminConsoleEndpoints();
+        app.MapDeliveryConsoleEndpoints();
         app.MapCqrsObservatoryPageEndpoints();
         app.MapCqrsObservatoryApiEndpoints();
         app.MapStreamingProxyEndpoints();
@@ -652,15 +633,15 @@ public static class MainnetHostBuilderExtensions
         if (!string.IsNullOrWhiteSpace(builder.Configuration[audienceKey]))
             return;
 
-        // NyxID access tokens use its public authority/BASE_URL as their audience. Identity assertions use
+        // NyxID access tokens use its public API BASE_URL as their audience. Identity assertions use
         // a separate audience and must not be reused for bearer-token validation.
-        var nyxIdAuthority = builder.Configuration[NyxIdAuthorityKey];
-        if (string.IsNullOrWhiteSpace(nyxIdAuthority))
+        var nyxIdApiBaseUrl = builder.Configuration[NyxIdApiBaseUrlKey];
+        if (string.IsNullOrWhiteSpace(nyxIdApiBaseUrl))
             return;
 
         builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            [audienceKey] = nyxIdAuthority.Trim(),
+            [audienceKey] = nyxIdApiBaseUrl.Trim(),
         });
     }
 

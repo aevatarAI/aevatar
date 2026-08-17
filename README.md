@@ -73,6 +73,10 @@ curl -X POST http://localhost:5100/api/chat \
 - 使用 `Aevatar.Workflow.Sdk` 可快速接入 `/api/chat` 流式调用与 `resume/signal`。
 - 接入文档见：`docs/SDK_WORKFLOW_CHAT_DOTNET.md`。
 
+### NyxID 部署端点
+
+Mainnet 部署必须配置 NyxID 的两类公开地址：`Aevatar:NyxId:Authority` 只用于公开 OIDC issuer/discovery，`Aevatar:NyxId:ApiBaseUrl` 用于控制面 REST、LLM gateway、浏览器和 webhook 地址。`Aevatar:NyxId:InternalApiBaseUrl` 只用于 `/api/v1/proxy/s/*` 与 `/api/v1/ssh/*` 执行流量；Mainnet 默认使用公网，只有同时显式设置 `Aevatar:NyxId:EnableInternalApiTransport=true` 和合法的 internal URL 才启用内网 transport。控制面请求（包括 `/user-services`、`/keys` 和 `/api-keys/scope-plan`）始终走 `ApiBaseUrl`。执行请求在内网目标明确尚未建立连接时会改走 `ApiBaseUrl` 重试一次；此外，仅 `GET/HEAD/OPTIONS` 在内网响应头等待超过 `Aevatar:NyxId:InternalApiFallbackTimeoutSeconds`（默认 5 秒）时可向公网重放一次。mutation 超时、TLS、连接重置、调用方取消、重定向、任意 HTTP 响应，以及已收到响应头后的 body 读取失败都不会触发重放。完整配置与降级语义见 [NyxID LLM Provider 集成指南](docs/canon/nyxid-llm-integration.md#aevatar-端配置管理员)。
+
 ---
 
 ## 架构一眼看懂（多 Agent 协作 + YAML 编排）

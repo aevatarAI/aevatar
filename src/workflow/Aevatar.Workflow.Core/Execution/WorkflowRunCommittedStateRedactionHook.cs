@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Workflow.Core.Modules;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core.Execution;
@@ -34,6 +35,12 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
                 stateEvent.State = Any.Pack(RedactConnectorCallState(connectorState));
                 context.Published.StateEvent.EventData = Any.Pack(stateEvent);
             }
+            else if (stateEvent.State?.Is(ToolCallModuleState.Descriptor) == true)
+            {
+                var toolCallState = stateEvent.State.Unpack<ToolCallModuleState>() ?? new ToolCallModuleState();
+                stateEvent.State = Any.Pack(RedactToolCallState(toolCallState));
+                context.Published.StateEvent.EventData = Any.Pack(stateEvent);
+            }
         }
 
         if (context.Published.StateEvent?.EventData?.Is(WorkflowRunExecutionStartedEvent.Descriptor) == true)
@@ -56,6 +63,7 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
             state.Initiator.BindingId = string.Empty;
         RedactSecureInputExecutionState(state);
         RedactConnectorCallExecutionState(state);
+        RedactToolCallExecutionState(state);
 
         context.Published.StateRoot = Any.Pack(state);
         return Task.CompletedTask;
@@ -101,6 +109,40 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
             coordination.MaterialReference = null;
             coordination.CompletionReference = null;
         }
+        return redacted;
+    }
+
+    private static void RedactToolCallExecutionState(WorkflowRunState state)
+    {
+        foreach (var pair in state.ExecutionStates.ToList())
+        {
+            if (!pair.Value.Is(ToolCallModuleState.Descriptor))
+                continue;
+
+            var toolCallState = pair.Value.Unpack<ToolCallModuleState>() ?? new ToolCallModuleState();
+            state.ExecutionStates[pair.Key] = Any.Pack(RedactToolCallState(toolCallState));
+        }
+    }
+
+    private static ToolCallModuleState RedactToolCallState(ToolCallModuleState source)
+    {
+        var redacted = source.Clone();
+        ToolCallModule.ScrubLegacyPayloadFields(redacted);
+        foreach (var pending in redacted.PendingApprovals.Values)
+        {
+            pending.ProtectedMaterialReference = null;
+            pending.ProtectedMaterialDigestSha256 = string.Empty;
+        }
+
+        foreach (var pending in redacted.PendingExecutions.Values)
+        {
+            pending.ProtectedMaterialReference = null;
+            pending.ProtectedMaterialDigestSha256 = string.Empty;
+        }
+
+        foreach (var completion in redacted.Completions)
+            completion.ProtectedMaterialReference = null;
+
         return redacted;
     }
 

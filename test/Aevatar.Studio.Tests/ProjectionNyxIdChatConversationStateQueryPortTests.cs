@@ -51,19 +51,6 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         result.Snapshot.ActiveTask.PlanRevision.Should().Be(2);
         result.Snapshot.ActiveTask.PlanRevisionHistoryStart.Should().Be(1);
         result.Snapshot.ActiveTask.Title.Should().Be("Update GitHub safely");
-        result.Snapshot.ActiveTask.Gate.Should().NotBeNull();
-        var gate = result.Snapshot.ActiveTask.Gate!;
-        gate.Mode.Should().Be("confirm");
-        gate.Reason.Should().Be("The plan contains an effect-capable operation.");
-        gate.Status.Should().Be("pending");
-        gate.RequestId.Should().Be("plan-gate-alpha");
-        gate.TaskId.Should().Be("task-alpha");
-        gate.PlanId.Should().Be("plan-alpha");
-        gate.PlanRevision.Should().Be(2);
-        var gateAdmission = gate.Admissions.Should().ContainSingle().Which;
-        gateAdmission.ActionRequestId.Should().Be("action-alpha");
-        gateAdmission.Action.Should().Be("service.connect");
-        gateAdmission.ActionParamsSha256.Should().Equal([1, 2, 3, 4]);
         result.Snapshot.ActiveTask.PlanRevisions.Should().NotBeNull();
         result.Snapshot.ActiveTask.PlanRevisions!.Select(static revision =>
                 (revision.PlanRevision, revision.RevisionCause))
@@ -120,11 +107,20 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             new NyxIdChatCanaryEffectFaultSnapshot(
                 "arm-alpha",
                 "forwarded",
-                "turn-alpha",
-                "task-alpha",
-                "step-alpha",
-                "operation-alpha",
-                1,
+                new NyxIdChatCanaryOperationSnapshot(
+                    "conversation-alpha",
+                    "turn-source",
+                    "task-source",
+                    "step-source",
+                    "operation-source",
+                    1),
+                new NyxIdChatCanaryOperationSnapshot(
+                    "conversation-alpha",
+                    "turn-alpha",
+                    "task-alpha",
+                    "step-alpha",
+                    "operation-alpha",
+                    1),
                 DateTimeOffset.Parse("2026-08-01T12:15:00Z"),
                 DateTimeOffset.Parse("2026-08-01T12:00:00Z"),
                 DateTimeOffset.Parse("2026-08-01T12:01:00Z"),
@@ -199,6 +195,38 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         rotateParams.KeyId.Should().Be("key-predecessor");
         rotateParams.Name.Should().BeNull();
         rotateParams.AllowedServiceIds.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldExposeReloadableServiceAccessReviewParameters()
+    {
+        var document = BuildDocument(stateVersion: 8);
+        var review = document.PendingActions.Single();
+        review.Action = "service.access_review";
+        review.Request.Action = "service.access_review";
+        review.Request.Params = new NyxIdChatConversationActionParamsDocument
+        {
+            ServiceAccessReview = new NyxIdChatConversationServiceAccessReviewDocument
+            {
+                UserServiceId = "user-service-alpha",
+                ServiceSlug = "api-github",
+                ResourceUri = "https://nyx-api.example/s/api-github",
+            },
+        };
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(
+            new RecordingReader { Document = document });
+
+        var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
+            "scope-alpha",
+            "conversation-alpha"));
+
+        var request = result.Snapshot!.PendingActions.Single().Request!;
+        request.Action.Should().Be("service.access_review");
+        request.Params.ServiceAccessReview.Should().BeEquivalentTo(
+            new NyxIdChatServiceAccessReviewSnapshot(
+                "user-service-alpha",
+                "api-github",
+                "https://nyx-api.example/s/api-github"));
     }
 
     [Fact]
@@ -419,11 +447,24 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
         {
             ArmId = "arm-alpha",
             Status = "forwarded",
-            TurnId = "turn-alpha",
-            TaskId = "task-alpha",
-            StepId = "step-alpha",
-            OperationId = "operation-alpha",
-            OperationGeneration = 1,
+            SourceOperation = new NyxIdChatConversationCanaryOperationDocument
+            {
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-source",
+                TaskId = "task-source",
+                StepId = "step-source",
+                OperationId = "operation-source",
+                OperationGeneration = 1,
+            },
+            TargetOperation = new NyxIdChatConversationCanaryOperationDocument
+            {
+                ConversationActorId = "conversation-alpha",
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                OperationId = "operation-alpha",
+                OperationGeneration = 1,
+            },
             ExpiresAt = Timestamp.FromDateTimeOffset(
                 DateTimeOffset.Parse("2026-08-01T12:15:00Z")),
             ArmedAt = Timestamp.FromDateTimeOffset(
@@ -458,26 +499,6 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
             PlanRevision = 2,
             PlanRevisionHistoryStart = 1,
             Title = "Update GitHub safely",
-            Gate = new NyxIdChatConversationPlanGateDocument
-            {
-                Mode = "confirm",
-                Reason = "The plan contains an effect-capable operation.",
-                Status = "pending",
-                RequestId = "plan-gate-alpha",
-                TaskId = "task-alpha",
-                PlanId = "plan-alpha",
-                PlanRevision = 2,
-                Admissions =
-                {
-                    new NyxIdChatConversationPlanOperationAdmissionDocument
-                    {
-                        ActionRequestId = "action-alpha",
-                        Action = "service.connect",
-                        ActionParamsSha256 = Google.Protobuf.ByteString.CopyFrom(
-                            [1, 2, 3, 4]),
-                    },
-                },
-            },
             PlanRevisions =
             {
                 new NyxIdChatConversationPlanRevisionDocument

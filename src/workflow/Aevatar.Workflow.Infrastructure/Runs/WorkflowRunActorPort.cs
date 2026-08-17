@@ -713,7 +713,7 @@ internal sealed class WorkflowRunActorPort :
             if (!boundHasRevisionId)
                 throw new WorkflowCapabilityAdmissionRebindRequiredException();
 
-            if (!requestedRequiresIdentity ||
+            if ((boundRequiresIdentity && !requestedRequiresIdentity) ||
                 !string.Equals(binding.WorkflowId, definition.WorkflowId, StringComparison.Ordinal) ||
                 !string.Equals(binding.RevisionId, definition.RevisionId, StringComparison.Ordinal))
             {

@@ -52,6 +52,39 @@ public sealed class UserSkillRunServiceTests
         dispatch.Request.CallerCredential.Should().BeSameAs(callerCredential);
         dispatch.Request.CallerCredential!.NyxIdAuthority!.ExternalUserId.Should().Be("nyx-user-alpha");
         dispatch.Request.CallerCredential.NyxIdAuthority.BindingId.Should().Be("binding-alpha");
+        dispatch.Request.CommandIdSeed.Should().MatchRegex("^[0-9a-f]{32}$");
+        dispatch.Request.CorrelationIdSeed.Should().Be(dispatch.Request.CommandIdSeed);
+    }
+
+    [Fact]
+    public async Task InvokeOnceAsync_ShouldUseDistinctCommandIdentityForEachInvocation()
+    {
+        var dispatch = new RecordingWorkflowChatDispatch();
+        var service = new UserSkillRunService(
+            new RecordingRemoteSkillFetcher(WorkflowSkill()),
+            dispatch,
+            new UnusedScheduleProvisioningPort(),
+            new NoOpSkillWorkflowConfirmationPort());
+        var callerCredential = SourceReadableCallerCredential();
+
+        await service.InvokeOnceAsync(
+            "skill-alpha",
+            callerCredential,
+            "scope-alpha",
+            "first run",
+            CancellationToken.None);
+        var firstCommandIdentity = dispatch.Request!.CommandIdSeed;
+
+        await service.InvokeOnceAsync(
+            "skill-alpha",
+            callerCredential,
+            "scope-alpha",
+            "second run",
+            CancellationToken.None);
+
+        dispatch.Request!.CommandIdSeed.Should().MatchRegex("^[0-9a-f]{32}$");
+        dispatch.Request.CommandIdSeed.Should().NotBe(firstCommandIdentity);
+        dispatch.Request.CorrelationIdSeed.Should().Be(dispatch.Request.CommandIdSeed);
     }
 
     [Fact]

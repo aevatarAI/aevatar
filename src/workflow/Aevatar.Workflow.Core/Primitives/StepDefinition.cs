@@ -36,6 +36,11 @@ public sealed class StepDefinition
     public ExternalWorkflowCapabilitySelector? Capability { get; init; }
 
     /// <summary>
+    /// Static structured projection applied to an admitted tool response before durable persistence.
+    /// </summary>
+    public WorkflowToolResponseProjection? ResponseProjection { get; init; }
+
+    /// <summary>
     /// Typed deterministic transform operation for bounded numeric, grouping, and template transforms.
     /// </summary>
     public TransformOperationSpec? TransformOperation { get; init; }

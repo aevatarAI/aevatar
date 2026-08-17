@@ -68,6 +68,11 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             bindDefinitionEvent.CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone();
         }
 
+        var canonicalNext = ApplyBindWorkflowDefinition(State, bindDefinitionEvent);
+        canonicalNext.Version = State.Version;
+        if (canonicalNext.Equals(State))
+            return;
+
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
     }
 
@@ -165,7 +170,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             if (!hasExistingRevisionId)
                 throw new WorkflowCapabilityAdmissionRebindRequiredException();
 
-            if (!requestedRequiresExplicitIdentity ||
+            if ((existingRequiresExplicitIdentity && !requestedRequiresExplicitIdentity) ||
                 !string.Equals(State.WorkflowId, workflowId, StringComparison.Ordinal) ||
                 !string.Equals(State.RevisionId, revisionId, StringComparison.Ordinal))
             {

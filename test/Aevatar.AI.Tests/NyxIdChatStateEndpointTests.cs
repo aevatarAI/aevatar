@@ -3,11 +3,13 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
@@ -97,6 +99,12 @@ public sealed class NyxIdChatStateEndpointTests
                 ServiceId = "connected-service-alpha",
                 ReadinessCapabilityId = "readiness-capability-alpha",
                 ProviderResourceId = "repository-alpha",
+                Presentation = ToolPresentationDescriptors.Skill(
+                    "repository_update",
+                    "Repository maintenance",
+                    "Update the exact repository.",
+                    "repository-maintenance",
+                    "remote"),
             },
         };
         task.Steps[1].Kind = NyxIdChatStepKind.Postcondition;
@@ -187,8 +195,10 @@ public sealed class NyxIdChatStateEndpointTests
             .Should().Be(0, "a present all-false message remains a present empty object");
         currentTask["steps"]![1]!.AsObject().ContainsKey("availableActions").Should().BeFalse(
             "an absent message remains absent");
-        currentTask["steps"]![1]!["operation"]!.AsObject().Count.Should().Be(0,
-            "a present empty operation remains a present empty object");
+        var defaultOperation = currentTask["steps"]![1]!["operation"]!.AsObject();
+        defaultOperation.Count.Should().Be(1,
+            "a present operation always exposes its external-state classification");
+        defaultOperation["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
         currentTask["steps"]![0]!.AsObject().ContainsKey("retryInputRebuildable")
             .Should().BeFalse();
         currentTask["steps"]![0]!["operation"]!.AsObject().ContainsKey("idempotencyKey")
@@ -212,6 +222,14 @@ public sealed class NyxIdChatStateEndpointTests
         currentTask.ToJsonString().Should().NotContain("user-service-sensitive-alpha");
         currentTask["steps"]![0]!["source"]!["tool"]!["providerResourceId"]!
             .GetValue<string>().Should().Be("repository-alpha");
+        var presentation = currentTask["steps"]![0]!["source"]!["tool"]!["presentation"]!;
+        presentation["invocationName"]!.GetValue<string>().Should().Be("repository_update");
+        presentation["displayName"]!.GetValue<string>().Should().Be("Repository maintenance");
+        presentation["kind"]!.GetValue<string>().Should().Be("skill");
+        presentation["availability"]!.GetValue<string>().Should().Be("available");
+        presentation["skill"]!["skillName"]!.GetValue<string>().Should()
+            .Be("repository-maintenance");
+        presentation["skill"]!["source"]!.GetValue<string>().Should().Be("remote");
         currentTask["steps"]![1]!["source"]!["postcondition"]!["providerResourceId"]!
             .GetValue<string>().Should().Be("repository-alpha");
         currentTask["schemaVersion"]!.GetValue<int>().Should().Be(6);
@@ -485,7 +503,7 @@ public sealed class NyxIdChatStateEndpointTests
                     2,
                     "tool",
                     "failed",
-                    true,
+                    false,
                     "Read repository.",
                     false,
                     "not_applied",
@@ -496,23 +514,30 @@ public sealed class NyxIdChatStateEndpointTests
                     false,
                     new NyxIdChatAvailableActionsSnapshot(true, false, false),
                     null,
-                    null,
+                    new NyxIdChatConversationOperationSnapshot(
+                        ConversationActorId: "conversation-alpha",
+                        TurnId: "turn-alpha",
+                        TaskId: "task-alpha",
+                        StepId: "step-beta",
+                        OperationId: "operation-beta",
+                        OperationGeneration: 1,
+                        Kind: "tool",
+                        Phase: "failed",
+                        MayChangeExternalState: false,
+                        Idempotent: false,
+                        LatestProgressSequence: 0,
+                        TerminalCode: "TOOL_FAILED",
+                        SafeMessage: "The tool failed.",
+                        RequestedAt: null,
+                        DispatchedAt: null,
+                        CompletedAt: null),
                     new NyxIdChatConversationStepSourceSnapshot(
                         Tool: new NyxIdChatToolStepSourceSnapshot(
                             "repository_read",
                             "service-slug-beta",
                             "connected-service-beta",
                             null))),
-            ],
-            Gate: new NyxIdChatConversationPlanGateSnapshot(
-                "confirm",
-                "Review the complete plan.",
-                "pending",
-                "gate-alpha",
-                "task-alpha",
-                1,
-                null,
-                "plan-alpha"));
+            ]);
         var queryPort = new RecordingQueryPort
         {
             Result = NyxIdChatConversationStateQueryResult.Current(new NyxIdChatConversationStateSnapshot(
@@ -562,12 +587,11 @@ public sealed class NyxIdChatStateEndpointTests
         json.RootElement.GetProperty("turnId").GetString().Should().Be("turn-alpha");
         json.RootElement.GetProperty("snapshot").GetProperty("actorId").GetString()
             .Should().Be("conversation-alpha");
-        var gate = json.RootElement
+        json.RootElement
             .GetProperty("snapshot")
             .GetProperty("activeTask")
-            .GetProperty("gate");
-        gate.GetProperty("mode").GetString().Should().Be("confirm");
-        gate.GetProperty("status").GetString().Should().Be("pending");
+            .TryGetProperty("gate", out _)
+            .Should().BeFalse();
         var pendingApproval = json.RootElement
             .GetProperty("snapshot")
             .GetProperty("pendingApproval");
@@ -594,6 +618,14 @@ public sealed class NyxIdChatStateEndpointTests
             .GetProperty("source")
             .GetProperty("tool");
         sourceWithoutReadiness.TryGetProperty("readinessCapabilityId", out _).Should().BeFalse();
+        var optionalReadStep = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("activeTask")
+            .GetProperty("steps")[1];
+        optionalReadStep.GetProperty("required").GetBoolean().Should().BeFalse();
+        optionalReadStep.GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
+        optionalReadStep.GetProperty("operation")
+            .GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
     }
 
     [Fact]
@@ -685,6 +717,71 @@ public sealed class NyxIdChatStateEndpointTests
             .Should().Equal("keyId");
         rotateParams.TryGetProperty("keyRotate", out _).Should().BeFalse();
         response.Body.Should().NotContain("fullKey").And.NotContain("keyMaterial");
+    }
+
+    [Fact]
+    public async Task GetState_ServiceConnectRequest_ShouldOmitUnsetOptionalTypedParameters()
+    {
+        var serviceConnect = new NyxIdChatActionSnapshot(
+            4,
+            "action-service-connect",
+            "turn-alpha",
+            "task-alpha",
+            "step-service-connect",
+            "service.connect",
+            DateTimeOffset.Parse("2026-08-14T01:00:00Z"),
+            [],
+            null,
+            new NyxIdChatActionRequestSnapshot(
+                4,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-service-connect",
+                "action-service-connect",
+                "service.connect",
+                new NyxIdChatActionParamsSnapshot(
+                    CatalogService: new NyxIdChatCatalogServiceConnectSnapshot(
+                        "github",
+                        ["repo:read"],
+                        ViaNodeId: null,
+                        TargetOrgId: null))));
+        var queryPort = new RecordingQueryPort
+        {
+            Result = NyxIdChatConversationStateQueryResult.Current(
+                new NyxIdChatConversationStateSnapshot(
+                    ActorId: "conversation-alpha",
+                    ScopeId: "scope-alpha",
+                    StateVersion: 12,
+                    ProgressSequence: 41,
+                    UpdatedAt: DateTimeOffset.Parse("2026-08-14T01:01:00Z"),
+                    ActiveTurn: null,
+                    LatestTurn: null,
+                    RecentTerminalTurns: [],
+                    ActiveTask: null,
+                    PendingApproval: null,
+                    PendingActions: [serviceConnect],
+                    ControlFence: null,
+                    LatestControlResult: null,
+                    ContinuationAdmission: null)),
+        };
+
+        var response = await ExecuteAsync(queryPort, string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(response.Body);
+        var catalogService = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("pendingActions")[0]
+            .GetProperty("request")
+            .GetProperty("params")
+            .GetProperty("catalogService");
+        catalogService.GetProperty("serviceSlug").GetString().Should().Be("github");
+        catalogService.GetProperty("requestedScopes").EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("repo:read");
+        catalogService.TryGetProperty("viaNodeId", out _).Should().BeFalse();
+        catalogService.TryGetProperty("targetOrgId", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -812,27 +909,6 @@ public sealed class NyxIdChatStateEndpointTests
             PlanId = "plan-alpha",
             PlanRevision = 2,
             Title = "Complete the requested assistant task",
-            Gate = new NyxIdChatPlanGate
-            {
-                Mode = NyxIdChatPlanGateMode.Confirm,
-                Reason = "Confirm the exact repository operation.",
-                Status = NyxIdChatPlanGateStatus.Pending,
-                RequestId = "plan-gate-alpha",
-                TaskId = "task-alpha",
-                PlanId = "plan-alpha",
-                PlanRevision = 2,
-                Admissions =
-                {
-                    new NyxIdChatPlanOperationAdmission
-                    {
-                        Key = operation.Key.Clone(),
-                        ToolCallId = "call-alpha",
-                        ToolName = "repository_update",
-                        ArgumentsSha256 = NyxIdChatPlanGateDecisions.HashArguments(
-                            "{\"repositoryId\":\"repo-alpha\"}"),
-                    },
-                },
-            },
             Steps =
             {
                 new NyxIdChatTaskStepState

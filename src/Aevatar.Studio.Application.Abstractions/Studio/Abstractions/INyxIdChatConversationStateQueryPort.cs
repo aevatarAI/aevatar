@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.Studio.Application.Studio.Abstractions;
 
@@ -126,15 +127,20 @@ public sealed record NyxIdChatConversationStateSnapshot(
 public sealed record NyxIdChatCanaryEffectFaultSnapshot(
     string ArmId,
     string Status,
-    string TurnId,
-    string TaskId,
-    string StepId,
-    string OperationId,
-    long OperationGeneration,
+    NyxIdChatCanaryOperationSnapshot SourceOperation,
+    NyxIdChatCanaryOperationSnapshot? TargetOperation,
     DateTimeOffset? ExpiresAt,
     DateTimeOffset? ArmedAt,
     DateTimeOffset? ForwardedAt,
     DateTimeOffset? ConsumedAt);
+
+public sealed record NyxIdChatCanaryOperationSnapshot(
+    string ConversationActorId,
+    string TurnId,
+    string TaskId,
+    string StepId,
+    string OperationId,
+    long OperationGeneration);
 
 public sealed record NyxIdChatConversationTurnSnapshot(
     string TurnId,
@@ -162,7 +168,6 @@ public sealed record NyxIdChatConversationTaskSnapshot(
     string? PlanId = null,
     int PlanRevision = 1,
     string? Title = null,
-    NyxIdChatConversationPlanGateSnapshot? Gate = null,
     IReadOnlyList<NyxIdChatConversationPlanRevisionSnapshot>? PlanRevisions = null,
     int PlanRevisionHistoryStart = 0,
     NyxIdChatTaskDomainSnapshot? Domain = null,
@@ -252,31 +257,6 @@ public sealed record NyxIdChatConversationPlanRevisionSnapshot(
     IReadOnlyList<string> AddedStepIds,
     IReadOnlyList<string> CancelledStepIds);
 
-public sealed record NyxIdChatConversationPlanGateSnapshot(
-    string Mode,
-    string? Reason,
-    string Status = "",
-    string? RequestId = null,
-    string? TaskId = null,
-    int PlanRevision = 0,
-    DateTimeOffset? DecidedAt = null,
-    string? PlanId = null,
-    IReadOnlyList<NyxIdChatConversationPlanOperationAdmissionSnapshot>? Admissions = null);
-
-public sealed record NyxIdChatConversationPlanOperationAdmissionSnapshot(
-    string? ConversationActorId,
-    string? TurnId,
-    string? TaskId,
-    string? StepId,
-    string? OperationId,
-    long OperationGeneration,
-    string? ToolCallId,
-    string? ToolName,
-    byte[] ArgumentsSha256,
-    string? ActionRequestId,
-    string? Action,
-    byte[] ActionParamsSha256);
-
 public sealed record NyxIdChatConversationStepSnapshot(
     string StepId,
     int Order,
@@ -352,7 +332,9 @@ public sealed record NyxIdChatToolStepSourceSnapshot(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? ReadinessCapabilityId,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? ProviderResourceId = null);
+    string? ProviderResourceId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ToolPresentationDescriptor? Presentation = null);
 
 public sealed record NyxIdChatBrowserActionStepSourceSnapshot(
     string Action,
@@ -547,6 +529,8 @@ public sealed record NyxIdChatActionParamsSnapshot(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     NyxIdChatCustomServiceConnectSnapshot? CustomService = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatServiceAccessReviewSnapshot? ServiceAccessReview = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? Name = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? Platform = null,
@@ -558,16 +542,26 @@ public sealed record NyxIdChatActionParamsSnapshot(
 public sealed record NyxIdChatCatalogServiceConnectSnapshot(
     string ServiceSlug,
     IReadOnlyList<string> RequestedScopes,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? ViaNodeId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? TargetOrgId);
 
 public sealed record NyxIdChatCustomServiceConnectSnapshot(
     string Name,
     string EndpointUrl,
     string AuthMethod,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? AuthKeyName,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? ViaNodeId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? TargetOrgId);
+
+public sealed record NyxIdChatServiceAccessReviewSnapshot(
+    string UserServiceId,
+    string ServiceSlug,
+    string ResourceUri);
 
 public sealed record NyxIdChatActionReportSnapshot(
     string ActionRequestId,

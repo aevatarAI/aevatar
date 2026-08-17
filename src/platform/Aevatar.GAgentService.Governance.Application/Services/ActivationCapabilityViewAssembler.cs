@@ -1,10 +1,10 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Services;
 
 namespace Aevatar.GAgentService.Governance.Application.Services;
 
@@ -41,7 +41,10 @@ public sealed class ActivationCapabilityViewAssembler : IActivationCapabilityVie
 
         var serviceKey = ServiceKeys.Build(identity);
         var catalog = await _catalogQueryReader.GetAsync(identity, ct)
-            ?? throw new InvalidOperationException($"Service definition '{serviceKey}' was not found.");
+            ?? throw new ActivationCapabilityViewNotReadyException(
+                serviceKey,
+                revisionId,
+                ActivationCapabilityViewProjection.ServiceCatalog);
         var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(identity, ct);
         var artifact = revisionCatalog.GetRequiredPreparedArtifact(identity, revisionId);
         var configuration = await _configurationQueryReader.GetAsync(identity, ct);

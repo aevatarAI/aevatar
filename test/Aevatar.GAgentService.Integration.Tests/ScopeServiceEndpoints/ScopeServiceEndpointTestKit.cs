@@ -691,15 +691,7 @@ public abstract class ScopeServiceEndpointTestKit
     {
         public RetireServiceRevisionCommand? RetireRevisionCommand { get; private set; }
 
-        public SetDefaultServingRevisionCommand? SetDefaultServingCommand { get; private set; }
-
         public ActivateServiceRevisionCommand? ActivateRevisionCommand { get; private set; }
-
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
-        {
-            SetDefaultServingCommand = command;
-            return Task.FromResult(new ServiceCommandAcceptedReceipt("service-actor", "cmd-default-serving", "corr-default-serving"));
-        }
 
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {
@@ -818,9 +810,14 @@ public abstract class ScopeServiceEndpointTestKit
 
         public FakeServiceRunQueryPort? LinkedQueryPort { get; set; }
 
+        public Exception? RegisterFailure { get; set; }
+
         public Task<ServiceRunRegistrationResult> RegisterAsync(ServiceRunRecord record, CancellationToken ct = default)
         {
             RegisterCalls.Add(record.Clone());
+            if (RegisterFailure != null)
+                return Task.FromException<ServiceRunRegistrationResult>(RegisterFailure);
+
             LinkedQueryPort?.Upsert(BuildSnapshot(record));
             return Task.FromResult(new ServiceRunRegistrationResult($"service-run:{record.ScopeId}:{record.ServiceId}:{record.RunId}", record.RunId));
         }

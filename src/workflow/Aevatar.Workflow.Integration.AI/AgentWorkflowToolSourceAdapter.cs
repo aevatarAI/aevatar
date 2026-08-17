@@ -44,6 +44,9 @@ public sealed class AgentWorkflowToolSourceAdapter(
 
         public string Name => _tool.Name;
 
+        public WorkflowToolRecoverySafety RecoverySafety =>
+            WorkflowToolRecoverySafety.DurableStartOnceRedispatch;
+
         public async Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ArgumentNullException.ThrowIfNull(request);

@@ -14,7 +14,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Hosting.Backfill;
 
-internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedService
+internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundService
 {
     private const int SourceReadTake = 10_000;
 
@@ -53,33 +53,40 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await Task.Yield();
+
+        await RunBackfillOnceAsync(stoppingToken);
+    }
+
+    internal async Task RunBackfillOnceAsync(CancellationToken cancellationToken)
     {
         // The backfill is convergence acceleration, not a boot invariant: the
         // event-driven projectors keep the catalogue converging regardless,
         // and a pod restart re-runs the backfill. It must therefore never
-        // abort host startup — during a rolling upgrade the first new-image
+        // fault the background service — during a rolling upgrade the first new-image
         // pod can hit actors an old-image silo cannot resolve
         // (UnknownAgentKindException, which additionally has no Orleans
-        // codec), and failing StartAsync here crash-loops the rollout.
+        // codec), and propagating that failure would stop the host.
         try
         {
-            await RunBackfillAsync(cancellationToken);
+            await RunBackfillCoreAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            throw;
+            return;
         }
         catch (Exception ex)
         {
             _logger.LogError(
                 ex,
-                "Scope workflow catalogue backfill failed; continuing host startup. " +
+                "Scope workflow catalogue backfill failed; background execution has stopped. " +
                 "Event-driven projections keep the catalogue converging and a pod restart re-runs the backfill.");
         }
     }
 
-    private async Task RunBackfillAsync(CancellationToken cancellationToken)
+    private async Task RunBackfillCoreAsync(CancellationToken cancellationToken)
     {
         var serviceCatalogs = await QueryAllAsync(_serviceCatalogReader, cancellationToken);
         var deploymentCatalogs = await QueryAllAsync(_deploymentCatalogReader, cancellationToken);
@@ -106,11 +113,11 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
             }
 
             if (!deploymentCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var deploymentCatalog) ||
-                ResolveActiveDeployment(deploymentCatalog) is not { } activeDeployment ||
+                ResolveDeployment(serviceCatalog, deploymentCatalog) is not { } deployment ||
                 !revisionCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var revisionCatalog) ||
                 !TryResolveWorkflowRevision(
                     revisionCatalog,
-                    activeDeployment.RevisionId,
+                    deployment.RevisionId,
                     serviceCatalog.ServiceId,
                     out var revision,
                     out var workflowId))
@@ -118,7 +125,7 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
                 continue;
             }
 
-            var serviceSource = ToServiceSource(serviceCatalog, deploymentCatalog, revision, activeDeployment, workflowId);
+            var serviceSource = ToServiceSource(serviceCatalog, deploymentCatalog, revision, deployment, workflowId);
             currentServiceSourceIds.Add(serviceSource.Id);
             await _catalogueWriteDispatcher.UpsertAsync(serviceSource, cancellationToken);
             await RefreshRowAsync(
@@ -203,8 +210,6 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
             staleServiceCount,
             staleDraftCount);
     }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     private static async Task<IReadOnlyList<TReadModel>> QueryAllAsync<TReadModel>(
         IProjectionDocumentReader<TReadModel, string> reader,
@@ -325,12 +330,48 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : IHostedServi
         }
     }
 
-    private static ServiceDeploymentReadModel? ResolveActiveDeployment(ServiceDeploymentCatalogReadModel deploymentCatalog) =>
-        deploymentCatalog.Deployments
-            .Where(static deployment => string.Equals(deployment.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal))
+    private static ServiceDeploymentReadModel? ResolveDeployment(
+        ServiceCatalogReadModel serviceCatalog,
+        ServiceDeploymentCatalogReadModel deploymentCatalog) =>
+        ResolveDefaultDeployment(deploymentCatalog.Deployments, serviceCatalog.DefaultServingRevisionId)
+        ?? ResolveActiveDeployment(deploymentCatalog.Deployments)
+        ?? ResolveFallbackDeployment(deploymentCatalog.Deployments);
+
+    private static ServiceDeploymentReadModel? ResolveDefaultDeployment(
+        IEnumerable<ServiceDeploymentReadModel> deployments,
+        string? defaultServingRevisionId)
+    {
+        if (string.IsNullOrWhiteSpace(defaultServingRevisionId))
+            return null;
+
+        return deployments
+            .Where(deployment => string.Equals(deployment.RevisionId, defaultServingRevisionId, StringComparison.Ordinal))
+            .OrderByDescending(static deployment => IsActiveDeployment(deployment))
+            .ThenByDescending(static deployment => ResolveDeploymentActivationTime(deployment))
+            .ThenByDescending(static deployment => deployment.UpdatedAt)
+            .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    private static ServiceDeploymentReadModel? ResolveActiveDeployment(IEnumerable<ServiceDeploymentReadModel> deployments) =>
+        deployments
+            .Where(static deployment => IsActiveDeployment(deployment))
+            .OrderByDescending(static deployment => ResolveDeploymentActivationTime(deployment))
+            .ThenByDescending(static deployment => deployment.UpdatedAt)
+            .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+    private static ServiceDeploymentReadModel? ResolveFallbackDeployment(IEnumerable<ServiceDeploymentReadModel> deployments) =>
+        deployments
             .OrderByDescending(static deployment => deployment.UpdatedAt)
             .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
             .FirstOrDefault();
+
+    private static bool IsActiveDeployment(ServiceDeploymentReadModel deployment) =>
+        string.Equals(deployment.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal);
+
+    private static DateTimeOffset ResolveDeploymentActivationTime(ServiceDeploymentReadModel deployment) =>
+        deployment.ActivatedAt ?? deployment.UpdatedAt;
 
     private static bool TryResolveWorkflowRevision(
         ServiceRevisionCatalogReadModel revisionCatalog,
