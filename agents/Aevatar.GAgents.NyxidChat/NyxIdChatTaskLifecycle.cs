@@ -39,11 +39,6 @@ public static class NyxIdChatTaskLifecycle
     public const string ConditionGuardMismatch = "NYXID_CHAT_CONDITION_GUARD_MISMATCH";
     public const string ConditionGuardedToolRequired =
         "NYXID_CHAT_CONDITION_GUARDED_TOOL_REQUIRED";
-    public const string DomainEvidenceInvalid = "NYXID_CHAT_DOMAIN_EVIDENCE_INVALID";
-    public const string DomainEvidenceSourceStale = "NYXID_CHAT_DOMAIN_EVIDENCE_SOURCE_STALE";
-    public const string DomainGuardMismatch = "NYXID_CHAT_DOMAIN_GUARD_MISMATCH";
-    public const string DomainCompletionEvidenceRequired =
-        "NYXID_CHAT_DOMAIN_COMPLETION_EVIDENCE_REQUIRED";
     public const string ServiceConnectCatalogRequired =
         "NYXID_CHAT_SERVICE_CONNECT_CATALOG_REQUIRED";
     public const string ServiceConnectToolInvalid =
@@ -79,14 +74,6 @@ public static class NyxIdChatTaskLifecycle
         "The proposed tool did not match the committed condition guard.";
     private const string ConditionGuardedToolRequiredMessage =
         "The true condition requires the exact guarded tool call.";
-    private const string DomainEvidenceInvalidMessage =
-        "The assistant returned invalid typed domain evidence.";
-    private const string DomainEvidenceSourceStaleMessage =
-        "The domain evidence did not reference the active committed user input.";
-    private const string DomainGuardMismatchMessage =
-        "The proposed tool did not match the committed domain evidence.";
-    private const string DomainCompletionEvidenceRequiredMessage =
-        "The domain journey must complete its guarded branch and verified artifact before ending.";
     private const string AuthorizationContinuationToolRequiredMessage =
         "The verified connected-service request did not invoke an available operation.";
     internal const string AuthorizationContinuationCapabilityUnavailableMessage =
@@ -199,17 +186,6 @@ public static class NyxIdChatTaskLifecycle
         }
 
         if (signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm &&
-            IsDomainCompletionEvidenceMissing(state))
-        {
-            return FailClosed(
-                state,
-                operationKey,
-                DomainCompletionEvidenceRequired,
-                DomainCompletionEvidenceRequiredMessage,
-                now);
-        }
-
-        if (signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm &&
             IsServiceConnectIntent(state) &&
             !verifiedAuthorizationCompletionCommunication &&
             !HasVerifiedServiceConnectedPostcondition(state))
@@ -258,7 +234,6 @@ public static class NyxIdChatTaskLifecycle
             NyxIdChatOperationResultSignal.ResultOneofCase.ToolVerification)
         {
             ApplyVerificationEvidence(next, normalizedSignal.ToolVerification, now);
-            ApplyDomainArtifactEvidence(next, normalizedSignal.ToolVerification, now);
         }
 
         NyxIdChatOperationDispatchCommand? successor = null;
@@ -505,44 +480,6 @@ public static class NyxIdChatTaskLifecycle
         if (NyxIdChatAskUserContract.IsAskUser(toolCall))
             return ApplyLlmInputPlan(state, signal, operationKey, currentStep, toolCall, now);
 
-        if (NyxIdChatDomainEvidenceContract.IsDomainEvidence(toolCall))
-            return ApplyLlmDomainEvidencePlan(
-                state,
-                signal,
-                operationKey,
-                currentStep,
-                toolCall,
-                now);
-
-        if (state.ActiveTask.Artifact is null &&
-            state.ActiveTask.Domain?.Reimbursement is { } reimbursement &&
-            !string.Equals(
-                toolCall.ToolName,
-                reimbursement.GuardedToolName,
-                StringComparison.Ordinal))
-        {
-            return FailClosed(
-                state,
-                operationKey,
-                DomainGuardMismatch,
-                DomainGuardMismatchMessage,
-                now);
-        }
-
-        if (state.ActiveTask.Artifact is null &&
-            state.ActiveTask.Domain?.CandidateScreening is not null &&
-            !state.ActiveTask.Steps.Any(static step =>
-                step.Kind == NyxIdChatStepKind.Condition) &&
-            !NyxIdChatConditionEvaluateContract.IsConditionEvaluate(toolCall))
-        {
-            return FailClosed(
-                state,
-                operationKey,
-                DomainGuardMismatch,
-                DomainGuardMismatchMessage,
-                now);
-        }
-
         if (NyxIdChatConditionEvaluateContract.IsConditionEvaluate(toolCall))
             return ApplyLlmConditionPlan(state, signal, operationKey, currentStep, toolCall, now);
 
@@ -669,172 +606,6 @@ public static class NyxIdChatTaskLifecycle
             command);
     }
 
-    private static NyxIdChatTaskLifecycleDecision ApplyLlmDomainEvidencePlan(
-        NyxIdChatConversationGAgentState state,
-        NyxIdChatOperationResultSignal signal,
-        NyxIdChatOperationKey operationKey,
-        NyxIdChatTaskStepState currentStep,
-        NyxIdChatToolCall toolCall,
-        Timestamp now)
-    {
-        var domain = new NyxIdChatTaskDomainState();
-        string sourceInputRequestId;
-        if (string.Equals(
-                toolCall.ToolName,
-                NyxIdChatDomainEvidenceContract.ReimbursementToolName,
-                StringComparison.Ordinal) &&
-            NyxIdChatDomainEvidenceContract.TryParseReimbursement(
-                toolCall.ArgumentsJson,
-                out var reimbursement))
-        {
-            reimbursement.EvidenceId = BuildStableIdentity(
-                "reimbursement-evidence",
-                operationKey.ConversationActorId,
-                operationKey.TurnId,
-                operationKey.TaskId,
-                currentStep.StepId,
-                toolCall.CallId);
-            reimbursement.CommittedAt = now.Clone();
-            sourceInputRequestId = reimbursement.SourceInputRequestId;
-            domain.Reimbursement = reimbursement;
-        }
-        else if (string.Equals(
-                     toolCall.ToolName,
-                     NyxIdChatDomainEvidenceContract.CandidateScreeningToolName,
-                     StringComparison.Ordinal) &&
-                 NyxIdChatDomainEvidenceContract.TryParseCandidateScreening(
-                     toolCall.ArgumentsJson,
-                     out var candidate))
-        {
-            candidate.EvidenceId = BuildStableIdentity(
-                "candidate-screening-evidence",
-                operationKey.ConversationActorId,
-                operationKey.TurnId,
-                operationKey.TaskId,
-                currentStep.StepId,
-                toolCall.CallId);
-            candidate.CommittedAt = now.Clone();
-            sourceInputRequestId = candidate.SourceInputRequestId;
-            domain.CandidateScreening = candidate;
-        }
-        else
-        {
-            return FailClosed(
-                state,
-                operationKey,
-                DomainEvidenceInvalid,
-                DomainEvidenceInvalidMessage,
-                now);
-        }
-
-        var inputStep = state.ActiveTask.Steps.SingleOrDefault(step =>
-            step.Kind == NyxIdChatStepKind.Input &&
-            step.Status == NyxIdChatStepStatus.Done &&
-            string.Equals(step.Source?.Input?.RequestId, sourceInputRequestId,
-                StringComparison.Ordinal));
-        var inputResolution = state.RecentInputResolutions.SingleOrDefault(candidate =>
-            string.Equals(candidate.RequestId, sourceInputRequestId, StringComparison.Ordinal));
-        if (state.ActiveTask.Domain is not null ||
-            inputStep is null ||
-            inputResolution?.Outcome != NyxIdChatNeedsYouResolutionOutcome.Accepted ||
-            !currentStep.DependsOn.Contains(inputStep.StepId, StringComparer.Ordinal) ||
-            domain.DomainCase == NyxIdChatTaskDomainState.DomainOneofCase.CandidateScreening &&
-            inputResolution.NumericThreshold is null)
-        {
-            return FailClosed(
-                state,
-                operationKey,
-                DomainEvidenceSourceStale,
-                DomainEvidenceSourceStaleMessage,
-                now);
-        }
-
-        var transition = NyxIdChatTaskTransitionPolicy.ReconcileOperation(state, signal);
-        if (transition.Outcome != NyxIdChatTransitionOutcome.Accepted)
-            return FromTransition(transition, nextCommand: null);
-
-        var next = transition.State.Clone();
-        StampReconciledState(next, operationKey, now);
-        next.ActiveTask.SchemaVersion = Math.Max(next.ActiveTask.SchemaVersion, 6);
-        next.ActiveTask.Domain = domain.Clone();
-        var order = next.ActiveTask.Steps.Max(static step => step.Order) + 1;
-        var stepId = BuildStableIdentity(
-            "step",
-            next.ConversationActorId,
-            operationKey.TurnId,
-            operationKey.TaskId,
-            currentStep.StepId,
-            toolCall.CallId,
-            order.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            "domain-continuation");
-        var key = new NyxIdChatOperationKey
-        {
-            ConversationActorId = next.ConversationActorId,
-            TurnId = operationKey.TurnId,
-            TaskId = operationKey.TaskId,
-            StepId = stepId,
-            OperationId = BuildStableIdentity(
-                "operation",
-                next.ConversationActorId,
-                operationKey.TurnId,
-                operationKey.TaskId,
-                stepId,
-                "1"),
-            OperationGeneration = 1,
-        };
-        var continuationStep = new NyxIdChatTaskStepState
-        {
-            StepId = stepId,
-            Order = order,
-            Kind = NyxIdChatStepKind.Llm,
-            Status = NyxIdChatStepStatus.Running,
-            Required = true,
-            Description = domain.DomainCase == NyxIdChatTaskDomainState.DomainOneofCase.Reimbursement
-                ? "Continue from committed reimbursement evidence."
-                : "Continue from committed candidate screening evidence.",
-            Source = new NyxIdChatStepSource { Llm = new NyxIdChatLLMStepSource() },
-            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
-            AddedBy = NyxIdChatStepAddedBy.Replan,
-            DependsOn = { currentStep.StepId, inputStep.StepId },
-            Operation = new NyxIdChatOperationState
-            {
-                Key = key.Clone(),
-                Kind = NyxIdChatStepKind.Llm,
-                Phase = NyxIdChatOperationPhase.Requested,
-                RequestedAt = now.Clone(),
-            },
-            UpdatedAt = now.Clone(),
-        };
-        continuationStep.AvailableActions =
-            NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(continuationStep);
-        next.ActiveTask.Steps.Add(continuationStep);
-        NyxIdChatPlanRevisions.CommitChange(
-            next.ActiveTask,
-            NyxIdChatPlanRevisionCause.ScopeResolution,
-            now,
-            [continuationStep]);
-        ActivateStep(next, continuationStep, now);
-        FinalizeDerivedState(next, now);
-        var continuation = new NyxIdChatDomainContinuationInput
-        {
-            ToolCallId = toolCall.CallId,
-        };
-        if (domain.DomainCase == NyxIdChatTaskDomainState.DomainOneofCase.Reimbursement)
-            continuation.Reimbursement = domain.Reimbursement.Clone();
-        else
-            continuation.CandidateScreening = domain.CandidateScreening.Clone();
-        return new NyxIdChatTaskLifecycleDecision(
-            transition.Outcome,
-            transition.ReasonCode,
-            transition.SafeMessage,
-            next,
-            new NyxIdChatOperationDispatchCommand
-            {
-                Key = key,
-                DomainContinuation = continuation,
-            });
-    }
-
     private static NyxIdChatTaskLifecycleDecision ApplyLlmConditionPlan(
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationResultSignal signal,
@@ -866,30 +637,6 @@ public static class NyxIdChatTaskLifecycle
         if (inputStep is null ||
             resolution?.NumericThreshold is null ||
             !currentStep.DependsOn.Contains(inputStep.StepId, StringComparer.Ordinal))
-        {
-            return FailClosed(
-                state,
-                operationKey,
-                ConditionSourceStale,
-                ConditionSourceStaleMessage,
-                now);
-        }
-
-        var candidateEvidence = state.ActiveTask.Domain?.CandidateScreening;
-        if (candidateEvidence is not null &&
-            (!string.Equals(
-                 proposal.SourceEvidenceId,
-                 candidateEvidence.EvidenceId,
-                 StringComparison.Ordinal) ||
-             !string.Equals(
-                 proposal.SourceInputRequestId,
-                 candidateEvidence.SourceInputRequestId,
-                 StringComparison.Ordinal) ||
-             proposal.ObservedValue != candidateEvidence.TotalScore ||
-             !string.Equals(
-                 proposal.GuardedToolName,
-                 candidateEvidence.GuardedToolName,
-                 StringComparison.Ordinal)))
         {
             return FailClosed(
                 state,
@@ -939,7 +686,6 @@ public static class NyxIdChatTaskLifecycle
             Outcome = outcome,
             EvaluatedAt = now.Clone(),
             GuardedToolName = proposal.GuardedToolName,
-            SourceEvidenceId = proposal.SourceEvidenceId ?? string.Empty,
         };
         var conditionStep = new NyxIdChatTaskStepState
         {
@@ -2183,113 +1929,6 @@ public static class NyxIdChatTaskLifecycle
             NyxIdChatTaskTransitionPolicy.RefreshTaskOutcome(state);
     }
 
-    private static void ApplyDomainArtifactEvidence(
-        NyxIdChatConversationGAgentState state,
-        NyxIdChatToolVerificationResult verification,
-        Timestamp now)
-    {
-        if (verification.Disposition != NyxIdChatToolVerificationDisposition.Applied ||
-            state.ActiveTask.Domain is null ||
-            state.ActiveTask.Artifact is not null)
-        {
-            return;
-        }
-
-        var effectStep = state.ActiveTask.Steps.SingleOrDefault(step =>
-            string.Equals(step.StepId, verification.EffectStepId, StringComparison.Ordinal));
-        var tool = effectStep?.Source?.Tool;
-        if (tool is null || string.IsNullOrWhiteSpace(tool.ProviderResourceId))
-            return;
-
-        var artifact = new NyxIdChatVerifiedArtifactState
-        {
-            CheckName = verification.CheckName,
-            VerifiedAt = now.Clone(),
-        };
-        switch (state.ActiveTask.Domain.DomainCase)
-        {
-            case NyxIdChatTaskDomainState.DomainOneofCase.Reimbursement:
-            {
-                var evidence = state.ActiveTask.Domain.Reimbursement;
-                if (!string.Equals(tool.ToolName, evidence.GuardedToolName,
-                        StringComparison.Ordinal))
-                {
-                    return;
-                }
-                artifact.Reimbursement = new NyxIdChatReimbursementArtifact
-                {
-                    ProviderInstanceId = tool.ProviderResourceId,
-                    CostCenter = evidence.CostCenter,
-                    RetainedItemCount = evidence.RetainedSourceOrdinals.Count,
-                    DuplicateItemCount = evidence.DuplicateInvoices.Count,
-                };
-                break;
-            }
-            case NyxIdChatTaskDomainState.DomainOneofCase.CandidateScreening:
-            {
-                var evidence = state.ActiveTask.Domain.CandidateScreening;
-                var threshold = state.RecentInputResolutions.SingleOrDefault(candidate =>
-                    string.Equals(
-                        candidate.RequestId,
-                        evidence.SourceInputRequestId,
-                        StringComparison.Ordinal))?.NumericThreshold;
-                if (!string.Equals(tool.ToolName, evidence.GuardedToolName,
-                        StringComparison.Ordinal) ||
-                    threshold is null)
-                {
-                    return;
-                }
-                artifact.CandidateTracker = new NyxIdChatCandidateTrackerArtifact
-                {
-                    ProviderRecordId = tool.ProviderResourceId,
-                    CandidateName = evidence.CandidateName,
-                    Score = evidence.TotalScore,
-                    Threshold = threshold.EffectiveValue,
-                    TrackerTable = evidence.TrackerTable,
-                    TrackerTableId = evidence.TrackerTableId,
-                    Stage = evidence.Stage,
-                };
-                break;
-            }
-            default:
-                return;
-        }
-
-        state.ActiveTask.SchemaVersion = Math.Max(state.ActiveTask.SchemaVersion, 6);
-        state.ActiveTask.Artifact = artifact;
-    }
-
-    private static bool IsDomainCompletionEvidenceMissing(
-        NyxIdChatConversationGAgentState state)
-    {
-        if (state.ActiveTask.Domain?.Reimbursement is not null)
-            return state.ActiveTask.Artifact?.Reimbursement is null;
-
-        var candidateEvidence = state.ActiveTask.Domain?.CandidateScreening;
-        if (candidateEvidence is null)
-            return false;
-        var conditions = state.ActiveTask.Steps
-            .Where(static step => step.Kind == NyxIdChatStepKind.Condition)
-            .Select(static step => step.Source?.Condition?.Condition)
-            .Where(candidate =>
-                candidate is not null &&
-                string.Equals(
-                    candidate.SourceEvidenceId,
-                    candidateEvidence.EvidenceId,
-                    StringComparison.Ordinal))
-            .ToArray();
-        if (conditions.Length != 1)
-            return true;
-        var condition = conditions[0];
-        return condition?.Outcome switch
-        {
-            NyxIdChatConditionOutcome.False => false,
-            NyxIdChatConditionOutcome.True =>
-                state.ActiveTask.Artifact?.CandidateTracker is null,
-            _ => true,
-        };
-    }
-
     private static NyxIdChatTaskLifecycleDecision ApplyRecoveredToolVerification(
         NyxIdChatConversationGAgentState state,
         NyxIdChatTaskStepState effectStep,
@@ -2358,7 +1997,6 @@ public static class NyxIdChatTaskLifecycle
             superseded is null ? [] : [superseded]);
 
         ApplyVerificationEvidence(next, verification, now, refreshTaskOutcome: false);
-        ApplyDomainArtifactEvidence(next, verification, now);
         next.ActiveTask.ActiveStepId = string.Empty;
         next.ActiveTask.ActiveOperationId = string.Empty;
         NyxIdChatTaskTransitionPolicy.RefreshTaskOutcome(next);
