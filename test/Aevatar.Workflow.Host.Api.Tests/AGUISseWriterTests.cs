@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Aevatar.AGUI.Contracts;
 using Aevatar.GAgentService.Hosting.Sse;
@@ -67,6 +68,47 @@ public sealed class AGUISseWriterTests
     }
 
     [Fact]
+    public async Task WriteAsync_WhileIdleAfterFrame_ShouldEmitKeepAliveHeartbeat()
+    {
+        var body = new KeepAliveSignalingStream();
+        var http = new DefaultHttpContext
+        {
+            Response = { Body = body },
+        };
+
+        await using var writer = new AGUISseWriter(
+            http.Response,
+            heartbeatInterval: TimeSpan.FromMilliseconds(20));
+        await writer.WriteAsync(
+            new AGUIEvent
+            {
+                RunStarted = new RunStartedEvent
+                {
+                    ThreadId = "thread-1",
+                    RunId = "run-1",
+                },
+            },
+            CancellationToken.None);
+
+        await body.KeepAliveSeen.WaitAsync(TimeSpan.FromSeconds(5));
+        body.KeepAliveSeen.IsCompletedSuccessfully.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WithoutWrite_ShouldNotThrow()
+    {
+        var http = new DefaultHttpContext
+        {
+            Response = { Body = new MemoryStream() },
+        };
+
+        var writer = new AGUISseWriter(http.Response);
+        var dispose = async () => await writer.DisposeAsync();
+
+        await dispose.Should().NotThrowAsync();
+    }
+
+    [Fact]
     public async Task WriteAsync_WithWorkflowRegistry_ShouldSerializeNestedWorkflowExecutionStatePayload()
     {
         var http = new DefaultHttpContext
@@ -130,5 +172,48 @@ public sealed class AGUISseWriterTests
             JsonValueKind.String => long.Parse(value.GetString()!, System.Globalization.CultureInfo.InvariantCulture),
             _ => throw new InvalidOperationException($"Unexpected timestamp JSON kind: {value.ValueKind}"),
         };
+    }
+
+    private sealed class KeepAliveSignalingStream : Stream
+    {
+        private const string KeepAliveMarker = ": keepalive";
+        private readonly MemoryStream _inner = new();
+        private readonly TaskCompletionSource _seen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task KeepAliveSeen => _seen.Task;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _inner.Length;
+        public override long Position
+        {
+            get => _inner.Position;
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await _inner.WriteAsync(buffer, cancellationToken);
+            Signal(Encoding.UTF8.GetString(buffer.Span));
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            _inner.Write(buffer, offset, count);
+            Signal(Encoding.UTF8.GetString(buffer, offset, count));
+        }
+
+        private void Signal(string written)
+        {
+            if (written.Contains(KeepAliveMarker, StringComparison.Ordinal))
+                _seen.TrySetResult();
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
+        public override void Flush() => _inner.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 }
