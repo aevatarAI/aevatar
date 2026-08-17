@@ -236,6 +236,48 @@ replica cannot serve an operation it does not own. Until a persistent shared bac
 the same canary is repeated across restart and replicas, this integration must not claim provider
 crash durability, retained-result durability, or cross-node owner isolation.
 
+#### Production verification (2026-08-17 UTC)
+
+Production acceptance used the committed NyxID, Chrono Sandbox, Aevatar, and Lark read models rather
+than client or Bot wording. The Aevatar deployment was Ready on immutable image
+`9af2a379680cad37759e0628fae9712b12283e67` (deployment generation 3279, revision 1677, 1/1 updated,
+ready, and available), and its public readiness endpoint returned HTTP 200.
+
+The public NyxID route produced the following provider evidence:
+
+- The zero-persistence enablement probe omitted `Idempotency-Key` and sent empty script and language
+  fields. It failed before admission or operation creation with HTTP 400 and
+  `IDEMPOTENCY_KEY_MISSING`, rather than the disabled-handler `ASYNC_EXECUTION_UNAVAILABLE` response.
+- A harmless program slept for 130 seconds with an explicit `timeout_secs=180`. Submit returned a
+  queued receipt immediately; repeating the same owner, key, and payload converged on the same
+  operation. The terminal result had `success=true`, `exit_code=0`, execution time `131124 ms`, and
+  the expected `AEVATAR_DURABLE_GT125_OK` stdout marker. The maximum observed individual
+  submit/status/result exchange was 1 second and no exchange returned `524`. The redacted operation
+  fingerprint is `sha256:2231f328b39d`.
+
+The separately authorized Lark HR-01 canary then exercised the deployed Aevatar workflow adapter:
+
+- Exactly one trigger delivery was created after the `2026-08-17T17:24:20Z` baseline. It reached
+  `delivered` in one attempt; its redacted fingerprint is `sha256:35362f37942c`.
+- The unique committed workflow run started at `2026-08-17T17:26:13.8708204Z` and completed at
+  `2026-08-17T17:31:24.871508Z` with `status=completed`, `success=true`, state version 724, and
+  102/102 requested steps completed. The formerly failing `normalize_person` code-execution step
+  succeeded in `8825 ms`. Its typed final output reported complete 65/65 history pagination,
+  `failed_reads=0`, `approval_created=true`, `verify_ok=true`, `partial_failure=false`, and a
+  `PENDING` approval. The redacted run fingerprint is `sha256:9c6531877445`.
+- An independent Lark Approval API read returned that real `PENDING` instance and matched the exact
+  synthetic name, Human Resources department, 2026-12-31 onboarding date, and generated email
+  prefix. The redacted approval fingerprint is `sha256:043342b4a7c0`.
+
+The greater-than-125-second probe directly verifies the deployed public provider contract; HR-01
+separately verifies that the deployed Aevatar durable adapter reaches a committed terminal workflow
+and externally committed approval. It does not claim that this particular HR run executed a
+greater-than-125-second program, nor does either result change the ephemeral restart and replica
+limitations above. The database-free single-replica rollout is tracked in
+[Chrono Sandbox issue 11](https://github.com/ChronoAIProject/chrono-sandbox/issues/11); persistent
+shared-backend replacement is tracked separately in
+[issue 12](https://github.com/ChronoAIProject/chrono-sandbox/issues/12).
+
 The selector and accepted credential contract are private to the platform `code_execute` route.
 They do not filter connected services, `nyxid_proxy`, explicit external-capability selections, LLM
 routes, or managed `codex_exec`. Other capabilities may use the same generic convergence mechanism
