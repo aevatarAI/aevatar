@@ -76,7 +76,7 @@ public sealed class OrleansStreamForwardingAuthorityTests
     }
 
     [Fact]
-    public void GrainContract_ShouldExposeNonInterleavableExactLookupAndSerializableEvidence()
+    public void GrainContract_ShouldPreserveRollingCompatibleRpcSurfaceAndSerializableEvidence()
     {
         var upsertMethod = typeof(IStreamTopologyGrain).GetMethod(
             nameof(IStreamTopologyGrain.UpsertAsync),
@@ -86,12 +86,8 @@ public sealed class OrleansStreamForwardingAuthorityTests
         var listMethod = typeof(IStreamTopologyGrain).GetMethod(nameof(IStreamTopologyGrain.ListAsync));
         listMethod.Should().NotBeNull();
         listMethod!.ReturnType.Should().Be(typeof(Task<IReadOnlyList<StreamForwardingBindingEntry>>));
-        var getMethod = typeof(IStreamTopologyGrain).GetMethod(nameof(IStreamTopologyGrain.GetAsync), [typeof(string)]);
-        getMethod.Should().NotBeNull();
-        getMethod!.ReturnType.Should().Be(typeof(Task<StreamForwardingBindingEntry>));
-        getMethod.GetCustomAttributes(inherit: false)
-            .Select(attribute => attribute.GetType().Name)
-            .Should().NotContain("AlwaysInterleaveAttribute");
+        typeof(IStreamTopologyGrain).GetMethod("GetAsync", [typeof(string)])
+            .Should().BeNull("adding an Orleans RPC breaks mixed-version rolling upgrades");
 
         var entryType = typeof(StreamForwardingBindingEntry);
         entryType.GetCustomAttributes(inherit: false)
@@ -133,11 +129,11 @@ public sealed class OrleansStreamForwardingAuthorityTests
     [Fact]
     public async Task AuthoritativeGet_ShouldHonorCancellationWhileGrainCallIsPending()
     {
-        var pending = new TaskCompletionSource<StreamForwardingBindingEntry?>(
+        var pending = new TaskCompletionSource<IReadOnlyList<StreamForwardingBindingEntry>>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var grain = new TopologyGrainStub
         {
-            GetHandler = _ => pending.Task,
+            ListHandler = () => pending.Task,
         };
         var registry = new OrleansDistributedStreamForwardingRegistry(
             CreateGrainFactory((_, _) => grain));
@@ -229,7 +225,7 @@ public sealed class OrleansStreamForwardingAuthorityTests
         public int ListCallCount { get; private set; }
         public int RevisionCallCount { get; private set; }
         public StreamForwardingBindingEntry? LastUpsert { get; private set; }
-        public Func<string, Task<StreamForwardingBindingEntry?>>? GetHandler { get; init; }
+        public Func<Task<IReadOnlyList<StreamForwardingBindingEntry>>>? ListHandler { get; init; }
 
         public Task UpsertAsync(StreamForwardingBindingEntry binding)
         {
@@ -258,16 +254,9 @@ public sealed class OrleansStreamForwardingAuthorityTests
         public Task<IReadOnlyList<StreamForwardingBindingEntry>> ListAsync()
         {
             ListCallCount++;
+            if (ListHandler is not null)
+                return ListHandler();
             return Task.FromResult<IReadOnlyList<StreamForwardingBindingEntry>>(_bindings.Select(Clone).ToList());
-        }
-
-        public Task<StreamForwardingBindingEntry?> GetAsync(string targetStreamId)
-        {
-            if (GetHandler is not null)
-                return GetHandler(targetStreamId);
-            var binding = _bindings.FirstOrDefault(item =>
-                string.Equals(item.TargetStreamId, targetStreamId, StringComparison.Ordinal));
-            return Task.FromResult(binding == null ? null : Clone(binding));
         }
 
         public Task<long> GetRevisionAsync()

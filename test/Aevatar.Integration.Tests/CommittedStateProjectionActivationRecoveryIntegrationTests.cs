@@ -101,7 +101,7 @@ public sealed class CommittedStateProjectionActivationRecoveryIntegrationTests :
         recoveredCheckpoint!.PublishedVersion.Should().Be(committed.Version);
         recoveredCheckpoint.PublishedEventId.Should().Be(committed.EventId);
         recoveredCheckpoint.Failure.Should().BeNull();
-        authority.ReadCount.Should().Be(3);
+        authority.ReadCount.Should().Be(4);
         runtime.CreateCallCount.Should().Be(1);
         dispatch.CallCount.Should().Be(1);
     }
@@ -200,7 +200,8 @@ public sealed class CommittedStateProjectionActivationRecoveryIntegrationTests :
             return Interlocked.Increment(ref _readCount) switch
             {
                 1 => Task.FromResult<StreamForwardingBinding?>(null),
-                2 => Task.FromException<StreamForwardingBinding?>(
+                2 => Task.FromResult<StreamForwardingBinding?>(null),
+                3 => Task.FromException<StreamForwardingBinding?>(
                     new InvalidOperationException("Injected relay readiness failure.")),
                 _ => Task.FromResult<StreamForwardingBinding?>(
                     new StreamForwardingBinding

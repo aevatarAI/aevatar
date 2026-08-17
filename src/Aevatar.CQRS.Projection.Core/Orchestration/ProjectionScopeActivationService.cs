@@ -19,6 +19,7 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
     private readonly Func<ProjectionScopeStartRequest, TContext> _contextFactory;
     private readonly Func<ProjectionRuntimeScopeKey, TContext, TLease> _leaseFactory;
     private readonly IStreamForwardingBindingAuthority? _bindingAuthority;
+    private readonly IStreamForwardingRegistry? _forwardingRegistry;
     private readonly ILogger<ProjectionScopeActivationService<TLease, TContext, TScopeAgent>> _logger;
 
     public ProjectionScopeActivationService(
@@ -30,7 +31,8 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         IAgentKindRegistry? agentKindRegistry = null,
         IStreamPubSubMaintenance? streamPubSubMaintenance = null,
         ILoggerFactory? loggerFactory = null,
-        IStreamForwardingBindingAuthority? bindingAuthority = null)
+        IStreamForwardingBindingAuthority? bindingAuthority = null,
+        IStreamForwardingRegistry? forwardingRegistry = null)
     {
         _scopeRuntime = new ProjectionScopeActorRuntime<TScopeAgent>(
             runtime,
@@ -42,6 +44,7 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
         _leaseFactory = leaseFactory ?? throw new ArgumentNullException(nameof(leaseFactory));
         _bindingAuthority = bindingAuthority;
+        _forwardingRegistry = forwardingRegistry ?? bindingAuthority as IStreamForwardingRegistry;
         _logger = loggerFactory?.CreateLogger<ProjectionScopeActivationService<TLease, TContext, TScopeAgent>>() ??
                   NullLogger<ProjectionScopeActivationService<TLease, TContext, TScopeAgent>>.Instance;
     }
@@ -65,7 +68,12 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
             request.SessionId);
 
         var targetActorId = ProjectionScopeActorId.Build(scopeKey);
-        if (await HasExactActivationEvidenceAsync(scopeKey, targetActorId, ct).ConfigureAwait(false))
+        var initialBinding = await ReadActivationEvidenceAsync(scopeKey, targetActorId, ct).ConfigureAwait(false);
+        if (ProjectionScopeObservationRelayBinding.IsExactActivationEvidence(
+                initialBinding,
+                scopeKey.RootActorId,
+                targetActorId,
+                _scopeRuntime.ScopeAgentKind))
         {
             ProjectionActivationMetrics.RecordResult("warm", scopeKey.Mode, "success");
             return _leaseFactory(scopeKey, context);
@@ -74,10 +82,21 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         var ensureDispatched = false;
         try
         {
-            await _scopeRuntime.EnsureExistsAsync(scopeKey, ct).ConfigureAwait(false);
+            var actorEvidence = await _scopeRuntime.EnsureExistsAsync(scopeKey, ct).ConfigureAwait(false);
+            var allowLegacyEvidence = await PrepareLegacyReadinessProbeAsync(
+                    scopeKey,
+                    targetActorId,
+                    actorEvidence.ExpectedKindProven,
+                    ct)
+                .ConfigureAwait(false);
             await DispatchEnsureAsync(scopeKey, ct).ConfigureAwait(false);
             ensureDispatched = true;
-            await WaitForObservationRelayAsync(scopeKey, targetActorId, ct).ConfigureAwait(false);
+            await WaitForObservationRelayAsync(
+                    scopeKey,
+                    targetActorId,
+                    allowLegacyEvidence,
+                    ct)
+                .ConfigureAwait(false);
             ProjectionActivationMetrics.RecordResult("cold", scopeKey.Mode, "success");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -166,7 +185,7 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         }
     }
 
-    private async Task<bool> HasExactActivationEvidenceAsync(
+    private async Task<StreamForwardingBinding?> ReadActivationEvidenceAsync(
         ProjectionRuntimeScopeKey scopeKey,
         string targetActorId,
         CancellationToken ct)
@@ -187,7 +206,7 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
                 startedAt,
                 scopeKey.Mode,
                 matches ? "hit" : "miss");
-            return matches;
+            return binding;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -209,9 +228,43 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         }
     }
 
+    private async Task<bool> PrepareLegacyReadinessProbeAsync(
+        ProjectionRuntimeScopeKey scopeKey,
+        string targetActorId,
+        bool expectedKindProven,
+        CancellationToken ct)
+    {
+        if (!expectedKindProven)
+            return false;
+
+        // EnsureExists can activate the scope actor, and OnActivate can write legacy evidence.
+        // Read again after that boundary so dispatch admission cannot inherit an unchallenged
+        // pre-dispatch legacy relay from either the original state or activation.
+        var currentBinding = await RequireBindingAuthority()
+            .GetAsync(scopeKey.RootActorId, targetActorId, ct)
+            .ConfigureAwait(false);
+        if (!ProjectionScopeObservationRelayBinding.IsLegacyCompatibleActivationEvidence(
+                currentBinding,
+                scopeKey.RootActorId,
+                targetActorId))
+        {
+            return true;
+        }
+
+        // Dispatch admission is not handled/committed evidence. Challenge a pre-existing
+        // legacy relay without changing its forwarding behavior; only the scope owner can
+        // restore the old empty-lease shape (or replace it with exact new-wire evidence).
+        var probe = ProjectionScopeObservationRelayBinding.CreateLegacyReadinessProbe(
+            scopeKey.RootActorId,
+            targetActorId);
+        await RequireForwardingRegistry().UpsertAsync(probe, ct).ConfigureAwait(false);
+        return true;
+    }
+
     private async Task WaitForObservationRelayAsync(
         ProjectionRuntimeScopeKey scopeKey,
         string targetActorId,
+        bool allowLegacyEvidence,
         CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -231,6 +284,27 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
                         targetActorId,
                         _scopeRuntime.ScopeAgentKind))
                 {
+                    ProjectionActivationMetrics.RecordStage(
+                        ProjectionActivationMetrics.RelayReadinessStage,
+                        startedAt,
+                        scopeKey.Mode,
+                        "success");
+                    return;
+                }
+
+                // A rolling peer can only write the old empty kind/generation/lease shape.
+                // It is accepted after the cold path proved the expected actor kind and after
+                // any pre-existing legacy evidence was challenged before dispatch.
+                if (allowLegacyEvidence &&
+                    ProjectionScopeObservationRelayBinding.IsLegacyCompatibleActivationEvidence(
+                        binding,
+                        scopeKey.RootActorId,
+                        targetActorId))
+                {
+                    _logger.LogWarning(
+                        "Projection activation observed legacy relay evidence after synchronous repair. actorId={ActorId} projectionKind={ProjectionKind}",
+                        targetActorId,
+                        scopeKey.ProjectionKind);
                     ProjectionActivationMetrics.RecordStage(
                         ProjectionActivationMetrics.RelayReadinessStage,
                         startedAt,
@@ -275,4 +349,8 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
     private IStreamForwardingBindingAuthority RequireBindingAuthority() =>
         _bindingAuthority ?? throw new InvalidOperationException(
             "IStreamForwardingBindingAuthority is required to prove projection relay readiness.");
+
+    private IStreamForwardingRegistry RequireForwardingRegistry() =>
+        _forwardingRegistry ?? throw new InvalidOperationException(
+            "IStreamForwardingRegistry is required to challenge pre-existing legacy projection relay evidence.");
 }

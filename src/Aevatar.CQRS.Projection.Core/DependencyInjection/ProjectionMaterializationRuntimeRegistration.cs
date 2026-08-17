@@ -61,7 +61,8 @@ public static class ProjectionMaterializationRuntimeRegistration
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
                 sp.GetService<ILoggerFactory>(),
-                sp.GetRequiredService<IStreamForwardingBindingAuthority>());
+                sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
+                sp.GetRequiredService<IStreamForwardingRegistry>());
 
             return materializeScopeStatus
                 ? new ProjectionScopeStatusActivationService<TRuntimeLease>(

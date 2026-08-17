@@ -55,16 +55,6 @@ public sealed class StreamTopologyGrain(
         return Task.FromResult(_readSnapshot);
     }
 
-    public Task<StreamForwardingBindingEntry?> GetAsync(string targetStreamId)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
-        EnsureInitialized();
-        return Task.FromResult(
-            state.State.BindingsByTarget.TryGetValue(targetStreamId, out var binding)
-                ? CloneEntry(binding)
-                : null);
-    }
-
     public Task<long> GetRevisionAsync()
     {
         EnsureInitialized();

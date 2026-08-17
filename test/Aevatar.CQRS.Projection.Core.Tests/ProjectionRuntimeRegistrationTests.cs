@@ -165,7 +165,7 @@ public sealed class ProjectionRuntimeRegistrationTests
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
         var failingRegistry = new FailingStreamForwardingRegistry(
             new TimeoutException("relay unavailable"),
-            successfulReadsBeforeFailure: 1);
+            successfulReadsBeforeFailure: 2);
         services.AddSingleton<IStreamForwardingRegistry>(failingRegistry);
         services.AddSingleton<IStreamForwardingBindingAuthority>(failingRegistry);
 
@@ -211,7 +211,7 @@ public sealed class ProjectionRuntimeRegistrationTests
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
         var failingRegistry = new FailingStreamForwardingRegistry(
             new TimeoutException("relay unavailable"),
-            successfulReadsBeforeFailure: 1);
+            successfulReadsBeforeFailure: 2);
         services.AddSingleton<IStreamForwardingRegistry>(failingRegistry);
         services.AddSingleton<IStreamForwardingBindingAuthority>(failingRegistry);
 

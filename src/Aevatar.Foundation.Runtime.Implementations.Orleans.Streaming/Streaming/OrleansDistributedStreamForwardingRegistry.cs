@@ -80,7 +80,11 @@ public sealed class OrleansDistributedStreamForwardingRegistry
         ct.ThrowIfCancellationRequested();
 
         var grain = _grainFactory.GetGrain<IStreamTopologyGrain>(sourceStreamId);
-        var entry = await grain.GetAsync(targetStreamId).WaitAsync(ct);
+        // Keep the Orleans grain RPC surface compatible with rolling peers. The authority
+        // bypasses this registry's process-local cache by reading the grain snapshot directly.
+        var entries = await grain.ListAsync().WaitAsync(ct);
+        var entry = entries.SingleOrDefault(candidate =>
+            string.Equals(candidate.TargetStreamId, targetStreamId, StringComparison.Ordinal));
         return entry == null ? null : CloneBinding(ToBinding(entry));
     }
 

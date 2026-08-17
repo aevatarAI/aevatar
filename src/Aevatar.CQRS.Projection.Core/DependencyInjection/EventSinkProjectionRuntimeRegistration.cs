@@ -68,7 +68,8 @@ public static class EventSinkProjectionRuntimeRegistration
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
                 sp.GetService<ILoggerFactory>(),
-                sp.GetRequiredService<IStreamForwardingBindingAuthority>()));
+                sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
+                sp.GetRequiredService<IStreamForwardingRegistry>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<
                 TRuntimeLease,

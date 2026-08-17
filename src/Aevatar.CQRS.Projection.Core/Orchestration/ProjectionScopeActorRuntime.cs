@@ -32,7 +32,9 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         _logger = logger ?? NullLogger<ProjectionScopeActorRuntime<TScopeAgent>>.Instance;
     }
 
-    public async Task EnsureExistsAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
+    public async Task<ProjectionScopeActorEnsureResult> EnsureExistsAsync(
+        ProjectionRuntimeScopeKey scopeKey,
+        CancellationToken ct)
     {
         var actorId = ProjectionScopeActorId.Build(scopeKey);
         var existenceStartedAt = ProjectionActivationMetrics.StartTimestamp();
@@ -68,11 +70,11 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         if (!exists)
         {
             _ = await _runtime.CreateByKindAsync(_scopeAgentKind, actorId, ct).ConfigureAwait(false);
-            return;
+            return ProjectionScopeActorEnsureResult.Proven;
         }
 
         if (_agentKindVerifier == null)
-            return;
+            return ProjectionScopeActorEnsureResult.Unverified;
 
         var kindStartedAt = ProjectionActivationMetrics.StartTimestamp();
         try
@@ -84,7 +86,7 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
                     kindStartedAt,
                     scopeKey.Mode,
                     "success");
-                return;
+                return ProjectionScopeActorEnsureResult.Proven;
             }
 
             ProjectionActivationMetrics.RecordStage(
@@ -152,6 +154,7 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         }
 
         _ = await _runtime.CreateByKindAsync(_scopeAgentKind, actorId, ct).ConfigureAwait(false);
+        return ProjectionScopeActorEnsureResult.Proven;
     }
 
     public async Task<bool> ExistsAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
@@ -186,4 +189,11 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
 
         return kind;
     }
+}
+
+internal readonly record struct ProjectionScopeActorEnsureResult(bool ExpectedKindProven)
+{
+    public static ProjectionScopeActorEnsureResult Proven { get; } = new(true);
+
+    public static ProjectionScopeActorEnsureResult Unverified { get; } = new(false);
 }

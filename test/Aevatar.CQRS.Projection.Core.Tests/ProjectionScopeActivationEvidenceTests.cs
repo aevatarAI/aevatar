@@ -32,6 +32,142 @@ public sealed class ProjectionScopeActivationEvidenceTests
         fixture.Dispatch.CallCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task EnsureAsync_LegacyWireEvidence_ShouldRequireSynchronousColdRepairOnEveryAttempt()
+    {
+        var fixture = CreateFixture();
+        fixture.Runtime.Exists = true;
+        fixture.Authority.Binding = LegacyBinding(fixture.ScopeActorId);
+        fixture.Dispatch.Handler = (_, _) =>
+        {
+            ProjectionScopeObservationRelayBinding.IsLegacyReadinessProbe(
+                    fixture.Authority.Binding,
+                    RootActorId,
+                    fixture.ScopeActorId)
+                .Should().BeTrue();
+            fixture.Authority.Binding = LegacyBinding(fixture.ScopeActorId);
+            return Task.CompletedTask;
+        };
+
+        await fixture.Service.EnsureAsync(Request());
+        await fixture.Service.EnsureAsync(Request());
+
+        fixture.Runtime.ExistsCallCount.Should().Be(2);
+        fixture.Verifier.CallCount.Should().Be(2);
+        fixture.Dispatch.CallCount.Should().Be(2);
+        fixture.Authority.UpsertCallCount.Should().Be(2);
+        ProjectionScopeObservationRelayBinding.IsExactActivationEvidence(
+                fixture.Authority.Binding,
+                RootActorId,
+                fixture.ScopeActorId,
+                ScopeAgentKind)
+            .Should().BeFalse();
+        ProjectionScopeObservationRelayBinding.IsLegacyCompatibleActivationEvidence(
+                fixture.Authority.Binding,
+                RootActorId,
+                fixture.ScopeActorId)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task EnsureAsync_PreexistingLegacyEvidence_ShouldNotTreatDispatchAdmissionAsRepair()
+    {
+        var fixture = CreateFixture();
+        fixture.Runtime.Exists = true;
+        fixture.Authority.Binding = LegacyBinding(fixture.ScopeActorId);
+        var dispatched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Dispatch.Handler = (_, _) =>
+        {
+            dispatched.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var activation = fixture.Service.EnsureAsync(Request());
+        await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        activation.IsCompleted.Should().BeFalse();
+        ProjectionScopeObservationRelayBinding.IsLegacyReadinessProbe(
+                fixture.Authority.Binding,
+                RootActorId,
+                fixture.ScopeActorId)
+            .Should().BeTrue();
+
+        fixture.Authority.Binding = LegacyBinding(fixture.ScopeActorId);
+        await activation.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task EnsureAsync_LegacyEvidenceWrittenDuringActorVerification_ShouldBeChallengedBeforeDispatch()
+    {
+        var fixture = CreateFixture();
+        fixture.Runtime.Exists = true;
+        fixture.Verifier.Handler = (_, _, _) =>
+        {
+            fixture.Authority.Binding = LegacyBinding(fixture.ScopeActorId);
+            return Task.FromResult(true);
+        };
+        var dispatched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Dispatch.Handler = (_, _) =>
+        {
+            dispatched.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var activation = fixture.Service.EnsureAsync(Request());
+        await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        activation.IsCompleted.Should().BeFalse();
+        ProjectionScopeObservationRelayBinding.IsLegacyReadinessProbe(
+                fixture.Authority.Binding,
+                RootActorId,
+                fixture.ScopeActorId)
+            .Should().BeTrue();
+
+        fixture.Authority.Binding = LegacyBinding(fixture.ScopeActorId);
+        await activation.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task EnsureAsync_ExistingActorWithoutKindVerifier_ShouldRejectLegacyEvidence()
+    {
+        var fixture = CreateFixture(includeVerifier: false);
+        fixture.Runtime.Exists = true;
+        fixture.Authority.Binding = LegacyBinding(fixture.ScopeActorId);
+        var dispatched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Dispatch.Handler = (_, _) =>
+        {
+            dispatched.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        var activation = fixture.Service.EnsureAsync(Request());
+        await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        activation.IsCompleted.Should().BeFalse();
+        fixture.Verifier.CallCount.Should().Be(0);
+        fixture.Authority.UpsertCallCount.Should().Be(0);
+
+        fixture.Authority.Binding = ExactBinding(fixture.ScopeActorId);
+        await activation.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task EnsureAsync_CreatedActorWithoutKindVerifier_ShouldAcceptNewLegacyEvidence()
+    {
+        var fixture = CreateFixture(includeVerifier: false);
+        fixture.Dispatch.Handler = (_, _) =>
+        {
+            fixture.Authority.Binding = LegacyBinding(fixture.ScopeActorId);
+            return Task.CompletedTask;
+        };
+
+        await fixture.Service.EnsureAsync(Request());
+
+        fixture.Runtime.CreateCallCount.Should().Be(1);
+        fixture.Verifier.CallCount.Should().Be(0);
+        fixture.Authority.UpsertCallCount.Should().Be(0);
+    }
+
     [Theory]
     [InlineData("source")]
     [InlineData("target")]
@@ -241,7 +377,7 @@ public sealed class ProjectionScopeActivationEvidenceTests
             Equals(item.Tags["mode"], "durable"));
     }
 
-    private static Fixture CreateFixture()
+    private static Fixture CreateFixture(bool includeVerifier = true)
     {
         var runtime = new CountingRuntime();
         var verifier = new CountingKindVerifier();
@@ -259,7 +395,7 @@ public sealed class ProjectionScopeActivationEvidenceTests
                 ProjectionKind = request.ProjectionKind,
             },
             (_, context) => new EvidenceLease(context),
-            verifier,
+            includeVerifier ? verifier : null,
             CreateKindRegistry(),
             bindingAuthority: authority);
         return new Fixture(runtime, verifier, authority, dispatch, service, ProjectionScopeActorId.Build(ScopeKey()));
@@ -282,6 +418,14 @@ public sealed class ProjectionScopeActivationEvidenceTests
 
     private static StreamForwardingBinding ExactBinding(string targetActorId) =>
         ProjectionScopeObservationRelayBinding.Create(RootActorId, targetActorId, ScopeAgentKind, 7);
+
+    private static StreamForwardingBinding LegacyBinding(string targetActorId)
+    {
+        var binding = ExactBinding(targetActorId);
+        binding.TargetActorKind = string.Empty;
+        binding.ActivationGeneration = 0;
+        return binding;
+    }
 
     private static StreamForwardingBinding MismatchedBinding(string targetActorId, string mismatch)
     {
@@ -357,6 +501,7 @@ public sealed class ProjectionScopeActivationEvidenceTests
     {
         private int _readCount;
         public StreamForwardingBinding? Binding { get; set; }
+        public int UpsertCallCount { get; private set; }
         public Action<int>? OnRead { get; set; }
         public Func<int, CancellationToken, Task<StreamForwardingBinding?>>? Handler { get; set; }
 
@@ -373,6 +518,8 @@ public sealed class ProjectionScopeActivationEvidenceTests
 
         public Task UpsertAsync(StreamForwardingBinding binding, CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
+            UpsertCallCount++;
             Binding = binding;
             return Task.CompletedTask;
         }
