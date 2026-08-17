@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -599,9 +600,13 @@ public sealed class MainnetMessagesEndpointsTests
                 new LLMStreamChunk { DeltaContent = "ok", IsLast = true, Usage = new TokenUsage(1, 1, 2) },
             ],
         };
-        var routeResolver = new MessagesRecordingRouteResolver(new Dictionary<string, string>(StringComparer.Ordinal)
+        var routeResolver = new MessagesRecordingRouteResolver(new Dictionary<string, LLMRouteTarget>(StringComparer.Ordinal)
         {
-            ["anthropic"] = "/api/v1/llm/anthropic/v1",
+            ["anthropic"] = new()
+            {
+                CatalogServiceId = "catalog-anthropic",
+                ServiceSlugSnapshot = "anthropic",
+            },
         });
         await using var app = await CreateAppAsync(provider, routeResolver: routeResolver);
         var client = app.GetTestClient();
@@ -1152,19 +1157,28 @@ public sealed class MainnetMessagesEndpointsTests
 
     private sealed class MessagesNoopRouteResolver : IResponsesRouteResolver
     {
-        public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct) =>
-            Task.FromResult<string?>(null);
+        public Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+            string serviceSlug,
+            string upstreamModelId,
+            ResponsesCallerScope callerScope,
+            CancellationToken ct) =>
+            Task.FromResult<LLMRouteTarget?>(null);
     }
 
-    private sealed class MessagesRecordingRouteResolver(IReadOnlyDictionary<string, string> map)
+    private sealed class MessagesRecordingRouteResolver(IReadOnlyDictionary<string, LLMRouteTarget> map)
         : IResponsesRouteResolver
     {
         public List<string> ResolvedSlugs { get; } = [];
 
-        public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct)
+        public Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+            string serviceSlug,
+            string upstreamModelId,
+            ResponsesCallerScope callerScope,
+            CancellationToken ct)
         {
-            ResolvedSlugs.Add(slug);
-            return Task.FromResult(map.TryGetValue(slug, out var value) ? value : null);
+            ResolvedSlugs.Add(serviceSlug);
+            return Task.FromResult(
+                map.TryGetValue(serviceSlug, out var value) ? value.Clone() : null);
         }
     }
 

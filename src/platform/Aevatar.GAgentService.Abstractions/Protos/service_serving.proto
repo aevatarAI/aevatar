@@ -41,6 +41,24 @@ message ServiceServingSetState {
   google.protobuf.Timestamp updated_at = 5;
   int64 last_applied_event_version = 6;
   string last_event_id = 7;
+  string last_resolved_operation_id = 8;
+  string last_resolved_activation_attempt_id = 9;
+  string last_resolved_reply_actor_id = 10;
+  string last_resolved_deployment_id = 11;
+  string last_resolved_revision_id = 12;
+  google.protobuf.Timestamp last_resolved_applied_at = 13;
+  map<string, ServiceServingResolvedOperationRecord> resolved_operations = 14;
+}
+
+message ServiceServingResolvedOperationRecord {
+  string operation_id = 1;
+  string activation_attempt_id = 2;
+  string reply_actor_id = 3;
+  string deployment_id = 4;
+  string revision_id = 5;
+  int64 serving_generation = 6;
+  google.protobuf.Timestamp applied_at = 7;
+  ServiceServingTargetSpec target = 8;
 }
 
 message ReplaceServiceServingTargetsCommand {
@@ -55,6 +73,9 @@ message ReplaceResolvedServiceServingTargetsCommand {
   repeated ServiceServingTargetSpec targets = 2;
   string rollout_id = 3;
   string reason = 4;
+  string activation_attempt_id = 5;
+  string operation_id = 6;
+  string reply_actor_id = 7;
 }
 
 message ServiceServingSetUpdatedEvent {
@@ -64,6 +85,21 @@ message ServiceServingSetUpdatedEvent {
   string rollout_id = 4;
   string reason = 5;
   google.protobuf.Timestamp updated_at = 6;
+  string resolved_operation_id = 7;
+  string resolved_activation_attempt_id = 8;
+  string resolved_reply_actor_id = 9;
+  string resolved_deployment_id = 10;
+  string resolved_revision_id = 11;
+}
+
+message ServiceServingTargetsAppliedAck {
+  ServiceIdentity identity = 1;
+  string revision_id = 2;
+  string deployment_id = 3;
+  string activation_attempt_id = 4;
+  string operation_id = 5;
+  int64 serving_generation = 6;
+  google.protobuf.Timestamp applied_at = 7;
 }
 
 message ServiceRolloutStageSpec {

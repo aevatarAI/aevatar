@@ -23,14 +23,19 @@ public sealed class ProjectionScheduledInvocationMemberQueryPort(
         CancellationToken ct = default)
     {
         var document = await reader.GetAsync($"studio-member:{scopeId.Trim()}:{memberId.Trim()}", ct);
-        if (document == null || string.IsNullOrWhiteSpace(document.ImplementationWorkflowId))
+        if (document == null ||
+            document.AuthorizationRevision < 0 ||
+            string.IsNullOrWhiteSpace(document.ImplementationWorkflowId))
             return null;
         return new ScheduledInvocationMemberEvidence(
-            document.StateVersion,
+            ResolveAuthorizationRevision(document.AuthorizationRevision),
             document.ImplementationWorkflowId,
             document.LastBoundRevisionId,
             document.PublishedServiceId);
     }
+
+    private static long ResolveAuthorizationRevision(long rawRevision) =>
+        rawRevision == 0 ? 1 : rawRevision;
 }
 
 public sealed class ProjectionScheduledInvocationWorkflowQueryPort(

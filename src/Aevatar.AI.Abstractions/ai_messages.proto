@@ -7,6 +7,7 @@ import "Protos/voice_presence.proto";
 import "ToolProviders/agent_tool_admission.proto";
 import "Tools/tool_presentation.proto";
 import "google/protobuf/timestamp.proto";
+import "llm_selection.proto";
 
 enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
@@ -105,6 +106,7 @@ message LLMControlContextPayload {
   string nyx_id_route_preference = 5;
   optional int32 max_tool_rounds_override = 6;
   string user_memory_prompt = 7;
+  LLMRouteTarget route_target = 8;
 }
 
 enum TelegramBridgeOperation {
@@ -267,6 +269,7 @@ message AgentToolRecoveryContextPayload {
   bool requires_sender_nyx_id_access_token = 19;
   bool requires_source_readable_nyx_id_access_token = 20;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 21;
+  AgentToolNyxIdCredentialAuthorityPayload nyx_id_credential_authority = 22;
 }
 
 message AgentSkillRecoveryCheckpointPayload {
@@ -286,12 +289,18 @@ enum AgentToolNyxIdCredentialKindPayload {
   AGENT_TOOL_NYX_ID_CREDENTIAL_KIND_PAYLOAD_PROXY_DELEGATION = 2;
 }
 
+enum AgentToolNyxIdCredentialAuthorityPayload {
+  AGENT_TOOL_NYX_ID_CREDENTIAL_AUTHORITY_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_NYX_ID_CREDENTIAL_AUTHORITY_PAYLOAD_TOOL_EXECUTION_CONTEXT = 1;
+}
+
 message AgentToolCredentialsPayload {
   string nyx_id_access_token = 1;
   string nyx_id_org_token = 2;
   string sender_nyx_id_access_token = 3;
   AgentToolNyxIdCredentialKindPayload nyx_id_credential_kind = 4;
   string source_readable_nyx_id_access_token = 5;
+  AgentToolNyxIdCredentialAuthorityPayload nyx_id_credential_authority = 6;
 }
 
 message AgentToolCallerContextPayload {
@@ -376,6 +385,7 @@ message LLMRequestRoutingContextPayload {
   string nyx_id_route_preference = 2;
   optional int32 max_tool_rounds_override = 3;
   string user_memory_prompt = 4;
+  LLMRouteTarget route_target = 5;
 }
 
 message AgentToolConnectedServicesContextPayload {

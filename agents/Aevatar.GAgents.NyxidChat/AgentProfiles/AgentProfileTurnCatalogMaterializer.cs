@@ -430,6 +430,79 @@ public sealed class AgentProfileTurnCatalogMaterializer
             selectedTools.Values);
     }
 
+    internal async Task<AgentProfileTurnCatalog> MaterializeVerifiedAuthorizationContinuationAsync(
+        AgentProfileSnapshot? profile,
+        AgentProfileTurnAuthorityState? committedAuthority,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(toolContext);
+        if ((profile is null) != (committedAuthority is null))
+            return RestrictedEmptyCatalog();
+
+        var diagnostics = committedAuthority is null
+            ? []
+            : DiagnosticsFromAuthority(committedAuthority);
+        var routeToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet;
+        if (profile is not null)
+        {
+            if (!AgentProfileSnapshotCodec.Verify(profile) ||
+                committedAuthority!.CandidateRoute is null ||
+                !MatchesCommittedProfile(profile, committedAuthority.CandidateRoute))
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ProfileInvalid,
+                    "committed_profile_mismatch"));
+                return RestrictedEmptyCatalog(diagnostics);
+            }
+
+            routeToolSetRef = profile.RouteToolSetRef;
+        }
+
+        var routeTools = await DiscoverToolSetAsync(
+            routeToolSetRef,
+            toolContext,
+            AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
+            diagnostics,
+            ct);
+        if (routeTools.HadFailure)
+            return RestrictedEmptyCatalog(diagnostics);
+
+        var eligible = new HashSet<string>(routeTools.Names, StringComparer.OrdinalIgnoreCase);
+        eligible.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
+        if (profile is not null)
+        {
+            var maximum = await ResolvePolicyAsync(
+                profile.MaximumToolPolicy,
+                toolContext,
+                diagnostics,
+                ct);
+            if (maximum.HadFailure)
+                return RestrictedEmptyCatalog(diagnostics);
+
+            eligible.IntersectWith(maximum.Names);
+        }
+
+        var selectedTools = SelectTools(routeTools.Tools, eligible);
+        return profile is null
+            ? new AgentProfileTurnCatalog(
+                eligible,
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: null,
+                candidateIntentId: null,
+                diagnostics,
+                selectedTools)
+            : BuildCatalog(
+                profile,
+                eligible,
+                selectedIntentId: null,
+                candidateIntentId: committedAuthority!.CandidateRoute?.IntentId,
+                selectedSkillPromptLayer: null,
+                diagnostics,
+                selectedTools);
+    }
+
     internal static AgentProfileTurnCatalog NarrowToBuiltInIntent(
         NyxIdChatTurnIntent intent,
         AgentProfileTurnCatalog catalog,
@@ -460,6 +533,53 @@ public sealed class AgentProfileTurnCatalogMaterializer
             catalog.ProfilePromptLayer,
             catalog.SelectedSkillPromptLayer,
             builtIn.IntentId,
+            catalog.CandidateIntentId,
+            catalog.Diagnostics,
+            selectedTools.Values);
+    }
+
+    internal static AgentProfileTurnCatalog NarrowToVerifiedUserService(
+        AgentProfileTurnCatalog catalog,
+        NyxIdChatVerifiedAuthorizationContinuation continuation)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(continuation);
+
+        var userServiceId = continuation.VerifiedResource?.ResourceCase ==
+                            NyxIdChatSafeResourceRef.ResourceOneofCase.UserService
+            ? continuation.VerifiedResource.UserService.UserServiceId?.Trim()
+            : null;
+        var serviceSlug = continuation.ServiceSlug?.Trim();
+        if (string.IsNullOrWhiteSpace(userServiceId) ||
+            string.IsNullOrWhiteSpace(serviceSlug))
+        {
+            return RestrictedEmptyCatalog(catalog.Diagnostics);
+        }
+
+        var selectedTools = catalog.RouteOwnedTools
+            .Where(pair =>
+                catalog.FinalAllowedToolNames.Contains(pair.Key) &&
+                pair.Value is IAgentToolOperationAdmissionOwner owner &&
+                string.Equals(
+                    owner.OperationAdmission.ServiceInstanceId,
+                    userServiceId,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    owner.OperationAdmission.ServiceSlug,
+                    serviceSlug,
+                    StringComparison.Ordinal))
+            .ToDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value,
+                StringComparer.OrdinalIgnoreCase);
+        if (selectedTools.Count == 0)
+            return RestrictedEmptyCatalog(catalog.Diagnostics);
+
+        return new AgentProfileTurnCatalog(
+            selectedTools.Keys,
+            catalog.ProfilePromptLayer,
+            catalog.SelectedSkillPromptLayer,
+            catalog.SelectedIntentId,
             catalog.CandidateIntentId,
             catalog.Diagnostics,
             selectedTools.Values);

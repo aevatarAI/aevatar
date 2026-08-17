@@ -1026,6 +1026,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> ListUserServicesAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/user-services", ct);
 
+    public Task<NyxIdProxyTextResponse> ListUserServicesBoundedAsync(
+        string token,
+        long maxBytes,
+        CancellationToken ct) =>
+        GetBoundedAsync(token, "/api/v1/user-services", maxBytes, ct);
+
     /// <summary>
     /// Requests NyxID's authoritative constrained API-key grants for an exact service set.
     /// The raw response is parsed by <see cref="NyxIdApiAccessResponseParser"/> at this adapter boundary.
@@ -1189,6 +1195,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> ListApprovalServiceConfigsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/approvals/service-configs", ct);
 
+    public Task<NyxIdProxyTextResponse> ListApprovalServiceConfigsBoundedAsync(
+        string token,
+        long maxBytes,
+        CancellationToken ct) =>
+        GetBoundedAsync(token, "/api/v1/approvals/service-configs", maxBytes, ct);
+
     // ─── Profile ───
 
     public Task<string> UpdateProfileAsync(string token, string body, CancellationToken ct) =>
@@ -1338,6 +1350,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     public Task<string> GetNotificationSettingsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/notifications/settings", ct);
+
+    public Task<NyxIdProxyTextResponse> GetNotificationSettingsBoundedAsync(
+        string token,
+        long maxBytes,
+        CancellationToken ct) =>
+        GetBoundedAsync(token, "/api/v1/notifications/settings", maxBytes, ct);
 
     public Task<string> UpdateNotificationSettingsAsync(string token, string body, CancellationToken ct) =>
         PutAsync(token, "/api/v1/notifications/settings", body, ct);
@@ -1777,6 +1795,21 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return await SendAsync(request, ct);
+    }
+
+    private async Task<NyxIdProxyTextResponse> GetBoundedAsync(
+        string token,
+        string path,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
+
+        var url = $"{GetPublicApiBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await SendTextResponseAsync(request, maxBytes, ct);
     }
 
     internal async Task<string> PostAsync(string token, string path, string body, CancellationToken ct)

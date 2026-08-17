@@ -29,6 +29,11 @@ const CUSTOM_SERVICE_KEYS = Object.freeze([
   "viaNodeId",
   "targetOrgId",
 ]);
+const SERVICE_ACCESS_REVIEW_KEYS = Object.freeze([
+  "userServiceId",
+  "serviceSlug",
+  "resourceUri",
+]);
 const CUSTOM_AUTH_METHODS = Object.freeze([
   "bearer",
   "header",
@@ -75,10 +80,6 @@ const ENUMS = Object.freeze({
   ]),
   stepKind: enumDefinition("NYX_ID_CHAT_STEP_KIND_", [
     "llm", "tool", "browser_action", "postcondition", "input", "approval", "web", "condition",
-  ]),
-  planGateMode: enumDefinition("NYX_ID_CHAT_PLAN_GATE_MODE_", ["auto", "confirm"]),
-  planGateStatus: enumDefinition("NYX_ID_CHAT_PLAN_GATE_STATUS_", [
-    "pending", "satisfied", "rejected",
   ]),
   stepAddedBy: enumDefinition("NYX_ID_CHAT_STEP_ADDED_BY_", ["initial", "replan", "steering"]),
   planRevisionCause: enumDefinition("NYX_ID_CHAT_PLAN_REVISION_CAUSE_", [
@@ -140,13 +141,22 @@ export async function consumeSse(response, onFrame) {
     buffer = parsed.rest;
     for (const event of parsed.events) {
       if (!event.data || event.data === "[DONE]") continue;
+      let shouldContinue;
       try {
-        await onFrame(JSON.parse(event.data), event);
+        shouldContinue = await onFrame(JSON.parse(event.data), event);
       } catch (error) {
-        await onFrame({
+        shouldContinue = await onFrame({
           type: "DEMO_PROTOCOL_ERROR",
           protocolError: { message: error.message, raw: event.data.slice(0, 500) },
         }, event);
+      }
+      if (shouldContinue === false) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The transport may already be closing after the authoritative state converged.
+        }
+        return;
       }
     }
     if (done) break;
@@ -425,7 +435,8 @@ export function unpackAny(payload) {
 export function validateActionRequest(payload) {
   const value = requireObject(unpackAny(payload), "NyxID action request must be an object.");
   assertAllowedKeys(value, ACTION_REQUEST_KEYS);
-  if (value.schemaVersion !== 4 || value.action !== "service.connect") {
+  if (value.schemaVersion !== 4 ||
+      !["service.connect", "service.access_review"].includes(value.action)) {
     throw new ProtocolValidationError(
       "Unsupported NyxID action request.",
       "NYXID_ACTION_UNSUPPORTED",
@@ -435,12 +446,14 @@ export function validateActionRequest(payload) {
   const identity = Object.fromEntries(
     IDENTITY_KEYS.map((key) => [key, validateIdentity(value[key])]),
   );
-  const params = validateServiceConnectParams(value.params);
+  const params = value.action === "service.connect"
+    ? validateServiceConnectParams(value.params)
+    : validateServiceAccessReviewParams(value.params);
   rejectSecretBearingInput({ ...identity, params });
   return deepFreeze({
     schemaVersion: 4,
     ...identity,
-    action: "service.connect",
+    action: value.action,
     params,
   });
 }
@@ -482,7 +495,7 @@ export function validateActionContinuation(input, { expectedAction = null } = {}
     }
 
     const resource = validateActionResource(report.resource);
-    if (expectedAction === "service.connect" &&
+    if (["service.connect", "service.access_review"].includes(expectedAction) &&
         report.disposition === "completed" &&
         (!resource || !Object.prototype.hasOwnProperty.call(resource, "userService"))) {
       throw invalidActionResource();
@@ -554,6 +567,31 @@ function validateServiceConnectParams(input) {
   return hasCatalog
     ? { catalogService: validateCatalogService(value.catalogService) }
     : { customService: validateCustomService(value.customService) };
+}
+
+function validateServiceAccessReviewParams(input) {
+  const value = requireObject(input, "NyxID action params must be an object.");
+  assertAllowedKeys(value, ["serviceAccessReview"]);
+  if (!Object.prototype.hasOwnProperty.call(value, "serviceAccessReview")) {
+    throw invalidActionParams();
+  }
+  const review = requireObject(
+    value.serviceAccessReview,
+    "NyxID service access review params must be an object.",
+  );
+  assertAllowedKeys(review, SERVICE_ACCESS_REVIEW_KEYS);
+  const serviceSlug = validateBoundedString(review.serviceSlug, 128);
+  if (!/^[A-Za-z0-9._-]+$/.test(serviceSlug)) throw invalidActionParams();
+  const resourceUri = validateSafeHttpsUrl(review.resourceUri);
+  const parsedResource = new URL(resourceUri);
+  if (!parsedResource.pathname.endsWith(`/s/${serviceSlug}`)) throw invalidActionParams();
+  return {
+    serviceAccessReview: {
+      userServiceId: validateIdentity(review.userServiceId),
+      serviceSlug,
+      resourceUri,
+    },
+  };
 }
 
 function validateCatalogService(input) {
@@ -685,6 +723,13 @@ function invalidActionVariant() {
   );
 }
 
+function invalidActionParams() {
+  return new ProtocolValidationError(
+    "NyxID action params are invalid.",
+    "NYXID_ACTION_PARAMS_INVALID",
+  );
+}
+
 function unsafeActionUrl() {
   return new ProtocolValidationError(
     "NyxID action URL is unsafe.",
@@ -733,12 +778,6 @@ function normalizeActorPayload(type, payload) {
       throw new ProtocolValidationError("Actor plan revision is invalid.", "NYXID_NUMBER_INVALID");
     }
     normalizeEnumProperty(value, "status", ENUMS.taskStatus);
-    if (value.gate && typeof value.gate === "object") {
-      value.gate = cloneJsonObject(value.gate);
-      normalizeEnumProperty(value.gate, "mode", ENUMS.planGateMode);
-      normalizeEnumProperty(value.gate, "status", ENUMS.planGateStatus);
-      normalizeIntegerProperty(value.gate, "planRevision");
-    }
     if (Array.isArray(value.steps)) value.steps = value.steps.map(normalizeStep);
     if (Object.prototype.hasOwnProperty.call(value, "planRevisions")) {
       if (!Array.isArray(value.planRevisions)) {
@@ -1078,5 +1117,6 @@ export function normalizeStoredMessages(value) {
       timestamp: Number.isFinite(Number(item.timestamp)) ? Number(item.timestamp) : 0,
       status: String(item.status || "completed"),
       error: item.error ? String(item.error) : null,
+      turnId: item.turnId ? String(item.turnId) : null,
     }));
 }

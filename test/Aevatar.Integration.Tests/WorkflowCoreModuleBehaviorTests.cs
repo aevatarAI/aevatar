@@ -24,10 +24,11 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "step-1",
                 StepType = "tool_call",
+                RunId = ctx.RunId,
                 Input = "{}",
             };
 
-            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+            await ExecuteToolCallToCompletionAsync(module, request, ctx);
 
             ctx.Published.Should().ContainSingle();
             ctx.Published[0].direction.Should().Be(TopologyAudience.Self);
@@ -46,23 +47,23 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "step-2",
                 StepType = "tool_call",
+                RunId = ctx.RunId,
                 Input = """{"x":1}""",
                 Parameters = { ["tool"] = "missing_tool" },
             };
 
             await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-            ctx.Published.Should().HaveCount(3);
+            ctx.Published.Should().HaveCount(2);
             ctx.Published.Select(x => x.evt.GetType()).Should().ContainInOrder(
-                typeof(WorkflowToolCallStartedEvent),
                 typeof(WorkflowToolCallCompletedEvent),
                 typeof(StepCompletedEvent));
 
-            var toolResult = ctx.Published[1].evt.Should().BeOfType<WorkflowToolCallCompletedEvent>().Subject;
+            var toolResult = ctx.Published[0].evt.Should().BeOfType<WorkflowToolCallCompletedEvent>().Subject;
             toolResult.Success.Should().BeFalse();
             toolResult.Error.Should().Contain("tool 'missing_tool' execution failed");
 
-            var completed = ctx.Published[2].evt.Should().BeOfType<StepCompletedEvent>().Subject;
+            var completed = ctx.Published[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
             completed.Success.Should().BeFalse();
             completed.Error.Should().Contain("tool 'missing_tool' execution failed");
         }
@@ -85,7 +86,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
                 Parameters = { ["tool"] = "echo" },
             };
 
-            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+            await ExecuteToolCallToCompletionAsync(module, request, ctx);
 
             source.DiscoverCalls.Should().Be(1);
             var toolResult = ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Single();
@@ -103,27 +104,27 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             var module = CreateToolCallModule([source]);
             var ctx = CreateContext();
 
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-4",
                     StepType = "tool_call",
                     Input = """{"n":1}""",
                     Parameters = { ["tool"] = "cached_echo" },
-                }),
-                ctx,
-                CancellationToken.None);
+                },
+                ctx);
 
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-5",
                     StepType = "tool_call",
                     Input = """{"n":2}""",
                     Parameters = { ["tool"] = "cached_echo" },
-                }),
-                ctx,
-                CancellationToken.None);
+                },
+                ctx);
 
             source.DiscoverCalls.Should().Be(1);
             ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Should().OnlyContain(x => x.Success);
@@ -149,16 +150,16 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
 
                     await start.Task;
                     var ctx = CreateContext();
-                    await module.HandleAsync(
-                        Envelope(new StepRequestEvent
+                    await ExecuteToolCallToCompletionAsync(
+                        module,
+                        new StepRequestEvent
                         {
                             StepId = $"step-parallel-{i}",
                             StepType = "tool_call",
                             Input = """{"ok":true}""",
                             Parameters = { ["tool"] = "parallel_echo" },
-                        }),
-                        ctx,
-                        CancellationToken.None);
+                        },
+                        ctx);
                     return ctx;
                 }))
                 .ToArray();
@@ -194,6 +195,8 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
                 {
                     StepId = "step-cancelled",
                     StepType = "tool_call",
+                    RunId = cancelledContext.RunId,
+                    ExecutionId = "exec-step-cancelled",
                     Input = """{"msg":"cancel"}""",
                     Parameters = { ["tool"] = "delayed_echo" },
                 }),
@@ -207,16 +210,16 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledAttempt);
 
             var retryContext = CreateContext();
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-retry",
                     StepType = "tool_call",
                     Input = """{"msg":"retry"}""",
                     Parameters = { ["tool"] = "delayed_echo" },
-                }),
-                retryContext,
-                CancellationToken.None);
+                },
+                retryContext);
 
             source.DiscoverCalls.Should().Be(2);
             retryContext.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle()
@@ -233,15 +236,15 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             var module = CreateToolCallModule([source]);
             var ctx = CreateContext();
 
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-6",
                     StepType = "tool_call",
                     Parameters = { ["tool"] = "explode" },
-                }),
-                ctx,
-                CancellationToken.None);
+                },
+                ctx);
 
             var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Last();
             completed.Success.Should().BeFalse();
@@ -255,16 +258,16 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             var module = new ToolCallModule([new CountingToolSource([tool])], NullLogger<ToolCallModule>.Instance);
             var ctx = CreateContext();
 
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-direct-tool",
                     StepType = "tool_call",
                     Input = """{"msg":"ok"}""",
                     Parameters = { ["tool"] = "safe_echo" },
-                }),
-                ctx,
-                CancellationToken.None);
+                },
+                ctx);
 
             tool.ExecuteCalls.Should().Be(1);
             var toolResult = ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Single();
@@ -284,6 +287,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-1",
                 StepType = "foreach",
+                RunId = ctx.RunId,
                 Input = "",
             };
 
@@ -292,6 +296,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             ctx.Published.Should().ContainSingle();
             var completed = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
             completed.StepId.Should().Be("foreach-1");
+            completed.RunId.Should().Be(ctx.RunId);
             completed.Success.Should().BeTrue();
             completed.Output.Should().BeEmpty();
         }
@@ -305,6 +310,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-2",
                 StepType = "foreach",
+                RunId = ctx.RunId,
                 Input = "alpha\n---\nbeta",
                 Parameters =
                 {
@@ -323,15 +329,40 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             subRequests[0].TargetRole.Should().Be("worker_role");
             subRequests[0].Parameters["op"].Should().Be("uppercase");
             subRequests[1].StepId.Should().Be("foreach-2_item_1");
+            subRequests.Should().OnlyContain(child => child.RunId == ctx.RunId);
+            subRequests.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+            subRequests.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
 
             var countBeforeCompletions = ctx.Published.Count;
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_0", Success = true, Output = "A" }), ctx, CancellationToken.None);
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_0_sub_1", Success = true, Output = "IGNORED" }), ctx, CancellationToken.None);
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_1", Success = false, Output = "B" }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = subRequests[0].StepId,
+                RunId = subRequests[0].RunId,
+                ExecutionId = subRequests[0].ExecutionId,
+                Success = true,
+                Output = "A",
+            }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = $"{subRequests[0].StepId}_sub_1",
+                RunId = subRequests[0].RunId,
+                ExecutionId = subRequests[0].ExecutionId,
+                Success = true,
+                Output = "IGNORED",
+            }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = subRequests[1].StepId,
+                RunId = subRequests[1].RunId,
+                ExecutionId = subRequests[1].ExecutionId,
+                Success = false,
+                Output = "B",
+            }), ctx, CancellationToken.None);
 
             var delta = ctx.Published.Skip(countBeforeCompletions).Select(x => x.evt).OfType<StepCompletedEvent>().ToList();
             delta.Should().ContainSingle();
             delta[0].StepId.Should().Be("foreach-2");
+            delta[0].RunId.Should().Be(ctx.RunId);
             delta[0].Success.Should().BeFalse();
             delta[0].Output.Should().Be("A\n---\nB");
         }
@@ -345,7 +376,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-arguments",
                 StepType = "foreach",
-                RunId = "run-foreach-arguments",
+                RunId = ctx.RunId,
                 Input = "[\"instance-alpha\",\"instance-beta\"]",
                 Parameters =
                 {
@@ -365,6 +396,9 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
                 .Should().Be("instance-alpha");
             secondArguments.RootElement.GetProperty("path_params").GetProperty("instance_id").GetString()
                 .Should().Be("instance-beta");
+            subRequests.Should().OnlyContain(child => child.RunId == ctx.RunId);
+            subRequests.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+            subRequests.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
         }
 
         [Fact]

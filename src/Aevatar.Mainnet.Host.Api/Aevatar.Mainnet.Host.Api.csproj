@@ -64,9 +64,16 @@
   <ItemGroup>
     <EmbeddedResource Include="BackendConsole\admin.html" />
     <EmbeddedResource Include="BackendConsole\auto-callback.html" />
+    <EmbeddedResource Include="BackendConsole\delivery.html" />
     <EmbeddedResource Include="Status\status.html" />
     <EmbeddedResource Include="Cqrs\cqrs-observatory.html" />
     <EmbeddedResource Include="Voice\voice-console.html" />
     <EmbeddedResource Include="Skills\workflow-skills.html" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\delivery-workflows\hr_onboarding_email_approval.yaml;..\..\delivery-workflows\hr_monthly_attendance_approval.yaml;..\..\delivery-workflows\hr_attendance_fill_reminder.yaml;..\..\delivery-workflows\fin_invoice_precheck_approval.yaml;..\..\delivery-workflows\fin_budget_variance_monitor.yaml" Link="delivery-workflows\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 </Project>

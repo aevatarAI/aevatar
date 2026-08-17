@@ -1,5 +1,6 @@
 using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
@@ -41,6 +42,18 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberInvocationReadinessQueryPort,
             StudioMemberInvocationReadinessQueryPort>();
         services.TryAddSingleton<IStudioWorkflowProvisioningService, StudioWorkflowProvisioningService>();
+        services.TryAddSingleton<IWorkflowDeliveryPackageCatalog, WorkflowDeliveryPackageCatalog>();
+        services.TryAddSingleton<IWorkflowDeliveryConfigurationRenderer, WorkflowDeliveryConfigurationRenderer>();
+        services.TryAddSingleton<IWorkflowDeliveryService, WorkflowDeliveryService>();
+        services.TryAddSingleton<
+            IWorkflowInstallationReadinessReconciler,
+            WorkflowInstallationReadinessReconciler>();
+        services.TryAddSingleton<
+            IWorkflowAcceptanceArtifactMaterializer,
+            WorkflowAcceptanceArtifactMaterializer>();
+        services.TryAddSingleton<
+            IWorkflowDeliveryProvisioningExecutor,
+            WorkflowDeliveryProvisioningExecutor>();
         services.TryAddSingleton<
             IStudioWorkflowScheduleProvisioningExecutor,
             StudioWorkflowScheduleProvisioningExecutor>();
@@ -89,6 +102,16 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChannelUserLlmPreferencePort, ChannelUserLlmPreferencePort>();
         services.TryAddSingleton<IUserConfigService, UserConfigService>();
         services.TryAddSingleton<IUserLlmPreferenceService, UserLlmPreferenceService>();
+        services.TryAddSingleton<LLMModelSourceResolver>();
+        services.TryAddSingleton<
+            ILLMModelCatalogPolicyApplicationService,
+            LLMModelCatalogPolicyApplicationService>();
+        services.TryAddSingleton<
+            ILLMModelDiscoveryApplicationService,
+            LLMModelDiscoveryApplicationService>();
+        services.TryAddSingleton<
+            ILLMModelRouteApplicationService,
+            LLMModelRouteApplicationService>();
 
         // Override the platform resolver so existing member-first invoke /
         // runs / binding routes resolve to the same

@@ -82,7 +82,9 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
         }
         catch
         {
-            if (ensureDispatched)
+            // Durable scopes outlive an activation attempt. A late ensure must retain its relay
+            // so the same unconfirmed committed publication can recover after the backlog drains.
+            if (ensureDispatched && scopeKey.Mode == ProjectionRuntimeMode.SessionObservation)
                 await ReleaseFailedActivationAsync(scopeKey).ConfigureAwait(false);
             throw;
         }

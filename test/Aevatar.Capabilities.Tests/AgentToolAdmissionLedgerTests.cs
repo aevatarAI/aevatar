@@ -305,6 +305,9 @@ public sealed class AgentToolAdmissionLedgerTests
     [PinnedRedisFact]
     public async Task GarnetStore_WithPinnedRedis_ShouldRoundTripBinaryAndExpireKey()
     {
+        if (!CanRunPinnedRedisTests())
+            return;
+
         await using var server = await PinnedRedisServer.StartAsync();
         using var connection = await ConnectionMultiplexer.ConnectAsync(server.ConnectionString);
         var store = new GarnetAgentToolAdmissionFactStore(connection);
@@ -325,6 +328,9 @@ public sealed class AgentToolAdmissionLedgerTests
     [PinnedRedisFact]
     public async Task DistributedLedger_WithPinnedRedis_ShouldAtomicallyStartOnceThenRejectDuplicatesAndConflict()
     {
+        if (!CanRunPinnedRedisTests())
+            return;
+
         await using var server = await PinnedRedisServer.StartAsync();
         using var connection = await ConnectionMultiplexer.ConnectAsync(server.ConnectionString);
         var ledger = new DistributedAgentToolAdmissionLedger(
@@ -346,6 +352,9 @@ public sealed class AgentToolAdmissionLedgerTests
     [PinnedRedisFact]
     public async Task GarnetStore_WhenCallerCancels_ShouldPropagateWithoutWriting()
     {
+        if (!CanRunPinnedRedisTests())
+            return;
+
         await using var server = await PinnedRedisServer.StartAsync();
         using var connection = await ConnectionMultiplexer.ConnectAsync(server.ConnectionString);
         var store = new GarnetAgentToolAdmissionFactStore(connection);
@@ -391,6 +400,22 @@ public sealed class AgentToolAdmissionLedgerTests
         OperationId = "operation-1",
         ReplayPolicy = AgentToolReplayPolicy.ReadOnlyRetryable,
     };
+
+    private static bool CanRunPinnedRedisTests()
+    {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(
+                "AGENT_TOOL_ADMISSION_REDIS_CONNECTION_STRING")))
+        {
+            return true;
+        }
+
+        var executableName = OperatingSystem.IsWindows() ? "redis-server.exe" : "redis-server";
+        return (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(
+                Path.PathSeparator,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(directory => File.Exists(Path.Combine(directory, executableName)));
+    }
 
     private sealed class RecordingAdmissionFactStore : IAgentToolAdmissionFactStore
     {

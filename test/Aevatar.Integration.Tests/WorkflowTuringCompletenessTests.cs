@@ -497,7 +497,15 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         var ctx = CreateContext(workflowRunAgent);
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-        return ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        if (module is ToolCallModule toolCallModule)
+        {
+            await WorkflowCoreModuleTestBase.DrainToolCallContinuationsAsync(
+                toolCallModule,
+                request,
+                ctx);
+        }
+
+        return ctx.GetPublishedSnapshot().Select(static item => item.evt).OfType<StepCompletedEvent>().Single();
     }
 
     private static EventEnvelope Envelope(IMessage evt)

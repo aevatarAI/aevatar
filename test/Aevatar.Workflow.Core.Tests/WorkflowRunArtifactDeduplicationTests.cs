@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
@@ -76,6 +77,112 @@ public sealed class WorkflowRunArtifactDeduplicationTests
         agent.State.ProcessedArtifactSources.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ArtifactObservation_ShouldSuppressStepCompletionReplayAfterActorRecovery()
+    {
+        const string actorId = "workflow-run-step-completion-dedup";
+        var store = new InMemoryEventStore();
+        var agent = CreateAgent(actorId, store);
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(
+            StepCompletionEnvelope(actorId, "tool-step", "exec-1"));
+
+        var recovered = CreateAgent(actorId, store);
+        await recovered.ActivateAsync();
+        await recovered.HandleEventAsync(
+            StepCompletionEnvelope(actorId, "tool-step", "exec-1"));
+
+        var persistedFacts = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(StepCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<StepCompletedEvent>())
+            .ToList();
+        persistedFacts.Should().ContainSingle()
+            .Which.ExecutionId.Should().Be("exec-1");
+        recovered.State.ProcessedStepCompletionKeys.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ArtifactObservation_ShouldPersistDistinctExecutionsOfTheSameStep()
+    {
+        const string actorId = "workflow-run-step-completion-distinct";
+        var store = new InMemoryEventStore();
+        var agent = CreateAgent(actorId, store);
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(
+            StepCompletionEnvelope(actorId, "tool-step", "exec-1"));
+        await agent.HandleEventAsync(
+            StepCompletionEnvelope(actorId, "tool-step", "exec-2"));
+
+        var persistedFacts = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(StepCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<StepCompletedEvent>())
+            .ToList();
+        persistedFacts.Select(completion => completion.ExecutionId)
+            .Should().Equal("exec-1", "exec-2");
+        agent.State.ProcessedStepCompletionKeys.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ArtifactObservation_ShouldPreserveLegacyStepCompletionsWithoutExecutionIdentity()
+    {
+        const string actorId = "workflow-run-step-completion-legacy";
+        var store = new InMemoryEventStore();
+        var agent = CreateAgent(actorId, store);
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(
+            StepCompletionEnvelope(actorId, "tool-step", string.Empty));
+        await agent.HandleEventAsync(
+            StepCompletionEnvelope(actorId, "tool-step", string.Empty));
+
+        (await store.GetEventsAsync(actorId))
+            .Count(stateEvent => stateEvent.EventData.Is(StepCompletedEvent.Descriptor))
+            .Should().Be(2);
+        agent.State.ProcessedStepCompletionKeys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DefinitionBinding_ShouldClearStepCompletionDeduplicationKeys()
+    {
+        const string actorId = "workflow-run-step-completion-rebind";
+        var store = new InMemoryEventStore();
+        var agent = CreateAgent(actorId, store);
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(
+            StepCompletionEnvelope(actorId, "tool-step", "exec-1"));
+        agent.State.ProcessedStepCompletionKeys.Should().ContainSingle();
+
+        await PersistForTestAsync(agent, new BindWorkflowRunDefinitionEvent
+        {
+            DefinitionActorId = "definition-artifact-dedup",
+            WorkflowName = "artifact_dedup",
+            WorkflowYaml = "name: artifact_dedup",
+            RunId = "next-run",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            ReusePolicy = WorkflowRunActorReusePolicy.SingleRun,
+        });
+
+        agent.State.RunId.Should().Be("next-run");
+        agent.State.ProcessedStepCompletionKeys.Should().BeEmpty();
+    }
+
+    private static async Task PersistForTestAsync(WorkflowRunGAgent agent, IMessage evt)
+    {
+        var method = typeof(GAgentBase<WorkflowRunState>)
+            .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Single(candidate =>
+                candidate.Name == "PersistDomainEventAsync" &&
+                candidate.IsGenericMethodDefinition &&
+                candidate.GetParameters().Length == 2 &&
+                candidate.GetParameters()[0].ParameterType.IsGenericParameter);
+        var task = (Task)method.MakeGenericMethod(evt.GetType())
+            .Invoke(agent, [evt, CancellationToken.None])!;
+        await task;
+    }
+
     private static WorkflowRunGAgent CreateAgent(string actorId, InMemoryEventStore store)
     {
         var runtime = new UnsupportedActorRuntime();
@@ -124,6 +231,24 @@ public sealed class WorkflowRunArtifactDeduplicationTests
             }),
         };
 
+    private static EventEnvelope StepCompletionEnvelope(
+        string runId,
+        string stepId,
+        string executionId) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(runId, TopologyAudience.Self),
+            Payload = Any.Pack(new StepCompletedEvent
+            {
+                RunId = runId,
+                StepId = stepId,
+                ExecutionId = executionId,
+                Success = true,
+                Output = "{}",
+            }),
+        };
+
     private sealed class EmptyModuleFactory : IEventModuleFactory<IWorkflowExecutionContext>
     {
         public bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? module)
@@ -156,14 +281,46 @@ public sealed class WorkflowRunArtifactDeduplicationTests
     {
         public static EmptyServiceProvider Instance { get; } = new();
 
+        private static IActorRuntimeCallbackScheduler CallbackScheduler { get; } =
+            new NoopRuntimeCallbackScheduler();
+
         public object? GetService(System.Type serviceType)
         {
+            if (serviceType == typeof(IActorRuntimeCallbackScheduler))
+                return CallbackScheduler;
             if (serviceType == typeof(IEnumerable<IGAgentExecutionHook>))
                 return Array.Empty<IGAgentExecutionHook>();
             if (serviceType == typeof(IEnumerable<ICommittedStatePublicationHook>))
                 return Array.Empty<ICommittedStatePublicationHook>();
             return null;
         }
+    }
+
+    private sealed class NoopRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class UnsupportedActorRuntime : IActorRuntime, IActorDispatchPort

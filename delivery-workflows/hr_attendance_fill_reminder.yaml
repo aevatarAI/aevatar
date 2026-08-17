@@ -1,0 +1,146 @@
+# =============================================================================
+# HR-03 考勤填写提醒
+#
+# 用途：月末前（如每月 27 号）给考勤负责人发送 Lark 卡片提醒，检查考勤表是否填写完整。
+# 输入（JSON）：
+#   {"period_label":"2026年8月","days_left":"3","submit":false}
+# 模式：
+#   submit=false（默认）→ 只输出将要发送的提醒卡片内容
+#   submit=true          → 真实发送 Lark 私信卡片
+#
+# 说明：引擎没有时钟，"每月 27 号运行"由调度方/操作者负责；days_left 由调用方传入。
+#
+# ★ 交接替换清单：config 步骤内的 JSON + capability.nyxid_request.user_service_id。
+#   提醒卡片的核对清单文案写在 build_request 模板里（body_text），可按你们的
+#   考勤字段口径直接修改文字。
+# =============================================================================
+name: hr_attendance_fill_reminder
+description: 考勤填写提醒：构造月末考勤核对提醒卡片，preview 输出卡片内容，submit 发送 Lark 私信。
+roles:
+  - id: operator
+    name: HR Operator
+steps:
+  - id: capture_request
+    type: assign
+    parameters:
+      target: raw_request
+      value: "$input"
+    next: config
+
+  # ★★★ 部署参数 ★★★
+  - id: config
+    type: assign
+    parameters:
+      target: deploy_config
+      value: >-
+        {"notify_user_id":"831cg5af",
+         "doc_url":"https://aelfblockchain.sg.larksuite.com/base/MwIRb3h5hauYvcsA28kl8FGfgjg?table=tblTDqjSDKffQ7cm&view=vewfR8fiQS",
+         "submit_time_note":"月末最后一天 10:00 前请完成核对并运行月度考勤审批"}
+    next: merge_context
+
+  - id: merge_context
+    type: assign
+    parameters:
+      target: run_context
+      value: >-
+        {"config":${deploy_config},"request":${raw_request}}
+    next: build_request
+
+  - id: build_request
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{~ cfg = data.config; period = get(data.request, 'period_label', '') ~}}
+        {{~ if period == ''; number('period_label is required'); end ~}}
+        {{~ days_left = get(data.request, 'days_left', '') ~}}
+        {{~ if days_left == ''; number('days_left is required'); end ~}}
+        {{~ sub = get(data.request, 'submit', false); mode = 'PREVIEW'; if sub == true || sub == 'true'; mode = 'SUBMIT'; end ~}}
+        {{~ body_text = '距月末还有 **' + days_left + ' 天**，请在月底前完成核对：\n\n☐ 每人「应出勤/实出勤天数」已更新\n☐ 事假、病假天数已填写\n☐ 离职人员状态已更新\n\n' + cfg.submit_time_note ~}}
+        {{~ card = json({
+              config: { wide_screen_mode: true },
+              header: { title: { tag: 'plain_text', content: '⏰ ' + period + ' 考勤数据填写提醒' }, template: 'orange' },
+              elements: [
+                { tag: 'div', text: { tag: 'lark_md', content: body_text } },
+                { tag: 'action', actions: [ { tag: 'button', text: { tag: 'plain_text', content: '打开考勤表' }, type: 'primary', url: cfg.doc_url } ] } ] }) ~}}
+        {{ json({ mode: mode, period: period, days_left: days_left, card_preview: body_text,
+                  notify_user_id: cfg.notify_user_id, doc_url: cfg.doc_url,
+                  message_request: { query: { receive_id_type: 'user_id' },
+                                     body: { receive_id: cfg.notify_user_id, msg_type: 'interactive', content: card } } }) }}
+    next: route_mode
+
+  - id: route_mode
+    type: switch
+    parameters:
+      on: "${steps.build_request.json.mode}"
+      branch.SUBMIT: extract_message_request
+      branch.PREVIEW: preview_summary
+      branch._default: preview_summary
+    branches:
+      SUBMIT: extract_message_request
+      PREVIEW: preview_summary
+      _default: preview_summary
+
+  # ---- preview 分支 ----
+  - id: preview_summary
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{ json({ workflow: 'hr_attendance_fill_reminder', mode: 'preview',
+                  period: data.period, days_left: data.days_left,
+                  notify_user_id: data.notify_user_id, doc_url: data.doc_url,
+                  card_text_preview: data.card_preview,
+                  side_effects: false }) }}
+    next: done
+
+  # ---- submit 分支 ----
+  - id: extract_message_request
+    type: transform
+    parameters:
+      op: json_extract
+      path: message_request
+    next: send_reminder
+
+  - id: send_reminder
+    type: tool_call
+    capability:
+      nyxid_request:
+        user_service_id: 77d19bda-d635-4af5-bfba-cfcccfd6ba0b
+        method: POST
+        path_template: /open-apis/im/v1/messages
+        query_parameters:
+          - receive_id_type
+        header_parameters: []
+        body_mode: json
+        body_required: true
+        response_mode: text
+    parameters:
+      tool: nyxid_proxy
+    next: merge_submit_results
+
+  - id: merge_submit_results
+    type: assign
+    parameters:
+      target: submit_results
+      value: >-
+        {"built":${steps.build_request.output},"sent":${steps.send_reminder.output}}
+    next: summarize_submit
+
+  - id: summarize_submit
+    type: transform
+    parameters:
+      op: template
+      template: >-
+        {{~ if data.sent.code != 0; number('reminder message was not sent'); end ~}}
+        {{ json({ workflow: 'hr_attendance_fill_reminder', mode: 'submit',
+                  period: data.built.period,
+                  message_id: get(data.sent.data, 'message_id', ''),
+                  message_sent: true, side_effects: true }) }}
+    next: done
+
+  - id: done
+    type: assign
+    parameters:
+      target: final
+      value: "$input"

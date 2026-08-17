@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -285,9 +286,13 @@ public sealed class MainnetChatCompletionsEndpointsTests
     public async Task PostChatCompletions_WithModelSlug_ShouldResolveNyxRoutePreference()
     {
         var provider = new ChatCompletionsRecordingLLMProvider();
-        var routeResolver = new ChatCompletionsRecordingRouteResolver(new Dictionary<string, string>(StringComparer.Ordinal)
+        var routeResolver = new ChatCompletionsRecordingRouteResolver(new Dictionary<string, LLMRouteTarget>(StringComparer.Ordinal)
         {
-            ["chrono-llm"] = "/api/v1/proxy/s/chrono-llm",
+            ["chrono-llm"] = new()
+            {
+                UserServiceId = "user-chrono-llm",
+                ServiceSlugSnapshot = "chrono-llm",
+            },
         });
         await using var app = await CreateAppAsync(
             provider,
@@ -315,7 +320,9 @@ public sealed class MainnetChatCompletionsEndpointsTests
         var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.Model.Should().Be("gpt-5-chat");
-        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        command.RoutePreference.Should().BeEmpty();
+        command.RouteTarget.UserServiceId.Should().Be("user-chrono-llm");
+        command.RouteTarget.ServiceSlugSnapshot.Should().Be("chrono-llm");
     }
 
     [Fact]
@@ -662,19 +669,29 @@ public sealed class MainnetChatCompletionsEndpointsTests
 
     private sealed class ChatCompletionsNoopRouteResolver : IResponsesRouteResolver
     {
-        public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct) =>
-            Task.FromResult<string?>(null);
+        public Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+            string serviceSlug,
+            string upstreamModelId,
+            ResponsesCallerScope callerScope,
+            CancellationToken ct) =>
+            Task.FromResult<LLMRouteTarget?>(null);
     }
 
-    private sealed class ChatCompletionsRecordingRouteResolver(IReadOnlyDictionary<string, string> map)
+    private sealed class ChatCompletionsRecordingRouteResolver(
+        IReadOnlyDictionary<string, LLMRouteTarget> map)
         : IResponsesRouteResolver
     {
         public List<string> ResolvedSlugs { get; } = [];
 
-        public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct)
+        public Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+            string serviceSlug,
+            string upstreamModelId,
+            ResponsesCallerScope callerScope,
+            CancellationToken ct)
         {
-            ResolvedSlugs.Add(slug);
-            return Task.FromResult(map.TryGetValue(slug, out var value) ? value : null);
+            ResolvedSlugs.Add(serviceSlug);
+            return Task.FromResult(
+                map.TryGetValue(serviceSlug, out var value) ? value.Clone() : null);
         }
     }
 

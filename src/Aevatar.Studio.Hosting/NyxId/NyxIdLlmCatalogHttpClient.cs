@@ -238,9 +238,19 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
     {
         try
         {
+            if (service.Identity is not
+                {
+                    Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                    NyxIdUserServiceId: var userServiceId,
+                } identity || string.IsNullOrWhiteSpace(userServiceId))
+                return result;
+
+            var path = $"/api/v1/proxy/s/{Uri.EscapeDataString(service.ServiceSlug)}/models" +
+                       $"?_nyxid_via={Uri.EscapeDataString(userServiceId.Trim())}";
+
             var response = await SendNyxIdAsync(
                 HttpMethod.Get,
-                $"/api/v1/proxy/s/{Uri.EscapeDataString(service.ServiceSlug)}/models",
+                path,
                 bearerToken,
                 body: null,
                 ct).ConfigureAwait(false);
@@ -256,7 +266,7 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
             }
 
             var observedCatalog = NyxIdLlmServiceCatalogParser.ParseOpenAIModelsResponse(response.Body);
-            return NyxIdLlmServiceCatalogParser.MergeObservedModelCatalog(result, service.ServiceSlug, observedCatalog);
+            return NyxIdLlmServiceCatalogParser.MergeObservedModelCatalog(result, identity, observedCatalog);
         }
         catch (OperationCanceledException)
         {

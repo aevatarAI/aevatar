@@ -893,6 +893,68 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
     }
 
     [Fact]
+    public async Task InvokeStreamEndpoint_ShouldPreserveAcceptedRunContext_WhenServiceRunRegistrationFails()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        await ConfigureWorkflowStreamServiceAsync(host);
+        host.ServiceRunRegistrationPort.RegisterFailure =
+            new InvalidOperationException("synthetic service-run registration failure");
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/scopes/scope-a/services/orders/invoke/chat:stream",
+            new { prompt = "hello" });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("text/event-stream");
+        var frames = body
+            .Split("\n\n", StringSplitOptions.RemoveEmptyEntries)
+            .Where(block => block.StartsWith("data: ", StringComparison.Ordinal))
+            .Select(block => JsonDocument.Parse(block["data: ".Length..]).RootElement.Clone())
+            .ToArray();
+        frames.Should().HaveCount(2);
+        frames[0].GetProperty("custom").GetProperty("name").GetString()
+            .Should().Be("aevatar.run.context");
+        frames[1].GetProperty("runError").GetProperty("code").GetString()
+            .Should().Be("EXECUTION_FAILED");
+        frames[1].GetProperty("runError").GetProperty("message").GetString()
+            .Should().Be("Workflow execution failed.");
+        body.Should().NotContain("synthetic service-run registration failure");
+        host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle()
+            .Which.RunId.Should().Be("run-actor-orders");
+    }
+
+    [Fact]
+    public async Task InvokeStreamEndpoint_ShouldAttemptServiceRunRegistrationBeforeCanceledStreamWrite()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        await ConfigureWorkflowStreamServiceAsync(host);
+        host.InteractionService.ResultFactory = async (_, _, onAcceptedAsync, _) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt(
+                "run-actor-canceled",
+                "orders",
+                "cmd-canceled",
+                "corr-canceled");
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            await onAcceptedAsync!(receipt, cancellation.Token);
+            return WorkflowChatRunInteractionResult.Success(
+                receipt,
+                new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                    WorkflowProjectionCompletionStatus.Completed,
+                    true));
+        };
+
+        using var response = await host.Client.PostAsJsonAsync(
+            "/api/scopes/scope-a/services/orders/invoke/chat:stream",
+            new { prompt = "hello" });
+
+        host.ServiceRunRegistrationPort.RegisterCalls.Should().ContainSingle()
+            .Which.RunId.Should().Be("run-actor-canceled");
+    }
+
+    [Fact]
     public async Task InvokeStreamEndpoint_ShouldAllowEmptyMultipartForWorkflowTarget()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

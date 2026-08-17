@@ -8,7 +8,7 @@ owner: eanzhao
 
 Aevatar 的 Agent 可以通过 NyxID LLM Gateway 使用用户在 NyxID 上配置的 LLM API Key（OpenAI、Anthropic、DeepSeek 等），无需在 Aevatar 端存储任何密钥。
 
-## Catalog lifecycle authority
+## Durable authorization catalog lifecycle authority
 
 NyxID catalog snapshots are owned by one catalog actor per authenticated `authority + owner_kind + owner_subject`. This identity is independent of Aevatar `scopeId`; adapters must not derive one from the other. Host and Identity adapters may use a transient bearer to read the external catalog, but dispatch only secret-free typed activation, observation, refresh-failure, invalidation, or cleanup commands. The actor commits the corresponding domain event and the unified projection pipeline materializes its actor-scoped current-state replica.
 
@@ -38,7 +38,122 @@ configured NyxID authority + verified canonical owner
   -> runtime exact match before actor inbox
 ```
 
-Refresh destinations come only from configured NyxID authority and verified canonical identity; caller route strings, URLs, labels, slugs, and model prefixes cannot choose a network destination. Query, planner, and invocation paths do not refresh catalogs, replay events, prime projections, or perform external I/O. The legacy bare-model fallback described for external Responses clients is not authority for UserConfig, scheduling, or workflow execution.
+Refresh destinations come only from configured NyxID authority and verified canonical identity; untrusted caller route strings, URLs, labels, slugs, and model prefixes cannot invent a network destination. Query and planner paths do not refresh catalogs, replay events, prime projections, or perform external I/O. The legacy bare-model fallback described for external Responses clients is not authority for UserConfig, scheduling, or workflow execution.
+
+## Scope model catalog discovery policy
+
+`LLMModelCatalogPolicyGAgent` is the sole authority for the model discovery policy exposed by
+`GET /v1/models`. There is one platform owner and one owner for each `scopeId`. A replace command
+uses `expectedStateVersion` for optimistic concurrency and `mutationId` for idempotency; its
+`202 Accepted` receipt means accepted for dispatch only. The actor commits the policy, publishes
+the committed state through the unified Projection Pipeline, and
+`LLMModelCatalogPolicyCurrentStateDocument` becomes the actor-scoped current-state query replica.
+Readers never replay events, refresh NyxID, or prime that projection in the query call stack. An
+Admin client reports the change as active only after a later GET observes both a higher
+`stateVersion` and `lastMutationId` equal to its submitted `mutationId`. A higher version carrying a
+different mutation means another update won; the client must load that latest policy and ask the
+user to retry instead of reporting a false success.
+
+The two policy owners have deliberately different portable identities:
+
+- The platform policy is always `custom_replace`. Each source stores an exact NyxID
+  `catalogServiceId`, so an administrator can publish a default source list for all scopes without
+  storing one user's credential binding.
+- A scope policy is either `inherit_platform` or `custom_replace`. A custom source stores the exact
+  caller-owned `userServiceId`. `custom_replace` is a complete replacement: an explicitly empty
+  source list is valid, remains empty, and never falls back to the platform policy.
+- Each source always carries an exact, non-empty `explicit_models` list; there is no wildcard or
+  request-time inventory expansion mode. `serviceSlugSnapshot` must be a canonical NyxID slug and
+  must be unique within the policy. It is the stable public model namespace, not an authoritative
+  service identity or an access grant.
+
+`custom_replace` is also the user override boundary. It replaces the platform default as a whole;
+there is no source-by-source merge. This includes an explicitly empty override. To return a scope
+to the administrator-managed default, the client sends
+`DELETE /api/scopes/{scopeId}/llm-model-catalog` with the current `expectedStateVersion` and a
+`mutationId`. The committed scope mode then becomes `inherit_platform`; reset does not copy the
+current platform sources into scope-owned state.
+
+This policy controls discovery, not permission. Saving a source does not create a NyxID service,
+bind credentials, make an organization credential usable, or grant proxy access. Runtime model
+listing and qualified invocation resolve from the persisted policy and never call the human-only
+`GET /api/v1/keys` or `GET /api/v1/services` endpoints. NyxID remains the credential and permission
+authority when the resolved target is invoked at the proxy boundary. The Admin candidate APIs are
+the only consumers of those human inventory endpoints: scope candidates come from `/api/v1/keys`,
+platform candidates from `/api/v1/services`, and they are configuration aids rather than runtime
+facts.
+
+Model inventory can be fetched on demand while editing a source. These configuration-only APIs are:
+
+- `GET /api/scopes/{scopeId}/llm-model-catalog/candidates/{userServiceId}/models`;
+- `GET /api/admin/llm-model-catalog/candidates/{catalogServiceId}/models`.
+
+The scope endpoint re-reads the caller's authoritative NyxID inventory, requires an ordinal exact
+`userServiceId` match that is currently callable, derives the canonical slug from that match, and
+then requests the upstream service's `/models` through
+`/api/v1/proxy/s/{serviceSlug}/models?_nyxid_via={userServiceId}`. The platform endpoint re-reads
+the authoritative catalog inventory, requires an ordinal exact `catalogServiceId` match that is
+currently selectable, and requests `/api/v1/proxy/{catalogServiceId}/models`. A caller cannot
+supply a trusted slug, URL, or proxy destination to either endpoint.
+
+A successful discovery response contains `sourceIdentity`, `serviceSlug`, sorted unique
+`modelIds`, and an optional `defaultModelId`. It is an editing suggestion, not a policy mutation or
+a runtime fact. The operator selects models and persists them as `explicit_models` through the
+corresponding policy `PUT`; an upstream discovery failure fails the request, while a valid empty
+upstream list remains an empty suggestion. Runtime reads do not repeat this fetch.
+
+Aevatar must never classify an LLM source or repair a missing identity from URL text, display name,
+service name, or the presence of `llm` in any of those strings. A canonical slug is accepted only as
+an explicit policy field tied to an exact service identity. This is why services such as
+`chrono-llm` and `chrono-llm-public` are selectable through explicit Admin configuration instead of
+a naming convention.
+
+`GET /v1/models` requires a bearer at the Host boundary only so the caller-scope resolver can
+determine the caller's `scopeId`. The discovery application service receives only that `scopeId`;
+it receives no bearer credential and performs no HTTP calls. It reads only the effective
+`LLMModelCatalogPolicyCurrentStateDocument`:
+
+- A scope `custom_replace`, including one with an explicitly empty source list, is authoritative and
+  never falls back.
+- An absent scope policy or `inherit_platform` selects the platform projection. If that required
+  projection is missing or unavailable, the catalog is unavailable.
+
+Each configured upstream model ID produces one deterministic OpenAI-compatible entry. Entries are
+sorted by `id` using ordinal comparison, and every entry has:
+
+- `id = <serviceSlugSnapshot>/<upstreamModelId>`;
+- `object = model` and `created = 0`;
+- `owned_by` and `group` equal to `serviceSlugSnapshot`;
+- no optional rich metadata (`context_length`, `max_output_tokens`, `display_name`, or
+  `description`).
+
+Model listing never calls an upstream `/models` endpoint, invents request-time timestamps, classifies
+upstream authentication or availability failures, or returns a partial per-source result.
+
+`GET /v1/models` distinguishes an empty catalog from an unavailable catalog:
+
+- Missing or invalid caller authentication returns `401` (`authentication_required` or
+  `authentication_failed`) before discovery reads the policy.
+- An explicitly empty effective policy returns `200 OK` with `data: []`.
+- A missing or unavailable required effective-policy projection returns
+  `503 model_catalog_unavailable`.
+
+Qualified invocation uses the same effective policy as listing and requires an ordinal exact match
+for both `serviceSlugSnapshot` and `upstreamModelId`. A match produces a typed target: a platform
+source supplies its exact `catalogServiceId`, while a scope source supplies its exact
+`userServiceId` together with the canonical slug snapshot. The slug remains a public namespace and
+never becomes authoritative identity. Every qualified model ID returned by `/v1/models` is resolved
+through this same policy path by both `POST /v1/chat/completions` and `POST /v1/responses`; subject
+to NyxID proxy authorization and upstream availability, the same ID is therefore invocable through
+either API. An unknown qualified slug or model returns
+`404 model_not_found`; a routing-projection failure returns `503 model_route_unavailable`. Bare
+model routing remains a legacy compatibility path. Runtime routing does not read external inventory
+or keep an in-process per-bearer catalog/slug cache.
+
+Qualified routes use NyxID's REST proxy plane, not the legacy LLM gateway authorization path. The
+bearer used for a qualified invocation must therefore carry `proxy` or `proxy:*`; `llm:proxy` alone
+is insufficient. A bearer limited to `llm:proxy` may continue to call the legacy gateway with a
+bare model, but it cannot invoke a configured qualified catalog or UserService target.
 
 ## Published topology contract boundary
 
@@ -71,7 +186,7 @@ NyxID 验证 Token → 查找该用户的 API Key → 注入 → 转发给上游
 返回结果
 ```
 
-用户的 API Key 始终加密存储在 NyxID 中，Aevatar 不接触明文密钥。旧调用方仍可让 Gateway 按裸 model 名做兼容路由（例如 `gpt-4o` → OpenAI，`claude-sonnet-4-5-20250929` → Anthropic），但新的 Responses 直连接入应优先使用 `/v1/models` 返回的 `<service-slug>/<model>`。
+用户的 API Key 始终加密存储在 NyxID 中，Aevatar 不接触明文密钥。旧调用方仍可让 Gateway 按裸 model 名做兼容路由（例如 `gpt-4o` → OpenAI，`claude-sonnet-4-5-20250929` → Anthropic），但新的 Responses 直连接入应优先使用 `/v1/models` 返回的 `<service-slug>/<model>`。这里的 slug 只是客户端可读的模型命名空间，不能代替 NyxID 的精确 service identity。
 
 ---
 
@@ -92,10 +207,17 @@ chrono-llm/gpt-5.5
 llm-anthropic/claude-haiku-4-5
 ```
 
-`GET /v1/models` 会按调用者 bearer 从 NyxID service catalog 聚合可达服务，并把每个上游模型规范化成上述格式。创建请求时，Aevatar 会把 `<service-slug>/<model>` 拆成两部分：
+`GET /v1/models` 要求 bearer，但 bearer 只交给 caller-scope resolver 解析 `scopeId`；model discovery 只接收 `scopeId`，不接收 bearer，也不执行 HTTP 请求。它只读取当前 scope 的有效 model catalog policy current-state projection：scope `custom_replace`（包括显式空来源）始终优先且不回退；scope 缺失或 `inherit_platform` 时读取平台 projection，所需的平台 projection 缺失或不可用则返回 `503 model_catalog_unavailable`。显式空有效策略返回 `200 OK` 与 `data: []`，缺失或非法 caller authentication 返回 `401`。
 
-1. `service-slug` 通过 NyxID catalog 解析成 `route_value`，写入本次 LLM request 的 `NyxIdRoutePreference`。
-2. 裸 `model` 传给下游 LLM provider。
+每个 `explicit_models` 中的 model ID 都确定性映射为一条 `<serviceSlugSnapshot>/<upstreamModelId>`，结果按完整 `id` 做 ordinal 排序；`created` 固定为 `0`，`owned_by` 与 `group` 固定为 slug，rich metadata 字段保持 null 并从 JSON 省略。该端点不调用上游 `/models`，不生成请求时刻时间戳，也不存在按来源失败分类、部分成功或成功并集语义。human-only 的 `/api/v1/keys`、`/api/v1/services` 与 `/api/v1/user-services` 不参与运行时 discovery；Admin candidate inventory 也不是运行时事实。
+
+创建请求时，Aevatar 会把 `<service-slug>/<model>` 拆成展示命名空间与裸模型名，但不会把 slug 当作最终路由身份：
+
+1. `service-slug` 与裸 `model` 必须同时 ordinal exact match 同一份有效 policy；只命中 slug 但 model 不在该来源的 `explicit_models` 中也视为未知模型。
+2. 命中平台来源时生成携带 exact `catalogServiceId` 的 typed target；命中 scope 来源时生成携带 exact `userServiceId` 与 canonical slug snapshot 的 typed target。slug 只用于公开命名空间，绝不是 authoritative identity。
+3. 裸 `model` 与 typed target 一起传给下游 LLM provider。
+
+未知的 qualified slug/model 返回 `404 model_not_found`；routing projection 不可用返回 `503 model_route_unavailable`。
 
 如果客户端传裸 model 名，Aevatar 仍会走默认 gateway fallback。这只是兼容路径，不是新文档推荐路径。
 

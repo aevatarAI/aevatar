@@ -193,6 +193,53 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task EnsureDefinitionAsync_WhenBindingProjectionStaysLagged_ShouldNotDuplicateAuthority()
+    {
+        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string actorId = "definition-projection-lag";
+        var eventStore = new InMemoryEventStore();
+        var definitionAgent = CreateWorkflowDefinitionAgent(eventStore, actorId);
+        var runtime = new RecordingActorRuntime();
+        runtime.StoredActors[actorId] = new RecordingActor(
+            actorId,
+            definitionAgent,
+            forwardToAgent: true);
+        var laggedReader = new StaticWorkflowActorBindingReader(
+            new Dictionary<string, WorkflowActorBinding?>(StringComparer.Ordinal)
+            {
+                [actorId] = null,
+            });
+        var port = CreatePort(runtime, laggedReader);
+        var definition = new WorkflowDefinitionBinding(
+            actorId,
+            "direct",
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Durable,
+            ScopeId: "tenant-alpha",
+            SourceKind: "service_revision",
+            CapabilityAdmissionPlan: WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Durable,
+                [],
+                []));
+
+        var first = await port.EnsureDefinitionAsync(definition, actorId, CancellationToken.None);
+        var second = await port.EnsureDefinitionAsync(definition, actorId, CancellationToken.None);
+
+        first.Should().Be(new WorkflowDefinitionProvisioningReceipt(actorId, CreatedNow: false));
+        second.Should().Be(first);
+        runtime.Dispatches.Should().HaveCount(2);
+        runtime.Dispatches.Should().OnlyContain(dispatch =>
+            dispatch.Envelope.Payload != null &&
+            dispatch.Envelope.Payload.Is(BindWorkflowDefinitionEvent.Descriptor));
+        definitionAgent.State.Version.Should().Be(1);
+        (await eventStore.GetEventsAsync(actorId))
+            .Should().ContainSingle(evt => evt.EventData.Is(BindWorkflowDefinitionEvent.Descriptor));
+    }
+
+    [Fact]
     public async Task EnsureDefinitionAsync_ShouldForwardPreferredActorId()
     {
         var runtime = new RecordingActorRuntime();
@@ -1687,9 +1734,11 @@ public sealed class WorkflowRunActorPortBranchTests
         return agent;
     }
 
-    private static WorkflowGAgent CreateWorkflowDefinitionAgent()
+    private static WorkflowGAgent CreateWorkflowDefinitionAgent(
+        InMemoryEventStore? eventStore = null,
+        string? actorId = null)
     {
-        var eventStore = new InMemoryEventStore();
+        eventStore ??= new InMemoryEventStore();
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
             .AddSingleton<IEventStore>(eventStore)
@@ -1701,6 +1750,14 @@ public sealed class WorkflowRunActorPortBranchTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
         var agent = new WorkflowGAgent();
+        if (!string.IsNullOrWhiteSpace(actorId))
+        {
+            typeof(Aevatar.Foundation.Core.GAgentBase)
+                .GetMethod(
+                    "SetId",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .Invoke(agent, [actorId]);
+        }
         agent.Services = services;
         agent.EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<WorkflowState>>();
         return agent;

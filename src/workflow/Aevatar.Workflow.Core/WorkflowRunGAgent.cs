@@ -46,6 +46,7 @@ public sealed partial class WorkflowRunGAgent
       ISecretVaultAccessor
 {
     private const string RunningStatus = "running";
+    private const string BoundStatus = "bound";
     private const string CompletedStatus = "completed";
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
@@ -54,8 +55,10 @@ public sealed partial class WorkflowRunGAgent
     private const string ToolApprovalNotificationDispatchOperationPrefix = "workflow-tool-approval-notification";
     private const string TerminalNotificationDispatchOperationPrefix = "workflow-terminal-notification";
     private const string TerminalNotificationRetryCallbackPrefix = "workflow-terminal-notification-retry";
+    private const string TerminalToolCallCleanupRetryCallbackPrefix = "workflow-tool-terminal-cleanup-retry";
     private const int TerminalNotificationInitialRetryDelayMs = 250;
     private const int TerminalNotificationMaxRetryDelayMs = 30_000;
+    private static readonly TimeSpan TerminalToolCallCleanupRetryDelay = TimeSpan.FromSeconds(1);
     private const string WorkflowNotExecutableError = "Workflow run is not definition-bound or compiled.";
     private const string InputFileBindingError = "workflow_input_file_binding_failed";
     private const int InteractiveActionHandoffLimit = 32;
@@ -218,6 +221,13 @@ public sealed partial class WorkflowRunGAgent
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeKey);
         ArgumentNullException.ThrowIfNull(state);
+        if (string.Equals(scopeKey, ToolCallModule.ModuleStateKey, StringComparison.Ordinal) &&
+            state.Is(ToolCallModuleState.Descriptor))
+        {
+            var toolCallState = state.Unpack<ToolCallModuleState>();
+            ToolCallModule.ScrubLegacyPayloadFields(toolCallState);
+            state = Any.Pack(toolCallState);
+        }
         return PersistDomainEventAsync(
             new WorkflowExecutionStateUpsertedEvent
             {
@@ -394,8 +404,10 @@ public sealed partial class WorkflowRunGAgent
     {
         RebuildCompiledWorkflowCache();
         await base.OnActivateAsync(ct);
+        await DrainPendingDefinitionBindingContinuationAsync(ct);
         InstallCognitiveModules();
-        await RecoverToolCallDurablePublicationsAsync(ct);
+        await RecoverTerminalNotificationAsync(ct);
+        await RecoverToolCallActorLocalStateAsync(ct);
         await RecoverForEachDurablePublicationsAsync(ct);
 
         if (string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
@@ -413,7 +425,13 @@ public sealed partial class WorkflowRunGAgent
 
         await DispatchPendingInteractiveActionContinuationsAsync(ct);
         await ResumeCompensationAsync(ct);
-        await RecoverTerminalNotificationAsync(ct);
+    }
+
+    protected override Task OnDeactivateAsync(CancellationToken ct)
+    {
+        CancelWorkflowExecutionBackgroundWork();
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
     }
 
     protected override async Task OnCommittedStatePublicationRecoveredAsync(
@@ -421,13 +439,36 @@ public sealed partial class WorkflowRunGAgent
         CancellationToken ct)
     {
         await base.OnCommittedStatePublicationRecoveredAsync(envelope, ct);
+        await DrainPendingDefinitionBindingContinuationAsync(ct);
+        await RecoverTerminalNotificationAsync(ct);
+        await RecoverToolCallActorLocalStateAsync(ct);
         await DispatchPendingInteractiveActionContinuationsAsync(ct);
-        await RecoverToolCallDurablePublicationsAsync(ct);
         await RecoverForEachDurablePublicationsAsync(ct);
+    }
+
+    private async Task RecoverToolCallActorLocalStateAsync(CancellationToken ct)
+    {
+        if (IsTerminalStatus(State.Status) && !IsCompensating(State))
+        {
+            DisableExecutionModules();
+            await CleanupTerminalToolCallStateAsync(
+                ct,
+                allowImmediateFallback: false);
+            return;
+        }
+
+        await RecoverToolCallPendingApprovalWatchdogsAsync(ct);
+        await RecoverToolCallPendingExecutionWatchdogsAsync(ct);
+        await RecoverToolCallPendingExecutionRetriesAsync(ct);
+        await RecoverToolCallPendingExecutionsAsync(ct);
+        await RecoverToolCallDurablePublicationsAsync(ct);
     }
 
     private async Task RecoverForEachDurablePublicationsAsync(CancellationToken ct)
     {
+        if (IsTerminalStatus(State.Status) && !IsCompensating(State))
+            return;
+
         var packed = State.ExecutionStates.GetValueOrDefault(ForEachModule.ModuleStateKey);
         if (packed == null || !packed.Is(ForEachModuleState.Descriptor))
             return;
@@ -530,6 +571,419 @@ public sealed partial class WorkflowRunGAgent
         }
     }
 
+    private async Task RecoverToolCallPendingExecutionWatchdogsAsync(CancellationToken ct)
+    {
+        var packed = State.ExecutionStates.GetValueOrDefault(ToolCallModule.ModuleStateKey);
+        if (packed == null || !packed.Is(ToolCallModuleState.Descriptor))
+            return;
+
+        var state = packed.Unpack<ToolCallModuleState>();
+        foreach (var recovery in ToolCallModule.BuildPendingExecutionWatchdogRecoveries(
+                     state,
+                     _timeProvider.GetUtcNow()))
+        {
+            var lease = await ScheduleSelfDurableTimeoutAsync(
+                recovery.CallbackId,
+                recovery.DueTime,
+                recovery.Timeout,
+                recovery.Options,
+                ct);
+
+            packed = State.ExecutionStates.GetValueOrDefault(ToolCallModule.ModuleStateKey);
+            if (packed == null || !packed.Is(ToolCallModuleState.Descriptor))
+            {
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    CancelDurableCallbackAsync,
+                    Logger,
+                    lease,
+                    "orphaned recovered tool execution watchdog",
+                    CancellationToken.None);
+                return;
+            }
+
+            state = packed.Unpack<ToolCallModuleState>();
+            if (!state.PendingExecutions.TryGetValue(recovery.PendingKey, out var pending) ||
+                !ToolCallModule.MatchesPendingExecution(pending, recovery))
+            {
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    CancelDurableCallbackAsync,
+                    Logger,
+                    lease,
+                    "orphaned recovered tool execution watchdog",
+                    ct);
+                continue;
+            }
+
+            pending.TimeoutLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+            state.PendingExecutions[recovery.PendingKey] = pending;
+            await UpsertExecutionStateAsync(
+                ToolCallModule.ModuleStateKey,
+                Any.Pack(state),
+                ct);
+        }
+    }
+
+    private async Task RecoverToolCallPendingApprovalWatchdogsAsync(CancellationToken ct)
+    {
+        var packed = State.ExecutionStates.GetValueOrDefault(ToolCallModule.ModuleStateKey);
+        if (packed == null || !packed.Is(ToolCallModuleState.Descriptor))
+            return;
+
+        var state = packed.Unpack<ToolCallModuleState>();
+        foreach (var recovery in ToolCallModule.BuildPendingApprovalWatchdogRecoveries(
+                     state,
+                     _timeProvider.GetUtcNow()))
+        {
+            var lease = await ScheduleSelfDurableTimeoutAsync(
+                recovery.CallbackId,
+                recovery.DueTime,
+                recovery.Timeout,
+                recovery.Options,
+                ct);
+
+            packed = State.ExecutionStates.GetValueOrDefault(ToolCallModule.ModuleStateKey);
+            if (packed == null || !packed.Is(ToolCallModuleState.Descriptor))
+            {
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    CancelDurableCallbackAsync,
+                    Logger,
+                    lease,
+                    "orphaned recovered tool approval watchdog",
+                    CancellationToken.None);
+                return;
+            }
+
+            state = packed.Unpack<ToolCallModuleState>();
+            if (!state.PendingApprovals.TryGetValue(recovery.PendingKey, out var pending) ||
+                !ToolCallModule.MatchesPendingApproval(pending, recovery))
+            {
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    CancelDurableCallbackAsync,
+                    Logger,
+                    lease,
+                    "orphaned recovered tool approval watchdog",
+                    CancellationToken.None);
+                continue;
+            }
+
+            pending.TimeoutCallbackId = recovery.CallbackId;
+            pending.TimeoutLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+            state.PendingApprovals[recovery.PendingKey] = pending;
+            try
+            {
+                await UpsertExecutionStateAsync(
+                    ToolCallModule.ModuleStateKey,
+                    Any.Pack(state),
+                    ct);
+            }
+            catch
+            {
+                if (!IsToolCallApprovalWatchdogCheckpointed(recovery, lease))
+                {
+                    await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                        CancelDurableCallbackAsync,
+                        Logger,
+                        lease,
+                        "uncommitted recovered tool approval watchdog",
+                        CancellationToken.None);
+                }
+                throw;
+            }
+        }
+    }
+
+    private bool IsToolCallApprovalWatchdogCheckpointed(
+        ToolCallModule.PendingApprovalWatchdogRecovery recovery,
+        RuntimeCallbackLease lease)
+    {
+        var packed = State.ExecutionStates.GetValueOrDefault(ToolCallModule.ModuleStateKey);
+        if (packed == null || !packed.Is(ToolCallModuleState.Descriptor))
+            return false;
+
+        var state = packed.Unpack<ToolCallModuleState>();
+        if (!state.PendingApprovals.TryGetValue(recovery.PendingKey, out var pending))
+            return false;
+
+        var checkpointedLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+        return ToolCallModule.MatchesPendingApproval(
+            pending,
+            recovery with { ExpectedTimeoutLease = checkpointedLease });
+    }
+
+    private async Task RecoverToolCallPendingExecutionRetriesAsync(CancellationToken ct)
+    {
+        var packed = State.ExecutionStates.GetValueOrDefault(ToolCallModule.ModuleStateKey);
+        if (packed == null || !packed.Is(ToolCallModuleState.Descriptor))
+            return;
+
+        var state = packed.Unpack<ToolCallModuleState>();
+        foreach (var recovery in ToolCallModule.BuildPendingExecutionRetryRecoveries(
+                     state,
+                     _timeProvider.GetUtcNow()))
+        {
+            var lease = await ScheduleSelfDurableTimeoutAsync(
+                recovery.CallbackId,
+                recovery.DueTime,
+                recovery.Retry,
+                recovery.Options,
+                ct);
+
+            packed = State.ExecutionStates.GetValueOrDefault(ToolCallModule.ModuleStateKey);
+            if (packed == null || !packed.Is(ToolCallModuleState.Descriptor))
+                return;
+
+            state = packed.Unpack<ToolCallModuleState>();
+            if (!state.PendingExecutions.TryGetValue(recovery.PendingKey, out var pending) ||
+                !ToolCallModule.MatchesPendingExecution(pending, recovery))
+            {
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    CancelDurableCallbackAsync,
+                    Logger,
+                    lease,
+                    "orphaned recovered tool execution retry",
+                    ct);
+                continue;
+            }
+
+            pending.RetryLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+            state.PendingExecutions[recovery.PendingKey] = pending;
+            await UpsertExecutionStateAsync(
+                ToolCallModule.ModuleStateKey,
+                Any.Pack(state),
+                ct);
+        }
+    }
+
+    private async Task RecoverToolCallPendingExecutionsAsync(CancellationToken ct)
+    {
+        var packed = State.ExecutionStates.GetValueOrDefault(ToolCallModule.ModuleStateKey);
+        if (packed == null || !packed.Is(ToolCallModuleState.Descriptor))
+            return;
+
+        var state = packed.Unpack<ToolCallModuleState>();
+        foreach (var recovery in ToolCallModule.BuildPendingExecutionRecoveries(state))
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                recovery.CallbackId,
+                TimeSpan.FromMilliseconds(1),
+                recovery.Recovery,
+                recovery.Options,
+                ct);
+        }
+    }
+
+    private async Task CleanupTerminalToolCallStateAsync(
+        CancellationToken ct,
+        bool allowImmediateFallback = true)
+    {
+        CancelWorkflowExecutionBackgroundWork();
+        if (!State.ExecutionStates.TryGetValue(ToolCallModule.ModuleStateKey, out var packed) ||
+            !packed.Is(ToolCallModuleState.Descriptor))
+        {
+            return;
+        }
+
+        var toolState = packed.Unpack<ToolCallModuleState>();
+        await CancelToolCallPendingCallbacksAsync(toolState, ct);
+        var materialCleanup = await RevokeToolCallProtectedMaterialsAsync(toolState, ct);
+        if (materialCleanup.AllReferencesRevoked)
+        {
+            await ClearExecutionStateAsync(ToolCallModule.ModuleStateKey, ct);
+            return;
+        }
+
+        if (materialCleanup.StateChanged)
+        {
+            await UpsertExecutionStateAsync(
+                ToolCallModule.ModuleStateKey,
+                Any.Pack(toolState),
+                ct);
+        }
+
+        await ScheduleTerminalToolCallCleanupRetryAsync(allowImmediateFallback, ct);
+    }
+
+    private async Task CancelToolCallPendingCallbacksAsync(
+        ToolCallModuleState toolState,
+        CancellationToken ct)
+    {
+        foreach (var pending in toolState.PendingApprovals.Values)
+        {
+            await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                CancelDurableCallbackAsync,
+                Logger,
+                WorkflowRuntimeCallbackLeaseStateCodec.ToRuntime(pending.TimeoutLease),
+                "terminal tool approval watchdog",
+                ct);
+        }
+
+        foreach (var pending in toolState.PendingExecutions.Values)
+        {
+            await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                CancelDurableCallbackAsync,
+                Logger,
+                WorkflowRuntimeCallbackLeaseStateCodec.ToRuntime(pending.TimeoutLease),
+                "terminal tool execution watchdog",
+                ct);
+            await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                CancelDurableCallbackAsync,
+                Logger,
+                WorkflowRuntimeCallbackLeaseStateCodec.ToRuntime(pending.RetryLease),
+                "terminal tool execution retry",
+                ct);
+        }
+    }
+
+    private async Task<ToolCallProtectedMaterialCleanupResult> RevokeToolCallProtectedMaterialsAsync(
+        ToolCallModuleState toolState,
+        CancellationToken ct)
+    {
+        var runtimeSecretStore = (IRuntimeSecretStore?)Services.GetService(typeof(IRuntimeSecretStore));
+        var references = toolState.PendingApprovals.Values
+            .Select(static pending => pending.ProtectedMaterialReference)
+            .Concat(toolState.PendingExecutions.Values.Select(static pending => pending.ProtectedMaterialReference))
+            .Concat(toolState.Completions.Select(static completion => completion.ProtectedMaterialReference))
+            .Where(static reference => reference != null && !string.IsNullOrWhiteSpace(reference.Ref))
+            .GroupBy(static reference => reference!.Ref, StringComparer.Ordinal)
+            .Select(static group => group.First()!)
+            .ToArray();
+        var revokedReferences = new HashSet<string>(StringComparer.Ordinal);
+        var allReferencesRevoked = true;
+        foreach (var reference in references)
+        {
+            var revoked = await ToolCallModule.RevokeOrConfirmProtectedMaterialUnavailableAsync(
+                reference,
+                runtimeSecretStore,
+                ct);
+            if (revoked)
+            {
+                revokedReferences.Add(reference.Ref);
+                continue;
+            }
+
+            allReferencesRevoked = false;
+            Logger.LogWarning(
+                "Workflow tool protected material revocation was not confirmed. actor={ActorId} run={RunId} step={StepId}",
+                Id,
+                reference.OwnerRunId,
+                reference.OwnerStepId);
+        }
+
+        if (revokedReferences.Count == 0)
+        {
+            return new ToolCallProtectedMaterialCleanupResult(
+                allReferencesRevoked,
+                StateChanged: false);
+        }
+
+        foreach (var pending in toolState.PendingApprovals.Values)
+        {
+            if (pending.ProtectedMaterialReference != null &&
+                revokedReferences.Contains(pending.ProtectedMaterialReference.Ref))
+            {
+                pending.ProtectedMaterialReference = null;
+                pending.ProtectedMaterialDigestSha256 = string.Empty;
+            }
+        }
+
+        foreach (var pending in toolState.PendingExecutions.Values)
+        {
+            if (pending.ProtectedMaterialReference != null &&
+                revokedReferences.Contains(pending.ProtectedMaterialReference.Ref))
+            {
+                pending.ProtectedMaterialReference = null;
+                pending.ProtectedMaterialDigestSha256 = string.Empty;
+            }
+        }
+
+        foreach (var completion in toolState.Completions)
+        {
+            if (completion.ProtectedMaterialReference != null &&
+                revokedReferences.Contains(completion.ProtectedMaterialReference.Ref))
+            {
+                completion.ProtectedMaterialReference = null;
+            }
+        }
+
+        return new ToolCallProtectedMaterialCleanupResult(
+            allReferencesRevoked,
+            StateChanged: true);
+    }
+
+    private readonly record struct ToolCallProtectedMaterialCleanupResult(
+        bool AllReferencesRevoked,
+        bool StateChanged);
+
+    private async Task ScheduleTerminalToolCallCleanupRetryAsync(
+        bool allowImmediateFallback,
+        CancellationToken ct)
+    {
+        var retry = new WorkflowToolCallTerminalCleanupRetryFiredEvent
+        {
+            RunId = RunId,
+        };
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                BuildTerminalToolCallCleanupRetryCallbackId(retry.RunId),
+                TerminalToolCallCleanupRetryDelay,
+                retry,
+                BuildTerminalToolCallCleanupRetryOptions(retry.RunId),
+                ct: ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception scheduleException)
+        {
+            Logger.LogWarning(
+                scheduleException,
+                "Terminal workflow tool cleanup retry scheduling failed; falling back to a typed self continuation. actor={ActorId} run={RunId}",
+                Id,
+                retry.RunId);
+            if (!allowImmediateFallback)
+            {
+                throw new WorkflowDurablePublicationPendingException(
+                    "Terminal workflow tool cleanup durable retry scheduling remains unavailable.",
+                    scheduleException);
+            }
+
+            try
+            {
+                await PublishAsync(
+                    retry.Clone(),
+                    TopologyAudience.Self,
+                    ct,
+                    BuildTerminalToolCallCleanupRetryOptions(retry.RunId));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception continuationException)
+            {
+                throw new WorkflowDurablePublicationPendingException(
+                    "Terminal workflow tool cleanup remains pending.",
+                    continuationException);
+            }
+        }
+    }
+
+    private static string BuildTerminalToolCallCleanupRetryCallbackId(string runId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(
+            TerminalToolCallCleanupRetryCallbackPrefix,
+            WorkflowRunIdNormalizer.Normalize(runId));
+
+    private static EventEnvelopePublishOptions BuildTerminalToolCallCleanupRetryOptions(string runId) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = BuildTerminalToolCallCleanupRetryCallbackId(runId),
+            },
+        };
+
     public async Task BindWorkflowRunDefinitionAsync(
         string definitionActorId,
         string workflowYaml,
@@ -551,6 +1005,12 @@ public sealed partial class WorkflowRunGAgent
         string? bindPublisherActorId = null,
         CancellationToken ct = default)
     {
+        if (State.PendingDefinitionBindingContinuation != null)
+        {
+            throw new InvalidOperationException(
+                "Workflow Run cannot bind while definition binding cleanup is pending.");
+        }
+
         var requestedRunId = ResolveRequestedBindRunId(State, runId);
         var normalizedReusePolicy = reusePolicy == WorkflowRunActorReusePolicy.Unspecified
             ? WorkflowRunActorReusePolicy.SingleRun
@@ -602,6 +1062,11 @@ public sealed partial class WorkflowRunGAgent
         {
             throw new InvalidOperationException(bindDecision.Error);
         }
+        if (HasPendingToolCallState(State))
+        {
+            throw new InvalidOperationException(
+                "Workflow Run cannot bind while actor-local tool call cleanup is pending.");
+        }
 
         if (expectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
             !System.Enum.IsDefined(expectedExecutionMode))
@@ -617,14 +1082,19 @@ public sealed partial class WorkflowRunGAgent
         }
 
         EnsureWorkflowNameCanBind(workflowName);
-        var childActorIdsToReset = CaptureDerivedChildActorIdsForReset();
-        var stateBeforeBind = State.Clone();
-
-        await PersistDomainEventAsync(bindDefinitionEvent, ct);
-        await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);
-        RebuildCompiledWorkflowCache();
-        await ResetDerivedRuntimeStateAsync(childActorIdsToReset, ct);
-        InstallCognitiveModules();
+        var continuation = BuildDefinitionBindingContinuation(
+            executeAfterBind: false,
+            executionInput: string.Empty);
+        await PersistDomainEventsAsync(
+            [
+                bindDefinitionEvent,
+                new WorkflowRunDefinitionBindingContinuationRegisteredEvent
+                {
+                    Continuation = continuation,
+                },
+            ],
+            ct);
+        await DrainPendingDefinitionBindingContinuationAsync(ct);
     }
 
     [EventHandler]
@@ -987,7 +1457,9 @@ public sealed partial class WorkflowRunGAgent
             return;
         }
 
-        var replaceResult = await ReplaceWorkflowDefinitionBypassingBindingAsync(yaml);
+        var replaceResult = await ReplaceWorkflowDefinitionBypassingBindingAsync(
+            yaml,
+            request.Input ?? string.Empty);
         if (!replaceResult.Compiled || _compiledWorkflow == null)
         {
             var reason = string.IsNullOrWhiteSpace(replaceResult.CompilationError)
@@ -1003,40 +1475,6 @@ public sealed partial class WorkflowRunGAgent
             }, TopologyAudience.Parent);
             return;
         }
-
-        await EnsureAgentTreeAsync();
-
-        var runId = string.IsNullOrWhiteSpace(State.RunId)
-            ? WorkflowRunIdNormalizer.Normalize(Id)
-            : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var replacementExecutionContext =
-            WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta();
-        replacementExecutionContext.ClearCallerCredential = true;
-        replacementExecutionContext.ClearUnattendedEffectAuthorization = true;
-        await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
-        {
-            RunId = runId,
-            WorkflowName = _compiledWorkflow.Name,
-            Input = request.Input ?? string.Empty,
-            DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            ScopeId = State.ScopeId ?? string.Empty,
-            ExecutionContextDelta = replacementExecutionContext,
-            Attempt = State.ForkAttempt,
-            // O2 (06-19-workflow-run-observatory): capture the run-start fact so the readmodel can sort by it.
-            StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            CurrentTurnId = State.CurrentTurnId,
-        });
-
-        await PublishStartWorkflowOrTerminalFailureAsync(
-            new StartWorkflowEvent
-            {
-                WorkflowName = _compiledWorkflow.Name,
-                Input = request.Input ?? string.Empty,
-                RunId = runId,
-                BindingGeneration = State.BindingGeneration,
-            },
-            sessionId: string.Empty,
-            CancellationToken.None);
     }
 
     private async Task PublishStartWorkflowOrTerminalFailureAsync(
@@ -1657,6 +2095,30 @@ public sealed partial class WorkflowRunGAgent
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleWorkflowToolCallTerminalCleanupRetryFired(
+        WorkflowToolCallTerminalCleanupRetryFiredEvent retry)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        if (!IsTerminalStatus(State.Status) ||
+            IsCompensating(State) ||
+            !string.Equals(retry.RunId, RunId, StringComparison.Ordinal))
+        {
+            Logger.LogDebug(
+                "Ignore stale terminal workflow tool cleanup retry. actor={ActorId} currentRun={CurrentRunId} retryRun={RetryRunId} status={Status}",
+                Id,
+                RunId,
+                retry.RunId,
+                State.Status);
+            return;
+        }
+
+        DisableExecutionModules();
+        await CleanupTerminalToolCallStateAsync(
+            CancellationToken.None,
+            allowImmediateFallback: false);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleWorkflowRunTerminalNotificationRetryFired(
         WorkflowRunTerminalNotificationRetryFiredEvent retry)
     {
@@ -1851,7 +2313,7 @@ public sealed partial class WorkflowRunGAgent
                 "Ignore duplicate WorkflowCompletedEvent for terminal run={RunId} status={Status}.",
                 string.IsNullOrWhiteSpace(evt.RunId) ? RunId : evt.RunId,
                 State.Status);
-            await EnsureTerminalNotificationAsync(CancellationToken.None);
+            await RecoverDuplicateTerminalToolCallCleanupAsync(CancellationToken.None);
             return;
         }
 
@@ -1868,6 +2330,7 @@ public sealed partial class WorkflowRunGAgent
                     CompletedAtUtc = completedAt,
                 },
             ]);
+        DisableExecutionModules();
         await TryRevokeScheduledCallerCredentialAsync(
             stateBeforeCompletion,
             "workflow-run-completed",
@@ -1879,7 +2342,6 @@ public sealed partial class WorkflowRunGAgent
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(evt.RunId, stateBeforeCompletion, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
         _runtimeContext.Clear();
-        DisableExecutionModules();
         if (evt.Success)
         {
             Logger.LogInformation(
@@ -1910,6 +2372,7 @@ public sealed partial class WorkflowRunGAgent
 
         await PublishManagedParentInvocationCompletionAsync(persistedEvent, stateBeforeCompletion, CancellationToken.None);
         await EnsureTerminalNotificationAsync(CancellationToken.None);
+        await CleanupTerminalToolCallStateAsync(CancellationToken.None);
     }
 
     // R1 (06-20-observatory-run-state-feed): a provisioned run delegates execution to an inner child
@@ -1951,7 +2414,7 @@ public sealed partial class WorkflowRunGAgent
                 "Skip adopting relayed WorkflowCompletedEvent for terminal run={RunId} status={Status}.",
                 RunId,
                 State.Status);
-            await EnsureTerminalNotificationAsync(CancellationToken.None);
+            await RecoverDuplicateTerminalToolCallCleanupAsync(CancellationToken.None);
             return;
         }
 
@@ -1969,7 +2432,9 @@ public sealed partial class WorkflowRunGAgent
                     CompletedAtUtc = completedAt,
                 },
             ]);
+        DisableExecutionModules();
         await EnsureTerminalNotificationAsync(CancellationToken.None);
+        await CleanupTerminalToolCallStateAsync(CancellationToken.None);
     }
 
     private WorkflowCompletedEvent NormalizeAdoptedCompleted(WorkflowCompletedEvent evt)
@@ -2052,8 +2517,8 @@ public sealed partial class WorkflowRunGAgent
 
         if (!TryPrepareStop(evt.RunId, nameof(WorkflowStoppedEvent), out var runId))
         {
-            if (IsTerminalStatus(State.Status))
-                await EnsureTerminalNotificationAsync(CancellationToken.None);
+            if (IsTerminalStatus(State.Status) && !IsMismatchedRunIdentity(State, evt.RunId))
+                await RecoverDuplicateTerminalToolCallCleanupAsync(CancellationToken.None);
             return;
         }
 
@@ -2079,8 +2544,8 @@ public sealed partial class WorkflowRunGAgent
         ArgumentNullException.ThrowIfNull(evt);
         if (!TryPrepareStop(evt.RunId, nameof(WorkflowRunStoppedEvent), out var runId))
         {
-            if (IsTerminalStatus(State.Status))
-                await EnsureTerminalNotificationAsync(CancellationToken.None);
+            if (IsTerminalStatus(State.Status) && !IsMismatchedRunIdentity(State, evt.RunId))
+                await RecoverDuplicateTerminalToolCallCleanupAsync(CancellationToken.None);
             return;
         }
 
@@ -2203,6 +2668,10 @@ public sealed partial class WorkflowRunGAgent
         {
             return;
         }
+
+        var stepCompletionKey = BuildStepCompletionArtifactKey(artifactFact as StepCompletedEvent);
+        if (stepCompletionKey != null && State.ProcessedStepCompletionKeys.ContainsKey(stepCompletionKey))
+            return;
 
         await PersistDomainEventAsync(artifactFact, CancellationToken.None);
     }
@@ -2373,6 +2842,7 @@ public sealed partial class WorkflowRunGAgent
 
     private void InstallCognitiveModules()
     {
+        CancelWorkflowExecutionBackgroundWork();
         if (_compiledWorkflow == null)
         {
             Logger.LogDebug("Workflow run definition is not bound yet; skipping module installation for actor {ActorId}.", Id);
@@ -2431,7 +2901,17 @@ public sealed partial class WorkflowRunGAgent
         SetModules(workflowModules);
     }
 
-    private void DisableExecutionModules() => SetModules([]);
+    private void DisableExecutionModules()
+    {
+        CancelWorkflowExecutionBackgroundWork();
+        SetModules([]);
+    }
+
+    private void CancelWorkflowExecutionBackgroundWork()
+    {
+        foreach (var bridge in GetModules().OfType<WorkflowExecutionBridgeModule>())
+            bridge.CancelBackgroundWork();
+    }
 
     private void ConfigureModule(IEventModule<IWorkflowExecutionContext> module)
     {
@@ -2451,6 +2931,12 @@ public sealed partial class WorkflowRunGAgent
         return StateTransitionMatcher
             .Match(current, evt)
             .On<BindWorkflowRunDefinitionEvent>(ApplyBindWorkflowRunDefinition)
+            .On<WorkflowRunDefinitionBindingContinuationRegisteredEvent>(
+                ApplyDefinitionBindingContinuationRegistered)
+            .On<WorkflowRunDefinitionBindingCleanupCompletedEvent>(
+                ApplyDefinitionBindingCleanupCompleted)
+            .On<WorkflowRunDefinitionBindingContinuationClearedEvent>(
+                ApplyDefinitionBindingContinuationCleared)
             .On<WorkflowRunCompletionNotificationTargetAdoptedEvent>(ApplyWorkflowRunCompletionNotificationTargetAdopted)
             .On<WorkflowCommandObservedEvent>(ApplyWorkflowCommandObserved)
             .On<WorkflowRunExecutionStartedEvent>(ApplyWorkflowRunExecutionStarted)
@@ -2475,6 +2961,7 @@ public sealed partial class WorkflowRunGAgent
             .On<WorkflowRunTerminalNotificationDispatchedEvent>(ApplyWorkflowRunTerminalNotificationDispatched)
             .On<WorkflowRunTerminalNotificationExpiredEvent>(ApplyWorkflowRunTerminalNotificationExpired)
             .On<WorkflowRunTerminalNotificationRetryFiredEvent>(KeepCurrentState)
+            .On<WorkflowToolCallTerminalCleanupRetryFiredEvent>(KeepCurrentState)
             .On<WorkflowRoleReplyRecordedEvent>(ApplyWorkflowRoleReplyRecorded)
             .On<WorkflowRuntimeOperationRecordedEvent>(ApplyWorkflowRuntimeOperationRecorded)
             .On<WorkflowInteractiveActionHandoffDispatchedEvent>(ApplyInteractiveActionHandoffDispatched)
@@ -2603,6 +3090,25 @@ public sealed partial class WorkflowRunGAgent
             _ => null,
         };
 
+    private static string? BuildStepCompletionArtifactKey(StepCompletedEvent? completion)
+    {
+        // Legacy and composite-module completions without an execution identity cannot be
+        // safely deduplicated because the same step can legitimately run more than once.
+        if (completion == null ||
+            string.IsNullOrWhiteSpace(completion.RunId) ||
+            string.IsNullOrWhiteSpace(completion.StepId) ||
+            string.IsNullOrWhiteSpace(completion.ExecutionId))
+        {
+            return null;
+        }
+
+        return RuntimeCallbackKeyComposer.BuildKey(
+            '|',
+            WorkflowRunIdNormalizer.Normalize(completion.RunId),
+            completion.StepId.Trim(),
+            completion.ExecutionId.Trim());
+    }
+
     private static bool IsProcessedArtifactSource(
         WorkflowRunState state,
         WorkflowArtifactSourceIdentity? source) =>
@@ -2657,7 +3163,7 @@ public sealed partial class WorkflowRunGAgent
         next.ReusePolicy = evt.ReusePolicy;
         next.BindingGeneration = evt.BindingGeneration;
         next.ReuseAuthorityActorId = evt.ReuseAuthorityActorId?.Trim() ?? string.Empty;
-        next.Status = "bound";
+        next.Status = BoundStatus;
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
@@ -2695,6 +3201,7 @@ public sealed partial class WorkflowRunGAgent
         next.InteractiveActionHandoffs.Clear();
         next.ProcessedArtifactSources.Clear();
         next.ProcessedArtifactStateVersionsByPublisher.Clear();
+        next.ProcessedStepCompletionKeys.Clear();
         next.Lineage = evt.InitialLineage == null
             ? CreateUnavailableLineage("Run lineage is unavailable for this run.")
             : EnsureLineage(evt.InitialLineage);
@@ -2714,6 +3221,54 @@ public sealed partial class WorkflowRunGAgent
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
         next.CompilationError = compileResult.CompilationError;
+        return next;
+    }
+
+    private static WorkflowRunState ApplyDefinitionBindingContinuationRegistered(
+        WorkflowRunState current,
+        WorkflowRunDefinitionBindingContinuationRegisteredEvent evt)
+    {
+        if (evt.Continuation == null || string.IsNullOrWhiteSpace(evt.Continuation.ContinuationId))
+            return current;
+
+        var next = current.Clone();
+        next.PendingDefinitionBindingContinuation = evt.Continuation.Clone();
+        return next;
+    }
+
+    private static WorkflowRunState ApplyDefinitionBindingCleanupCompleted(
+        WorkflowRunState current,
+        WorkflowRunDefinitionBindingCleanupCompletedEvent evt)
+    {
+        if (current.PendingDefinitionBindingContinuation == null ||
+            !string.Equals(
+                current.PendingDefinitionBindingContinuation.ContinuationId,
+                evt.ContinuationId?.Trim(),
+                StringComparison.Ordinal))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.PendingDefinitionBindingContinuation.CleanupCompleted = true;
+        return next;
+    }
+
+    private static WorkflowRunState ApplyDefinitionBindingContinuationCleared(
+        WorkflowRunState current,
+        WorkflowRunDefinitionBindingContinuationClearedEvent evt)
+    {
+        if (current.PendingDefinitionBindingContinuation == null ||
+            !string.Equals(
+                current.PendingDefinitionBindingContinuation.ContinuationId,
+                evt.ContinuationId?.Trim(),
+                StringComparison.Ordinal))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.PendingDefinitionBindingContinuation = null;
         return next;
     }
 
@@ -3151,6 +3706,10 @@ public sealed partial class WorkflowRunGAgent
         if (string.IsNullOrWhiteSpace(stepId))
             return next;
 
+        var completionKey = BuildStepCompletionArtifactKey(evt);
+        if (completionKey != null)
+            next.ProcessedStepCompletionKeys[completionKey] = true;
+
         var workflow = ResolveWorkflowForTransition(current);
         var step = string.IsNullOrWhiteSpace(stepId) ? null : workflow?.GetStep(stepId);
         var compensationStepId = step?.Compensation?.Trim() ?? string.Empty;
@@ -3343,7 +3902,7 @@ public sealed partial class WorkflowRunGAgent
             next.FinalError = evt.Reason;
         next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
-        next.ExecutionStates.Clear();
+        ClearExecutionStatesPreservingToolCallCleanup(next);
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
@@ -3415,7 +3974,7 @@ public sealed partial class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
-        next.ExecutionStates.Clear();
+        ClearExecutionStatesPreservingToolCallCleanup(next);
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
@@ -3423,6 +3982,20 @@ public sealed partial class WorkflowRunGAgent
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
         return next;
+    }
+
+    private static void ClearExecutionStatesPreservingToolCallCleanup(WorkflowRunState state)
+    {
+        Any? toolCallState = null;
+        if (state.ExecutionStates.TryGetValue(ToolCallModule.ModuleStateKey, out var packed) &&
+            packed.Is(ToolCallModuleState.Descriptor))
+        {
+            toolCallState = packed.Clone();
+        }
+
+        state.ExecutionStates.Clear();
+        if (toolCallState != null)
+            state.ExecutionStates[ToolCallModule.ModuleStateKey] = toolCallState;
     }
 
     private static void ApplyTerminalTiming(WorkflowRunState state, Timestamp? completedAtUtc)
@@ -3585,10 +4158,28 @@ public sealed partial class WorkflowRunGAgent
 
     private static WorkflowRunState KeepCurrentState(WorkflowRunState current, WorkflowRunTerminalNotificationRetryFiredEvent _) => current;
 
+    private static WorkflowRunState KeepCurrentState(
+        WorkflowRunState current,
+        WorkflowToolCallTerminalCleanupRetryFiredEvent _) => current;
+
     private static bool IsTerminalStatus(string? status) =>
         string.Equals(status, CompletedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, FailedStatus, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, StoppedStatus, StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasPendingToolCallState(WorkflowRunState state)
+    {
+        if (!state.ExecutionStates.TryGetValue(ToolCallModule.ModuleStateKey, out var packed) ||
+            !packed.Is(ToolCallModuleState.Descriptor))
+        {
+            return false;
+        }
+
+        var toolState = packed.Unpack<ToolCallModuleState>();
+        return toolState.PendingApprovals.Count > 0 ||
+               toolState.PendingExecutions.Count > 0 ||
+               toolState.Completions.Count > 0;
+    }
 
     private string ResolveRequestedBindRunId(WorkflowRunState state, string? requestedRunId)
     {
@@ -4483,6 +5074,7 @@ public sealed partial class WorkflowRunGAgent
 
         var stateBeforeStop = State.Clone();
         await persistAsync(ct);
+        DisableExecutionModules();
         await TryRevokeScheduledCallerCredentialAsync(
             stateBeforeStop,
             "workflow-run-stopped",
@@ -4491,7 +5083,6 @@ public sealed partial class WorkflowRunGAgent
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(runId, stateBeforeStop, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
         _runtimeContext.Clear();
-        DisableExecutionModules();
 
         Logger.LogInformation(
             "Workflow run {Name} stopped: run={RunId} reason={Reason}",
@@ -4507,6 +5098,16 @@ public sealed partial class WorkflowRunGAgent
             Error = BuildStoppedMessage(reason),
         }, TopologyAudience.Parent);
         await EnsureTerminalNotificationAsync(ct);
+        await CleanupTerminalToolCallStateAsync(CancellationToken.None);
+    }
+
+    private async Task RecoverDuplicateTerminalToolCallCleanupAsync(CancellationToken ct)
+    {
+        DisableExecutionModules();
+        await EnsureTerminalNotificationAsync(ct);
+        await CleanupTerminalToolCallStateAsync(
+            ct,
+            allowImmediateFallback: false);
     }
 
     private async Task TryRevokeScheduledCallerCredentialAsync(
@@ -4659,10 +5260,21 @@ public sealed partial class WorkflowRunGAgent
 
     private async Task<WorkflowCompilationResult> ReplaceWorkflowDefinitionBypassingBindingAsync(
         string workflowYaml,
+        string executionInput,
         CancellationToken ct = default)
     {
-        var childActorIdsToReset = CaptureDerivedChildActorIdsForReset();
-        var stateBeforeBind = State.Clone();
+        if (State.PendingDefinitionBindingContinuation != null)
+        {
+            return WorkflowCompilationResult.Invalid(
+                "Workflow Run cannot replace its definition while definition binding cleanup is pending.");
+        }
+
+        if (HasPendingToolCallState(State))
+        {
+            return WorkflowCompilationResult.Invalid(
+                "Workflow Run cannot replace its definition while actor-local tool call cleanup is pending.");
+        }
+
         WorkflowDefinition parsed;
         try
         {
@@ -4679,7 +5291,7 @@ public sealed partial class WorkflowRunGAgent
             return WorkflowCompilationResult.Invalid(string.Join("; ", validationErrors));
 
         var workflowName = parsed.Name ?? string.Empty;
-        await PersistDomainEventAsync(new BindWorkflowRunDefinitionEvent
+        var bind = new BindWorkflowRunDefinitionEvent
         {
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             WorkflowName = workflowName,
@@ -4698,11 +5310,20 @@ public sealed partial class WorkflowRunGAgent
             ReusePolicy = State.ReusePolicy,
             BindingGeneration = State.BindingGeneration,
             ReuseAuthorityActorId = State.ReuseAuthorityActorId ?? string.Empty,
-        }, ct);
-        await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);
-        RebuildCompiledWorkflowCache();
-        await ResetDerivedRuntimeStateAsync(childActorIdsToReset, ct);
-        InstallCognitiveModules();
+        };
+        var continuation = BuildDefinitionBindingContinuation(
+            executeAfterBind: true,
+            executionInput);
+        await PersistDomainEventsAsync(
+            [
+                bind,
+                new WorkflowRunDefinitionBindingContinuationRegisteredEvent
+                {
+                    Continuation = continuation,
+                },
+            ],
+            ct);
+        await DrainPendingDefinitionBindingContinuationAsync(ct);
         return WorkflowCompilationResult.Success(parsed);
     }
 
@@ -4742,6 +5363,120 @@ public sealed partial class WorkflowRunGAgent
         }
 
         return childActorIds;
+    }
+
+    private WorkflowRunDefinitionBindingContinuationState BuildDefinitionBindingContinuation(
+        bool executeAfterBind,
+        string executionInput)
+    {
+        var continuation = new WorkflowRunDefinitionBindingContinuationState
+        {
+            ContinuationId = Guid.NewGuid().ToString("N"),
+            ExecuteAfterBind = executeAfterBind,
+            ExecutionInput = executionInput ?? string.Empty,
+        };
+        continuation.DefinitionResolutionTimeoutLeases.Add(
+            State.PendingSubWorkflowDefinitionResolutions
+                .Where(static pending => pending.TimeoutLease != null)
+                .Select(static pending => pending.TimeoutLease.Clone()));
+        continuation.DerivedChildActorIds.Add(
+            CaptureDerivedChildActorIdsForReset()
+                .Where(static actorId => !string.IsNullOrWhiteSpace(actorId))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(static actorId => actorId, StringComparer.Ordinal));
+        return continuation;
+    }
+
+    private async Task DrainPendingDefinitionBindingContinuationAsync(CancellationToken ct)
+    {
+        var continuation = State.PendingDefinitionBindingContinuation?.Clone();
+        if (continuation == null || string.IsNullOrWhiteSpace(continuation.ContinuationId))
+            return;
+
+        if (!continuation.CleanupCompleted)
+        {
+            CancelWorkflowExecutionBackgroundWork();
+            foreach (var leaseState in continuation.DefinitionResolutionTimeoutLeases)
+            {
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    CancelDurableCallbackAsync,
+                    Logger,
+                    WorkflowRuntimeCallbackLeaseStateCodec.ToRuntime(leaseState),
+                    "workflow definition binding resolution timeout cleanup",
+                    ct);
+            }
+
+            await ResetDerivedRuntimeStateAsync(continuation.DerivedChildActorIds, ct);
+            await PersistDomainEventAsync(new WorkflowRunDefinitionBindingCleanupCompletedEvent
+            {
+                ContinuationId = continuation.ContinuationId,
+            }, ct);
+            continuation = State.PendingDefinitionBindingContinuation?.Clone();
+            if (continuation == null)
+                return;
+        }
+
+        RebuildCompiledWorkflowCache();
+        InstallCognitiveModules();
+        if (continuation.ExecuteAfterBind)
+            await DrainDynamicDefinitionStartAsync(continuation, ct);
+
+        await PersistDomainEventAsync(new WorkflowRunDefinitionBindingContinuationClearedEvent
+        {
+            ContinuationId = continuation.ContinuationId,
+        }, ct);
+    }
+
+    private async Task DrainDynamicDefinitionStartAsync(
+        WorkflowRunDefinitionBindingContinuationState continuation,
+        CancellationToken ct)
+    {
+        if (_compiledWorkflow == null)
+            throw new InvalidOperationException("Dynamic workflow definition is not compiled.");
+
+        if (!string.Equals(State.Status, BoundStatus, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        await EnsureAgentTreeAsync();
+        var runId = string.IsNullOrWhiteSpace(State.RunId)
+            ? WorkflowRunIdNormalizer.Normalize(Id)
+            : WorkflowRunIdNormalizer.Normalize(State.RunId);
+        if (string.Equals(State.Status, BoundStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            var replacementExecutionContext =
+                WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta();
+            replacementExecutionContext.ClearCallerCredential = true;
+            replacementExecutionContext.ClearUnattendedEffectAuthorization = true;
+            await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
+            {
+                RunId = runId,
+                WorkflowName = _compiledWorkflow.Name,
+                Input = continuation.ExecutionInput,
+                DefinitionActorId = State.DefinitionActorId ?? string.Empty,
+                ScopeId = State.ScopeId ?? string.Empty,
+                ExecutionContextDelta = replacementExecutionContext,
+                Attempt = State.ForkAttempt,
+                StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                CurrentTurnId = State.CurrentTurnId,
+            }, ct);
+        }
+
+        if (!string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        await PublishStartWorkflowOrTerminalFailureAsync(
+            new StartWorkflowEvent
+            {
+                WorkflowName = _compiledWorkflow.Name,
+                Input = continuation.ExecutionInput,
+                RunId = runId,
+                BindingGeneration = State.BindingGeneration,
+            },
+            sessionId: string.Empty,
+            ct);
     }
 
     private IReadOnlyCollection<string> CaptureRoleActorIdsFromCurrentDefinition()

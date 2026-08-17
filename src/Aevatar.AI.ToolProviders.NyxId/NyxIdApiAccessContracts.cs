@@ -129,6 +129,10 @@ public sealed record NyxIdUserServiceAuthorizationEvidence(
     IReadOnlyList<string>? GrantedScopes,
     DateTimeOffset? LastAuthorizedAtUtc);
 
+public sealed record NyxIdServiceAccessEvidence(
+    string UserServiceId,
+    string ServiceSlug);
+
 public sealed record NyxIdApiKeyVersionEvidence(
     string? RotationPredecessorId,
     long StateVersion,

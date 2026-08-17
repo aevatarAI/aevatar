@@ -23,6 +23,7 @@
     <Project Path="agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
     <Project Path="agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
     <Project Path="agents/Aevatar.GAgents.WorkOrder/Aevatar.GAgents.WorkOrder.csproj" />
+    <Project Path="agents/Aevatar.GAgents.WorkflowDelivery/Aevatar.GAgents.WorkflowDelivery.csproj" />
     <Project Path="agents/Aevatar.GAgents.ContentArtifacts/Aevatar.GAgents.ContentArtifacts.csproj" />
     <Project Path="agents/Aevatar.GAgents.ChatRouting/Aevatar.GAgents.ChatRouting.csproj" />
   </Folder>

@@ -68,6 +68,11 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             bindDefinitionEvent.CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone();
         }
 
+        var canonicalNext = ApplyBindWorkflowDefinition(State, bindDefinitionEvent);
+        canonicalNext.Version = State.Version;
+        if (canonicalNext.Equals(State))
+            return;
+
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
     }
 

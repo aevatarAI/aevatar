@@ -537,16 +537,7 @@ public sealed class NyxIdChatStateEndpointTests
                             "service-slug-beta",
                             "connected-service-beta",
                             null))),
-            ],
-            Gate: new NyxIdChatConversationPlanGateSnapshot(
-                "confirm",
-                "Review the complete plan.",
-                "pending",
-                "gate-alpha",
-                "task-alpha",
-                1,
-                null,
-                "plan-alpha"));
+            ]);
         var queryPort = new RecordingQueryPort
         {
             Result = NyxIdChatConversationStateQueryResult.Current(new NyxIdChatConversationStateSnapshot(
@@ -596,12 +587,11 @@ public sealed class NyxIdChatStateEndpointTests
         json.RootElement.GetProperty("turnId").GetString().Should().Be("turn-alpha");
         json.RootElement.GetProperty("snapshot").GetProperty("actorId").GetString()
             .Should().Be("conversation-alpha");
-        var gate = json.RootElement
+        json.RootElement
             .GetProperty("snapshot")
             .GetProperty("activeTask")
-            .GetProperty("gate");
-        gate.GetProperty("mode").GetString().Should().Be("confirm");
-        gate.GetProperty("status").GetString().Should().Be("pending");
+            .TryGetProperty("gate", out _)
+            .Should().BeFalse();
         var pendingApproval = json.RootElement
             .GetProperty("snapshot")
             .GetProperty("pendingApproval");
@@ -730,6 +720,71 @@ public sealed class NyxIdChatStateEndpointTests
     }
 
     [Fact]
+    public async Task GetState_ServiceConnectRequest_ShouldOmitUnsetOptionalTypedParameters()
+    {
+        var serviceConnect = new NyxIdChatActionSnapshot(
+            4,
+            "action-service-connect",
+            "turn-alpha",
+            "task-alpha",
+            "step-service-connect",
+            "service.connect",
+            DateTimeOffset.Parse("2026-08-14T01:00:00Z"),
+            [],
+            null,
+            new NyxIdChatActionRequestSnapshot(
+                4,
+                "conversation-alpha",
+                "turn-alpha",
+                "task-alpha",
+                "step-service-connect",
+                "action-service-connect",
+                "service.connect",
+                new NyxIdChatActionParamsSnapshot(
+                    CatalogService: new NyxIdChatCatalogServiceConnectSnapshot(
+                        "github",
+                        ["repo:read"],
+                        ViaNodeId: null,
+                        TargetOrgId: null))));
+        var queryPort = new RecordingQueryPort
+        {
+            Result = NyxIdChatConversationStateQueryResult.Current(
+                new NyxIdChatConversationStateSnapshot(
+                    ActorId: "conversation-alpha",
+                    ScopeId: "scope-alpha",
+                    StateVersion: 12,
+                    ProgressSequence: 41,
+                    UpdatedAt: DateTimeOffset.Parse("2026-08-14T01:01:00Z"),
+                    ActiveTurn: null,
+                    LatestTurn: null,
+                    RecentTerminalTurns: [],
+                    ActiveTask: null,
+                    PendingApproval: null,
+                    PendingActions: [serviceConnect],
+                    ControlFence: null,
+                    LatestControlResult: null,
+                    ContinuationAdmission: null)),
+        };
+
+        var response = await ExecuteAsync(queryPort, string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(response.Body);
+        var catalogService = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("pendingActions")[0]
+            .GetProperty("request")
+            .GetProperty("params")
+            .GetProperty("catalogService");
+        catalogService.GetProperty("serviceSlug").GetString().Should().Be("github");
+        catalogService.GetProperty("requestedScopes").EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("repo:read");
+        catalogService.TryGetProperty("viaNodeId", out _).Should().BeFalse();
+        catalogService.TryGetProperty("targetOrgId", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GetState_ShouldReturnReloadRequiredForInvalidNumericCursorWithoutQuerying()
     {
         var queryPort = new RecordingQueryPort();
@@ -854,27 +909,6 @@ public sealed class NyxIdChatStateEndpointTests
             PlanId = "plan-alpha",
             PlanRevision = 2,
             Title = "Complete the requested assistant task",
-            Gate = new NyxIdChatPlanGate
-            {
-                Mode = NyxIdChatPlanGateMode.Confirm,
-                Reason = "Confirm the exact repository operation.",
-                Status = NyxIdChatPlanGateStatus.Pending,
-                RequestId = "plan-gate-alpha",
-                TaskId = "task-alpha",
-                PlanId = "plan-alpha",
-                PlanRevision = 2,
-                Admissions =
-                {
-                    new NyxIdChatPlanOperationAdmission
-                    {
-                        Key = operation.Key.Clone(),
-                        ToolCallId = "call-alpha",
-                        ToolName = "repository_update",
-                        ArgumentsSha256 = NyxIdChatPlanGateDecisions.HashArguments(
-                            "{\"repositoryId\":\"repo-alpha\"}"),
-                    },
-                },
-            },
             Steps =
             {
                 new NyxIdChatTaskStepState

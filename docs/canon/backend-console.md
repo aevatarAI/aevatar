@@ -24,6 +24,7 @@ Backend console 只使用一种页面承载方式：
 |---|---|---|
 | `/admin` | `src/Aevatar.Mainnet.Host.Api/BackendConsole/admin.html` | Mainnet Host |
 | `/auto/callback` | `src/Aevatar.Mainnet.Host.Api/BackendConsole/auto-callback.html` | Mainnet Host |
+| `/delivery` | `src/Aevatar.Mainnet.Host.Api/BackendConsole/delivery.html` | Mainnet Host |
 | `/status` | `src/Aevatar.Mainnet.Host.Api/Status/status.html` | Mainnet Host |
 | `/cqrs` | `src/Aevatar.Mainnet.Host.Api/Cqrs/cqrs-observatory.html` | Mainnet Host |
 | `/voice` | `src/Aevatar.Mainnet.Host.Api/Voice/voice-console.html` | Mainnet Host |
@@ -78,6 +79,21 @@ Studio's `/api/auth/nyxid/config` still returns an actor-backed snapshot so auth
 Backend console page endpoints are static shells. They may be anonymous because the browser page performs OIDC PKCE login and all data endpoints enforce authorization server-side.
 
 Static shell endpoint files must not introduce mutating data APIs. Data surfaces stay in their existing API endpoint files, with their existing authorization and audit rules. Adding a new console page means adding the asset, declaring it as an embedded resource, mapping a GET shell route, and extending the guard inventory.
+
+`/delivery` is the standalone Workflow Delivery Center shell, parallel to `/admin`. It shares the
+console OIDC PKCE token and `/auto/callback` contract, while preserving a safe `/delivery#/...` return
+route. The page determines administrator/customer capabilities only from `GET /api/delivery/session`.
+Administrators can select only server-returned allowlisted workflow package versions and create a
+delivery request for an explicit target scope. Customers can read only requests authorized for their
+NyxID scope, select a server-returned Team, submit only `variableSchema` fields, and observe the durable
+installation read model. The page never treats HTTP `202` as completion: only an installation whose
+server status is `ready` is rendered as successfully installed. For a personal scope, a customer may
+create a hosted NyxID connect link and explicitly re-check its server status. The transient
+`connectUrl` stays only in the current page memory; connection references are resolved by the server
+and are never submitted by the browser. External-service credentials, connection tokens, and secrets
+never enter the page or browser storage; the console's own OIDC login session continues to use the
+shared Backend Console storage contract. Organization-scope connection remains an explicit unsupported state until
+the NyxID connect-link contract supports an organization target.
 
 Workflow Observatory data endpoints are read-only. Normal run detail reads remain scope-bound under
 `GET /api/workflow/observatory/runs/{runId}` and `GET /api/workflow/observatory/runs/{runId}/graph`.

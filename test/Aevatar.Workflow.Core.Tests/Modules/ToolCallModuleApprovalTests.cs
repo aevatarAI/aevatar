@@ -1,4 +1,6 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
@@ -9,6 +11,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Threading.Channels;
 
 namespace Aevatar.Workflow.Core.Tests.Modules;
 
@@ -50,7 +53,8 @@ public sealed class ToolCallModuleApprovalTests
             "idem-approval-1");
 
         tool.Requests.Should().ContainSingle();
-        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallStartedEvent>().Should().ContainSingle();
+        ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallStartedEvent>()
+            .Should().ContainSingle().Which.ArgumentsJson.Should().BeEmpty();
         ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Should().BeEmpty();
         ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
         var suspended = ctx.Published.Select(x => x.Event).OfType<WorkflowSuspendedEvent>().Should().ContainSingle().Subject;
@@ -67,8 +71,79 @@ public sealed class ToolCallModuleApprovalTests
         var state = ctx.LoadState<ToolCallModuleState>("tool_call");
         state.PendingApprovals.Should().ContainKey("run-1:danger_step:exec-1:workflow:run-1:danger_step:exec-1:approval-1");
         var pendingState = state.PendingApprovals.Values.Should().ContainSingle().Subject;
-        pendingState.InputFileRefs.Should().ContainSingle().Which.FileId.Should().Be("file-approval");
-        pendingState.IdempotencyKey.Should().Be("idem-approval-1");
+        pendingState.ProtectedMaterialReference.Should().NotBeNull();
+        pendingState.ProtectedMaterialDigestSha256.Should().MatchRegex("^[0-9a-f]{64}$");
+        pendingState.ExecutionPhase.Should().Be(WorkflowToolCallExecutionPhase.ApprovalPending);
+        pendingState.TimeoutMs.Should().BeGreaterThan(0);
+        pendingState.TimeoutDeadlineUnixMs.Should().BeGreaterThan(ctx.UtcNow.ToUnixTimeMilliseconds());
+        pendingState.ContinuationId.Should().NotBeNullOrWhiteSpace();
+        pendingState.Attempt.Should().Be(1);
+        pendingState.ArgumentsJson.Should().BeEmpty();
+        pendingState.Input.Should().BeEmpty();
+        pendingState.InputFileRefs.Should().BeEmpty();
+        pendingState.IdempotencyKey.Should().BeEmpty();
+        pendingState.ExternalInvocation.Should().BeNull();
+        pendingState.DisplayName.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ApprovedResume_AfterOriginalDeadline_ShouldFailWithoutRedispatch()
+    {
+        var pending = new WorkflowToolApprovalPendingOutcome(
+            ApprovalRequestId: "approval-1",
+            ToolName: "danger",
+            ToolCallId: "workflow:run-1:danger_step:exec-1",
+            ArgumentsJson: "{}",
+            ApprovalMode: "AlwaysRequire",
+            IsReadOnly: false,
+            IsDestructive: true);
+        var tool = new ScriptedWorkflowTool(
+            "danger",
+            request => request.ApprovalGrant is null
+                ? new WorkflowToolExecutionResult(string.Empty, PendingApproval: pending)
+                : WorkflowToolExecutionResult.Success("{}"));
+        var module = CreateModule(tool);
+        var now = new DateTimeOffset(2026, 8, 14, 1, 2, 3, TimeSpan.Zero);
+        var ctx = new RecordingWorkflowContext { CurrentUtcNow = now };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            "danger_step",
+            "{}",
+            "exec-1",
+            timeoutMs: 500);
+        var approval = ctx.LoadState<ToolCallModuleState>("tool_call")
+            .PendingApprovals.Values.Should().ContainSingle().Subject.Clone();
+        approval.TimeoutMs.Should().Be(500);
+        approval.TimeoutDeadlineUnixMs.Should().Be(now.AddMilliseconds(500).ToUnixTimeMilliseconds());
+        ctx.Published.Clear();
+        ctx.CurrentUtcNow = now.AddMilliseconds(500);
+
+        await HandleAndDrainAsync(
+            module,
+            Envelope(new WorkflowResumedEvent
+            {
+                RunId = "run-1",
+                StepId = "danger_step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResume
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "workflow:run-1:danger_step:exec-1",
+                    ApprovalRequestId = "approval-1",
+                },
+            }),
+            ctx);
+
+        tool.Requests.Should().ContainSingle();
+        var completed = ctx.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().ContainSingle().Subject;
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("tool_approval_deadline_exceeded");
+        completed.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().BeEmpty();
     }
 
     [Fact]
@@ -106,7 +181,7 @@ public sealed class ToolCallModuleApprovalTests
         var pendingState = ctx.LoadState<ToolCallModuleState>("tool_call")
             .PendingApprovals.Values.Should().ContainSingle().Subject;
         pendingState.IssuedAtUnixMs.Should().Be(issuedAt.ToUnixTimeMilliseconds());
-        pendingState.DisplayName.Should().Be("Dangerous step");
+        pendingState.DisplayName.Should().BeEmpty();
         ctx.Published.Clear();
 
         var resumed = new WorkflowResumedEvent
@@ -121,14 +196,14 @@ public sealed class ToolCallModuleApprovalTests
                 ApprovalRequestId = "approval-1",
             },
         };
-        await module.HandleAsync(
+        await HandleAndDrainAsync(
+            module,
             Envelope(resumed),
-            ctx,
-            CancellationToken.None);
-        await module.HandleAsync(
+            ctx);
+        await HandleAndDrainAsync(
+            module,
             Envelope(resumed),
-            ctx,
-            CancellationToken.None);
+            ctx);
 
         tool.Requests.Should().HaveCount(2);
         tool.Requests[1].ArgumentsJson.Should().Be("""{"danger":true}""");
@@ -181,7 +256,7 @@ public sealed class ToolCallModuleApprovalTests
                 ApprovalRequestId = "approval-1",
             },
         };
-        await module.HandleAsync(Envelope(exact), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(exact), ctx);
         var reloaded = ToolCallModuleState.Parser.ParseFrom(
             ctx.LoadState<ToolCallModuleState>("tool_call").ToByteArray());
         await ctx.SaveStateAsync("tool_call", reloaded);
@@ -190,7 +265,7 @@ public sealed class ToolCallModuleApprovalTests
         tombstone.TerminalDecision.Should().Be(WorkflowToolCallTerminalDecision.Approved);
         ctx.Published.Clear();
 
-        await module.HandleAsync(Envelope(exact), ctx, CancellationToken.None);
+        await HandleAndDrainAsync(module, Envelope(exact), ctx);
 
         ctx.Published.Should().BeEmpty();
         var mismatches = new[]
@@ -203,7 +278,7 @@ public sealed class ToolCallModuleApprovalTests
             Mutate(exact.Clone(), value => value.Approved = false),
         };
         foreach (var mismatch in mismatches)
-            await module.HandleAsync(Envelope(mismatch), ctx, CancellationToken.None);
+            await HandleAndDrainAsync(module, Envelope(mismatch), ctx);
 
         tool.Requests.Should().HaveCount(2);
         ctx.Published.Select(x => x.Event)
@@ -243,7 +318,8 @@ public sealed class ToolCallModuleApprovalTests
             "exec-1");
         ctx.Published.Clear();
 
-        await module.HandleAsync(
+        await HandleAndDrainAsync(
+            module,
             Envelope(new WorkflowResumedEvent
             {
                 RunId = "run-1",
@@ -256,8 +332,7 @@ public sealed class ToolCallModuleApprovalTests
                     ApprovalRequestId = "approval-1",
                 },
             }),
-            ctx,
-            CancellationToken.None);
+            ctx);
 
         var toolCompleted = ctx.Published.Select(x => x.Event)
             .OfType<WorkflowToolCallCompletedEvent>()
@@ -276,7 +351,7 @@ public sealed class ToolCallModuleApprovalTests
     }
 
     [Fact]
-    public async Task ApprovedResume_WhenPreTerminalFailureIsRetryable_ShouldKeepPendingAndRetryTurn()
+    public async Task ApprovedResume_WhenPreTerminalFailureIsRetryable_ShouldPersistDurableRetry()
     {
         var pending = new WorkflowToolApprovalPendingOutcome(
             ApprovalRequestId: "approval-1",
@@ -308,7 +383,8 @@ public sealed class ToolCallModuleApprovalTests
             "exec-1");
         ctx.Published.Clear();
 
-        var action = () => module.HandleAsync(
+        await HandleAndDrainAsync(
+            module,
             Envelope(new WorkflowResumedEvent
             {
                 RunId = "run-1",
@@ -321,12 +397,14 @@ public sealed class ToolCallModuleApprovalTests
                     ApprovalRequestId = "approval-1",
                 },
             }),
-            ctx,
-            CancellationToken.None);
+            ctx);
 
-        await action.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("The durable tool admission ledger is unavailable.");
-        ctx.LoadState<ToolCallModuleState>("tool_call").PendingApprovals.Should().ContainSingle();
+        var state = ctx.LoadState<ToolCallModuleState>("tool_call");
+        state.PendingApprovals.Should().BeEmpty();
+        var execution = state.PendingExecutions.Values.Should().ContainSingle().Subject;
+        execution.Attempt.Should().Be(3);
+        execution.TerminalDecision.Should().Be(WorkflowToolCallTerminalDecision.Approved);
+        execution.RetryLease.Should().NotBeNull();
         ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Should().BeEmpty();
         ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Should().BeEmpty();
     }
@@ -362,14 +440,14 @@ public sealed class ToolCallModuleApprovalTests
                 ApprovalRequestId = "approval-1",
             },
         };
-        await module.HandleAsync(
+        await HandleAndDrainAsync(
+            module,
             Envelope(resumed),
-            ctx,
-            CancellationToken.None);
-        await module.HandleAsync(
+            ctx);
+        await HandleAndDrainAsync(
+            module,
             Envelope(resumed),
-            ctx,
-            CancellationToken.None);
+            ctx);
 
         tool.Requests.Should().ContainSingle();
         var toolCompleted = ctx.Published.Select(x => x.Event).OfType<WorkflowToolCallCompletedEvent>().Single();
@@ -402,7 +480,8 @@ public sealed class ToolCallModuleApprovalTests
         await ExecuteToolCallAsync(module, ctx, tool.Name, "danger_step", """{"danger":true}""", "exec-1");
         ctx.Published.Clear();
 
-        await module.HandleAsync(
+        await HandleAndDrainAsync(
+            module,
             Envelope(new WorkflowResumedEvent
             {
                 RunId = "run-1",
@@ -415,8 +494,7 @@ public sealed class ToolCallModuleApprovalTests
                     ApprovalRequestId = "other-approval",
                 },
             }),
-            ctx,
-            CancellationToken.None);
+            ctx);
 
         tool.Requests.Should().ContainSingle();
         var rejected = ctx.Published.Select(x => x.Event)
@@ -512,7 +590,8 @@ public sealed class ToolCallModuleApprovalTests
         IReadOnlyList<WorkflowFileRef>? inputFileRefs = null,
         string idempotencyKey = "",
         DateTimeOffset? issuedAt = null,
-        string displayName = "")
+        string displayName = "",
+        int timeoutMs = 0)
     {
         var request = new StepRequestEvent
         {
@@ -523,6 +602,7 @@ public sealed class ToolCallModuleApprovalTests
             IdempotencyKey = idempotencyKey,
             Input = input,
             DisplayName = displayName,
+            TimeoutMs = timeoutMs,
             Parameters = { ["tool"] = toolName },
         };
         request.InputFileRefs.Add(inputFileRefs?.Select(static fileRef => fileRef.Clone()) ?? []);
@@ -531,6 +611,39 @@ public sealed class ToolCallModuleApprovalTests
             Envelope(request, issuedAt),
             ctx,
             CancellationToken.None);
+        await DrainToolCallContinuationsAsync(module, ctx);
+    }
+
+    private static async Task HandleAndDrainAsync(
+        ToolCallModule module,
+        EventEnvelope envelope,
+        RecordingWorkflowContext ctx)
+    {
+        await module.HandleAsync(envelope, ctx, CancellationToken.None);
+        await DrainToolCallContinuationsAsync(module, ctx);
+    }
+
+    private static async Task DrainToolCallContinuationsAsync(
+        ToolCallModule module,
+        RecordingWorkflowContext ctx)
+    {
+        while (true)
+        {
+            var pending = ctx.LoadState<ToolCallModuleState>("tool_call")
+                .PendingExecutions.Values.FirstOrDefault(static candidate =>
+                    candidate.ExecutionPhase == WorkflowToolCallExecutionPhase.ExecutionPending);
+            if (pending == null)
+                return;
+
+            var completed = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>(candidate =>
+                candidate.CallId == pending.CallId &&
+                candidate.ExecutionId == pending.ExecutionId &&
+                candidate.Attempt == pending.Attempt &&
+                candidate.ContinuationId == pending.ContinuationId);
+            ctx.Published.RemoveAll(item => ReferenceEquals(item.Event, completed));
+
+            await module.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
+        }
     }
 
     private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
@@ -578,9 +691,15 @@ public sealed class ToolCallModuleApprovalTests
     }
 
     private sealed class RecordingWorkflowContext
-        : IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor, IWorkflowExecutionStateHost
+        : IWorkflowExecutionContext,
+          IWorkflowExecutionRuntimeContextAccessor,
+          IWorkflowExecutionStateHost,
+          IRuntimeSecretStoreAccessor
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
+        private readonly Channel<IMessage> _publishedEvents = Channel.CreateUnbounded<IMessage>();
+        private readonly Dictionary<IMessage, EventEnvelopePublishOptions?> _publishedOptions =
+            new(ReferenceEqualityComparer.Instance);
 
         public EventEnvelope InboundEnvelope { get; } = new()
         {
@@ -590,13 +709,43 @@ public sealed class ToolCallModuleApprovalTests
 
         public string AgentId => "agent-1";
         public string RunId => "run-1";
+        public DateTimeOffset CurrentUtcNow { get; set; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset UtcNow => CurrentUtcNow;
         public string ScopeId => "scope-1";
         public IServiceProvider Services { get; } = new EmptyServiceProvider();
         public ILogger Logger { get; } = NullLogger.Instance;
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+        public IRuntimeSecretStore? RuntimeSecretStore { get; } = new InMemoryRuntimeSecretStore();
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
         public WorkflowRunExecutionContextState ExecutionContextSnapshot => ExecutionContextState.Clone();
         public List<(IMessage Event, TopologyAudience Direction)> Published { get; } = [];
+
+        public async Task<TEvent> WaitForPublishedAsync<TEvent>(Func<TEvent, bool>? predicate = null)
+            where TEvent : class, IMessage
+        {
+            while (true)
+            {
+                var evt = await _publishedEvents.Reader.ReadAsync().AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (evt is TEvent typed && (predicate == null || predicate(typed)))
+                    return typed;
+            }
+        }
+
+        public EventEnvelope PublishedEnvelope(IMessage evt)
+        {
+            var envelope = Envelope(evt);
+            envelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(AgentId, TopologyAudience.Self);
+            if (_publishedOptions.GetValueOrDefault(evt)?.Delivery?.OperationId is { Length: > 0 } operationId)
+            {
+                envelope.Runtime = new EnvelopeRuntime
+                {
+                    DeliveryIdentity = new DeliveryIdentity { OperationId = operationId },
+                };
+            }
+
+            return envelope;
+        }
 
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new()
@@ -718,6 +867,8 @@ public sealed class ToolCallModuleApprovalTests
             ct.ThrowIfCancellationRequested();
             _ = options;
             Published.Add((evt, direction));
+            _publishedOptions[evt] = options?.DeepClone();
+            _publishedEvents.Writer.TryWrite(evt);
             return Task.CompletedTask;
         }
 

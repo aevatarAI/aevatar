@@ -116,6 +116,7 @@ message ServiceDeploymentReadModel {
   string status = 4;
   google.protobuf.Timestamp activated_at_utc_value = 5;
   google.protobuf.Timestamp updated_at_utc_value = 6;
+  string artifact_hash = 7;
 }
 
 message ServiceDeploymentActivationFailureReadModel {
@@ -123,6 +124,7 @@ message ServiceDeploymentActivationFailureReadModel {
   aevatar.gagentservice.ServiceDeploymentActivationFailureCode failure_code = 2;
   string failure_reason = 3;
   google.protobuf.Timestamp occurred_at_utc_value = 4;
+  string activation_attempt_id = 5;
 }
 
 // --- ServiceRevisionCatalogReadModel ---
@@ -305,6 +307,7 @@ message ServiceRunCurrentStateReadModel {
   string last_error = 23;
   string schedule_id = 24;
   repeated aevatar.content_artifacts.ContentArtifactReference result_artifacts = 25;
+  string schedule_operation_id = 26;
 }
 // --- GAgentRunTerminalReadModel ---
 

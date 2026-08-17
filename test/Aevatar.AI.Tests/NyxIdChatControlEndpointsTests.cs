@@ -33,8 +33,6 @@ public sealed class NyxIdChatControlEndpointsTests
         "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:retry";
     private const string SkipRoute =
         "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip";
-    private const string PlanResolveRoute =
-        "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/plans/{taskId}:resolve";
     private const string CanaryEffectFaultArmRoute =
         "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:arm-effect-fault-canary";
     private const string ShareOpsOwnerSubject = "ce646b72-dd49-4ea8-bc1e-8273672c102c";
@@ -223,93 +221,6 @@ public sealed class NyxIdChatControlEndpointsTests
     }
 
     [Fact]
-    public async Task PlanResolve_ShouldBindExactPlanAndCarryFreshTransientCapability()
-    {
-        var dispatch = new RecordingDispatchPort();
-        var routeValues = ConversationRouteValues();
-        routeValues["taskId"] = "task-alpha";
-
-        var response = await ExecuteAsync(
-            PlanResolveRoute,
-            routeValues,
-            """
-            {
-              "requestId": "plan-gate-alpha",
-              "clientRequestId": "client-plan-alpha",
-              "planId": "plan-alpha",
-              "planRevision": 3,
-              "confirmed": true,
-              "expectedStateVersion": 23
-            }
-            """,
-            new RecordingAdmissionPort(),
-            dispatch,
-            accessToken: "fresh-plan-token-alpha",
-            authenticatedScopeId: "scope-alpha",
-            authenticatedOwnerSubject: "owner-alpha");
-
-        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        response.Body.Should().NotContain("fresh-plan-token-alpha");
-        var command = dispatch.Dispatches.Should().ContainSingle().Which.Envelope.Payload
-            .Unpack<NyxIdChatPlanResolveCommand>();
-        command.ScopeId.Should().Be("scope-alpha");
-        command.ConversationActorId.Should().Be("conversation-alpha");
-        command.TaskId.Should().Be("task-alpha");
-        command.PlanId.Should().Be("plan-alpha");
-        command.PlanRevision.Should().Be(3);
-        command.RequestId.Should().Be("plan-gate-alpha");
-        command.ClientRequestId.Should().Be("client-plan-alpha");
-        command.Confirmed.Should().BeTrue();
-        command.ExpectedStateVersion.Should().Be(23);
-        command.ToolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-plan-token-alpha");
-        command.ToolContext.Credentials.NyxIdCredentialKind.Should().Be(
-            AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
-        command.ToolContext.Request.RequestId.Should().Be("plan-gate-alpha");
-        command.ToolContext.Channel.Platform.Should().Be(NyxIdChatServiceDefaults.ServiceId);
-        command.ToolContext.Channel.SenderId.Should().BeEmpty();
-        command.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-alpha");
-        command.ToolContext.Caller.ScopeId.Should().Be("scope-alpha");
-        command.ToolContext.Caller.OwnerScopeId.Should().Be("scope-alpha");
-        command.ToolContext.Caller.OwnerSubject.Should().Be("owner-alpha");
-        command.ToolContext.Caller.ResponseId.Should().Be("plan-gate-alpha");
-        command.ToolContext.NyxIdAuthority.Platform.Should().Be("nyxid");
-        command.ToolContext.NyxIdAuthority.ExternalUserId.Should().Be("owner-alpha");
-        command.ToolContext.NyxIdAuthority.Scope.Should().Be("proxy");
-        command.ToolContext.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.Actor);
-        command.ToolContext.ExecutionOwner.OwnerId.Should().Be("conversation-alpha");
-    }
-
-    [Fact]
-    public async Task PlanResolve_ShouldRejectMissingNyxIdSubjectBeforeAdmissionOrDispatch()
-    {
-        var admission = new RecordingAdmissionPort();
-        var dispatch = new RecordingDispatchPort();
-        var routeValues = ConversationRouteValues();
-        routeValues["taskId"] = "task-alpha";
-
-        var response = await ExecuteAsync(
-            PlanResolveRoute,
-            routeValues,
-            """
-            {
-              "requestId": "plan-gate-alpha",
-              "clientRequestId": "client-plan-alpha",
-              "planId": "plan-alpha",
-              "planRevision": 3,
-              "confirmed": true,
-              "expectedStateVersion": 23
-            }
-            """,
-            admission,
-            dispatch,
-            authenticatedScopeId: "scope-alpha");
-
-        response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
-        admission.Targets.Should().BeEmpty();
-        dispatch.Dispatches.Should().BeEmpty();
-    }
-
-    [Fact]
     public async Task CanaryEffectFaultArm_DefaultDisabled_ShouldReturnNotFoundWithoutAdmission()
     {
         var admission = new RecordingAdmissionPort();
@@ -377,7 +288,7 @@ public sealed class NyxIdChatControlEndpointsTests
         command.ConversationActorId.Should().Be("conversation-alpha");
         command.ArmId.Should().Be("arm-alpha");
         command.ClientRequestId.Should().Be("client-arm-alpha");
-        command.Key.Should().BeEquivalentTo(new NyxIdChatOperationKey
+        command.SourceOperationKey.Should().BeEquivalentTo(new NyxIdChatOperationKey
         {
             ConversationActorId = "conversation-alpha",
             TurnId = "turn-alpha",
@@ -621,11 +532,11 @@ public sealed class NyxIdChatControlEndpointsTests
         {
           "armId": "arm-alpha",
           "clientRequestId": "client-arm-alpha",
-          "turnId": "turn-alpha",
-          "taskId": "task-alpha",
-          "stepId": "step-alpha",
-          "operationId": "operation-alpha",
-          "operationGeneration": 1,
+          "sourceTurnId": "turn-alpha",
+          "sourceTaskId": "task-alpha",
+          "sourceStepId": "step-alpha",
+          "sourceOperationId": "operation-alpha",
+          "sourceOperationGeneration": 1,
           "serviceInstanceId": "connected-service-alpha",
           "expiresAt": "{{DateTimeOffset.UtcNow.AddMinutes(10):O}}",
           "expectedStateVersion": 23

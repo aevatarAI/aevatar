@@ -79,6 +79,45 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
+    public async Task ResolveRouteAsync_ShouldPreserveExactCatalogAndUserServiceIdentity()
+    {
+        var provider = CreateProvider();
+
+        var route = await provider.ResolveRouteAsync(CreateRequest(
+            routePreference: "/api/v1/proxy/catalog-chrono?_nyxid_via=us-chrono"));
+
+        route.RouteName.Should().Be("/api/v1/proxy/catalog-chrono?_nyxid_via=us-chrono");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/catalog-chrono"));
+        route.ExactUserServiceId.Should().Be("us-chrono");
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldPreservePortableCatalogIdentityWithoutUserSelector()
+    {
+        var provider = CreateProvider();
+
+        var route = await provider.ResolveRouteAsync(CreateRequest(
+            routePreference: "/api/v1/proxy/catalog-chrono"));
+
+        route.RouteName.Should().Be("/api/v1/proxy/catalog-chrono");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/catalog-chrono"));
+        route.ExactUserServiceId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldPreserveExactUserServiceIdentityForLegacySlugRoute()
+    {
+        var provider = CreateProvider();
+
+        var route = await provider.ResolveRouteAsync(CreateRequest(
+            routePreference: "/api/v1/proxy/s/chrono-llm?_nyxid_via=us-chrono"));
+
+        route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm?_nyxid_via=us-chrono");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm"));
+        route.ExactUserServiceId.Should().Be("us-chrono");
+    }
+
+    [Fact]
     public async Task ResolveRouteAsync_ShouldResolveModelFromRequest()
     {
         var provider = CreateProvider();
@@ -331,6 +370,10 @@ public sealed class NyxIdLLMProviderRoutingTests
     [InlineData("https://attacker.example")]
     [InlineData("/api/v1/proxy/s/chrono-llm?target=https://attacker.example")]
     [InlineData("/api/v1/proxy/s/chrono-llm#https://attacker.example")]
+    [InlineData("/api/v1/proxy/catalog-chrono?_nyxid_via=")]
+    [InlineData("/api/v1/proxy/catalog-chrono?_nyxid_via=us-chrono&target=other")]
+    [InlineData("/api/v1/proxy/catalog-chrono/extra?_nyxid_via=us-chrono")]
+    [InlineData("/api/v1/proxy/catalog-chrono?_nyxid_via=../other")]
     [InlineData("user@attacker.example")]
     [InlineData("/custom/path")]
     [InlineData("/api/v1/proxy/s/chrono-llm/extra")]
@@ -348,13 +391,12 @@ public sealed class NyxIdLLMProviderRoutingTests
     {
         var provider = CreateProvider();
 
-        var route = await provider.ResolveRouteAsync(
+        var act = () => provider.ResolveRouteAsync(
             CreateRequest(routePreference: routePreference));
 
-        route.RouteName.Should().Be("nyxid");
-        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1/"));
-        route.Endpoint.Scheme.Should().Be(Uri.UriSchemeHttps);
-        route.Endpoint.Authority.Should().Be("nyx.example.com");
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("The explicit NyxID route preference is not canonical.");
     }
 
     [Theory]
@@ -447,6 +489,7 @@ public sealed class NyxIdLLMProviderRoutingTests
                 new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm-public"),
                 "/api/v1/proxy/s/chrono-llm-public",
                 "test-token",
+                null,
             ]);
 
         delegateProvider.Should().NotBeNull();
@@ -455,6 +498,21 @@ public sealed class NyxIdLLMProviderRoutingTests
             BindingFlags.Instance | BindingFlags.NonPublic);
         executionPortField.Should().NotBeNull();
         executionPortField!.GetValue(delegateProvider).Should().BeSameAs(executionPort);
+    }
+
+    [Fact]
+    public void ApplyExactUserServiceSelector_ShouldReplaceForgedSelectorOnFinalSdkRequest()
+    {
+        var requestUri = new Uri(
+            "https://nyx.example.com/api/v1/proxy/catalog-chrono/chat/completions?api-version=v1&_nyxid_via=forged");
+
+        var selected = NyxIdLLMProvider.ApplyExactUserServiceSelector(requestUri, "us-chrono");
+
+        selected.AbsolutePath.Should().Be("/api/v1/proxy/catalog-chrono/chat/completions");
+        var queryParts = selected.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries);
+        queryParts.Should().BeEquivalentTo("api-version=v1", "_nyxid_via=us-chrono");
+        queryParts.Should().ContainSingle(static part =>
+            part.StartsWith("_nyxid_via=", StringComparison.Ordinal));
     }
 
     private static NyxIdLLMProvider CreateProvider() =>

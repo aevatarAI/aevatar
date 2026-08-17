@@ -97,6 +97,7 @@ public sealed class LlmRunCore(
                     NyxIdRoutePreference: toolContext.Routing.NyxIdRoutePreference,
                     MaxToolRoundsOverride: null,
                     UserMemoryPrompt: toolContext.Routing.UserMemoryPrompt),
+                RouteTarget = command.RouteTarget?.Clone(),
                 Model = NormalizeOptional(command.Model),
                 Temperature = command.HasTemperature ? command.Temperature : null,
                 MaxTokens = command.HasMaxTokens ? command.MaxTokens : null,

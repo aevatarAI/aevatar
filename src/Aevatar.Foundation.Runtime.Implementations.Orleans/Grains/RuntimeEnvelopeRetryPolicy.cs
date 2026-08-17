@@ -121,6 +121,23 @@ internal sealed class RuntimeEnvelopeRetryPolicy
         };
     }
 
+    /// <summary>
+    /// True when the handler explicitly requires the same envelope to remain
+    /// unacknowledged after runtime retries are exhausted.
+    /// </summary>
+    internal static bool ContainsRuntimeEnvelopeRetryableFailure(Exception exception)
+    {
+        return exception switch
+        {
+            IRuntimeEnvelopeRetryableException => true,
+            AggregateException aggregate =>
+                aggregate.InnerExceptions.Any(ContainsRuntimeEnvelopeRetryableFailure),
+            _ when exception.InnerException is not null =>
+                ContainsRuntimeEnvelopeRetryableFailure(exception.InnerException),
+            _ => false,
+        };
+    }
+
     private static int GetAttempt(EventEnvelope envelope)
     {
         return RuntimeEnvelopeDeliveryIdentity.GetAttempt(envelope);

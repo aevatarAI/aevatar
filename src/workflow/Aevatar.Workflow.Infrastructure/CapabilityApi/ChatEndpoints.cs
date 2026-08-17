@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -287,11 +288,23 @@ public static class WorkflowCapabilityEndpoints
                 onAcceptedAsync: async (receipt, token) =>
                 {
                     CapabilityTraceContext.ApplyCorrelationHeader(http.Response, receipt.Run.CorrelationId);
+                    ExceptionDispatchInfo? acceptedHookFailure = null;
                     if (onAcceptedHook != null)
-                        await onAcceptedHook(receipt.Run, token);
+                    {
+                        try
+                        {
+                            await onAcceptedHook(receipt.Run, token);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            acceptedHookFailure = ExceptionDispatchInfo.Capture(ex);
+                        }
+                    }
+
                     await writer.StartAsync(token);
                     await writer.WriteAsync(BuildRunContextFrame(receipt.Run), token);
                     scope.RecordFirstResponse();
+                    acceptedHookFailure?.Throw();
                 },
                 ct);
 

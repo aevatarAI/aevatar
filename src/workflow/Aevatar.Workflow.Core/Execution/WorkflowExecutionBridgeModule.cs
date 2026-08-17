@@ -3,6 +3,11 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Execution;
 
+internal interface IWorkflowExecutionBackgroundWorkOwner
+{
+    void CancelBackgroundWork();
+}
+
 internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandlerContext>
 {
     private readonly IReadOnlyList<IEventModule<IWorkflowExecutionContext>> _executors;
@@ -20,13 +25,34 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
 
     public string Name => "workflow_execution_bridge";
 
-    public int Priority => 0;
+    // The kernel must inspect child completions before foreach mutates its attempt ledger.
+    public int Priority => 1;
+
+    internal void CancelBackgroundWork()
+    {
+        foreach (var owner in _executors.OfType<IWorkflowExecutionBackgroundWorkOwner>())
+            owner.CancelBackgroundWork();
+    }
 
     public bool CanHandle(EventEnvelope envelope) =>
         _executors.Any(x => x.CanHandle(envelope));
 
     public async Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct)
     {
+        if (envelope.Payload?.Is(StepRequestEvent.Descriptor) == true)
+        {
+            var request = envelope.Payload.Unpack<StepRequestEvent>();
+            if (!WorkflowExecutionStateAccess.MatchesAuthoritativeRun(_stateHost.RunId, request.RunId))
+            {
+                ctx.Logger.LogWarning(
+                    "workflow_execution_bridge: ignore fenced step request currentRun={CurrentRunId} requestedRun={RequestedRunId} step={StepId}",
+                    _stateHost.RunId,
+                    request.RunId,
+                    request.StepId);
+                return;
+            }
+        }
+
         var workflowContext = WorkflowExecutionContextAdapter.Create(ctx, _stateHost);
         foreach (var executor in _executors)
         {
@@ -53,7 +79,7 @@ internal sealed class WorkflowExecutionBridgeModule : IEventModule<IEventHandler
                     ex,
                     "workflow_execution_bridge: durable executor publication remains pending run={RunId}",
                     _stateHost.RunId);
-                return;
+                throw;
             }
             catch (Exception ex) when (envelope.Payload?.Is(StepRequestEvent.Descriptor) == true)
             {

@@ -50,6 +50,37 @@ jest.mock('@/shared/studio/api', () => ({
   },
 }));
 
+function createMemberEndpointContract(
+  overrides: { readonly publishedServiceId?: string } = {},
+) {
+  return {
+    curlExample: null,
+    defaultSmokeInputMode: 'prompt',
+    defaultSmokePrompt: null,
+    deploymentStatus: 'Active',
+    endpointId: 'chat',
+    fetchExample: null,
+    invokePath: '/api/scopes/scope-1/members/m-alpha/invoke/chat:stream',
+    memberId: 'm-alpha',
+    method: 'POST',
+    publishedServiceId: 'svc-alpha',
+    requestContentType: 'application/json',
+    requestTypeUrl: '',
+    responseContentType: 'text/event-stream',
+    responseTypeUrl: '',
+    revisionId: 'rev-workflow',
+    sampleRequestJson: null,
+    scopeId: 'scope-1',
+    serviceId: 'svc-alpha',
+    smokeTestSupported: true,
+    streamFrameFormat: 'workflow-run-event',
+    supportsAguiFrames: false,
+    supportsSse: true,
+    supportsWebSocket: false,
+    ...overrides,
+  } as const;
+}
+
 describe('StudioMemberInvokePanel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -65,30 +96,41 @@ describe('StudioMemberInvokePanel', () => {
       requestId: 'run-1',
       targetActorId: 'actor-1',
     });
-    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockResolvedValue({
-      defaultSmokeInputMode: 'typed-payload',
-      defaultSmokePrompt: null,
-      deploymentStatus: 'Active',
-      endpointId: 'submit',
-      fetchExample: null,
-      curlExample: null,
-      invokePath: '/api/scopes/scope-1/members/default/invoke/submit',
-      method: 'POST',
-      publishedServiceId: 'default',
-      requestContentType: 'application/json',
-      requestTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
-      responseContentType: 'application/json',
-      responseTypeUrl: 'type.googleapis.com/example.ContractSubmitResult',
-      revisionId: 'contract-rev',
-      sampleRequestJson: '{"message":"hello"}',
-      scopeId: 'scope-1',
-      serviceId: 'default',
-      smokeTestSupported: true,
-      streamFrameFormat: null,
-      supportsAguiFrames: false,
-      supportsSse: false,
-      supportsWebSocket: false,
-    });
+    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockImplementation(
+      (scopeId: string, memberId: string, endpointId: string) => {
+        const publishedServiceId =
+          {
+            'member-alpha': 'svc-alpha',
+            'workspace-demo': 'member-workspace-demo',
+          }[memberId] ?? memberId;
+
+        return Promise.resolve({
+          defaultSmokeInputMode: 'typed-payload',
+          defaultSmokePrompt: null,
+          deploymentStatus: 'Active',
+          endpointId,
+          fetchExample: null,
+          curlExample: null,
+          invokePath: `/api/scopes/${scopeId}/members/${memberId}/invoke/${endpointId}`,
+          memberId,
+          method: 'POST',
+          publishedServiceId,
+          requestContentType: 'application/json',
+          requestTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+          responseContentType: 'application/json',
+          responseTypeUrl: 'type.googleapis.com/example.ContractSubmitResult',
+          revisionId: 'contract-rev',
+          sampleRequestJson: '{"message":"hello"}',
+          scopeId,
+          serviceId: publishedServiceId,
+          smokeTestSupported: true,
+          streamFrameFormat: null,
+          supportsAguiFrames: false,
+          supportsSse: false,
+          supportsWebSocket: false,
+        });
+      },
+    );
     (parseBackendSSEStream as jest.Mock).mockImplementation(
       async function* () {},
     );
@@ -1280,34 +1322,11 @@ describe('StudioMemberInvokePanel', () => {
 
   it('allows bound member-run chat endpoints to start without prompt or files', async () => {
     (runtimeRunsApi.streamEndpoint as jest.Mock).mockResolvedValue({});
-    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockResolvedValueOnce({
-      defaultSmokeInputMode: 'prompt',
-      defaultSmokePrompt: null,
-      deploymentStatus: 'Active',
-      endpointId: 'chat',
-      fetchExample: null,
-      curlExample: null,
-      invokePath: '/api/scopes/scope-1/members/m-alpha/invoke/chat:stream',
-      memberId: 'm-alpha',
-      method: 'POST',
-      publishedServiceId: 'svc-alpha',
-      requestContentType: 'application/json',
-      requestTypeUrl: '',
-      responseContentType: 'text/event-stream',
-      responseTypeUrl: '',
-      revisionId: 'rev-workflow',
-      sampleRequestJson: null,
-      scopeId: 'scope-1',
-      serviceId: 'svc-alpha',
-      smokeTestSupported: true,
-      streamFrameFormat: 'workflow-run-event',
-      supportsAguiFrames: false,
-      supportsSse: true,
-      supportsWebSocket: false,
-    });
+    const authoritativeEndpointContract = createMemberEndpointContract();
 
     render(
       React.createElement(StudioMemberInvokePanel, {
+        authoritativeEndpointContract,
         enableFileAttachments: true,
         memberId: 'm-alpha',
         memberRevision: {
@@ -1364,13 +1383,7 @@ describe('StudioMemberInvokePanel', () => {
       }),
     );
 
-    await waitFor(() => {
-      expect(scopeRuntimeApi.getMemberEndpointContract).toHaveBeenCalledWith(
-        'scope-1',
-        'm-alpha',
-        'chat',
-      );
-    });
+    expect(scopeRuntimeApi.getMemberEndpointContract).not.toHaveBeenCalled();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
 
@@ -1390,6 +1403,58 @@ describe('StudioMemberInvokePanel', () => {
     expect(
       screen.queryByText('Enter a request before running this workflow.'),
     ).toBeNull();
+  });
+
+  it('blocks member invocation when the authoritative endpoint contract is missing or mismatched', async () => {
+    const props = {
+      memberId: 'm-alpha',
+      runtimeTarget: 'member' as const,
+      scopeId: 'scope-1',
+      services: [
+        {
+          deploymentStatus: 'Active',
+          displayName: 'Status reporter service',
+          endpoints: [
+            {
+              description: 'Run the bound workflow.',
+              displayName: 'Chat',
+              endpointId: 'chat',
+              kind: 'chat' as const,
+              requestTypeUrl: '',
+              responseTypeUrl: '',
+            },
+          ],
+          kind: 'service' as const,
+          namespace: 'default',
+          serviceId: 'svc-alpha',
+        },
+      ],
+    };
+    const { rerender } = render(
+      React.createElement(StudioMemberInvokePanel, {
+        ...props,
+        authoritativeEndpointContract: null,
+      }),
+    );
+
+    expect(
+      await screen.findByRole('button', { name: 'Run workflow' }),
+    ).toBeDisabled();
+    expect(scopeRuntimeApi.getMemberEndpointContract).not.toHaveBeenCalled();
+
+    rerender(
+      React.createElement(StudioMemberInvokePanel, {
+        ...props,
+        authoritativeEndpointContract: createMemberEndpointContract({
+          publishedServiceId: 'svc-other',
+        }),
+      }),
+    );
+
+    expect(screen.getByRole('button', { name: 'Run workflow' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Run workflow' }));
+    expect(runtimeRunsApi.streamEndpoint).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.getMemberEndpointContract).not.toHaveBeenCalled();
   });
 
   it('records runs into read-only Run history without exposing internal identifiers', async () => {

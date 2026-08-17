@@ -121,7 +121,11 @@ public sealed class ServiceCatalogQueryReader : IServiceCatalogQueryReader
                 .ToList(),
             [.. readModel.PolicyIds],
             readModel.UpdatedAt,
-            MapExternalExposure(readModel.ExternalExposure, readModel.StateVersion));
+            MapExternalExposure(readModel.ExternalExposure, readModel.StateVersion))
+        {
+            StateVersion = readModel.StateVersion,
+            LastEventId = readModel.LastEventId ?? string.Empty,
+        };
     }
 
     private static ServiceExternalExposureSnapshot? MapExternalExposure(

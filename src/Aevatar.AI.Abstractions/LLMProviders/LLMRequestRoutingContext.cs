@@ -10,4 +10,6 @@ public sealed record LLMRequestRoutingContext(
     string? UserMemoryPrompt)
 {
     public static LLMRequestRoutingContext Empty { get; } = new(null, null, null, null);
+
+    public LLMRouteTarget? RouteTarget { get; init; }
 }

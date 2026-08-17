@@ -82,6 +82,27 @@ public sealed class RuntimeEnvelopeRetryPolicyTests
             .Should().BeFalse();
     }
 
+    [Fact]
+    public void ContainsRuntimeEnvelopeRetryableFailure_ShouldMatchWrappedMarkerOnly()
+    {
+        var marker = new RuntimeRetryableTestException();
+
+        RuntimeEnvelopeRetryPolicy.ContainsRuntimeEnvelopeRetryableFailure(marker).Should().BeTrue();
+        RuntimeEnvelopeRetryPolicy
+            .ContainsRuntimeEnvelopeRetryableFailure(new InvalidOperationException("wrap", marker))
+            .Should().BeTrue();
+        RuntimeEnvelopeRetryPolicy
+            .ContainsRuntimeEnvelopeRetryableFailure(new AggregateException(marker))
+            .Should().BeTrue();
+        RuntimeEnvelopeRetryPolicy
+            .ContainsRuntimeEnvelopeRetryableFailure(
+                new EventStoreOptimisticConcurrencyException("actor", expectedVersion: 1, actualVersion: 2))
+            .Should().BeFalse();
+        RuntimeEnvelopeRetryPolicy
+            .ContainsRuntimeEnvelopeRetryableFailure(new InvalidOperationException("ordinary"))
+            .Should().BeFalse();
+    }
+
     private static Exception BuildCommitBoundaryException(Type exceptionType)
     {
         if (exceptionType == typeof(EventStoreOptimisticConcurrencyException))

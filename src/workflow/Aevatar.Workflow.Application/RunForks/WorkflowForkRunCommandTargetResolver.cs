@@ -92,7 +92,9 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                     InlineWorkflowYamls: inlineWorkflowYamls,
                     ExpectedExecutionMode: seedView.ExpectedExecutionMode,
                     ScopeId: scopeId,
-                    CapabilityAdmissionPlan: seedView.CapabilityAdmissionPlan?.Clone(),
+                    CapabilityAdmissionPlan: preservesSourceArtifacts
+                        ? seedView.CapabilityAdmissionPlan?.Clone()
+                        : null,
                     WorkflowId: preservesSourceArtifacts ? seedView.WorkflowId : string.Empty,
                     RevisionId: preservesSourceArtifacts ? seedView.RevisionId : string.Empty,
                     DefinitionVersion: preservesSourceArtifacts ? Math.Max(0, seedView.DefinitionVersion) : 0),

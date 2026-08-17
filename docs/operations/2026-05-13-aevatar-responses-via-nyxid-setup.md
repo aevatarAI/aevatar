@@ -61,7 +61,12 @@ nyxid service add llm-openai-codex
 nyxid service list
 ```
 
-之后模型名使用 `/v1/models` 返回的完整 id，格式是：
+然后登录 Aevatar Backend Admin，进入 `/admin#/models`。当前 scope 页面可以继承平台默认，
+也可以选择 NyxID `/api/v1/keys` inventory 中的 exact UserService 并显式填写模型 ID；
+平台管理员还可以在“平台默认”页配置所有继承 scope 的通用目录。系统不会根据 URL 或服务名中
+是否含 `llm` 自动识别，所以 `chrono-llm`、`chrono-llm-public` 也通过这里显式加入。
+
+配置物化后，模型名使用 `/v1/models` 返回的完整 id，格式是：
 
 ```text
 <service-slug>/<model>
@@ -251,7 +256,9 @@ curl -N "$BASE/messages" \
 | `401 unauthorized` 来自 `nyx-api.chrono-ai.fun` | API key 错或被吊销 | `nyxid api-key list` 确认，必要时重发 |
 | `403 api_key_scope_forbidden_legacy` | `--allowed-services` 填了 catalog id | 用 `nyxid service list --output json` 拿 UserService id 后重签 |
 | `403` 访问 `/proxy/s/aevatar/*` | 受限 key 没覆盖 aevatar service | 把 aevatar 的 UserService id 也加入 `--allowed-services`，或先用 `--allow-all-services` 验证 |
-| `/v1/models` 为空 | 没有可达的 LLM service，或 key service 权限太窄 | `nyxid service add <slug>`，或临时用 `--allow-all-services` |
+| `/v1/models` 为空 | 当前 scope 配置了显式空替换，或 effective policy 没有模型 | 在 `/admin#/models` 添加来源和显式模型 ID，或切回继承平台默认 |
+| 已列出的模型调用返回 NyxID `403/404` | policy 只控制发现；对应 binding、组织权限或 API key `allowed_service_ids` 不满足 | 用 `nyxid service list --output json` 核对 exact UserService，并调整 NyxID 授权后重试 |
+| `/v1/models` 返回 `503 model_catalog_unavailable` | effective policy projection 暂不可读，尤其是尚未初始化平台默认时 | 平台管理员先保存平台默认配置；若已配置则检查 projection/read model 健康状态 |
 | Aevatar 返回 `authentication_required` | 没有带 bearer，或绕过了 NyxID proxy | 确认 URL 是 `/api/v1/proxy/s/aevatar/v1/...`，并带 `Authorization: Bearer` |
 | Claude Code 404 | `ANTHROPIC_BASE_URL` 拼错 | base URL 停在 `/api/v1/proxy/s/aevatar`，不要手写到 `/v1/messages` 两次 |
 | Messages 返回 `invalid_max_tokens` | `max_tokens` 缺失或不是正整数 | 给 Messages 请求补 `max_tokens` |

@@ -42,6 +42,9 @@ public sealed class WorkflowSpreadsheetExtractToolSource(
 
         public string Name => "spreadsheet_extract";
 
+        public WorkflowToolRecoverySafety RecoverySafety =>
+            WorkflowToolRecoverySafety.ReplayableReadOnly;
+
         public async Task<WorkflowToolExecutionResult> ExecuteAsync(
             WorkflowToolExecutionRequest request,
             CancellationToken ct = default)
