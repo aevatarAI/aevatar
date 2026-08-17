@@ -291,7 +291,14 @@ internal static class WorkflowSkillsEndpoints
             outcome.ErrorCode ?? "skill_schedule_unknown_failure");
 
         var scheduleStatus = ResolveScheduleFailureStatus(outcome.ErrorCode);
-        return Results.Json(new { code = outcome.ErrorCode, message = outcome.ErrorMessage }, statusCode: scheduleStatus);
+        return Results.Json(
+            new
+            {
+                code = outcome.ErrorCode,
+                message = outcome.ErrorMessage,
+                requiredUserServiceIds = outcome.RequiredUserServiceIds,
+            },
+            statusCode: scheduleStatus);
     }
 
     private static string BuildSkillScheduleLocation(SkillScheduleReceipt receipt) =>
@@ -306,7 +313,8 @@ internal static class WorkflowSkillsEndpoints
         "forbidden" or "api_key_scope_plan_denied" => StatusCodes.Status403Forbidden,
         "bad_request" or "validation_error" or "api_key_scope_plan_owner_unsupported" =>
             StatusCodes.Status400BadRequest,
-        "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" =>
+        "conflict" or "api_key_scope_plan_route_unresolved" or "api_key_scope_plan_stale" or
+            "schedule_authorization_route_unresolved" =>
             StatusCodes.Status409Conflict,
         "rate_limited" => StatusCodes.Status429TooManyRequests,
         "nyxid_scope_plan_provider_timed_out" => StatusCodes.Status504GatewayTimeout,

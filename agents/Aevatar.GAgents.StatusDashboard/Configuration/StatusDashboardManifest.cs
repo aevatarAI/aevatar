@@ -1,3 +1,6 @@
+using Aevatar.Configuration;
+using Microsoft.Extensions.Configuration;
+
 namespace Aevatar.GAgents.StatusDashboard.Configuration;
 
 /// <summary>
@@ -12,6 +15,7 @@ public sealed class StatusDashboardManifest
     private const string AevatarCoreLoopProbe = "aevatar_core_loop";
     private const string AuditQueryIndexProbe = "audit_query_index";
     private const string NyxIdAuthorityPlaceholder = "${configuration:Aevatar:NyxId:Authority}";
+    private const string NyxIdApiBaseUrlPlaceholder = "${configuration:Aevatar:NyxId:ApiBaseUrl}";
 
     public StatusDashboardManifest(IReadOnlyList<HealthProbeTargetDescriptor> descriptors)
     {
@@ -20,7 +24,9 @@ public sealed class StatusDashboardManifest
 
     public IReadOnlyList<HealthProbeTargetDescriptor> Descriptors { get; }
 
-    public static StatusDashboardManifest FromOptions(StatusDashboardOptions options)
+    public static StatusDashboardManifest FromOptions(
+        StatusDashboardOptions options,
+        IConfiguration? configuration = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         var defaultInterval = options.DefaultIntervalSeconds > 0
@@ -32,7 +38,7 @@ public sealed class StatusDashboardManifest
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var descriptors = new List<HealthProbeTargetDescriptor>();
-        var targets = ResolveTargets(options);
+        var targets = ResolveTargets(options, configuration);
         foreach (var t in targets)
         {
             if (string.IsNullOrWhiteSpace(t.Slug)) continue;
@@ -65,11 +71,13 @@ public sealed class StatusDashboardManifest
         return new StatusDashboardManifest(descriptors);
     }
 
-    private static IReadOnlyList<StatusProbeTargetConfig> ResolveTargets(StatusDashboardOptions options)
+    private static IReadOnlyList<StatusProbeTargetConfig> ResolveTargets(
+        StatusDashboardOptions options,
+        IConfiguration? configuration)
     {
         var configuredTargets = options.Targets ?? new List<StatusProbeTargetConfig>();
         return configuredTargets.Count == 0 && options.UseBuiltInTargets
-            ? BuiltInTargets(options)
+            ? BuiltInTargets(options, configuration)
             : configuredTargets;
     }
 
@@ -88,9 +96,14 @@ public sealed class StatusDashboardManifest
             ? "http://localhost:8080"
             : selfBaseUrl.Trim().TrimEnd('/');
 
-    private static List<StatusProbeTargetConfig> BuiltInTargets(StatusDashboardOptions options)
+    private static List<StatusProbeTargetConfig> BuiltInTargets(
+        StatusDashboardOptions options,
+        IConfiguration? configuration)
     {
         var selfBaseUrl = NormalizeSelfBaseUrl(options.SelfBaseUrl);
+        var nyxIdApiBaseUrl = configuration is null
+            ? NyxIdApiBaseUrlPlaceholder
+            : NyxIdEndpointResolver.ResolvePublicApiBaseUrl(configuration);
         var probe = options.Probe ?? new StatusProbeOptions();
         var targets = new List<StatusProbeTargetConfig>
         {
@@ -167,22 +180,29 @@ public sealed class StatusDashboardManifest
                 IntervalSeconds = 60,
             },
 
-            // ── upstream ──
-            HttpTarget(
+        };
+
+        // ── upstream ──
+        // A split-host deployment must never probe its issuer or cluster-local transport as
+        // though either were the public REST API. If ApiBaseUrl is missing, omit this probe.
+        if (!string.IsNullOrWhiteSpace(nyxIdApiBaseUrl))
+        {
+            targets.Add(HttpTarget(
                 slug: "nyxid-http-health",
                 name: "NyxID · health",
                 category: "upstream",
                 severity: "standard",
-                url: $"{NyxIdAuthorityPlaceholder}/health",
-                intervalSeconds: 60),
-            HttpTarget(
-                slug: "nyxid-oidc-discovery",
-                name: "NyxID · OIDC discovery",
-                category: "upstream",
-                severity: "standard",
-                url: $"{NyxIdAuthorityPlaceholder}/.well-known/openid-configuration",
-                intervalSeconds: 60),
-        };
+                url: $"{nyxIdApiBaseUrl}/health",
+                intervalSeconds: 60));
+        }
+
+        targets.Add(HttpTarget(
+            slug: "nyxid-oidc-discovery",
+            name: "NyxID · OIDC discovery",
+            category: "upstream",
+            severity: "standard",
+            url: $"{NyxIdAuthorityPlaceholder}/.well-known/openid-configuration",
+            intervalSeconds: 60));
 
         // ── paid LLM canary (real end-to-end completion) ──
         // Emitted only when a real NyxID-recognized credential is configured. Reuses the

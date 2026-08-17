@@ -127,10 +127,46 @@ message ExternalWorkflowCapabilitySelector {
   }
 }
 
+// Deterministic, provider-neutral projection applied to a tool response before the response may
+// enter workflow durable state or a committed completion event. Each output field evaluates its
+// operations in order against structured JSON. JSON pointers use RFC 6901 syntax.
+message WorkflowToolResponseProjection {
+  repeated WorkflowToolResponseProjectionField fields = 1;
+}
+
+message WorkflowToolResponseProjectionField {
+  string output_name = 1;
+  repeated WorkflowToolResponseProjectionOperation operations = 2;
+}
+
+message WorkflowToolResponseProjectionOperation {
+  oneof operation {
+    string json_pointer = 1;
+    bool parse_json = 2;
+    WorkflowToolResponseProjectionArrayMatch array_match = 3;
+    WorkflowToolResponseProjectionArrayMap array_map = 4;
+  }
+}
+
+// Selects exactly one array element whose string value at element_json_pointer equals
+// expected_string. Zero or multiple matches are projection failures.
+message WorkflowToolResponseProjectionArrayMatch {
+  string element_json_pointer = 1;
+  string expected_string = 2;
+}
+
+// Applies one bounded, ordered operation chain to every element of the current array and returns
+// the projected values in source order. Every element must project successfully. Array maps cannot
+// contain another array map.
+message WorkflowToolResponseProjectionArrayMap {
+  repeated WorkflowToolResponseProjectionOperation operations = 1;
+}
+
 message ExternalToolInvocationSpec {
   string call_site_id = 1;
   string tool_name = 2;
   ExternalWorkflowCapabilitySelector selector = 3;
+  WorkflowToolResponseProjection response_projection = 4;
 }
 
 message NyxIdUserServiceCapabilityRef {
@@ -278,6 +314,9 @@ message WorkflowCapabilityInvocationAdmission {
   string call_site_id = 1;
   ExternalWorkflowCapabilityRef capability = 2;
   NyxIdExplicitRequestGrant nyx_id_explicit_request_grant = 3;
+  // Exact call-site response projection sealed into the admission digest. Runtime dispatch must
+  // reject a compiled invocation whose projection differs from this proof.
+  WorkflowToolResponseProjection response_projection = 4;
 }
 
 message ExternalCapabilityBlocker {

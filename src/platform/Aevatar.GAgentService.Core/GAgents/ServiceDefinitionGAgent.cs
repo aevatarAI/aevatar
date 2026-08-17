@@ -260,11 +260,73 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         if (string.IsNullOrWhiteSpace(command.RevisionId))
             throw new InvalidOperationException("revision_id is required.");
 
+        var operationId = command.OperationId?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(operationId))
+            throw new InvalidOperationException("operation_id is required for default-serving coordination.");
+
+        if (!TryValidateDefaultServingContinuation(command, operationId))
+            return;
+
+        if (State.DefaultServingRevisionOperations.TryGetValue(operationId, out var committed))
+        {
+            EnsureMatchingDefaultServingOperation(committed, command);
+            await DispatchDefaultServingRevisionCommittedAckAsync(committed, CancellationToken.None);
+            await DispatchInvocationCatalogObservationAsync(CancellationToken.None);
+            return;
+        }
+
+        var operationAtGeneration = State.DefaultServingRevisionOperations.Values.FirstOrDefault(candidate =>
+            candidate.ServingGeneration == command.ServingGeneration);
+        if (operationAtGeneration != null)
+        {
+            throw new InvalidOperationException(
+                $"Default-serving generation '{command.ServingGeneration}' is already bound to operation '{operationAtGeneration.OperationId}'.");
+        }
+
+        if (command.ServingGeneration == State.DefaultServingGeneration)
+        {
+            throw new InvalidOperationException(
+                $"Default-serving generation '{command.ServingGeneration}' has no committed operation record.");
+        }
+
+        if (command.ServingGeneration < State.DefaultServingGeneration)
+        {
+            await PersistDomainEventAsync(new DefaultServingRevisionSupersededEvent
+            {
+                Identity = command.Identity.Clone(),
+                RevisionId = command.RevisionId,
+                OperationId = operationId,
+                CommandId = command.CommandId.Trim(),
+                ReplyActorId = command.ReplyActorId.Trim(),
+                ActivationAttemptId = command.ActivationAttemptId?.Trim() ?? string.Empty,
+                DeploymentId = command.DeploymentId.Trim(),
+                ServingGeneration = command.ServingGeneration,
+                SupersededAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                SupersededByGeneration = State.DefaultServingGeneration,
+            });
+            await DispatchDefaultServingRevisionCommittedAckAsync(
+                State.DefaultServingRevisionOperations[operationId],
+                CancellationToken.None);
+            return;
+        }
+
+        var committedAt = Timestamp.FromDateTime(DateTime.UtcNow);
+
         await PersistDomainEventAsync(new DefaultServingRevisionChangedEvent
         {
             Identity = command.Identity.Clone(),
             RevisionId = command.RevisionId,
+            OperationId = operationId,
+            CommandId = command.CommandId.Trim(),
+            ReplyActorId = command.ReplyActorId.Trim(),
+            ActivationAttemptId = command.ActivationAttemptId?.Trim() ?? string.Empty,
+            DeploymentId = command.DeploymentId.Trim(),
+            ServingGeneration = command.ServingGeneration,
+            CommittedAt = committedAt,
         });
+        await DispatchDefaultServingRevisionCommittedAckAsync(
+            State.DefaultServingRevisionOperations[operationId],
+            CancellationToken.None);
         await DispatchInvocationCatalogObservationAsync(CancellationToken.None);
     }
 
@@ -280,6 +342,7 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
             .On<ServiceRegistrationFailedEvent>(ApplyRegistrationFailed)
             .On<ServiceRegistrationRetiredEvent>(ApplyRegistrationRetired)
             .On<DefaultServingRevisionChangedEvent>(ApplyDefaultServingRevisionChanged)
+            .On<DefaultServingRevisionSupersededEvent>(ApplyDefaultServingRevisionSuperseded)
             .OrCurrent();
 
     private async Task<bool> TryRecoverExistingRegistrationAsync(
@@ -553,10 +616,177 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         DefaultServingRevisionChangedEvent evt)
     {
         var next = state.Clone();
-        next.DefaultServingRevisionId = evt.RevisionId ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(evt.OperationId))
+        {
+            next.DefaultServingRevisionId = evt.RevisionId ?? string.Empty;
+        }
+        else
+        {
+            var operation = new DefaultServingRevisionOperationRecord
+            {
+                RevisionId = evt.RevisionId ?? string.Empty,
+                OperationId = evt.OperationId.Trim(),
+                CommandId = evt.CommandId?.Trim() ?? string.Empty,
+                ReplyActorId = evt.ReplyActorId?.Trim() ?? string.Empty,
+                ActivationAttemptId = evt.ActivationAttemptId?.Trim() ?? string.Empty,
+                DeploymentId = evt.DeploymentId?.Trim() ?? string.Empty,
+                ServingGeneration = evt.ServingGeneration,
+                CommittedAt = evt.CommittedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UnixEpoch),
+                Disposition = DefaultServingRevisionCommitDisposition.Applied,
+            };
+            if (next.DefaultServingRevisionOperations.TryGetValue(operation.OperationId, out var existing) &&
+                !DefaultServingOperationsMatch(existing, operation))
+            {
+                throw new InvalidOperationException(
+                    $"Default-serving operation '{operation.OperationId}' conflicts with its committed facts.");
+            }
+
+            next.DefaultServingRevisionOperations[operation.OperationId] = operation;
+            if (operation.ServingGeneration > next.DefaultServingGeneration)
+            {
+                next.DefaultServingRevisionId = operation.RevisionId;
+                next.DefaultServingGeneration = operation.ServingGeneration;
+            }
+        }
+
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
-        next.LastEventId = BuildEventId(evt.Identity, $"default-serving:{evt.RevisionId}");
+        next.LastEventId = BuildEventId(
+            evt.Identity,
+            string.IsNullOrWhiteSpace(evt.OperationId)
+                ? $"default-serving:{evt.RevisionId}"
+                : $"default-serving:{evt.RevisionId}:{evt.OperationId}");
         return next;
+    }
+
+    private static ServiceDefinitionState ApplyDefaultServingRevisionSuperseded(
+        ServiceDefinitionState state,
+        DefaultServingRevisionSupersededEvent evt)
+    {
+        var next = state.Clone();
+        var operation = new DefaultServingRevisionOperationRecord
+        {
+            RevisionId = evt.RevisionId ?? string.Empty,
+            OperationId = evt.OperationId?.Trim() ?? string.Empty,
+            CommandId = evt.CommandId?.Trim() ?? string.Empty,
+            ReplyActorId = evt.ReplyActorId?.Trim() ?? string.Empty,
+            ActivationAttemptId = evt.ActivationAttemptId?.Trim() ?? string.Empty,
+            DeploymentId = evt.DeploymentId?.Trim() ?? string.Empty,
+            ServingGeneration = evt.ServingGeneration,
+            CommittedAt = evt.SupersededAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UnixEpoch),
+            Disposition = DefaultServingRevisionCommitDisposition.Superseded,
+            SupersededByGeneration = evt.SupersededByGeneration,
+        };
+        if (string.IsNullOrWhiteSpace(operation.OperationId) ||
+            operation.SupersededByGeneration <= operation.ServingGeneration)
+        {
+            throw new InvalidOperationException("Superseded default-serving operation facts are invalid.");
+        }
+
+        if (next.DefaultServingRevisionOperations.TryGetValue(operation.OperationId, out var existing) &&
+            !DefaultServingOperationsMatch(existing, operation))
+        {
+            throw new InvalidOperationException(
+                $"Default-serving operation '{operation.OperationId}' conflicts with its committed facts.");
+        }
+
+        next.DefaultServingRevisionOperations[operation.OperationId] = operation;
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(
+            evt.Identity,
+            $"default-serving-superseded:{evt.RevisionId}:{evt.OperationId}");
+        return next;
+    }
+
+    private bool TryValidateDefaultServingContinuation(
+        SetDefaultServingRevisionCommand command,
+        string operationId)
+    {
+        if (string.IsNullOrWhiteSpace(command.CommandId) ||
+            string.IsNullOrWhiteSpace(command.ReplyActorId) ||
+            string.IsNullOrWhiteSpace(command.DeploymentId) ||
+            command.ServingGeneration <= 0)
+        {
+            throw new InvalidOperationException(
+                "Default-serving continuation requires command_id, reply_actor_id, deployment_id, and a positive serving_generation.");
+        }
+
+        var deploymentActorId = ServiceActorIds.Deployment(command.Identity);
+        if (!string.Equals(command.ReplyActorId.Trim(), deploymentActorId, StringComparison.Ordinal))
+            throw new InvalidOperationException("Default-serving continuation reply_actor_id is not canonical.");
+
+        if (ActiveInboundEnvelope == null)
+            return true;
+
+        return string.Equals(
+                   ActiveInboundEnvelope.Route?.PublisherActorId,
+                   deploymentActorId,
+                   StringComparison.Ordinal) &&
+               string.Equals(ActiveInboundEnvelope.Id, command.CommandId.Trim(), StringComparison.Ordinal) &&
+               string.Equals(operationId, command.OperationId.Trim(), StringComparison.Ordinal);
+    }
+
+    private static void EnsureMatchingDefaultServingOperation(
+        DefaultServingRevisionOperationRecord committed,
+        SetDefaultServingRevisionCommand command)
+    {
+        var replayed = new DefaultServingRevisionOperationRecord
+        {
+            RevisionId = command.RevisionId?.Trim() ?? string.Empty,
+            OperationId = command.OperationId?.Trim() ?? string.Empty,
+            CommandId = command.CommandId?.Trim() ?? string.Empty,
+            ReplyActorId = command.ReplyActorId?.Trim() ?? string.Empty,
+            ActivationAttemptId = command.ActivationAttemptId?.Trim() ?? string.Empty,
+            DeploymentId = command.DeploymentId?.Trim() ?? string.Empty,
+            ServingGeneration = command.ServingGeneration,
+            CommittedAt = committed.CommittedAt?.Clone(),
+            Disposition = committed.Disposition,
+            SupersededByGeneration = committed.SupersededByGeneration,
+        };
+        if (!DefaultServingOperationsMatch(committed, replayed))
+        {
+            throw new InvalidOperationException(
+                $"Default-serving operation '{replayed.OperationId}' conflicts with its committed request.");
+        }
+    }
+
+    private static bool DefaultServingOperationsMatch(
+        DefaultServingRevisionOperationRecord left,
+        DefaultServingRevisionOperationRecord right) =>
+        string.Equals(left.RevisionId, right.RevisionId, StringComparison.Ordinal) &&
+        string.Equals(left.OperationId, right.OperationId, StringComparison.Ordinal) &&
+        string.Equals(left.CommandId, right.CommandId, StringComparison.Ordinal) &&
+        string.Equals(left.ReplyActorId, right.ReplyActorId, StringComparison.Ordinal) &&
+        string.Equals(left.ActivationAttemptId, right.ActivationAttemptId, StringComparison.Ordinal) &&
+        string.Equals(left.DeploymentId, right.DeploymentId, StringComparison.Ordinal) &&
+        left.ServingGeneration == right.ServingGeneration &&
+        left.Disposition == right.Disposition &&
+        left.SupersededByGeneration == right.SupersededByGeneration;
+
+    private async Task DispatchDefaultServingRevisionCommittedAckAsync(
+        DefaultServingRevisionOperationRecord operation,
+        CancellationToken ct)
+    {
+        var admission = await _dispatchPort.DispatchAsync(
+            operation.ReplyActorId,
+            CreateReplyEnvelope(
+                operation.ReplyActorId,
+                $"service-definition-default-serving-committed:{operation.OperationId}",
+                new DefaultServingRevisionCommittedAck
+                {
+                    Identity = State.Spec.Identity?.Clone(),
+                    RevisionId = operation.RevisionId,
+                    OperationId = operation.OperationId,
+                    CommandId = operation.CommandId,
+                    ActivationAttemptId = operation.ActivationAttemptId,
+                    DeploymentId = operation.DeploymentId,
+                    ServingGeneration = operation.ServingGeneration,
+                    CommittedAt = operation.CommittedAt?.Clone(),
+                    Disposition = operation.Disposition,
+                    SupersededByGeneration = operation.SupersededByGeneration,
+                }),
+            ct);
+        if (!admission.Accepted)
+            throw new InvalidOperationException("Default-serving revision committed acknowledgment was not admitted.");
     }
 
     private static void ValidateSpec(ServiceDefinitionSpec spec)
@@ -667,6 +897,16 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
             Route = EnvelopeRouteSemantics.CreateDirect("gagent-service.definition", actorId),
+            Propagation = new EnvelopePropagation(),
+        };
+
+    private EventEnvelope CreateReplyEnvelope(string actorId, string envelopeId, IMessage payload) =>
+        new()
+        {
+            Id = envelopeId,
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect(Id, actorId),
             Propagation = new EnvelopePropagation(),
         };
 

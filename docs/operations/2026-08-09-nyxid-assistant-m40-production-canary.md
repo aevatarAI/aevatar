@@ -430,13 +430,12 @@ Kubernetes use is read-only: `get`, `describe`, and `logs`. Do not `exec`,
 2. Assert a fresh service inventory still reports no personal GitHub binding.
 3. Start a new Studio conversation requesting GitHub connection and a read-only
    repository inspection.
-4. Read the committed state, record the exact task and plan revision, resolve
-   its plan gate exactly once, and require both the accepted resolution receipt
-   and the committed satisfied resolution before continuing.
+4. Read the committed state and record the exact task and plan revision. Require
+   the typed browser action to publish directly without a local plan decision.
 5. Require one `service.connect` action with a real `actionRequestId`, waiting
    step, exact requested scopes, and exactly one terminal frame.
-6. Reload before continuing. The same task, step, action identity, gate, and
-   waiting state must rehydrate without duplication.
+6. Reload before continuing. The same task, step, action identity, and waiting
+   state must rehydrate without duplication.
 7. Stop and delete the disposable Aevatar conversation. Re-read state and
    transcript until both are `404 not_found`.
 
@@ -450,9 +449,9 @@ UC1a does not depend on a prior UC and does not connect GitHub.
 2. Assert the exact personal UserService is active and the required read scope
    is present before opening Studio.
 3. Start a new Studio conversation requesting GitHub connection verification.
-4. Read the committed state, record the exact task and plan revision, resolve
-   its plan gate exactly once, and require both the accepted resolution receipt
-   and the committed satisfied resolution before continuing.
+4. Read the committed state and record the exact task and plan revision. Require
+   the typed postcondition operation to dispatch directly without a local plan
+   decision.
 5. Require the actor-owned postcondition `service.connected`, a verified
    resource identity, succeeded task, and exactly one terminal frame.
 6. Reload and require the same terminal task and action/postcondition identity
@@ -466,9 +465,9 @@ UC1b does not rely on UC1a having created or continued an action.
 ## UC3: Reconcile Before Retry
 
 Use only the fixed Approval definition. Generate a unique non-secret canary key
-and include it in both fixed form fields. The first generation must pass the
-plan gate and a real NyxID per-request decision, then encounter the reviewed
-one-shot fault after the effect dispatch waterline. The fault must be scoped to
+and include it in both fixed form fields. The first generation must enter its
+direct typed Tool dispatch and a real NyxID per-request decision, then encounter
+the reviewed one-shot fault after the effect dispatch waterline. The fault must be scoped to
 the exact conversation, turn, task, step, operation, generation, UserService,
 and operation digest. A process-wide timeout, workload restart, network outage,
 or ambiguous request mutation is forbidden.
@@ -491,8 +490,8 @@ Acceptance sequence:
    `GET /open-apis/approval/v4/instances/{instance_id}` with the caller UUID
    supplied to create. Only Lark provider code `1390003` proves `not_applied`;
    a timeout, malformed response, or any other miss is `unavailable`.
-5. The actor exposes `retry`; retry passes the plan gate again and enters
-   generation 2.
+5. The actor exposes `retry`; retry creates and directly dispatches generation 2
+   with the exact `not_applied` source-operation proof.
 6. Generation 2 produces a fresh NyxID approval request. Record its exact ID
    from the NyxID decision surface, prove it differs from generation 1, and
    approve it there. No Aevatar pre-return approval card is permitted. Under
@@ -513,31 +512,35 @@ Do not run UC3 until the narrow one-shot fault mechanism is present on the exact
 deployed image and reviewed as disabled by default. Fixture-only failure
 injection does not satisfy this production step.
 
-Before resolving the generation-1 plan gate, read the exact conversation
-`/state` document. Select its single planned effect step and record the
-conversation actor ID, active turn ID, task ID, step ID, operation ID,
-`operationGeneration=1`, admitted UserService ID, and
-top-level `stateVersion`. Do not derive, edit, or reuse any of these values.
-Using only the authenticated canonical subject above, POST those exact values
-plus a fresh `armId`, `clientRequestId`, and an expiry no more than 15 minutes
-ahead to:
+Before the source LLM operation completes, read the exact conversation `/state`
+document. Select its single active running LLM step and record the conversation
+actor ID, active turn ID, task ID, source step ID, source operation ID, source
+`operationGeneration=1`, and top-level `stateVersion`. Separately use the exact
+disposable UserService ID established by the UC setup. Do not derive, edit, or
+reuse any of these values. Using only the authenticated canonical subject above,
+POST those exact source-operation values plus the exact UserService ID, a fresh
+`armId`, `clientRequestId`, and an expiry no more than 15 minutes ahead to:
 
 ```text
 /api/scopes/{scopeId}/nyxid-chat/conversations/{conversationActorId}:arm-effect-fault-canary
 ```
 
-The request does not carry `catalogDigest`. The conversation actor must read the
-exact committed step admission, validate its digest, and seal that digest into
-the private one-shot directive atomically with the arm transition.
+The request does not carry `catalogDigest` or a target Tool operation identity,
+because neither exists at arm time. The conversation actor validates that the
+source LLM operation is still active and commits the owner-bound arm intent.
+When that exact LLM result materializes one generation-1 effect Tool operation,
+the actor reads its committed admission, validates the UserService and digest,
+then atomically seals the target operation key and digest into the private
+one-shot directive before direct dispatch.
 
 The accepted receipt is only dispatch evidence. Poll `/state` and require the
-same `armId`, exact operation key, and increasing actor `stateVersion` while the
-typed canary status progresses `armed -> forwarded -> consumed`; do not expose
-or record owner subject, UserService ID, catalog digest, or client request ID
-from the canary snapshot. Resolve the plan gate only after `armed` is visible.
-`forwarded` must appear after the exact plan resolution and `consumed` must
-appear before accepting the generation-1 uncertain result. Any other owner,
-default/non-Mainnet composition, disabled configuration, identity mismatch,
+same `armId`, exact `sourceOperation`, and increasing actor `stateVersion` while
+the typed canary status progresses `armed -> forwarded -> consumed`.
+`targetOperation` must be absent while `armed`, then match the directly
+dispatched effect Tool when `forwarded`. Do not expose or record owner subject,
+UserService ID, catalog digest, or client request ID from the canary snapshot.
+`consumed` must appear before accepting the generation-1 uncertain result. Any
+other owner, default/non-Mainnet composition, disabled configuration, identity mismatch,
 duplicate matching step, stale version, generation other than 1, or expired arm
 must fail closed; a non-allowlisted caller must receive `404` before scope
 admission or actor dispatch. Stop if any status, identity, or version transition

@@ -71,21 +71,31 @@ scope and is a different namespace from the runtime's `sandbox:execute` RBAC per
 Aevatar cannot observe — a route can therefore pass admission and still be refused by the runtime
 for a caller who lacks that permission.
 
-Fresh workflow command admission may self-repair this mismatch without a platform administrator.
-When the authenticated ingress supplies a verified direct human NyxID access token and there is
-exactly one active, catalog-backed, caller-owned personal candidate, Aevatar updates that exact
-UserService to `forward_access_token=false`, `inject_delegation_token=true`, preserves its existing
-unique delegation scopes, and appends `sandbox:execute`. It then rereads NyxID and admits only when
+Fresh workflow command admission may converge this mismatch without a platform administrator.
+`code_execute` owns the typed route contract above; it does not own a second route-management
+lifecycle. When authenticated ingress supplies a verified direct human NyxID access token and
+there is exactly one active, catalog-backed candidate that token may write, the shared route
+convergence boundary updates only that exact UserService to `forward_access_token=false`,
+`inject_delegation_token=true`, preserves the observed unique delegation scopes, and appends
+`sandbox:execute`. Write authority means either a caller-owned personal route or an organization
+route for which the caller is an organization admin. It then rereads NyxID and admits only when
 the exact route identity, catalog identity, credential policy, and preserved scopes verify. An
 already accepted forwarding or delegated route remains unchanged.
 
-Readiness queries never write. Neither proxy delegation, a broker-issued read token, API key,
-service account, relay credential, nor organization-shared route authorizes this reconciliation.
-The write-authority marker is transient ingress evidence: it is not serialized into a workflow
-command envelope, admission plan, actor state, or read model.
+An allowed organization member/viewer may use an already compatible route but may not change it;
+a mismatch remains a typed write-authority blocker. Readiness queries and runtime never write.
+Neither proxy delegation, a broker-issued read token, API key, service account, nor relay
+credential authorizes this convergence. The write-authority marker is transient ingress evidence:
+it is not serialized into a workflow command envelope, admission plan, actor state, or read model.
+NyxID UserService updates currently provide no compare-and-swap revision, so this is bounded
+best-effort convergence: Aevatar sends the minimal field patch, performs fresh readback, fails
+closed on final drift, and does not claim that a concurrent scope edit cannot be overwritten.
 
-Managed `codex_exec` reads the same UserService but targets a different runtime route with its own
-required scope, so it keeps its own eligibility policy. Neither policy is the other's contract.
+Managed `codex_exec` selects the same exact `chrono-sandbox` UserService ID but calls
+`/codex/execute` with its own request credential and eligibility contract. The UserService route
+configuration is shared: managed execution requires delegation containing `proxy:*`, while
+`code_execute` convergence preserves existing scopes and appends `sandbox:execute`. Neither
+capability may replace the other's contract or fall back to the other's runtime path.
 
 Interactive NyxID ingress may authorize that admission read with either a source-readable user
 bearer or the short-lived proxy delegation token injected for Aevatar when it carries NyxID's
@@ -97,14 +107,20 @@ code-execution admission rule is not shared by connected-service discovery, ordi
 LLM, or managed Codex paths.
 
 For workflows, `code_execute` is compiled as an external capability with no caller-authored route
-selector. Fresh draft-run, save, and bind command admission performs the bounded personal-route
-reconciliation before live readiness; standalone readiness remains read-only. Admission commits
+selector. Fresh draft-run, save, and bind command admission performs the bounded exact-route
+convergence before live readiness when the caller has write authority; standalone readiness
+remains read-only. Admission commits
 the exact UserService ID, slug snapshot, catalog identity, and contract digest into an
-`external-capability-admission.v5` call-site proof. Durable bind/invoke additionally requires the
+`external-capability-admission.v6` call-site proof. Durable bind/invoke additionally requires the
 existing actor-owned NyxID authorization catalog to prove that exact service grant. Interactive
-runtime re-reads NyxID facts when it has a source-readable caller credential. With delegation-only
-interactive ingress, runtime does not read inventory again and may call only the exact UserService
-ID sealed in the valid admission proof. Scheduled runtime follows the same exact-proof rule:
+runtime re-reads NyxID facts when it has a source-readable caller credential. If that source read
+returns `401 Unauthorized` after admission because the short-lived credential expired during a long
+run, runtime may continue only when the valid admission proof seals an exact UserService ID; NyxID
+then performs the final live credential and allowlist check on that exact proxy request. A `403`
+response or an inventory read that succeeds and explicitly denies the route still fails closed. With
+delegation-only interactive ingress, runtime does not read inventory again and may call only the
+exact UserService ID sealed in the valid admission proof. Scheduled runtime follows the same
+exact-proof rule:
 authority-refreshed tokens, short-lived tokens projected through a scheduled durable handle, and
 restricted scheduled-invocation Agent Keys all retain the `ProxyDelegation` kind. They are execution
 credentials, not source-readable inventory credentials, so none may auto-resolve a slug.
@@ -112,11 +128,13 @@ NyxID then enforces the exact route's slug constraint and credential allowlist o
 request. Without either a source-readable credential or an exact admitted route, execution fails
 before network access. Existing v4 plans did not contain code-execution proofs; they remain
 supported for source-readable interactive runtime resolution, but delegation-only and scheduled
-execution require an exact proof. New live admissions write v5 proofs.
+execution require an exact proof. New live admissions write v6 proofs; v5 requires rebind.
 
-This resolver is private to the platform `code_execute` route. It does not filter connected
-services, `nyxid_proxy`, explicit external-capability selections, LLM routes, or managed
-`codex_exec`; those paths retain their existing exact UserService and authorization contracts.
+The selector and accepted credential contract are private to the platform `code_execute` route.
+They do not filter connected services, `nyxid_proxy`, explicit external-capability selections, LLM
+routes, or managed `codex_exec`. Other capabilities may use the same generic convergence mechanism
+only by declaring their own typed route contract; they cannot inherit `sandbox:execute` or this
+route's preferred credential delivery settings.
 
 Route diagnostics distinguish `code_execution_route_missing`, `code_execution_route_inactive`,
 `code_execution_route_policy_mismatch`, `code_execution_route_ambiguous`, and

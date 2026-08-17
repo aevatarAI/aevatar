@@ -1,0 +1,484 @@
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using FluentAssertions;
+
+namespace Aevatar.Workflow.Host.Api.Tests;
+
+public sealed partial class WorkflowConsoleStaticAssetEndpointTests
+{
+    [Fact]
+    public async Task WorkflowStudio_RequestTraces_ShouldKeepClientIdentityAndIsolateHistoricalControls()
+    {
+        var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = source.indexOf('function ' + name + '(');
+              const end = source.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served Studio app');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return source.slice(start, end);
+            }
+
+            const hidden = [];
+            const classList = name => ({
+              add(value) { hidden.push([name, value]); },
+              remove() {},
+              toggle() {},
+            });
+            const dom = {
+              sendButton: { classList: classList('send') },
+              steerButton: { classList: classList('steer') },
+              stopButton: { classList: classList('stop') },
+              observationDisconnectButton: { classList: classList('observation') },
+              promptInput: { disabled: false },
+              attachButton: { disabled: false },
+              composerServicesButton: { disabled: false },
+              composerStatus: { textContent: '' },
+            };
+            const context = {
+              Map,
+              state: { activeConversation: null },
+              dom,
+              isActiveConversationContext: () => true,
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('createRequestTrace', 'currentRequestTrace')}
+              ${functionSource('currentRequestTrace', 'selectedRequestTrace')}
+              ${functionSource('selectedRequestTrace', 'traceForRun')}
+              ${functionSource('traceForRun', 'isReviewingHistoricalTrace')}
+              ${functionSource('isReviewingHistoricalTrace', 'requestTraceInput')}
+              ${functionSource('requestTraceInput', 'requestTraceOutput')}
+              ${functionSource('requestTraceOutput', 'requestTraceStatusLabel')}
+              ${functionSource('inspectorRequestTrace', 'inspectorRunState')}
+              ${functionSource('inspectorRunState', 'paintRunStatus')}
+              ${functionSource('renderActorControlUi', 'renderSteps')}
+            `, context);
+
+            const firstRun = {
+              clientRequestId: 'client-request-one', context: {}, events: [], tools: new Map(),
+              assistantText: 'First request result',
+            };
+            const secondRun = {
+              clientRequestId: 'client-request-two', context: {}, events: [], tools: new Map(),
+            };
+            const entry = {
+              run: firstRun,
+              traces: new Map(),
+              traceOrder: [],
+              selectedTraceKey: null,
+            };
+            context.state.activeConversation = entry;
+
+            const firstTrace = vm.runInContext('createRequestTrace', context)(entry, firstRun);
+            assert.equal(entry.currentTraceKey, 'client-request-one');
+            assert.equal(vm.runInContext('currentRequestRun', context)(entry), firstRun);
+            const duplicate = vm.runInContext('createRequestTrace', context)(entry, firstRun);
+            assert.equal(duplicate, firstTrace);
+            assert.equal(entry.traces.size, 1);
+            assert.deepEqual(entry.traceOrder, ['client-request-one']);
+
+            const secondTrace = vm.runInContext('createRequestTrace', context)(entry, secondRun);
+            assert.notEqual(secondTrace, firstTrace);
+            assert.equal(entry.traces.size, 2);
+            assert.deepEqual(entry.traceOrder, ['client-request-two', 'client-request-one']);
+            assert.equal(entry.currentTraceKey, 'client-request-two');
+            assert.equal(vm.runInContext('currentRequestRun', context)(entry), secondRun);
+            assert.equal(entry.selectedTraceKey, 'client-request-two');
+
+            firstRun.context.runId = 'run-server-one';
+            firstRun.context.turnId = 'turn-server-one';
+            assert.equal(vm.runInContext('attachRequestTraceServerFacts', context)(entry, firstRun, {
+              runId: 'run-server-one', turnId: 'turn-server-one',
+            }), firstTrace);
+            assert.equal(firstTrace.serverRunId, 'run-server-one');
+            assert.equal(firstTrace.serverTurnId, 'turn-server-one');
+            assert.equal(vm.runInContext('createRequestTrace', context)(entry, firstRun), firstTrace);
+            assert.equal(vm.runInContext('traceForRun', context)(entry, firstRun), firstTrace);
+            assert.equal(entry.currentTraceKey, 'client-request-two', 'looking up an existing trace does not make it current');
+            assert.equal(vm.runInContext('currentRequestRun', context)(entry), secondRun);
+            assert.equal(entry.traces.size, 2, 'server facts do not create or collapse client-owned traces');
+            assert.deepEqual([...entry.traces.keys()], ['client-request-one', 'client-request-two']);
+
+            entry.run = secondRun;
+            entry.selectedTraceKey = 'client-request-one';
+            assert.equal(vm.runInContext('currentRequestTrace', context)(entry), secondTrace);
+            assert.equal(vm.runInContext('selectedRequestTrace', context)(entry), firstTrace);
+            assert.equal(vm.runInContext('isReviewingHistoricalTrace', context)(entry), true);
+            assert.equal(vm.runInContext('currentRequestRun', context)(entry), secondRun,
+              'historical selection cannot redirect the live request pointer');
+            assert.equal(vm.runInContext('inspectorRequestTrace', context)(entry), firstTrace);
+            assert.equal(vm.runInContext('inspectorRunState', context)(entry), firstRun);
+            assert.equal(vm.runInContext('requestTraceOutput', context)(firstRun), 'First request result');
+
+            vm.runInContext('renderActorControlUi', context)();
+            assert.deepEqual(hidden, [
+              ['send', 'hidden'], ['steer', 'hidden'], ['stop', 'hidden'], ['observation', 'hidden'],
+            ]);
+            assert.equal(dom.promptInput.disabled, true);
+            assert.equal(dom.attachButton.disabled, true);
+            assert.equal(dom.composerServicesButton.disabled, true);
+            assert.match(dom.composerStatus.textContent, /历史轨迹/);
+
+            entry.selectedTraceKey = 'client-request-two';
+            assert.equal(vm.runInContext('isReviewingHistoricalTrace', context)(entry), false);
+            assert.equal(vm.runInContext('inspectorRunState', context)(entry), secondRun);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("function attachRequestTraceServerFacts(entry, run, event)");
+        app.Should().Contain("attachRequestTraceServerFacts(conversationContext || state.activeConversation, state.run, event)");
+        app.Should().Contain("dom.routeSection.classList.toggle(\"hidden\", historical);");
+        app.Should().Contain("renderMarkdown(dom.traceOutputFact, output);");
+        html.Should().Contain("历史轨迹仅供查看；返回当前轨迹后才能使用运行控制。");
+        html.Should().Contain("id=\"traceOutputFact\"");
+        html.Should().Contain("id=\"routeSection\"");
+        var sendPromptStart = app.IndexOf("async function sendPrompt(", StringComparison.Ordinal);
+        var ownerRunAssignment = app.IndexOf("conversation.run = state.run;", sendPromptStart, StringComparison.Ordinal);
+        var firstTraceCreation = app.IndexOf(
+            "createRequestTrace(conversation, state.run);",
+            sendPromptStart,
+            StringComparison.Ordinal);
+        ownerRunAssignment.Should().BeGreaterThan(sendPromptStart);
+        firstTraceCreation.Should().BeGreaterThan(ownerRunAssignment,
+            "the conversation must own the new request before its first trajectory render");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_OperationInspector_ShouldStayIsolatedFromTheDefaultConversationView()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = source.indexOf('function ' + name + '(');
+              const end = source.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served Studio app');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return source.slice(start, end);
+            }
+
+            const toggles = [];
+            const fact = () => ({textContent:'', className:'', title:'', classList:{toggle(){}}});
+            const entry = {mainView:'conversation'};
+            const record = {
+              key:'model:model-0', id:'model-0', kind:'model', title:'deepseek-chat',
+              status:'done', model:'deepseek-chat', provider:'deepseek', round:0,
+              sessionId:'session-alpha',
+              finishReason:'stop', usage:{totalTokens:12}, input:'Prompt', output:'Answer',
+              reasoning:'', error:'', tools:['search'], startedAt:1700000000000,
+              completedAt:1700000000100,
+            };
+            const trace = {selected:record};
+            const context = {
+              state:{activeConversation:entry},
+              dom:{
+                traceOperationSection:{classList:{toggle(name, hidden){toggles.push([name, hidden]);}}},
+                traceOperationKindFact:fact(), traceOperationTitleFact:fact(),
+                traceOperationIdFact:fact(), traceOperationStatusFact:fact(),
+                traceOperationStartedFact:fact(), traceOperationDurationFact:fact(),
+                traceOperationInputSection:fact(), traceOperationOutputSection:fact(),
+                traceOperationInputFact:fact(), traceOperationOutputFact:fact(),
+              },
+              inspectorRequestTrace:() => trace,
+              selectedTraceOperation:candidate => candidate?.selected || null,
+              traceOperationKindLabel:kind => kind.toUpperCase(),
+              traceOperationStatusLabel:status => status,
+              traceOperationStartedAt:() => '22:13:20.000',
+              traceOperationDuration:() => '100ms',
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('inspectorTraceOperation', 'renderTraceOperationInspector')}
+              ${functionSource('renderTraceOperationInspector', 'paintRunStatus')}
+            `, context);
+
+            assert.equal(context.inspectorTraceOperation(entry, trace), null,
+              'the default conversation view must not select an operation');
+            context.renderTraceOperationInspector(trace);
+            assert.deepEqual(toggles.at(-1), ['hidden', true]);
+            assert.equal(context.dom.traceOperationTitleFact.textContent, '',
+              'hidden trajectory facts must not overwrite the original inspector');
+
+            entry.mainView = 'traces';
+            assert.equal(context.inspectorTraceOperation(entry, trace), record);
+            context.renderTraceOperationInspector(trace);
+            assert.deepEqual(toggles.at(-1), ['hidden', false]);
+            assert.equal(context.dom.traceOperationTitleFact.textContent, 'deepseek-chat');
+            assert.equal(context.dom.traceOperationDurationFact.textContent, '100ms');
+            assert.match(context.dom.traceOperationInputFact.textContent, /Available tools:\nsearch/);
+            assert.match(context.dom.traceOperationOutputFact.textContent, /Provider: deepseek/);
+            assert.match(context.dom.traceOperationOutputFact.textContent, /Total tokens: 12/);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("const operation = inspectorTraceOperation(entry, trace);");
+        app.Should().Contain("const record = inspectorTraceOperation(state.activeConversation, trace);");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_OperationLedger_ShouldKeepEveryModelRoundAndToolCallAsAnIndependentLiveRecord()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function ensureTraceOperationState(');
+            const end = source.indexOf('\nfunction traceOperationDuration(', start);
+            assert.notEqual(start, -1, 'the operation ledger reducer must exist');
+            assert.notEqual(end, -1, 'the operation ledger reducer must have a stable boundary');
+
+            const context = {
+              Map, Date, Number,
+              createId: prefix => prefix + '-generated',
+              mergeUsage: (current, next) => ({...(current || {}), ...(next || {})}),
+              requestTraceInput: trace => String(trace?.run?.request?.prompt || ''),
+              traceForRun: entry => entry.trace,
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+
+            const run = {
+              clientRequestId: 'request-alpha',
+              startedAt: 1700000000000,
+              request: {prompt: 'Find the current deployment status'},
+            };
+            const trace = {
+              clientRequestId: run.clientRequestId,
+              run,
+              records: [],
+              recordIndex: new Map(),
+              selectedOperationKey: null,
+              activeModelOperationKey: null,
+              followLatestOperation: true,
+              nextOperationSequence: 0,
+            };
+            const entry = {trace};
+            const apply = context.applyRequestTraceEvent;
+            context.createInputTraceOperation(trace);
+            const input = trace.recordIndex.get('input:request-alpha');
+            assert.ok(input);
+            assert.equal(context.traceOperationDurationMs(input), null,
+              'request timing must not be presented as an independent Input duration');
+
+            apply(entry, run, {
+              type: 'model_start', operationId: 'model-round-0', sessionId: 'session-shared',
+              round: 0, model: 'deepseek-chat', provider: 'deepseek', sequence: 10,
+              timestamp: 1700000000100,
+            });
+            const firstModel = trace.recordIndex.get('model:model-round-0');
+            assert.ok(firstModel, 'model_start creates a record before any text exists');
+            assert.equal(firstModel.output, '');
+            assert.equal(firstModel.model, 'deepseek-chat');
+            assert.equal(firstModel.provider, 'deepseek');
+            assert.equal(firstModel.round, 0);
+            assert.equal(firstModel.serverSequence, 10);
+            assert.equal(context.traceOperationDurationMs(firstModel), null);
+
+            apply(entry, run, {
+              type: 'model_start', operationId: 'model-round-0', sessionId: 'session-shared',
+              round: 0, model: 'deepseek-chat', sequence: 10, timestamp: 1700000000100,
+            });
+            apply(entry, run, {
+              type: 'model_end', operationId: 'model-round-0', sessionId: 'session-shared',
+              round: 0, model: 'deepseek-chat', content: '', success: true,
+              usage: {promptTokens: 12, completionTokens: 0, totalTokens: 12},
+              sequence: 11, timestamp: 1700000000300,
+            });
+            apply(entry, run, {
+              type: 'model_end', operationId: 'model-round-0', sessionId: 'session-shared',
+              round: 0, model: 'deepseek-chat', content: '', success: true,
+              usage: {promptTokens: 12, completionTokens: 0, totalTokens: 12},
+              sequence: 11, timestamp: 1700000000300,
+            });
+            assert.equal(firstModel.status, 'done');
+            assert.equal(firstModel.output, '', 'a tool-call-only model round is still retained');
+            assert.equal(context.traceOperationDurationMs(firstModel), 200);
+            assert.equal(trace.records.length, 2, 'duplicate model frames upsert the stable operation');
+
+            trace.selectedOperationKey = firstModel.key;
+            trace.followLatestOperation = false;
+
+            // Delivery and clocks can disagree. The committed server sequence owns ledger ordering.
+            apply(entry, run, {
+              type: 'model_start', operationId: 'model-round-1', sessionId: 'session-shared',
+              round: 1, model: 'deepseek-chat', sequence: 20, timestamp: 1700000000400,
+            });
+            apply(entry, run, {
+              type: 'tool_start', toolCallId: 'call-search', toolName: 'search',
+              argumentsJson: '{"token":"raw-secret-must-not-leak"}',
+              sequence: 12, timestamp: 1700000000800,
+            });
+            const tool = trace.recordIndex.get('tool:call-search');
+            assert.ok(tool);
+            assert.equal(tool.input, '', 'tool_start never exposes raw arguments');
+            assert.equal(tool.serverSequence, 12);
+            assert.equal(context.traceOperationDurationMs(tool), null);
+
+            apply(entry, run, {
+              type: 'tool_start', toolCallId: 'call-search', toolName: 'search',
+              sequence: 12, timestamp: 1700000000800,
+            });
+            apply(entry, run, {
+              type: 'tool_end', toolCallId: 'call-search', toolName: 'search',
+              argumentsJson: '{"query":"deployment status"}', result: null,
+              success: false, error: 'upstream unavailable',
+              sequence: 13, timestamp: 1700000001100,
+            });
+            apply(entry, run, {
+              type: 'tool_end', toolCallId: 'call-search', toolName: 'search',
+              argumentsJson: '{"query":"deployment status"}', result: null,
+              success: false, error: 'upstream unavailable',
+              sequence: 13, timestamp: 1700000001100,
+            });
+            assert.equal(tool.input, '{"query":"deployment status"}');
+            assert.equal(tool.output, 'upstream unavailable');
+            assert.equal(tool.status, 'error');
+            assert.equal(context.traceOperationDurationMs(tool), 300);
+
+            apply(entry, run, {
+              type: 'model_end', operationId: 'model-round-1', sessionId: 'session-shared',
+              round: 1, model: 'deepseek-chat', content: 'Deployment is degraded.', success: true,
+              usage: {promptTokens: 16, completionTokens: 4, totalTokens: 20},
+              sequence: 21, timestamp: 1700000000600,
+            });
+            const secondModel = trace.recordIndex.get('model:model-round-1');
+            assert.ok(secondModel);
+            assert.notEqual(secondModel, firstModel, 'rounds in one role session are independent');
+            assert.equal(secondModel.output, 'Deployment is degraded.');
+            assert.equal(secondModel.round, 1);
+            assert.equal(secondModel.serverSequence, 20);
+            assert.equal(context.traceOperationDurationMs(secondModel), 200);
+            assert.equal(trace.selectedOperationKey, firstModel.key,
+              'live upserts do not steal selection while the operator inspects a record');
+
+            const records = context.orderedTraceOperations(trace);
+            assert.deepEqual(JSON.parse(JSON.stringify(records.map(record => record.key))), [
+              'input:request-alpha',
+              'model:model-round-0',
+              'tool:call-search',
+              'model:model-round-1',
+            ]);
+            assert.deepEqual(JSON.parse(JSON.stringify(records.map(record => record.kind))),
+              ['input', 'model', 'tool', 'model']);
+            assert.equal(trace.records.length, 4, 'each logical operation owns exactly one live row');
+
+            apply(entry, run, {
+              type: 'raw_observed', observedType: 'WorkflowLlmInvocationStartedEvent',
+              observed: {stepId: 'workflow-step', roleActorId: 'role-alpha'},
+              timestamp: 1700000001200,
+            });
+            assert.equal(trace.records.length, 4,
+              'a workflow-level invocation must not masquerade as a provider response');
+
+            apply(entry, run, {
+              type: 'model_end', operationId: 'model-out-of-order', sessionId: 'session-shared',
+              round: 2, model: 'deepseek-chat', content: 'Already complete', success: true,
+              sequence: 31, timestamp: 1700000001500,
+            });
+            apply(entry, run, {
+              type: 'model_start', operationId: 'model-out-of-order', sessionId: 'session-shared',
+              round: 2, model: 'deepseek-chat', sequence: 30, timestamp: 1700000001300,
+            });
+            const outOfOrder = trace.recordIndex.get('model:model-out-of-order');
+            assert.equal(outOfOrder.status, 'done', 'late start cannot reactivate a completed model');
+            assert.equal(context.traceOperationDurationMs(outOfOrder), 200);
+            assert.notEqual(trace.activeModelOperationKey, outOfOrder.key);
+            const beforeLegacyDelta = trace.records.length;
+            apply(entry, run, {type: 'text_delta', delta: 'duplicate legacy text'});
+            assert.equal(trace.records.length, beforeLegacyDelta,
+              'legacy text cannot create a second model after typed lifecycle is observed');
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_Protocol_ShouldPreserveTypedModelAndToolOperationFrames()
+    {
+        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
+            const context = {structuredClone, TextDecoder, URL, console};
+            vm.createContext(context);
+            vm.runInContext(source, context);
+
+            const modelStart = context.normalizeFrame({
+              type: 'MODEL_CALL_START', timestamp: 1700000000100, sequence: 10,
+              modelCallStart: {
+                operationId: 'model-round-0', sessionId: 'session-shared',
+                round: 0, model: 'deepseek-chat',
+              },
+            });
+            assert.equal(modelStart.type, 'model_start');
+            assert.equal(modelStart.operationId, 'model-round-0');
+            assert.equal(modelStart.sessionId, 'session-shared');
+            assert.equal(modelStart.round, 0);
+            assert.equal(modelStart.model, 'deepseek-chat');
+            assert.equal(modelStart.sequence, 10);
+            assert.equal(modelStart.raw.timestamp, 1700000000100);
+
+            const modelEnd = context.normalizeFrame({
+              modelCallEnd: {
+                operationId: 'model-round-0', sessionId: 'session-shared', round: 0,
+                model: 'deepseek-chat', content: '', reasoningContent: 'tool required',
+                usage: {promptTokens: 12, completionTokens: 0, totalTokens: 12},
+                finishReason: 'tool_calls', success: true, error: '',
+              },
+              timestamp: 1700000000300, sequence: 11,
+            });
+            assert.equal(modelEnd.type, 'model_end');
+            assert.equal(modelEnd.operationId, 'model-round-0');
+            assert.equal(modelEnd.content, '');
+            assert.equal(modelEnd.reasoningContent, 'tool required');
+            assert.equal(modelEnd.usage.totalTokens, 12);
+            assert.equal(modelEnd.finishReason, 'tool_calls');
+            assert.equal(modelEnd.success, true);
+            assert.equal(modelEnd.sequence, 11);
+
+            const toolStart = context.normalizeFrame({
+              type: 'TOOL_CALL_START', sequence: 12,
+              toolCallStart: {toolCallId: 'call-search', toolName: 'search'},
+            });
+            assert.equal(toolStart.type, 'tool_start');
+            assert.equal(toolStart.toolCallId, 'call-search');
+            assert.equal(toolStart.argumentsJson, undefined,
+              'tool start does not carry raw arguments');
+            assert.equal(toolStart.sequence, 12);
+
+            const toolEnd = context.normalizeFrame({
+              type: 'TOOL_CALL_END', sequence: 13,
+              toolCallEnd: {
+                toolCallId: 'call-search', argumentsJson: '{"query":"status"}',
+                result: null, success: false, error: 'upstream unavailable',
+              },
+            });
+            assert.equal(toolEnd.type, 'tool_end');
+            assert.equal(toolEnd.toolCallId, 'call-search');
+            assert.equal(toolEnd.argumentsJson, '{"query":"status"}');
+            assert.equal(toolEnd.success, false);
+            assert.equal(toolEnd.error, 'upstream unavailable');
+            assert.equal(toolEnd.sequence, 13);
+            """;
+
+        var result = await RunNodeAsync(script, protocol);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+}

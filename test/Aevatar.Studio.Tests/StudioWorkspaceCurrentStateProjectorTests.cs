@@ -2,6 +2,8 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Domain.Studio.Models;
 using IWorkflowYamlDocumentService = Aevatar.Studio.Application.Studio.Abstractions.IWorkflowYamlDocumentService;
 using WorkflowParseResult = Aevatar.Studio.Application.Studio.Abstractions.WorkflowParseResult;
@@ -136,9 +138,9 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
         catalogueSource.ActorId.Should().Be("scope-workflow-catalogue-source:scope-1:wf-alpha:draft");
         catalogueSource.StateVersion.Should().Be(catalogueSource.UpdatedAt.ToDateTimeOffset().UtcDateTime.Ticks);
         catalogueSource.Name.Should().Be("workflow-alpha");
-        rowDispatcher.Upserts.Should().ContainSingle(row => row.Id == "scope-1:workflow:wf-alpha" &&
-                                                           row.ActorId == "scope-workflow-catalogue-row:scope-1:wf-alpha" &&
-                                                           row.HasDraftSource);
+        rowDispatcher.Commands.Should().ContainSingle(command => command.ScopeId == "scope-1" &&
+                                                                  command.WorkflowId == "wf-alpha" &&
+                                                                  command.DraftSource != null);
         StudioWorkspaceCurrentStateDocument.Descriptor.Fields.InDeclarationOrder()
             .Select(field => field.Name)
             .Should().NotContain("state_root");
@@ -271,13 +273,11 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
                 projectedAt.UtcDateTime.Ticks + 1,
                 "evt-draft-deleted",
                 projectedAt));
-        rowDispatcher.DeleteMarkers.Should().ContainSingle().Which.Should().Be(
-            new ProjectionDocumentDeleteMarker(
-                "scope-1:workflow:wf-alpha",
-                "scope-workflow-catalogue-row:scope-1:wf-alpha",
-                projectedAt.UtcDateTime.Ticks + 1,
-                "evt-draft-deleted",
-                projectedAt));
+        rowDispatcher.Commands.Should().ContainSingle();
+        rowDispatcher.Commands[0].ScopeId.Should().Be("scope-1");
+        rowDispatcher.Commands[0].WorkflowId.Should().Be("wf-alpha");
+        rowDispatcher.Commands[0].DraftSource.Should().BeNull();
+        rowDispatcher.Commands[0].ObservationEventId.Should().Be("evt-draft-deleted");
     }
 
     [Fact]
@@ -423,28 +423,33 @@ public sealed class StudioWorkspaceCurrentStateProjectorTests
     }
 
     private sealed class RecordingCatalogueRowDispatcher
-        : IProjectionWriteDispatcher<ScopeWorkflowCatalogueRowDocument>
+        : IScopeWorkflowCatalogueRowCommandPort
     {
-        public List<ScopeWorkflowCatalogueRowDocument> Upserts { get; } = [];
-        public List<ProjectionDocumentDeleteMarker> DeleteMarkers { get; } = [];
+        public List<ObserveScopeWorkflowCatalogueSourcesCommand> Commands { get; } = [];
 
-        public Task<ProjectionWriteResult> UpsertAsync(
-            ScopeWorkflowCatalogueRowDocument readModel,
+        public Task ObserveSourcesAsync(
+            string scopeId,
+            string workflowId,
+            ScopeWorkflowCatalogueSourceSnapshot? draftSource,
+            ScopeWorkflowCatalogueSourceSnapshot? serviceSource,
+            DateTimeOffset draftWatermarkUtc,
+            DateTimeOffset serviceWatermarkUtc,
+            string observationEventId,
+            DateTimeOffset observedAt,
             CancellationToken ct = default)
         {
-            Upserts.Add(readModel);
-            return Task.FromResult(ProjectionWriteResult.Applied());
-        }
-
-        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
-            Task.FromResult(ProjectionWriteResult.Applied());
-
-        public Task<ProjectionWriteResult> DeleteAsync(
-            ProjectionDocumentDeleteMarker marker,
-            CancellationToken ct = default)
-        {
-            DeleteMarkers.Add(marker);
-            return Task.FromResult(ProjectionWriteResult.Applied());
+            Commands.Add(new ObserveScopeWorkflowCatalogueSourcesCommand
+            {
+                ScopeId = scopeId,
+                WorkflowId = workflowId,
+                DraftSource = draftSource?.Clone(),
+                ServiceSource = serviceSource?.Clone(),
+                ObservationEventId = observationEventId ?? string.Empty,
+                ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                DraftWatermarkUtc = Timestamp.FromDateTimeOffset(draftWatermarkUtc),
+                ServiceWatermarkUtc = Timestamp.FromDateTimeOffset(serviceWatermarkUtc),
+            });
+            return Task.CompletedTask;
         }
     }
 

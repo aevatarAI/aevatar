@@ -72,7 +72,22 @@ internal sealed class FileBackedWorkflowCatalogPort
                 continue;
             }
 
-            await MaterializeDefinitionAsync(definition, ct);
+            try
+            {
+                await MaterializeDefinitionAsync(definition, ct);
+            }
+            catch (WorkflowExternalCapabilityAdmissionException ex) when (
+                _options.SkipSourceCredentialRequiredDefinitionsOnStartup &&
+                string.Equals(
+                    ex.SafeBlockerCode,
+                    "CODE_EXECUTION_SOURCE_CREDENTIAL_REQUIRED",
+                    StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Skipping startup workflow definition '{WorkflowName}' because source credentials are required and startup skipping is enabled.",
+                    definition.WorkflowName);
+            }
         }
     }
 

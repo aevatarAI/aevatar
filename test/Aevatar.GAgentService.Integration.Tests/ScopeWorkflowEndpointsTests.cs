@@ -307,6 +307,8 @@ public sealed class ScopeWorkflowEndpointsTests
         port.Request.ExposureDesired.Should().BeTrue();
         port.Request.CapabilityAdmission.Should().NotBeNull();
         port.Request.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        port.Request.CapabilityAdmission.ExecutionMode.Should().Be(
+            ExternalCapabilityExecutionMode.Interactive);
         port.Request.CapabilityAdmission.NyxIdCallerCredential?.SourceReadableUserBearerToken
             .Should().Be("transient-caller-token");
         var confirmation = port.Request.CapabilityAdmission.ExplicitRequestConfirmations
@@ -317,6 +319,58 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("\"revisionId\":\"rev-generated\"");
         body.Should().Contain("\"acceptanceStage\":\"accepted\"");
         body.Should().Contain("\"propagationStage\":\"readmodel_propagating\"");
+    }
+
+    [Fact]
+    public async Task HandleSaveAndBindWorkflowAsync_ShouldPropagateExplicitDurableExecutionMode()
+    {
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-caller-token";
+        var port = new RecordingScopeWorkflowSaveAndBindPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleSaveAndBindWorkflowAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.SaveAndBindScopeWorkflowHttpRequest(
+                "wf-durable",
+                "name: approval\nsteps: []\n",
+                WorkflowName: "approval",
+                ExecutionMode: "durable"),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        port.Request.Should().NotBeNull();
+        port.Request!.CapabilityAdmission.Should().NotBeNull();
+        port.Request.CapabilityAdmission!.ExecutionMode.Should().Be(
+            ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task HandleSaveAndBindWorkflowAsync_ShouldRejectInvalidExecutionModeBeforeDispatch()
+    {
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-caller-token";
+        var port = new RecordingScopeWorkflowSaveAndBindPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleSaveAndBindWorkflowAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.SaveAndBindScopeWorkflowHttpRequest(
+                "wf-invalid",
+                "name: approval\nsteps: []\n",
+                ExecutionMode: "background"),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_USER_WORKFLOW_REQUEST");
+        port.Request.Should().BeNull();
     }
 
     [Fact]
@@ -358,6 +412,57 @@ public sealed class ScopeWorkflowEndpointsTests
         confirmation.CallSiteId.Should().Be("wf-alpha/request-alpha");
         confirmation.RequestContractDigest.Should().Be("digest-alpha");
         confirmation.AttestedRisk.Should().Be(NyxIdOperationRisk.Destructive);
+    }
+
+    [Fact]
+    public async Task HandleUpsertWorkflowAsync_ShouldPropagateExplicitDurableExecutionMode()
+    {
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-upsert-token";
+        var port = new RecordingScopeWorkflowCommandPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
+            http,
+            "user-1",
+            "wf-durable",
+            new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest(
+                "name: wf-durable\nsteps: []\n",
+                ExecutionMode: "durable"),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        port.Request.Should().NotBeNull();
+        port.Request!.CapabilityAdmission.Should().NotBeNull();
+        port.Request.CapabilityAdmission!.ExecutionMode.Should().Be(
+            ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public async Task HandleUpsertWorkflowAsync_ShouldRejectInvalidExecutionModeBeforeDispatch()
+    {
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-upsert-token";
+        var port = new RecordingScopeWorkflowCommandPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
+            http,
+            "user-1",
+            "wf-invalid",
+            new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest(
+                "name: wf-invalid\nsteps: []\n",
+                ExecutionMode: "background"),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_USER_WORKFLOW_REQUEST");
+        port.Request.Should().BeNull();
     }
 
     [Fact]
@@ -559,6 +664,15 @@ public sealed class ScopeWorkflowEndpointsTests
                 ["child"] = "name: child\nsteps: []\n",
             },
             ExternalCapabilityExecutionMode.Durable);
+        var descriptorSource = new FakePublishedServiceDescriptorSource(
+            new ScopeWorkflowPublishedServiceDescriptor(
+                "user-1",
+                "approval",
+                "workflow-app",
+                "user:user-1-token",
+                "approval",
+                "Approval",
+                DateTimeOffset.UtcNow));
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
         await revisionCatalog.UpsertRevisionAsync(
             "tenant-a:workflow-app:user:token:approval",
@@ -582,7 +696,7 @@ public sealed class ScopeWorkflowEndpointsTests
             http,
             "user-1",
             "approval",
-            BuildQueryPort(queryPort: queryPort, bindingReader: bindingReader),
+            BuildQueryPort(queryPort: queryPort, bindingReader: bindingReader, descriptorSource: descriptorSource),
             bindingReader,
             revisionCatalog,
             Options.Create(new ScopeWorkflowCapabilityOptions()),
@@ -594,6 +708,9 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"available\":true");
         body.Should().Contain("\"workflowId\":\"approval\"");
+        body.Should().Contain("\"serviceAppId\":\"workflow-app\"");
+        body.Should().Contain("\"serviceNamespace\":\"user:user-1-token\"");
+        body.Should().Contain("\"publishedServiceId\":\"approval\"");
         body.Should().Contain("\"workflowYaml\":\"name: approval\\nsteps: []\\n\"");
         body.Should().Contain("\"inlineWorkflowYamls\":{\"child\":\"name: child\\nsteps: []\\n\"}");
     }
@@ -1516,17 +1633,20 @@ public sealed class ScopeWorkflowEndpointsTests
                 ServiceNamespace = "default",
                 DefinitionActorIdPrefix = "scope-workflow",
             }),
-            new PassthroughWorkflowCapabilityAdmissionService());
+            new PassthroughWorkflowCapabilityAdmissionService(),
+            new TestWorkflowDefinitionParser());
     }
 
     private static IScopeWorkflowQueryPort BuildQueryPort(
         FakeServiceLifecycleQueryPort? queryPort = null,
-        FakeWorkflowActorBindingReader? bindingReader = null) =>
-        BuildQueryApplicationService(queryPort, bindingReader);
+        FakeWorkflowActorBindingReader? bindingReader = null,
+        IScopeWorkflowPublishedServiceDescriptorSource? descriptorSource = null) =>
+        BuildQueryApplicationService(queryPort, bindingReader, descriptorSource);
 
     private static ScopeWorkflowQueryApplicationService BuildQueryApplicationService(
         FakeServiceLifecycleQueryPort? queryPort = null,
-        FakeWorkflowActorBindingReader? bindingReader = null)
+        FakeWorkflowActorBindingReader? bindingReader = null,
+        IScopeWorkflowPublishedServiceDescriptorSource? descriptorSource = null)
     {
         return new ScopeWorkflowQueryApplicationService(
             queryPort ?? new FakeServiceLifecycleQueryPort(),
@@ -1536,7 +1656,8 @@ public sealed class ScopeWorkflowEndpointsTests
                 ServiceAppId = "default",
                 ServiceNamespace = "default",
                 DefinitionActorIdPrefix = "scope-workflow",
-            }));
+            }),
+            descriptorSource == null ? null : [descriptorSource]);
     }
 
     private static DefaultHttpContext CreateHttpContext(
@@ -1693,7 +1814,6 @@ public sealed class ScopeWorkflowEndpointsTests
         public Task<ServiceCommandAcceptedReceipt> PrepareRevisionAsync(PrepareServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> PublishRevisionAsync(PublishServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(DeactivateServiceDeploymentCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> ReplaceServiceServingTargetsAsync(ReplaceServiceServingTargetsCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
@@ -1774,6 +1894,32 @@ public sealed class ScopeWorkflowEndpointsTests
                     string.Empty,
                     new Dictionary<string, string>(),
                     ExternalCapabilityExecutionMode.Durable));
+    }
+
+    private sealed class FakePublishedServiceDescriptorSource
+        : IScopeWorkflowPublishedServiceDescriptorSource
+    {
+        private readonly IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor> _descriptors;
+
+        public FakePublishedServiceDescriptorSource(params ScopeWorkflowPublishedServiceDescriptor[] descriptors)
+        {
+            _descriptors = descriptors;
+        }
+
+        public Task<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>> ListAsync(
+            string scopeId,
+            int take,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>>(
+                _descriptors.Where(descriptor => descriptor.ScopeId == scopeId).Take(take).ToArray());
+
+        public Task<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>> FindByWorkflowIdAsync(
+            string scopeId,
+            string workflowId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowPublishedServiceDescriptor>>(
+                _descriptors.Where(descriptor =>
+                    descriptor.ScopeId == scopeId && descriptor.WorkflowId == workflowId).ToArray());
     }
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
@@ -1960,6 +2106,39 @@ public sealed class ScopeWorkflowEndpointsTests
             PersistedWorkflowCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(request.Plan.Clone());
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(request.Persisted.Plan.Clone());
+    }
+
+    private sealed class TestWorkflowDefinitionParser : IWorkflowDefinitionParser
+    {
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var name = (workflowYaml ?? string.Empty)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(static line => line.StartsWith("name:", StringComparison.OrdinalIgnoreCase))?
+                ["name:".Length..]
+                .Trim();
+            return Task.FromResult(string.IsNullOrWhiteSpace(name)
+                ? WorkflowYamlParseResult.Invalid("Workflow YAML is invalid.")
+                : WorkflowYamlParseResult.Success(
+                    name,
+                    new WorkflowAuthorizationDependencies
+                    {
+                        ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+                    }));
+        }
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            Task.FromResult(WorkflowInlineYamlBundleParseResult.Invalid("Not used by this test."));
     }
 
     private sealed class NoOpServiceGovernanceCommandPort : IServiceGovernanceCommandPort

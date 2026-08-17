@@ -39,16 +39,60 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
         if (existingPlan is null)
             return AdmitWithCatalogPreparationAsync(liveRequest, provisioningRequest, ct);
 
-        return _admissionService.RevalidatePersistedAsync(
-            new PersistedWorkflowCapabilityAdmissionRequest(
-                existingPlan,
-                liveRequest.WorkflowYaml,
-                liveRequest.InlineWorkflowYamls,
-                liveRequest.SourceKind,
-                liveRequest.ExecutionMode,
-                liveRequest.WorkflowId,
-                liveRequest.RevisionId),
+        var persisted = new PersistedWorkflowCapabilityAdmissionRequest(
+            existingPlan,
+            liveRequest.WorkflowYaml,
+            liveRequest.InlineWorkflowYamls,
+            liveRequest.SourceKind,
+            liveRequest.ExecutionMode,
+            liveRequest.WorkflowId,
+            liveRequest.RevisionId);
+        if (liveRequest.Access.NyxIdCallerCredential is null)
+            return _admissionService.RevalidatePersistedAsync(persisted, ct);
+
+        var refreshRequest = new RefreshPersistedWorkflowCapabilityAdmissionRequest(
+            persisted,
+            liveRequest.Access,
+            liveRequest.ExplicitRequestConfirmations);
+        return RefreshPersistedWithCatalogPreparationAsync(
+            liveRequest,
+            refreshRequest,
+            provisioningRequest,
             ct);
+    }
+
+    private async Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedWithCatalogPreparationAsync(
+        WorkflowExternalCapabilityAdmissionRequest liveRequest,
+        RefreshPersistedWorkflowCapabilityAdmissionRequest refreshRequest,
+        ProvisionWorkflowRequest provisioningRequest,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await _admissionService.RefreshPersistedAsync(refreshRequest, ct);
+        }
+        catch (WorkflowExternalCapabilityAdmissionException exception)
+            when (IsDurableAuthorizationCatalogUnavailable(liveRequest, exception))
+        {
+            if (!TryResolveCatalogPreparationInputs(
+                    liveRequest,
+                    provisioningRequest,
+                    out var owner,
+                    out var bearerToken) ||
+                !TryResolveDurableRequiredServices(
+                    refreshRequest.Persisted.Plan,
+                    out var requiredServices))
+            {
+                throw;
+            }
+
+            await RefreshAuthorizationCatalogAsync(
+                owner!,
+                bearerToken!,
+                requiredServices,
+                ct);
+            return await _admissionService.RefreshPersistedAsync(refreshRequest, ct);
+        }
     }
 
     private async Task<WorkflowCapabilityAdmissionPlan> AdmitWithCatalogPreparationAsync(
@@ -87,55 +131,77 @@ internal sealed class StudioWorkflowProvisioningAdmissionService
             if (!TryResolveDurableRequiredServices(interactivePlan, out var requiredServices))
                 throw;
 
-            NyxIdAuthorizationCatalogRefreshResult refresh;
-            try
-            {
-                refresh = await _catalogRefreshPort!.RefreshAsync(
-                    owner!,
-                    bearerToken!,
-                    new NyxIdAuthorizationCatalogRefreshRequest(requiredServices, null),
-                    ct);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    "Studio workflow durable authorization catalog refresh failed. failureType={FailureType}",
-                    ex.GetType().Name);
-                throw new StudioMemberAutomationCatalogRefreshUnavailableException();
-            }
-
-            _logger.LogInformation(
-                "Studio workflow durable authorization catalog refresh completed. status={RefreshStatus} stateVersion={StateVersion} failureCode={FailureCode}",
-                refresh.Status,
-                refresh.StateVersion,
-                refresh.FailureCode);
-
-            if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
-                throw new StudioMemberAutomationCatalogRefreshSupersededException();
-            if (!refresh.Success)
-                throw new StudioMemberAutomationCatalogRefreshUnavailableException();
-
-            var visibility = await _catalogVisibilityPort!
-                .ResolveAsync(owner!, refresh.StateVersion, ct);
-            _logger.LogInformation(
-                "Studio workflow durable authorization catalog visibility resolved. status={VisibilityStatus} requiredStateVersion={RequiredStateVersion} visibleStateVersion={VisibleStateVersion} failureCode={FailureCode}",
-                visibility.Status,
-                visibility.RequiredStateVersion,
-                visibility.VisibleStateVersion,
-                visibility.FailureCode);
-            if (visibility.ProjectionPending)
-                throw new StudioMemberAutomationProjectionPendingException(refresh.StateVersion);
-            if (!visibility.Ready &&
-                visibility.Status != NyxIdAuthorizationCatalogVisibilityStatus.Stale)
-            {
-                throw new StudioMemberAutomationCatalogRefreshUnavailableException();
-            }
+            await RefreshAuthorizationCatalogAsync(
+                owner!,
+                bearerToken!,
+                requiredServices,
+                ct);
 
             return await _admissionService.AdmitAsync(admissionRequest, ct);
+        }
+    }
+
+    private async Task RefreshAuthorizationCatalogAsync(
+        AuthorizationOwnerIdentity owner,
+        string bearerToken,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
+        CancellationToken ct)
+    {
+        NyxIdAuthorizationCatalogRefreshResult refresh;
+        try
+        {
+            refresh = await _catalogRefreshPort!.RefreshAsync(
+                owner,
+                bearerToken,
+                new NyxIdAuthorizationCatalogRefreshRequest(requiredServices, null),
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "Studio workflow durable authorization catalog refresh failed. failureType={FailureType}",
+                ex.GetType().Name);
+            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
+        }
+
+        _logger.LogInformation(
+            "Studio workflow durable authorization catalog refresh completed. status={RefreshStatus} stateVersion={StateVersion} failureCode={FailureCode}",
+            refresh.Status,
+            refresh.StateVersion,
+            refresh.FailureCode);
+
+        if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
+            throw new StudioMemberAutomationCatalogRefreshSupersededException();
+        if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable &&
+            string.Equals(
+                refresh.FailureCode,
+                StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode,
+                StringComparison.Ordinal))
+        {
+            throw new StudioMemberAutomationCatalogRouteUnresolvedException(
+                requiredServices.Select(static service => service.UserServiceId));
+        }
+        if (!refresh.Success)
+            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
+
+        var visibility = await _catalogVisibilityPort!
+            .ResolveAsync(owner, refresh.StateVersion, ct);
+        _logger.LogInformation(
+            "Studio workflow durable authorization catalog visibility resolved. status={VisibilityStatus} requiredStateVersion={RequiredStateVersion} visibleStateVersion={VisibleStateVersion} failureCode={FailureCode}",
+            visibility.Status,
+            visibility.RequiredStateVersion,
+            visibility.VisibleStateVersion,
+            visibility.FailureCode);
+        if (visibility.ProjectionPending)
+            throw new StudioMemberAutomationProjectionPendingException(refresh.StateVersion);
+        if (!visibility.Ready &&
+            visibility.Status != NyxIdAuthorizationCatalogVisibilityStatus.Stale)
+        {
+            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
         }
     }
 

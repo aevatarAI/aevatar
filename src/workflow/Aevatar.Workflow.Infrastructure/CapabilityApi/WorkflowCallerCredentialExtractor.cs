@@ -216,8 +216,7 @@ public static class WorkflowCallerCredentialExtractor
         {
             logger?.LogWarning(
                 ex,
-                "Caller NyxID source-readable token exchange failed; continuing with the verified proxy delegation. bindingId={BindingId}",
-                authority.BindingId);
+                "Caller NyxID source-readable token exchange failed; continuing with the verified proxy delegation.");
             return null;
         }
     }

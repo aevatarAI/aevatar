@@ -39,7 +39,8 @@ public sealed class AIAbstractionsProtoCoverageTests
                 "org-alpha",
                 "sender-alpha",
                 AgentToolNyxIdCredentialKind.ProxyDelegation,
-                "source-alpha"),
+                "source-alpha",
+                AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
         }).ToPayload();
 
         var copy = AgentToolExecutionContextMapper.FromPayload(
@@ -49,6 +50,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         copy.Credentials.NyxIdOrgToken.Should().Be("org-alpha");
         copy.Credentials.SenderNyxIdAccessToken.Should().Be("sender-alpha");
         copy.Credentials.SourceReadableNyxIdAccessToken.Should().Be("source-alpha");
+        copy.Credentials.NyxIdCredentialAuthority.Should().Be(
+            AgentToolNyxIdCredentialAuthority.ToolExecutionContext);
     }
 
     [Fact]

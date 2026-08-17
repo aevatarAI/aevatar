@@ -15,6 +15,7 @@
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
@@ -37,6 +38,7 @@
     <ProjectReference Include="../../agents/Aevatar.GAgents.StudioMember/Aevatar.GAgents.StudioMember.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.StudioTeam/Aevatar.GAgents.StudioTeam.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.WorkOrder/Aevatar.GAgents.WorkOrder.csproj" />
+    <ProjectReference Include="../../agents/Aevatar.GAgents.WorkflowDelivery/Aevatar.GAgents.WorkflowDelivery.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.NyxidChat/Aevatar.GAgents.NyxidChat.csproj" />
     <ProjectReference Include="../../agents/Aevatar.GAgents.ContentArtifacts/Aevatar.GAgents.ContentArtifacts.csproj" />
     <ProjectReference Include="../../src/workflow/Aevatar.Workflow.Studio/Aevatar.Workflow.Studio.csproj" />

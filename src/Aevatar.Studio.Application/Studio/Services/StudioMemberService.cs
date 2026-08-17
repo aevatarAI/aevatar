@@ -113,23 +113,37 @@ public sealed class StudioMemberService : IStudioMemberService
             var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
             var executionMode = suppliedAdmission?.ExecutionMode
                 ?? ExternalCapabilityExecutionMode.Interactive;
+            var capabilityAccess = new ExternalWorkflowCapabilityAccessContext(
+                normalizedScopeId,
+                callerId,
+                callerCredential,
+                organizationBearerToken);
             var capabilityAdmissionPlan = existingPlan is not null
-                ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                    PersistedWorkflowCapabilityAdmissionRequest.FromWorkflowYamls(
-                        existingPlan,
-                        workflow.WorkflowYamls,
-                        "studio_member_binding_run",
-                        executionMode,
-                        workflow.WorkflowId,
-                        request.RevisionId),
-                    ct)
+                ? callerCredential is not null
+                    ? await _capabilityAdmissionService.RefreshPersistedAsync(
+                        new RefreshPersistedWorkflowCapabilityAdmissionRequest(
+                            PersistedWorkflowCapabilityAdmissionRequest.FromWorkflowYamls(
+                                existingPlan,
+                                workflow.WorkflowYamls,
+                                "studio_member_binding_run",
+                                executionMode,
+                                workflow.WorkflowId,
+                                request.RevisionId),
+                            capabilityAccess,
+                            explicitRequestConfirmations),
+                        ct)
+                    : await _capabilityAdmissionService.RevalidatePersistedAsync(
+                        PersistedWorkflowCapabilityAdmissionRequest.FromWorkflowYamls(
+                            existingPlan,
+                            workflow.WorkflowYamls,
+                            "studio_member_binding_run",
+                            executionMode,
+                            workflow.WorkflowId,
+                            request.RevisionId),
+                        ct)
                 : await _capabilityAdmissionService.AdmitAsync(
                     WorkflowExternalCapabilityAdmissionRequest.FromWorkflowYamls(
-                    new ExternalWorkflowCapabilityAccessContext(
-                        normalizedScopeId,
-                        callerId,
-                        callerCredential,
-                        organizationBearerToken),
+                    capabilityAccess,
                     workflow.WorkflowYamls,
                     "studio_member_binding_run",
                     executionMode,
@@ -272,26 +286,12 @@ public sealed class StudioMemberService : IStudioMemberService
                 $"Revision '{normalizedRevisionId}' is retired and cannot be activated.");
         }
 
-        // NOTE: Activate is intentionally non-atomic — it dispatches
-        // SetDefaultServingRevision then ActivateServiceRevision. If the
-        // second command fails after the first succeeds, the revision is
-        // marked default-serving but never moves to "active". This matches
-        // the legacy scope-default activate path; no compensating action
-        // is taken here. Both commands are also idempotent on the
-        // platform side, so a retried Activate from the caller will
-        // converge.
-        await _serviceCommandPort.SetDefaultServingRevisionAsync(
-            new SetDefaultServingRevisionCommand
-            {
-                Identity = context.Identity.Clone(),
-                RevisionId = normalizedRevisionId,
-            },
-            ct);
         await _serviceCommandPort.ActivateServiceRevisionAsync(
             new ActivateServiceRevisionCommand
             {
                 Identity = context.Identity.Clone(),
                 RevisionId = normalizedRevisionId,
+                ExpectedArtifactHash = revision.ArtifactHash,
             },
             ct);
 
@@ -853,7 +853,11 @@ public sealed class StudioMemberService : IStudioMemberService
                 : null,
             FetchExample: smokeTestSupported
                 ? BuildFetchExample(invokePath, supportsSse, endpoint.RequestTypeUrl)
-                : null);
+                : null)
+        {
+            PublishedServiceStateVersion = service.StateVersion,
+            BoundRevisionStateVersion = revisions?.StateVersion ?? 0,
+        };
     }
 
     private static string BuildMemberInvokePath(string scopeId, string memberId, string endpointId) =>

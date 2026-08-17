@@ -473,7 +473,19 @@ internal sealed class WorkflowRunActorPort :
                 $"Workflow definition actor '{existingActor.Id}' does not have a materialized definition payload.");
         }
 
-        if (!IsSameDefinitionPayload(binding, definition))
+        var pinsAdmissionSnapshot = definition.CapabilityAdmissionPlan != null ||
+                                    definition.DefinitionVersion > 0 ||
+                                    string.Equals(
+                                        definition.RunOrigin,
+                                        WorkflowRunOrigins.Webhook,
+                                        StringComparison.Ordinal);
+        if (!IsSameDefinitionPayload(binding, definition) ||
+            (pinsAdmissionSnapshot &&
+             !string.Equals(
+                 binding.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                 definition.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                 StringComparison.Ordinal)) ||
+            (definition.DefinitionVersion > 0 && binding.SourceVersion != definition.DefinitionVersion))
         {
             throw new InvalidOperationException(
                 $"Workflow definition actor '{existingActor.Id}' payload does not match the requested Run definition.");
@@ -701,7 +713,7 @@ internal sealed class WorkflowRunActorPort :
             if (!boundHasRevisionId)
                 throw new WorkflowCapabilityAdmissionRebindRequiredException();
 
-            if (!requestedRequiresIdentity ||
+            if ((boundRequiresIdentity && !requestedRequiresIdentity) ||
                 !string.Equals(binding.WorkflowId, definition.WorkflowId, StringComparison.Ordinal) ||
                 !string.Equals(binding.RevisionId, definition.RevisionId, StringComparison.Ordinal))
             {

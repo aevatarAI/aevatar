@@ -486,7 +486,7 @@ public sealed class ServiceEndpointsTests
     }
 
     [Fact]
-    public async Task RevisionLifecycleEndpoints_ShouldDispatchCommandPortCalls()
+    public async Task RevisionLifecycleEndpoints_ShouldDispatchCommandsAndRejectLegacyDefaultServingWrite()
     {
         await using var host = await EndpointTestHost.StartAsync();
 
@@ -501,7 +501,7 @@ public sealed class ServiceEndpointsTests
             new ServiceEndpoints.ServiceIdentityHttpRequest("tenant", "app", "ns"));
         var defaultResponse = await host.Client.PostAsJsonAsync(
             "/api/services/orders:default-serving",
-            new ServiceEndpoints.SetDefaultServingRevisionHttpRequest("tenant", "app", "ns", "rev-1"));
+            new { TenantId = "tenant", AppId = "app", Namespace = "ns", RevisionId = "rev-1" });
         var activateResponse = await host.Client.PostAsJsonAsync(
             "/api/services/orders:activate",
             new ServiceEndpoints.ActivateServiceRevisionHttpRequest("tenant", "app", "ns", "rev-1"));
@@ -509,13 +509,12 @@ public sealed class ServiceEndpointsTests
         prepareResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         publishResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         retireResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        defaultResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        defaultResponse.StatusCode.Should().Be(HttpStatusCode.NotFound);
         activateResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
 
         host.CommandPort.PrepareRevisionCommand!.RevisionId.Should().Be("rev-1");
         host.CommandPort.PublishRevisionCommand!.RevisionId.Should().Be("rev-1");
         host.CommandPort.RetireServiceRevisionCommand!.RevisionId.Should().Be("rev-1");
-        host.CommandPort.SetDefaultServingRevisionCommand!.RevisionId.Should().Be("rev-1");
         host.CommandPort.ActivateServiceRevisionCommand!.RevisionId.Should().Be("rev-1");
     }
 
@@ -1862,6 +1861,8 @@ public sealed class ServiceEndpointsTests
 
         public List<PersistedWorkflowCapabilityAdmissionRequest> PersistedRequests { get; } = [];
 
+        public List<RefreshPersistedWorkflowCapabilityAdmissionRequest> RefreshRequests { get; } = [];
+
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
@@ -1888,6 +1889,17 @@ public sealed class ServiceEndpointsTests
 
             return Task.FromResult(request.Plan.Clone());
         }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RefreshRequests.Add(request);
+            if (_failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
+
+            return Task.FromResult(request.Persisted.Plan.Clone());
+        }
     }
 
     private sealed class RecordingServiceCommandPort : IServiceCommandPort
@@ -1907,8 +1919,6 @@ public sealed class ServiceEndpointsTests
         public PublishServiceRevisionCommand? PublishRevisionCommand { get; private set; }
 
         public RetireServiceRevisionCommand? RetireServiceRevisionCommand { get; private set; }
-
-        public SetDefaultServingRevisionCommand? SetDefaultServingRevisionCommand { get; private set; }
 
         public ActivateServiceRevisionCommand? ActivateServiceRevisionCommand { get; private set; }
 
@@ -1972,12 +1982,6 @@ public sealed class ServiceEndpointsTests
         {
             RetireServiceRevisionCommand = command;
             return Task.FromResult(new ServiceCommandAcceptedReceipt("revision-actor", "cmd-retire-revision", "corr-retire-revision"));
-        }
-
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
-        {
-            SetDefaultServingRevisionCommand = command;
-            return Task.FromResult(new ServiceCommandAcceptedReceipt("definition-actor", "cmd-default-serving", "corr-default-serving"));
         }
 
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)

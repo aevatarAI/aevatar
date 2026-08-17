@@ -88,6 +88,7 @@ message WorkflowRunInsightReportDocument {
   repeated WorkflowExecutionTimelineEvent timeline_entries = 23;
   WorkflowExecutionSummary summary_value = 24;
   WorkflowUsageMetricsReadModel usage_value = 25;
+  repeated WorkflowRuntimeOperationReadModel operation_entries = 26;
 }
 
 message WorkflowExecutionCurrentStateDocument {
@@ -267,6 +268,33 @@ message WorkflowExecutionRoleReply {
   string session_id = 3;
   string content = 4;
   int32 content_length = 5;
+}
+
+message WorkflowRuntimeOperationReadModel {
+  string session_id = 1;
+  string operation_id = 2;
+  int64 progress_sequence = 3;
+  int32 round = 4;
+  aevatar.workflow.WorkflowRuntimeOperationKind kind = 5;
+  google.protobuf.Timestamp started_at_utc_value = 6;
+  google.protobuf.Timestamp completed_at_utc_value = 7;
+  string role_actor_id = 8;
+  string model = 9;
+  string provider = 10;
+  string input_summary = 11;
+  repeated string available_tool_names = 12;
+  string output = 13;
+  string finish_reason = 14;
+  WorkflowUsageMetricsReadModel usage_value = 15;
+  google.protobuf.BoolValue success_wrapper = 16;
+  string error = 17;
+  string tool_call_id = 18;
+  string tool_name = 19;
+  string arguments_json = 20;
+  string result_json = 21;
+  string reasoning_content = 22;
+  int64 started_progress_sequence = 23;
+  int64 completed_progress_sequence = 24;
 }
 
 message WorkflowExecutionTimelineEvent {

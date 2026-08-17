@@ -69,7 +69,6 @@ public static class ServiceCollectionExtensions
             services.AddNyxIdApiAccess(configuration);
         var assistantActionsOptions = BindAssistantActionsOptions(configuration);
         services.TryAddSingleton(assistantActionsOptions);
-        services.TryAddSingleton(BindPlanGateOptions(configuration));
         services.TryAddSingleton(BindCanaryEffectFaultOptions(configuration));
         services.TryAddSingleton<INyxIdChatCanaryEffectFaultAuthorizationPolicy,
             NyxIdChatCanaryEffectFaultAuthorizationPolicy>();
@@ -120,13 +119,25 @@ public static class ServiceCollectionExtensions
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
         services.TryAddSingleton<IAgentRunToolApprovalDecisionDispatcher, AgentRunToolApprovalDecisionDispatcher>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>());
+        services.TryAddSingleton<IChannelWorkflowAuthorizedScopeResolver>(sp =>
+            new ChannelWorkflowAuthorizedScopeResolver(
+                sp.GetService<Aevatar.GAgents.Channel.Identity.Abstractions.IOwnerScopeResolver>(),
+                sp.GetService<ILogger<ChannelWorkflowAuthorizedScopeResolver>>()));
+        // The two-generic overload keeps the concrete implementation type visible to
+        // TryAddEnumerable; a Func<IServiceProvider, IChannelSlashCommandHandler> factory
+        // would be indistinguishable from every other handler registered for this service.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>(sp =>
+                new ChannelWorkflowDraftRunSlashCommandHandler(
+                    sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>(),
+                    sp.GetRequiredService<IChannelWorkflowAuthorizedScopeResolver>())));
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
         services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();
         services.TryAddSingleton<ChannelWorkflowDraftRunAdmission>(sp =>
             new ChannelWorkflowDraftRunAdmission(
                 sp.GetRequiredService<ChannelWorkflowDraftRunIntentParser>(),
-                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>()));
+                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>(),
+                sp.GetRequiredService<IChannelWorkflowAuthorizedScopeResolver>()));
         services.TryAddSingleton<WorkflowDraftRunReplyRenderer>();
         services.TryAddSingleton<IChannelWorkflowDraftRunInteractionPort>(sp =>
             new ChannelWorkflowDraftRunInteractionPort(
@@ -166,6 +177,9 @@ public static class ServiceCollectionExtensions
                     // the reply activity's TransportExtras) instead of the process-wide default, so a DM
                     // to one bot is answered by that bot's app and not a sibling under the same account.
                     sp.GetService<ILarkOutboundClientFactory>(),
+                    // Inbound turns bind the card through their single-use channel reply authority.
+                    // Proactive turns still use the scoped Lark proxy client above.
+                    sp.GetRequiredService<NyxIdApiClient>(),
                     sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
             }));
         }
@@ -209,12 +223,6 @@ public static class ServiceCollectionExtensions
                 sp.GetService<INyxIdAuthorizationCatalogQueryPort>(),
                 sp.GetService<INyxIdActionEvidenceReadPort>(),
                 sp.GetRequiredService<TimeProvider>()));
-        services.TryAddSingleton<INyxIdActionReadAuthorityPort>(sp =>
-            new NyxIdActionReadAuthorityPort(
-                sp.GetRequiredService<ISecretVault>(),
-                sp.GetRequiredService<TimeProvider>(),
-                TimeSpan.FromMinutes(10),
-                TimeSpan.FromHours(24)));
         services.TryAddSingleton<INyxIdChatDelegationCredentialLifecyclePort,
             NyxIdChatDelegationCredentialLifecyclePort>();
         services.TryAddSingleton<INyxIdChatTurnOperationExecutor, NyxIdChatTurnOperationExecutor>();
@@ -422,19 +430,6 @@ public static class ServiceCollectionExtensions
         return options;
     }
 
-    private static NyxIdChatPlanGateOptions BindPlanGateOptions(IConfiguration? configuration)
-    {
-        var options = new NyxIdChatPlanGateOptions();
-        configuration?.GetSection(NyxIdChatPlanGateOptions.ConfigSection).Bind(options);
-        if (options.ConfirmationThresholdSeconds <= 0)
-        {
-            throw new InvalidOperationException(
-                $"{NyxIdChatPlanGateOptions.ConfigSection}:ConfirmationThresholdSeconds must be positive.");
-        }
-
-        return options;
-    }
-
     private static NyxIdChatCanaryEffectFaultOptions BindCanaryEffectFaultOptions(
         IConfiguration? configuration)
     {
@@ -442,4 +437,5 @@ public static class ServiceCollectionExtensions
             $"{NyxIdChatCanaryEffectFaultOptions.ConfigSection}:Enabled") == true;
         return new NyxIdChatCanaryEffectFaultOptions { Enabled = enabled };
     }
+
 }

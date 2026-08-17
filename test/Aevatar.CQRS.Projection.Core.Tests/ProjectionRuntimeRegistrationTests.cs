@@ -150,7 +150,7 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
-    public async Task AddEventSinkProjectionRuntimeCore_ShouldReleaseScope_WhenRelayReadinessFails()
+    public async Task AddProjectionMaterializationRuntimeCore_ShouldPreserveDurableScope_WhenRelayReadinessFails()
     {
         var runtime = new RecordingActorRuntime();
         var dispatchPort = new RecordingActorDispatchPort();
@@ -158,7 +158,50 @@ public sealed class ProjectionRuntimeRegistrationTests
         services.AddSingleton<IActorRuntime>(runtime);
         services.AddSingleton<IActorDispatchPort>(dispatchPort);
         services.AddSingleton<IStreamForwardingRegistry>(
-            new FailingStreamForwardingRegistry(new InvalidOperationException("relay unavailable")));
+            new FailingStreamForwardingRegistry(new TimeoutException("relay unavailable")));
+
+        services.AddProjectionMaterializationRuntimeCore<
+            TestMaterializationContext,
+            TestMaterializationLease,
+            ProjectionMaterializationScopeGAgent<TestMaterializationContext>>(
+            scopeKey => new TestMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new TestMaterializationLease(context));
+
+        await using var provider = services.BuildServiceProvider();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestMaterializationLease>>();
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-durable-relay-failure",
+            "projection-durable-relay-failure",
+            ProjectionRuntimeMode.DurableMaterialization);
+
+        var act = () => activation.EnsureAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = scopeKey.RootActorId,
+            ProjectionKind = scopeKey.ProjectionKind,
+            Mode = scopeKey.Mode,
+        });
+
+        await act.Should().ThrowAsync<TimeoutException>().WithMessage("relay unavailable");
+        dispatchPort.Dispatched.Should().ContainSingle();
+        dispatchPort.Dispatched[0].actorId.Should().Be(ProjectionScopeActorId.Build(scopeKey));
+        dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>().Mode
+            .Should().Be(ProjectionScopeMode.DurableMaterialization);
+    }
+
+    [Fact]
+    public async Task AddEventSinkProjectionRuntimeCore_ShouldReleaseSessionScope_WhenRelayReadinessFails()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var services = new ServiceCollection();
+        services.AddSingleton<IActorRuntime>(runtime);
+        services.AddSingleton<IActorDispatchPort>(dispatchPort);
+        services.AddSingleton<IStreamForwardingRegistry>(
+            new FailingStreamForwardingRegistry(new TimeoutException("relay unavailable")));
 
         services.AddEventSinkProjectionRuntimeCore<
             TestSessionContext,
@@ -189,7 +232,7 @@ public sealed class ProjectionRuntimeRegistrationTests
             SessionId = scopeKey.SessionId,
         });
 
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("relay unavailable");
+        await act.Should().ThrowAsync<TimeoutException>().WithMessage("relay unavailable");
         dispatchPort.Dispatched.Select(item => item.command.Payload!.TypeUrl).Should().Equal(
             Any.Pack(new EnsureProjectionScopeCommand()).TypeUrl,
             Any.Pack(new ReleaseProjectionScopeCommand()).TypeUrl);

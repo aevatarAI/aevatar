@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Google.Protobuf;
@@ -35,15 +34,6 @@ public sealed class NyxIdChatBrowserActionTests
         decision.State.PendingActions.Should().ContainSingle()
             .Which.Should().BeEquivalentTo(decision.Request);
         decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
-        decision.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
-        decision.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
-        decision.State.ActiveTask.Gate.PlanId.Should().Be("plan-alpha");
-        decision.State.ActiveTask.Gate.Admissions.Should().ContainSingle().Which
-            .Should().Match<NyxIdChatPlanOperationAdmission>(admission =>
-                admission.ActionRequestId == decision.Request.ActionRequestId &&
-                admission.Action == decision.Request.Action &&
-                admission.ActionParamsSha256.Equals(
-                    NyxIdChatPlanGateDecisions.HashActionParams(decision.Request.Params)));
         decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
         decision.State.ActiveTurn.TerminalAt.Should().NotBeNull();
         decision.State.RecentTerminalTurns.Should().ContainSingle(summary =>
@@ -73,7 +63,50 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void KeyCreateAuthorizationRequired_ShouldCreateLeastScopeActionRequest()
+    public void ServiceAccessRequired_ShouldCreateExactServiceAccessReviewAction()
+    {
+        var state = AuthorizationWaitingState();
+        var signal = AuthorizationRequiredSignal(state);
+        signal.Tool.Receipt.AuthorizationRequired.ReasonCode =
+            "USER_SERVICE_ACCESS_REQUIRED";
+        signal.Tool.Receipt.AuthorizationRequired.UserServiceId =
+            "us-github-alpha";
+        signal.Tool.Receipt.AuthorizationRequired.ResourceUri =
+            "https://nyx-api.chrono-ai.fun/api/v1/proxy/s/api-github";
+
+        var decision = NyxIdChatBrowserActions.RequestAuthorization(
+            state,
+            signal,
+            Registry(),
+            Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        decision.Request.RegistryRevision.Should().Be(
+            NyxIdAssistantActionRegistry.ServiceAccessReviewRegistryRevision);
+        decision.Request.Action.Should().Be(
+            NyxIdAssistantActionKind.ServiceAccessReview);
+        decision.Request.Params.ParamsCase.Should().Be(
+            NyxIdAssistantActionParams.ParamsOneofCase.ServiceAccessReview);
+        decision.Request.Params.ServiceAccessReview.UserServiceId.Should()
+            .Be("us-github-alpha");
+        decision.Request.Params.ServiceAccessReview.ServiceSlug.Should()
+            .Be("api-github");
+        decision.Request.Params.ServiceAccessReview.ResourceUri.Should()
+            .Be("https://nyx-api.chrono-ai.fun/api/v1/proxy/s/api-github");
+        decision.Request.AdvisoryRisk.Should().Be(NyxIdAssistantActionRisk.Grant);
+        decision.Request.RememberEligible.Should().BeFalse();
+        decision.State.PendingActions.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(decision.Request);
+        decision.State.ActiveTask.Steps.Should().ContainSingle(step =>
+            step.Kind == NyxIdChatStepKind.BrowserAction &&
+            step.Source.BrowserAction.Action ==
+                NyxIdAssistantActionKind.ServiceAccessReview &&
+            step.ActionRequestId == decision.Request.ActionRequestId);
+    }
+
+    [Fact]
+    public void KeyCreateAuthorizationRequired_ShouldCommitExactLeastScopeActionRequest()
     {
         var state = AuthorizationWaitingState();
         var original = state.Clone();
@@ -132,88 +165,6 @@ public sealed class NyxIdChatBrowserActionTests
         decision.Request.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
         decision.Request.Params.KeyRotate.KeyId.Should().Be("key-alpha");
         state.Should().BeEquivalentTo(original);
-    }
-
-    [Fact]
-    public void ExactActionPlanConfirm_ShouldSatisfyOnlyLocalGateWithoutDispatchOrRevision()
-    {
-        var state = BlockedActionStateWithPendingGate();
-        var gate = state.ActiveTask.Gate.Clone();
-        var revision = state.ActiveTask.PlanRevision;
-        var history = RevisionHistory(state.ActiveTask);
-
-        var decision = NyxIdChatPlanGateDecisions.Resolve(
-            state,
-            ResolvePlanCommand(gate, confirmed: true),
-            currentStateVersion: 17,
-            Now);
-
-        decision.ShouldCommit.Should().BeTrue();
-        decision.NextCommand.Should().BeNull(
-            "local plan admission does not impersonate NyxID authorization");
-        decision.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Satisfied);
-        decision.State.PendingActions.Should().ContainSingle();
-        decision.State.ActiveTask.Steps.Where(step =>
-                step.ActionRequestId == gate.Admissions.Single().ActionRequestId)
-            .Select(static step => step.Status)
-            .Should().Equal(NyxIdChatStepStatus.Waiting, NyxIdChatStepStatus.Planned);
-        decision.State.ActiveTask.PlanRevision.Should().Be(revision);
-        RevisionHistory(decision.State.ActiveTask).Should().Equal(history);
-    }
-
-    [Fact]
-    public void ExactActionPlanReject_ShouldCancelActionAndPostconditionWithoutDispatch()
-    {
-        var state = BlockedActionStateWithPendingGate();
-        var gate = state.ActiveTask.Gate.Clone();
-        var revision = state.ActiveTask.PlanRevision;
-        var history = RevisionHistory(state.ActiveTask);
-
-        var decision = NyxIdChatPlanGateDecisions.Resolve(
-            state,
-            ResolvePlanCommand(gate, confirmed: false),
-            currentStateVersion: 17,
-            Now);
-
-        decision.ShouldCommit.Should().BeTrue();
-        decision.NextCommand.Should().BeNull();
-        decision.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Rejected);
-        decision.State.PendingActions.Should().BeEmpty();
-        decision.State.RecentActions.Should().ContainSingle(action =>
-            action.ActionRequestId == gate.Admissions.Single().ActionRequestId);
-        decision.State.ActiveTask.Steps.Where(step =>
-                step.ActionRequestId == gate.Admissions.Single().ActionRequestId)
-            .Should().OnlyContain(step =>
-                step.Status == NyxIdChatStepStatus.Cancelled &&
-                step.ExternalEffect == NyxIdChatEffectEvidence.NotApplied);
-        decision.State.ActiveTask.PlanRevision.Should().Be(revision);
-        RevisionHistory(decision.State.ActiveTask).Should().Equal(history);
-    }
-
-    [Fact]
-    public void ActionContinueBeforePlanConfirm_ShouldRejectWithoutDispatchOrRevisionChange()
-    {
-        var state = BlockedActionStateWithPendingGate();
-        var gate = state.ActiveTask.Gate.Clone();
-        var revision = state.ActiveTask.PlanRevision;
-        var history = RevisionHistory(state.ActiveTask);
-
-        var decision = NyxIdChatBrowserActions.Continue(
-            state,
-            ContinueCommand(
-                state.PendingActions.Single().ActionRequestId,
-                NyxIdChatActionDisposition.Completed),
-            Now);
-
-        decision.ShouldCommit.Should().BeTrue();
-        decision.ShouldDispatch.Should().BeFalse();
-        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
-        decision.ReasonCode.Should().Be(
-            NyxIdChatBrowserActions.ActionContinuationPlanConfirmationRequired);
-        decision.State.ActiveTask.Gate.Should().BeEquivalentTo(gate);
-        decision.State.PendingActions.Should().ContainSingle();
-        decision.State.ActiveTask.PlanRevision.Should().Be(revision);
-        RevisionHistory(decision.State.ActiveTask).Should().Equal(history);
     }
 
     [Fact]
@@ -516,7 +467,6 @@ public sealed class NyxIdChatBrowserActionTests
         var command = ContinueCommand(
             blocked.PendingActions.Single().ActionRequestId,
             NyxIdChatActionDisposition.Completed);
-        command.ReadAuthority = ReadAuthority(command.CommandId);
 
         var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
 
@@ -557,52 +507,16 @@ public sealed class NyxIdChatBrowserActionTests
             NyxIdChatActionDisposition.Completed);
         decision.NextCommand.ActionPostcondition.Params.ParamsCase.Should().Be(
             NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect);
-        decision.Admission.ReadAuthority.Should().BeNull();
-        decision.State.ContinuationAdmission.ReadAuthority.Should().BeNull();
-        decision.NextCommand.ActionPostcondition.ReadAuthority.Should().BeNull();
         decision.State.PendingActions.Single().Reports.Should().ContainSingle()
             .Which.SafeMessage.Should().BeEmpty(
             "browser supplied prose is not durable action evidence");
     }
 
     [Fact]
-    public void KeyCompletedReport_ShouldPersistCanonicalReadAuthorityThroughRecovery()
+    public void KeyCompletedReport_ShouldDispatchFreshToolContextWithoutPersistingItAndRecoverCredentialFree()
     {
-        var blocked = BlockedKeyCreateActionState();
-        var command = ContinueCommand(
-            blocked.PendingActions.Single().ActionRequestId,
-            NyxIdChatActionDisposition.Completed);
-        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
-        {
-            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
-        };
-        command.ReadAuthority = ReadAuthority(command.CommandId);
-
-        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
-
-        decision.ShouldCommit.Should().BeTrue();
-        decision.ShouldDispatch.Should().BeTrue();
-        decision.Admission.ReadAuthority.Should().BeEquivalentTo(command.ReadAuthority);
-        decision.State.ContinuationAdmission.ReadAuthority.Should()
-            .BeEquivalentTo(command.ReadAuthority);
-        decision.NextCommand!.ActionPostcondition.ReadAuthority.Should()
-            .BeEquivalentTo(command.ReadAuthority);
-
-        var restarted = NyxIdChatConversationGAgentState.Parser.ParseFrom(
-            decision.State.ToByteArray());
-        var recovery = NyxIdChatBrowserActions.TryBuildRecoveryDispatch(
-            restarted,
-            decision.NextCommand.Key);
-
-        recovery.Should().NotBeNull();
-        recovery!.ActionPostcondition.ReadAuthority.Should()
-            .BeEquivalentTo(command.ReadAuthority);
-    }
-
-    [Fact]
-    public void VerifiedKeyActionExactReplayAfterAuthorityExpiry_ShouldBeIdempotentWithoutDispatch()
-    {
-        var blocked = BlockedKeyCreateActionState();
+        const string freshToken = "fresh-key-continuation-token";
+        var blocked = BlockedKeyActionState(NyxIdAssistantActionKind.KeyCreate);
         var actionRequestId = blocked.PendingActions.Single().ActionRequestId;
         var command = ContinueCommand(
             actionRequestId,
@@ -611,199 +525,94 @@ public sealed class NyxIdChatBrowserActionTests
         {
             Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
         };
-        command.ReadAuthority = ReadAuthority(command.CommandId);
-        var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
-        var reconciled = NyxIdChatBrowserActions.ReconcilePostcondition(
-            admitted.State,
-            new NyxIdChatOperationResultSignal
-            {
-                Key = admitted.NextCommand!.Key.Clone(),
-                ActionPostcondition = new NyxIdChatActionPostconditionResult
-                {
-                    ActionRequestId = actionRequestId,
-                    Disposition = NyxIdChatActionDisposition.Completed,
-                    Verified = true,
-                    Resource = new NyxIdChatSafeResourceRef
-                    {
-                        Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
-                    },
-                },
-            },
-            Now);
-
-        var replay = NyxIdChatBrowserActions.Continue(
-            reconciled.State,
-            command.Clone(),
-            Timestamp.FromDateTimeOffset(
-                DateTimeOffset.FromUnixTimeMilliseconds(command.ReadAuthority.ExpiresAtUnixMs)
-                    .AddMilliseconds(1)));
-
-        reconciled.State.PendingActions.Should().BeEmpty();
-        reconciled.State.RecentActions.Should().ContainSingle(action =>
-            action.ActionRequestId == actionRequestId &&
-            action.PostconditionResult.Verified);
-        replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
-        replay.ShouldCommit.Should().BeFalse();
-        replay.ShouldDispatch.Should().BeFalse();
-        replay.NextCommand.Should().BeNull();
-        replay.State.Should().BeEquivalentTo(reconciled.State);
-    }
-
-    [Fact]
-    public void InFlightKeyActionExactReplayAfterAuthorityExpiry_ShouldRejectWithoutDispatch()
-    {
-        var blocked = BlockedKeyCreateActionState();
-        var command = ContinueCommand(
-            blocked.PendingActions.Single().ActionRequestId,
-            NyxIdChatActionDisposition.Completed);
-        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
-        {
-            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
-        };
-        command.ReadAuthority = ReadAuthority(command.CommandId);
-        var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
-
-        var replay = NyxIdChatBrowserActions.Continue(
-            admitted.State,
-            command.Clone(),
-            Timestamp.FromDateTimeOffset(
-                DateTimeOffset.FromUnixTimeMilliseconds(command.ReadAuthority.ExpiresAtUnixMs)
-                    .AddMilliseconds(1)));
-
-        replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
-        replay.ShouldCommit.Should().BeFalse();
-        replay.ShouldDispatch.Should().BeFalse();
-        replay.ReasonCode.Should().Be(
-            NyxIdChatBrowserActions.ActionContinuationInvalid);
-        replay.State.Should().BeEquivalentTo(admitted.State);
-    }
-
-    [Fact]
-    public void SameClientKeyReplayWithChangedReportAndMissingAuthority_ShouldConflict()
-    {
-        var blocked = BlockedKeyCreateActionState();
-        var command = ContinueCommand(
-            blocked.PendingActions.Single().ActionRequestId,
-            NyxIdChatActionDisposition.Completed);
-        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
-        {
-            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
-        };
-        command.ReadAuthority = ReadAuthority(command.CommandId);
-        var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
-        var tampered = command.Clone();
-        tampered.Actions[0].Resource = new NyxIdChatSafeResourceRef
-        {
-            UserService = new NyxIdChatUserServiceRef
-            {
-                UserServiceId = "service-alpha",
-            },
-        };
-        tampered.ReadAuthority = null;
-
-        var replay = NyxIdChatBrowserActions.Continue(admitted.State, tampered, Now);
-
-        replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
-        replay.ShouldCommit.Should().BeFalse();
-        replay.ShouldDispatch.Should().BeFalse();
-        replay.ReasonCode.Should().Be(
-            NyxIdChatBrowserActions.ActionContinuationConflict);
-        replay.State.Should().BeEquivalentTo(admitted.State);
-    }
-
-    [Theory]
-    [InlineData("missing")]
-    [InlineData("scope")]
-    [InlineData("owner")]
-    [InlineData("purpose")]
-    [InlineData("request")]
-    [InlineData("expired")]
-    public void KeyCompletedReport_ShouldRejectInvalidReadAuthority(string mutation)
-    {
-        var blocked = BlockedKeyCreateActionState();
-        var command = ContinueCommand(
-            blocked.PendingActions.Single().ActionRequestId,
-            NyxIdChatActionDisposition.Completed);
-        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
-        {
-            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
-        };
-        command.ReadAuthority = mutation == "missing"
-            ? null
-            : ReadAuthority(command.CommandId);
-        switch (mutation)
-        {
-            case "scope":
-                command.ReadAuthority!.ScopeId = "scope-other";
-                break;
-            case "owner":
-                command.ReadAuthority!.OwnerSubject = "owner-other";
-                break;
-            case "purpose":
-                command.ReadAuthority!.Purpose = "wrong-purpose";
-                break;
-            case "request":
-                command.ReadAuthority!.SecretRef = ReadAuthority("command-action-other").SecretRef;
-                break;
-            case "expired":
-                command.ReadAuthority!.ExpiresAtUnixMs = Now.ToDateTimeOffset()
-                    .AddMilliseconds(-1)
-                    .ToUnixTimeMilliseconds();
-                break;
-        }
+        command.ToolContext = BrowserToolContext(freshToken, command.CommandId);
 
         var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+
+        decision.ShouldCommit.Should().BeTrue();
+        decision.ShouldDispatch.Should().BeTrue();
+        decision.NextCommand.Should().NotBeNull();
+        decision.NextCommand!.ActionPostcondition.ActionRequestId.Should().Be(actionRequestId);
+        decision.NextCommand.ActionPostcondition.Action.Should().Be(
+            NyxIdAssistantActionKind.KeyCreate);
+        decision.NextCommand.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be("key-alpha");
+        decision.NextCommand.ActionPostcondition.ToolContext.Should()
+            .BeEquivalentTo(command.ToolContext);
+        AssertToolContextNotPersisted(decision.State, decision.Admission, freshToken);
+
+        var restarted = NyxIdChatConversationGAgentState.Parser.ParseFrom(
+            decision.State.ToByteArray());
+        var recovery = NyxIdChatBrowserActions.TryBuildRecoveryDispatch(
+            restarted,
+            decision.NextCommand.Key);
+
+        recovery.Should().NotBeNull();
+        recovery!.Key.Should().BeEquivalentTo(decision.NextCommand.Key);
+        recovery.ActionPostcondition.ActionRequestId.Should().Be(actionRequestId);
+        recovery.ActionPostcondition.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
+        recovery.ActionPostcondition.ReportedDisposition.Should().Be(
+            NyxIdChatActionDisposition.Completed);
+        recovery.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be("key-alpha");
+        recovery.ActionPostcondition.ToolContext.Should().BeNull();
+    }
+
+    [Fact]
+    public void KeyRecoveryDispatch_ShouldFallBackToCompletedRequestReport()
+    {
+        var blocked = BlockedKeyActionState(NyxIdAssistantActionKind.KeyRotate);
+        var actionRequestId = blocked.PendingActions.Single().ActionRequestId;
+        var command = ContinueCommand(
+            actionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-beta" },
+        };
+        command.ToolContext = BrowserToolContext("initial-rotate-token", command.CommandId);
+        var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+        var restarted = NyxIdChatConversationGAgentState.Parser.ParseFrom(
+            admitted.State.ToByteArray());
+        restarted.ContinuationAdmission.ActionReports.Clear();
+
+        var recovery = NyxIdChatBrowserActions.TryBuildRecoveryDispatch(
+            restarted,
+            admitted.NextCommand!.Key);
+
+        restarted.PendingActions.Single().Reports.Should().ContainSingle(report =>
+            report.ActionRequestId == actionRequestId &&
+            report.Disposition == NyxIdChatActionDisposition.Completed &&
+            report.Resource.Key.KeyId == "key-beta");
+        recovery.Should().NotBeNull();
+        recovery!.Key.Should().BeEquivalentTo(admitted.NextCommand.Key);
+        recovery.ActionPostcondition.ActionRequestId.Should().Be(actionRequestId);
+        recovery.ActionPostcondition.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
+        recovery.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be("key-beta");
+        recovery.ActionPostcondition.ToolContext.Should().BeNull();
+    }
+
+    [Fact]
+    public void KeyStateChangeWakeWithoutCompletedReport_ShouldFailClosed()
+    {
+        var blocked = BlockedKeyActionState(NyxIdAssistantActionKind.KeyCreate);
+        var wake = KeyStateChangeWake("missing-report");
+
+        var decision = NyxIdChatBrowserActions.Continue(blocked, wake, Now);
 
         decision.ShouldCommit.Should().BeFalse();
         decision.ShouldDispatch.Should().BeFalse();
         decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
         decision.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionContinuationInvalid);
+        decision.State.Should().BeEquivalentTo(blocked);
     }
 
     [Fact]
-    public void KeyStateChangeWakeWithoutReadAuthority_ShouldRejectWithoutDispatch()
-    {
-        var blocked = BlockedKeyCreateActionState();
-        var command = ContinueCommand(
-            blocked.PendingActions.Single().ActionRequestId,
-            NyxIdChatActionDisposition.Completed);
-        command.OriginTurnId = string.Empty;
-        command.Actions.Clear();
-
-        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
-
-        decision.ShouldCommit.Should().BeFalse();
-        decision.ShouldDispatch.Should().BeFalse();
-        decision.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionContinuationInvalid);
-    }
-
-    [Fact]
-    public void KeyStateChangeWakeWithReadAuthorityWithoutCompletedReport_ShouldFailClosed()
-    {
-        var blocked = BlockedKeyCreateActionState();
-        var command = ContinueCommand(
-            blocked.PendingActions.Single().ActionRequestId,
-            NyxIdChatActionDisposition.Completed);
-        command.OriginTurnId = string.Empty;
-        command.Actions.Clear();
-        command.ReadAuthority = ReadAuthority(command.CommandId);
-
-        var decision = NyxIdChatBrowserActions.Continue(blocked, command, Now);
-
-        decision.ShouldCommit.Should().BeFalse();
-        decision.ShouldDispatch.Should().BeFalse();
-        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
-        decision.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionContinuationInvalid);
-        decision.State.PendingActions.Single().Reports.Should().BeEmpty();
-    }
-
-    [Fact]
-    public void AuthenticatedStateChangeWake_AfterUnverifiedPostcondition_ShouldStartCleanNextGeneration()
+    public void AuthenticatedKeyStateChangeWake_AfterFailedPostcondition_ShouldRenewGeneration()
     {
         var failed = FailedKeyPostconditionState();
         var retryAt = Timestamp.FromDateTimeOffset(
             Now.ToDateTimeOffset().AddMinutes(1));
         var wake = KeyStateChangeWake("retry");
+        var freshToken = wake.ToolContext.Credentials.NyxIdAccessToken;
 
         var decision = NyxIdChatBrowserActions.Continue(
             failed.State,
@@ -818,6 +627,9 @@ public sealed class NyxIdChatBrowserActionTests
         request.ActionRequestId.Should().Be(failed.ActionRequestId);
         request.StepId.Should().Be(failed.ActionStepId);
         request.PostconditionResult.Should().BeNull();
+        request.Reports.Should().ContainSingle(report =>
+            report.Disposition == NyxIdChatActionDisposition.Completed &&
+            report.Resource.Key.KeyId == failed.ExpectedResourceKeyId);
 
         var step = decision.State.ActiveTask.Steps.Single(candidate =>
             candidate.Kind == NyxIdChatStepKind.Postcondition);
@@ -858,32 +670,21 @@ public sealed class NyxIdChatBrowserActionTests
         operation.PendingStepChangedProgressSequence.Should().Be(0);
         operation.StepChangedDueAt.Should().BeNull();
 
-        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
-        decision.State.ActiveTask.ActiveStepId.Should().Be(step.StepId);
-        decision.State.ActiveTask.ActiveOperationId.Should().Be(operation.Key.OperationId);
-        decision.State.ActiveTask.FailureCode.Should().BeEmpty();
-        decision.State.ActiveTask.SafeMessage.Should().BeEmpty();
-        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
-        decision.State.ActiveTurn.FailureCode.Should().BeEmpty();
-        decision.State.ActiveTurn.SafeMessage.Should().BeEmpty();
-        decision.State.ActiveTurn.TerminalAt.Should().BeNull();
-
-        decision.Admission.ReadAuthority.Should().BeEquivalentTo(wake.ReadAuthority);
-        decision.State.ContinuationAdmission.ReadAuthority.Should()
-            .BeEquivalentTo(wake.ReadAuthority);
+        decision.NextCommand.Should().NotBeNull();
         decision.NextCommand!.Key.Should().BeEquivalentTo(operation.Key);
         decision.NextCommand.ActionPostcondition.ActionRequestId.Should()
             .Be(failed.ActionRequestId);
-        decision.NextCommand.ActionPostcondition.ReadAuthority.Should()
-            .BeEquivalentTo(wake.ReadAuthority);
-        decision.NextCommand.ActionPostcondition.ReadAuthority.Should()
-            .NotBeEquivalentTo(failed.PreviousAuthority);
+        decision.NextCommand.ActionPostcondition.ResourceHint.Key.KeyId.Should()
+            .Be(failed.ExpectedResourceKeyId);
+        decision.NextCommand.ActionPostcondition.ToolContext.Should()
+            .BeEquivalentTo(wake.ToolContext);
+        AssertToolContextNotPersisted(decision.State, decision.Admission, freshToken);
     }
 
     [Theory]
     [InlineData(NyxIdAssistantActionKind.KeyCreate, "key-alpha")]
     [InlineData(NyxIdAssistantActionKind.KeyRotate, "key-beta")]
-    public async Task AuthenticatedStateChangeWake_ForKeyMutation_ShouldPreserveExactHintForReadBack(
+    public async Task AuthenticatedKeyStateChangeWake_ShouldPreserveExactEvidencePredicate(
         NyxIdAssistantActionKind action,
         string expectedKeyId)
     {
@@ -900,27 +701,18 @@ public sealed class NyxIdChatBrowserActionTests
         dispatch.ActionPostcondition.Action.Should().Be(action);
         dispatch.ActionPostcondition.ReportedDisposition.Should().Be(
             NyxIdChatActionDisposition.Completed);
-        dispatch.ActionPostcondition.ResourceHint.Should().NotBeNull();
         dispatch.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be(expectedKeyId);
-        dispatch.ActionPostcondition.ReadAuthority.Should().BeEquivalentTo(wake.ReadAuthority);
-
-        var replay = NyxIdChatBrowserActions.Continue(
-            decision.State,
-            wake.Clone(),
-            Now);
-        replay.NextCommand.Should().NotBeNull();
-        replay.NextCommand!.ActionPostcondition.ResourceHint.Key.KeyId.Should()
-            .Be(expectedKeyId);
-        replay.NextCommand.ActionPostcondition.ReportedDisposition.Should().Be(
-            NyxIdChatActionDisposition.Completed);
+        dispatch.ActionPostcondition.ToolContext.Should().BeEquivalentTo(wake.ToolContext);
 
         var recovery = NyxIdChatBrowserActions.TryBuildRecoveryDispatch(
             decision.State,
             dispatch.Key);
         recovery.Should().NotBeNull();
-        recovery!.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be(expectedKeyId);
-        recovery.ActionPostcondition.ReportedDisposition.Should().Be(
-            NyxIdChatActionDisposition.Completed);
+        recovery!.Key.Should().BeEquivalentTo(dispatch.Key);
+        recovery.ActionPostcondition.Action.Should().Be(action);
+        recovery.ActionPostcondition.ActionRequestId.Should().Be(failed.ActionRequestId);
+        recovery.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be(expectedKeyId);
+        recovery.ActionPostcondition.ToolContext.Should().BeNull();
 
         var evidence = VerifiableKeyEvidence(action, expectedKeyId);
         var reads = new RecordingKeyEvidenceReadPort(evidence);
@@ -931,7 +723,7 @@ public sealed class NyxIdChatBrowserActionTests
 
         var result = await verifier.VerifyAsync(
             dispatch.ActionPostcondition,
-            KeyReadContext());
+            dispatch.ActionPostcondition.ToolContext);
 
         reads.KeyIds.Should().ContainSingle().Which.Should().Be(expectedKeyId);
         result.Verified.Should().BeTrue();
@@ -939,40 +731,63 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void ExactStateChangeWakeReplay_WithinRetryGeneration_ShouldRemainIdempotent()
+    public void ExactKeyStateChangeWakeReplay_ShouldNotCreateAnotherGeneration()
     {
-        var failed = FailedKeyPostconditionState();
+        var failed = FailedKeyPostconditionState(NyxIdAssistantActionKind.KeyRotate);
         var wake = KeyStateChangeWake("retry-replay");
         var first = NyxIdChatBrowserActions.Continue(failed.State, wake, Now);
+        var replayWake = wake.Clone();
+        replayWake.ToolContext = BrowserToolContext(
+            "fresh-replay-token",
+            replayWake.CommandId);
 
         var replay = NyxIdChatBrowserActions.Continue(
             first.State,
-            wake.Clone(),
+            replayWake,
             Now);
 
         first.NextCommand!.Key.OperationGeneration.Should().Be(2);
         replay.ShouldCommit.Should().BeFalse();
         replay.ShouldDispatch.Should().BeTrue();
         replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
+        replay.NextCommand.Should().NotBeNull();
         replay.NextCommand!.Key.Should().BeEquivalentTo(first.NextCommand.Key);
-        replay.State.PendingActions.Should().ContainSingle()
-            .Which.ActionRequestId.Should().Be(failed.ActionRequestId);
+        replay.NextCommand.Key.OperationGeneration.Should().Be(2);
+        replay.NextCommand.Key.OperationId.Should().Be(first.NextCommand.Key.OperationId);
+        replay.NextCommand.ActionPostcondition.ActionRequestId.Should()
+            .Be(failed.ActionRequestId);
+        replay.NextCommand.ActionPostcondition.ResourceHint.Key.KeyId.Should()
+            .Be(failed.ExpectedResourceKeyId);
+        replay.NextCommand.ActionPostcondition.ToolContext.Should()
+            .BeEquivalentTo(replayWake.ToolContext);
+        AssertToolContextNotPersisted(
+            replay.State,
+            replay.Admission,
+            replayWake.ToolContext.Credentials.NyxIdAccessToken);
     }
 
     [Fact]
-    public void VerifiedKeyStateChangeWakeExactReplay_AfterAuthorityExpiry_ShouldRemainIdempotent()
+    public void VerifiedKeyActionExactReplay_ShouldRemainIdempotentWithoutDispatch()
     {
-        var failed = FailedKeyPostconditionState();
-        var wake = KeyStateChangeWake("terminal-replay");
-        var retry = NyxIdChatBrowserActions.Continue(failed.State, wake, Now);
-        var verified = NyxIdChatBrowserActions.ReconcilePostcondition(
-            retry.State,
+        var blocked = BlockedKeyActionState(NyxIdAssistantActionKind.KeyCreate);
+        var actionRequestId = blocked.PendingActions.Single().ActionRequestId;
+        var command = ContinueCommand(
+            actionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        command.ToolContext = BrowserToolContext("verified-key-token", command.CommandId);
+        var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
+        var reconciled = NyxIdChatBrowserActions.ReconcilePostcondition(
+            admitted.State,
             new NyxIdChatOperationResultSignal
             {
-                Key = retry.NextCommand!.Key.Clone(),
+                Key = admitted.NextCommand!.Key.Clone(),
                 ActionPostcondition = new NyxIdChatActionPostconditionResult
                 {
-                    ActionRequestId = failed.ActionRequestId,
+                    ActionRequestId = actionRequestId,
                     Disposition = NyxIdChatActionDisposition.Completed,
                     Verified = true,
                     Resource = new NyxIdChatSafeResourceRef
@@ -982,49 +797,27 @@ public sealed class NyxIdChatBrowserActionTests
                 },
             },
             Now);
-        var replayAt = Timestamp.FromDateTimeOffset(
-            DateTimeOffset.FromUnixTimeMilliseconds(wake.ReadAuthority.ExpiresAtUnixMs)
-                .AddMilliseconds(1));
 
         var replay = NyxIdChatBrowserActions.Continue(
-            verified.State,
-            wake.Clone(),
-            replayAt);
+            reconciled.State,
+            command.Clone(),
+            Timestamp.FromDateTimeOffset(Now.ToDateTimeOffset().AddMinutes(30)));
 
-        verified.State.PendingActions.Should().BeEmpty();
+        reconciled.State.PendingActions.Should().BeEmpty();
+        reconciled.State.RecentActions.Should().ContainSingle(action =>
+            action.ActionRequestId == actionRequestId &&
+            action.PostconditionResult.Verified);
+        replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
         replay.ShouldCommit.Should().BeFalse();
         replay.ShouldDispatch.Should().BeFalse();
-        replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
         replay.NextCommand.Should().BeNull();
-        replay.State.Should().BeEquivalentTo(verified.State);
+        replay.State.Should().BeEquivalentTo(reconciled.State);
     }
 
     [Fact]
-    public void ExactServiceStateChangeWakeReplay_AfterOptionalAuthorityExpiry_ShouldRedispatch()
+    public void SupersededKeyGenerationResult_ShouldNotCompletePendingAction()
     {
-        var blocked = BlockedActionState();
-        var wake = KeyStateChangeWake("service-replay");
-        var first = NyxIdChatBrowserActions.Continue(blocked, wake, Now);
-        var replayAt = Timestamp.FromDateTimeOffset(
-            DateTimeOffset.FromUnixTimeMilliseconds(wake.ReadAuthority.ExpiresAtUnixMs)
-                .AddMilliseconds(1));
-
-        var replay = NyxIdChatBrowserActions.Continue(
-            first.State,
-            wake.Clone(),
-            replayAt);
-
-        first.Admission.ReadAuthority.Should().BeNull();
-        replay.ShouldCommit.Should().BeFalse();
-        replay.ShouldDispatch.Should().BeTrue();
-        replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
-        replay.NextCommand!.Key.Should().BeEquivalentTo(first.NextCommand!.Key);
-    }
-
-    [Fact]
-    public void SupersededGenerationResult_ShouldNotCompletePendingAction()
-    {
-        var failed = FailedKeyPostconditionState();
+        var failed = FailedKeyPostconditionState(NyxIdAssistantActionKind.KeyRotate);
         var retry = NyxIdChatBrowserActions.Continue(
             failed.State,
             KeyStateChangeWake("retry-fence"),
@@ -1039,7 +832,7 @@ public sealed class NyxIdChatBrowserActionTests
                 Verified = true,
                 Resource = new NyxIdChatSafeResourceRef
                 {
-                    Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+                    Key = new NyxIdChatKeyRef { KeyId = failed.ExpectedResourceKeyId },
                 },
             },
         };
@@ -1060,6 +853,277 @@ public sealed class NyxIdChatBrowserActionTests
         decision.State.ActiveTask.Steps.Single(candidate =>
                 candidate.Kind == NyxIdChatStepKind.Postcondition)
             .Operation.Key.Should().BeEquivalentTo(retry.NextCommand.Key);
+    }
+
+    [Fact]
+    public void VerifiedAuthorizationPostcondition_ShouldResumeOriginTurnAndPreserveItsExecutionActor()
+    {
+        var origin = AuthorizationWaitingStateWithPlannedContinuation();
+        var requested = NyxIdChatBrowserActions.RequestAuthorization(
+            origin,
+            AuthorizationRequiredSignal(origin),
+            Registry(),
+            Now);
+        var actionRequestId = requested.Request.ActionRequestId;
+        var superseded = requested.State.ActiveTask.Steps.Single(step =>
+            step.StepId == "step-llm-after-readiness");
+        var actionContinuation = requested.State.ActiveTask.Steps.Single(step =>
+            step.Source?.Llm?.ActionRequestId == actionRequestId);
+
+        requested.Request.SourceToolStepId.Should().Be("step-tool-alpha");
+        superseded.Status.Should().Be(NyxIdChatStepStatus.Cancelled);
+        superseded.Required.Should().BeFalse();
+        actionContinuation.Status.Should().Be(NyxIdChatStepStatus.Planned);
+        requested.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.BrowserAction)
+            .DependsOn.Should().Equal("step-tool-alpha");
+        actionContinuation.DependsOn.Should().Equal(
+            requested.State.ActiveTask.Steps.Single(step =>
+                step.Kind == NyxIdChatStepKind.Postcondition).StepId);
+        var actionRevision = requested.State.ActiveTask.PlanRevisions[^1];
+        actionRevision.AddedStepIds.Should().Contain(actionContinuation.StepId);
+        actionRevision.CancelledStepIds.Should().Equal(superseded.StepId);
+        superseded.CancelledInPlanRevision.Should().Be(actionRevision.PlanRevision);
+
+        var continuation = ContinueCommand(
+            actionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        continuation.ToolContext = new AgentToolExecutionContextPayload
+        {
+            Credentials = new AgentToolCredentialsPayload
+            {
+                NyxIdAccessToken = "fresh-token",
+                NyxIdCredentialKind =
+                    AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+            },
+        };
+        var admitted = NyxIdChatBrowserActions.Continue(
+            requested.State,
+            continuation,
+            Now);
+        admitted.NextCommand!.ActionPostcondition.ToolContext.Credentials.NyxIdAccessToken
+            .Should().Be("fresh-token");
+        var reconciled = NyxIdChatBrowserActions.ReconcilePostcondition(
+            admitted.State,
+            VerifiedPostcondition(admitted.NextCommand!.Key, actionRequestId),
+            Now);
+
+        reconciled.ShouldDispatch.Should().BeTrue();
+        reconciled.NextCommand.Should().NotBeNull();
+        reconciled.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm);
+        reconciled.NextCommand.Key.TurnId.Should().Be("turn-alpha");
+        reconciled.NextCommand.Llm.ContinueSession.Should().BeTrue();
+        reconciled.NextCommand.Llm.RematerializeTurnCatalog.Should().BeTrue();
+        reconciled.NextCommand.Llm.AgentProfile.ProfileId.Should().Be("profile-alpha");
+        reconciled.NextCommand.Llm.AgentProfileTurnAuthority.AuthorityKind.Should().Be(
+            AgentProfileTurnAuthorityKind.Selected);
+        reconciled.State.ActiveTurn.TurnId.Should().Be("turn-action-alpha");
+        reconciled.State.ActiveTurn.CommandId.Should().Be("command-action-alpha");
+        reconciled.State.ActiveTurn.Prompt.Should().Be(
+            "retrieve one issue that is assigned to me via my github account.");
+        reconciled.State.ActiveTurn.AgentProfileTurnAuthority.AuthorityKind.Should().Be(
+            AgentProfileTurnAuthorityKind.Selected);
+        reconciled.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        reconciled.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+        reconciled.State.ActiveTask.Steps.Single(step =>
+                step.StepId == "step-tool-alpha")
+            .Should().Match<NyxIdChatTaskStepState>(step =>
+                step.Status == NyxIdChatStepStatus.Done &&
+                step.ExternalEffect == NyxIdChatEffectEvidence.NotApplied);
+        reconciled.State.ActiveTask.Steps.Single(step =>
+                step.Source?.Llm?.ActionRequestId == actionRequestId)
+            .Status.Should().Be(NyxIdChatStepStatus.Running);
+
+        var plannedTool = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            reconciled.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = reconciled.NextCommand.Key.Clone(),
+                Llm = new NyxIdChatLLMOperationResult
+                {
+                    ToolCalls =
+                    {
+                        new NyxIdChatToolCall
+                        {
+                            CallId = "call-github-issue",
+                            ToolName = "nyxop_github_issue_read",
+                            ArgumentsJson = "{\"limit\":1}",
+                            Safety = new NyxIdChatToolCallSafety
+                            {
+                                IsReadOnly = true,
+                                MayChangeExternalState = false,
+                            },
+                        },
+                    },
+                },
+            },
+            Now);
+
+        plannedTool.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        plannedTool.NextCommand.Should().NotBeNull();
+        plannedTool.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+        plannedTool.NextCommand.Key.TurnId.Should().Be("turn-alpha",
+            "the original turn actor owns the transient LLM session and authorized tool capability");
+    }
+
+    [Fact]
+    public void VerifiedAuthorizationPostcondition_ShouldDispatchTypedGenericContinuation()
+    {
+        var origin = AuthorizationWaitingStateWithPlannedContinuation();
+        origin.ActiveTurn.Prompt = "retrieve one assigned item through my connected service";
+        origin.LatestTurn = origin.ActiveTurn.Clone();
+        var sourceTool = origin.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool);
+        sourceTool.Source.Tool.ToolName = "nyxid_require_service";
+        sourceTool.Source.Tool.AuthorizationReadiness =
+            new NyxIdChatAuthorizationReadinessInput
+            {
+                ToolName = "nyxid_require_service",
+                Params = new NyxIdChatRequireServiceParams
+                {
+                    ServiceSlug = "service-alpha",
+                    ServiceLabel = "Service Alpha",
+                    ResourceUri = "https://service.example",
+                    RequestedScopes = { "items:read" },
+                },
+            };
+        var authorizationRequired = AuthorizationRequiredSignal(origin);
+        authorizationRequired.Tool.Receipt.ToolName = "nyxid_require_service";
+        authorizationRequired.Tool.Receipt.AuthorizationRequired.ServiceSlug = "service-alpha";
+        authorizationRequired.Tool.Receipt.AuthorizationRequired.SafeMessage =
+            "Connect or reauthorize the requested service.";
+        var requested = NyxIdChatBrowserActions.RequestAuthorization(
+            origin,
+            authorizationRequired,
+            Registry(),
+            Now);
+        var actionRequestId = requested.Request.ActionRequestId;
+        var continuation = ContinueCommand(
+            actionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        continuation.ToolContext = new AgentToolExecutionContextPayload
+        {
+            Credentials = new AgentToolCredentialsPayload
+            {
+                NyxIdAccessToken = "fresh-token-that-must-remain-transient",
+                NyxIdCredentialKind =
+                    AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+            },
+        };
+        var admitted = NyxIdChatBrowserActions.Continue(
+            requested.State,
+            continuation,
+            Now);
+        var postconditionStep = admitted.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            step.ActionRequestId == actionRequestId);
+
+        var reconciled = NyxIdChatBrowserActions.ReconcilePostcondition(
+            admitted.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = admitted.NextCommand!.Key.Clone(),
+                ActionPostcondition = new NyxIdChatActionPostconditionResult
+                {
+                    ActionRequestId = actionRequestId,
+                    Disposition = NyxIdChatActionDisposition.Completed,
+                    Verified = true,
+                    Resource = new NyxIdChatSafeResourceRef
+                    {
+                        UserService = new NyxIdChatUserServiceRef
+                        {
+                            UserServiceId = "us-alpha",
+                        },
+                    },
+                },
+            },
+            Now);
+
+        reconciled.ShouldDispatch.Should().BeTrue();
+        reconciled.NextCommand!.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Llm);
+        var typed = reconciled.NextCommand.Llm.VerifiedAuthorizationContinuation;
+        typed.Should().NotBeNull();
+        typed.ActionRequestId.Should().Be(actionRequestId);
+        typed.OriginTurnId.Should().Be("turn-alpha");
+        typed.SourceToolStepId.Should().Be("step-tool-alpha");
+        typed.PostconditionStepId.Should().Be(postconditionStep.StepId);
+        typed.VerifiedResource.UserService.UserServiceId.Should().Be("us-alpha");
+        typed.ServiceSlug.Should().Be("service-alpha");
+        typed.VerifiedAt.Should().Be(Now);
+        typed.ResumeRequirement.Should().Be(
+            NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest);
+        var typedJson = JsonFormatter.Default.Format(typed);
+        typedJson.Should().Contain("\"authorizationReadiness\"");
+        typedJson.Should().Contain("\"toolName\": \"nyxid_require_service\"");
+        typedJson.Should().Contain("\"serviceSlug\": \"service-alpha\"");
+        typedJson.Should().Contain("\"requestedScopes\": [ \"items:read\" ]");
+        typedJson.ToLowerInvariant().Should().NotContain("token");
+        typedJson.ToLowerInvariant().Should().NotContain("credential");
+        reconciled.State.ActiveTask.Steps.Single(step =>
+                step.Source?.Llm?.ActionRequestId == actionRequestId)
+            .Source.Llm.ResumeRequirement.Should().Be(
+                NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest);
+        reconciled.NextCommand.ToString().Should()
+            .NotContain("fresh-token-that-must-remain-transient");
+    }
+
+    [Fact]
+    public void DedicatedServiceConnectAuthorization_ShouldFreezeCommunicateCompletionRequirement()
+    {
+        var origin = AuthorizationWaitingStateWithPlannedContinuation();
+        origin.ActiveTurn.Prompt = "connect my requested service";
+        origin.ActiveTurn.Intent = NyxIdChatTurnIntent.ServiceConnect;
+        origin.LatestTurn = origin.ActiveTurn.Clone();
+        var authorizationRequired = AuthorizationRequiredSignal(origin);
+        authorizationRequired.Tool.Receipt.AuthorizationRequired.ServiceSlug = "service-alpha";
+        authorizationRequired.Tool.Receipt.AuthorizationRequired.SafeMessage =
+            "Connect or reauthorize the requested service.";
+        var requested = NyxIdChatBrowserActions.RequestAuthorization(
+            origin,
+            authorizationRequired,
+            Registry(),
+            Now);
+        var actionRequestId = requested.Request.ActionRequestId;
+        requested.State.ActiveTask.Steps.Single(step =>
+                step.Source?.Llm?.ActionRequestId == actionRequestId)
+            .Source.Llm.ResumeRequirement.Should().Be(
+                NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion);
+        var admitted = NyxIdChatBrowserActions.Continue(
+            requested.State,
+            ContinueCommand(actionRequestId, NyxIdChatActionDisposition.Completed),
+            Now);
+
+        var reconciled = NyxIdChatBrowserActions.ReconcilePostcondition(
+            admitted.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = admitted.NextCommand!.Key.Clone(),
+                ActionPostcondition = new NyxIdChatActionPostconditionResult
+                {
+                    ActionRequestId = actionRequestId,
+                    Disposition = NyxIdChatActionDisposition.Completed,
+                    Verified = true,
+                    Resource = new NyxIdChatSafeResourceRef
+                    {
+                        UserService = new NyxIdChatUserServiceRef
+                        {
+                            UserServiceId = "service-alpha",
+                        },
+                    },
+                },
+            },
+            Now);
+
+        reconciled.ShouldDispatch.Should().BeTrue();
+        reconciled.NextCommand!.Llm.VerifiedAuthorizationContinuation.ResumeRequirement.Should()
+            .Be(NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion);
+        reconciled.State.ActiveTask.Steps.Single(step =>
+                step.Source?.Llm?.ActionRequestId == actionRequestId)
+            .Source.Llm.ResumeRequirement.Should().Be(
+                NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion);
     }
 
     [Fact]
@@ -1177,9 +1241,6 @@ public sealed class NyxIdChatBrowserActionTests
         decision.NextCommand.ActionPostcondition.ResourceHint.Should().BeNull();
         decision.NextCommand.ActionPostcondition.Params.CatalogServiceConnect.ServiceSlug
             .Should().Be("api-github");
-        decision.Admission.ReadAuthority.Should().BeNull();
-        decision.State.ContinuationAdmission.ReadAuthority.Should().BeNull();
-        decision.NextCommand.ActionPostcondition.ReadAuthority.Should().BeNull();
     }
 
     [Fact]
@@ -1212,7 +1273,7 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void ExactEmptyWakeReplayWithoutPendingActions_AfterOptionalAuthorityExpiry_ShouldRemainIdempotent()
+    public void ExactEmptyWakeReplayWithoutPendingActions_ShouldRemainIdempotent()
     {
         var terminal = AuthorizationWaitingState();
         terminal.ActiveTurn.Status = NyxIdChatTurnStatus.Succeeded;
@@ -1224,15 +1285,13 @@ public sealed class NyxIdChatBrowserActionTests
         var wake = KeyStateChangeWake("terminal-replay");
         var first = NyxIdChatBrowserActions.Continue(terminal, wake, Now);
         var replayAt = Timestamp.FromDateTimeOffset(
-            DateTimeOffset.FromUnixTimeMilliseconds(wake.ReadAuthority.ExpiresAtUnixMs)
-                .AddMilliseconds(1));
+            Now.ToDateTimeOffset().AddMinutes(30));
 
         var replay = NyxIdChatBrowserActions.Continue(
             first.State,
             wake.Clone(),
             replayAt);
 
-        first.Admission.ReadAuthority.Should().BeNull();
         replay.ShouldCommit.Should().BeFalse();
         replay.ShouldDispatch.Should().BeFalse();
         replay.Outcome.Should().Be(NyxIdChatTransitionOutcome.Idempotent);
@@ -1393,7 +1452,6 @@ public sealed class NyxIdChatBrowserActionTests
         var command = ContinueCommand(
             blocked.PendingActions.Single().ActionRequestId,
             NyxIdChatActionDisposition.Completed);
-        command.ReadAuthority = ReadAuthority(command.CommandId);
         var first = NyxIdChatBrowserActions.Continue(blocked, command, Now);
 
         var replay = NyxIdChatBrowserActions.Continue(first.State, command.Clone(), Now);
@@ -1407,8 +1465,6 @@ public sealed class NyxIdChatBrowserActionTests
             blocked.ActiveTask.PlanRevisions);
         replay.State.ActiveTask.Steps.Select(static step => step.StepId).Should()
             .OnlyHaveUniqueItems();
-        first.Admission.ReadAuthority.Should().BeNull();
-        replay.Admission.ReadAuthority.Should().BeNull();
     }
 
     [Fact]
@@ -1435,7 +1491,7 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void SameClientChangedReportFromAuthorityFreeAdmissionToKeyAction_ShouldConflict()
+    public void SameClientChangedReportFromServiceAdmissionToKeyAction_ShouldConflict()
     {
         var blocked = BlockedActionStateWithTwoRequests();
         var serviceRequest = blocked.PendingActions[0];
@@ -1470,7 +1526,6 @@ public sealed class NyxIdChatBrowserActionTests
 
         var decision = NyxIdChatBrowserActions.Continue(first.State, changed, Now);
 
-        first.Admission.ReadAuthority.Should().BeNull();
         decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Rejected);
         decision.ShouldCommit.Should().BeFalse();
         decision.ShouldDispatch.Should().BeFalse();
@@ -1875,17 +1930,6 @@ public sealed class NyxIdChatBrowserActionTests
             action.PostconditionResult.Verified);
     }
 
-    private static NyxIdChatConversationGAgentState BlockedActionState()
-    {
-        var state = BlockedActionStateWithPendingGate();
-        state.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
-        state.ActiveTask.Gate.DecidedAt = Now.Clone();
-        return state;
-    }
-
-    private static NyxIdChatConversationGAgentState BlockedKeyCreateActionState() =>
-        BlockedKeyActionState(NyxIdAssistantActionKind.KeyCreate);
-
     private static NyxIdChatConversationGAgentState BlockedKeyActionState(
         NyxIdAssistantActionKind action)
     {
@@ -1939,44 +1983,29 @@ public sealed class NyxIdChatBrowserActionTests
                     Now.ToDateTimeOffset().AddMinutes(1))
                 : null);
 
-    private static AgentToolExecutionContextPayload KeyReadContext() => new()
-    {
-        Caller = new AgentToolCallerContextPayload
-        {
-            ScopeId = "scope-alpha",
-            OwnerSubject = "owner-alpha",
-        },
-        Credentials = new AgentToolCredentialsPayload
-        {
-            NyxIdAccessToken = "bearer-secret",
-            NyxIdCredentialKind =
-                AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
-        },
-    };
-
     private static (
         NyxIdChatConversationGAgentState State,
         NyxIdChatOperationKey PreviousKey,
-        NyxIdReadAuthorityRef PreviousAuthority,
         string ActionRequestId,
-        string ActionStepId) FailedKeyPostconditionState(
+        string ActionStepId,
+        string ExpectedResourceKeyId) FailedKeyPostconditionState(
         NyxIdAssistantActionKind action = NyxIdAssistantActionKind.KeyCreate)
     {
         var blocked = BlockedKeyActionState(action);
         var request = blocked.PendingActions.Single();
+        var expectedResourceKeyId = action == NyxIdAssistantActionKind.KeyRotate
+            ? "key-beta"
+            : "key-alpha";
         var command = ContinueCommand(
             request.ActionRequestId,
             NyxIdChatActionDisposition.Completed);
         command.Actions[0].Resource = new NyxIdChatSafeResourceRef
         {
-            Key = new NyxIdChatKeyRef
-            {
-                KeyId = action == NyxIdAssistantActionKind.KeyRotate
-                    ? "key-beta"
-                    : "key-alpha",
-            },
+            Key = new NyxIdChatKeyRef { KeyId = expectedResourceKeyId },
         };
-        command.ReadAuthority = ReadAuthority(command.CommandId);
+        command.ToolContext = BrowserToolContext(
+            "initial-key-postcondition-token",
+            command.CommandId);
         var admitted = NyxIdChatBrowserActions.Continue(blocked, command, Now);
         var step = admitted.State.ActiveTask.Steps.Single(candidate =>
             candidate.Kind == NyxIdChatStepKind.Postcondition);
@@ -1990,7 +2019,7 @@ public sealed class NyxIdChatBrowserActionTests
         step.Substeps.Add(new NyxIdChatSubstepState
         {
             SubstepId = "read-back",
-            Title = "Read back the created key",
+            Title = "Read back the key",
             Status = NyxIdChatSubstepStatus.Failed,
         });
         var previousKey = step.Operation.Key.Clone();
@@ -2005,16 +2034,16 @@ public sealed class NyxIdChatBrowserActionTests
                     Disposition = NyxIdChatActionDisposition.Completed,
                     Verified = false,
                     FailureCode = "NYXID_ACTION_POSTCONDITION_UNAVAILABLE",
-                    SafeMessage = "The created key is not visible yet.",
+                    SafeMessage = "The key is not visible yet.",
                 },
             },
             Now);
         return (
             failed.State,
             previousKey,
-            command.ReadAuthority.Clone(),
             request.ActionRequestId,
-            request.StepId);
+            request.StepId,
+            expectedResourceKeyId);
     }
 
     private static NyxIdChatActionContinueCommand KeyStateChangeWake(string suffix)
@@ -2028,8 +2057,41 @@ public sealed class NyxIdChatBrowserActionTests
         command.ClientRequestId = $"client-action-{suffix}";
         command.CommandId = $"command-action-{suffix}";
         command.CorrelationId = $"correlation-action-{suffix}";
-        command.ReadAuthority = ReadAuthority(command.CommandId);
+        command.ToolContext = BrowserToolContext($"wake-token-{suffix}", command.CommandId);
         return command;
+    }
+
+    private static AgentToolExecutionContextPayload BrowserToolContext(
+        string accessToken,
+        string requestId) => new()
+    {
+        Request = new AgentToolRequestIdentityPayload
+        {
+            RequestId = requestId,
+            IssuedAtUnixMs = Now.ToDateTimeOffset().ToUnixTimeMilliseconds(),
+        },
+        Caller = new AgentToolCallerContextPayload
+        {
+            ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
+        },
+        Credentials = new AgentToolCredentialsPayload
+        {
+            NyxIdAccessToken = accessToken,
+            NyxIdCredentialKind =
+                AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+            NyxIdCredentialAuthority =
+                AgentToolNyxIdCredentialAuthorityPayload.ToolExecutionContext,
+        },
+    };
+
+    private static void AssertToolContextNotPersisted(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatContinuationAdmissionState admission,
+        string accessToken)
+    {
+        JsonFormatter.Default.Format(state).Should().NotContain(accessToken);
+        JsonFormatter.Default.Format(admission).Should().NotContain(accessToken);
     }
 
     private sealed class RecordingKeyEvidenceReadPort(NyxIdAgentApiKeyEvidence evidence)
@@ -2042,6 +2104,13 @@ public sealed class NyxIdChatBrowserActionTests
                 string bearerToken,
                 string userServiceId,
                 CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<NyxIdApiAccessResult<NyxIdServiceAccessEvidence>> GetServiceAccessAsync(
+            string bearerToken,
+            string userServiceId,
+            string serviceSlug,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<NyxIdApiAccessResult<NyxIdAgentApiKeyEvidence>> GetAgentApiKeyAsync(
@@ -2061,7 +2130,7 @@ public sealed class NyxIdChatBrowserActionTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private static NyxIdChatConversationGAgentState BlockedActionStateWithPendingGate() =>
+    private static NyxIdChatConversationGAgentState BlockedActionState() =>
         NyxIdChatBrowserActions.RequestAuthorization(
             AuthorizationWaitingState(),
             AuthorizationRequiredSignal(AuthorizationWaitingState()),
@@ -2096,10 +2165,7 @@ public sealed class NyxIdChatBrowserActionTests
         second.ActionRequestId = "action-beta";
         second.StepId = "step-action-beta";
         second.Params.CatalogServiceConnect.ServiceSlug = "api-slack";
-        var committed = NyxIdChatBrowserActions.CommitRequest(state, second, Now).State;
-        committed.ActiveTask.Gate.Status = NyxIdChatPlanGateStatus.Satisfied;
-        committed.ActiveTask.Gate.DecidedAt = Now.Clone();
-        return committed;
+        return NyxIdChatBrowserActions.CommitRequest(state, second, Now).State;
     }
 
     private static NyxIdChatConversationGAgentState AuthorizationWaitingState()
@@ -2168,10 +2234,64 @@ public sealed class NyxIdChatBrowserActionTests
         };
     }
 
+    private static NyxIdChatConversationGAgentState AuthorizationWaitingStateWithPlannedContinuation()
+    {
+        var state = AuthorizationWaitingState();
+        state.AgentProfile = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-alpha",
+            ProfileVersion = "profile-v1",
+            PolicyRevision = "policy-v1",
+        };
+        state.ActiveTurn.Prompt =
+            "retrieve one issue that is assigned to me via my github account.";
+        state.ActiveTurn.Intent = NyxIdChatTurnIntent.Unspecified;
+        state.ActiveTurn.AgentProfileTurnAuthority = new AgentProfileTurnAuthorityState
+        {
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            AuthorityCeilingToolNames = { "nyxid_catalog", "nyxid_require_service" },
+        };
+        state.LatestTurn = state.ActiveTurn.Clone();
+        state.ActiveTask.Steps.Add(new NyxIdChatTaskStepState
+        {
+            StepId = "step-llm-after-readiness",
+            Order = 2,
+            Kind = NyxIdChatStepKind.Llm,
+            Status = NyxIdChatStepStatus.Planned,
+            Required = true,
+            Description = "Communicate the typed read result.",
+            Source = new NyxIdChatStepSource
+            {
+                Llm = new NyxIdChatLLMStepSource(),
+            },
+            DependsOn = { "step-tool-alpha" },
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = "conversation-alpha",
+                    TurnId = "turn-alpha",
+                    TaskId = "task-alpha",
+                    StepId = "step-llm-after-readiness",
+                    OperationId = "operation-llm-after-readiness",
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Llm,
+                Phase = NyxIdChatOperationPhase.Requested,
+                RequestedAt = Now.Clone(),
+            },
+            UpdatedAt = Now.Clone(),
+        });
+        return state;
+    }
+
     private static NyxIdChatOperationResultSignal AuthorizationRequiredSignal(
         NyxIdChatConversationGAgentState state) => new()
     {
-        Key = state.ActiveTask.Steps.Single().Operation.Key.Clone(),
+        Key = state.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Tool).Operation.Key.Clone(),
         Tool = new NyxIdChatToolOperationResult
         {
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
@@ -2210,40 +2330,6 @@ public sealed class NyxIdChatBrowserActionTests
         command.Actions.Add(ActionReport(actionRequestId, disposition));
         return command;
     }
-
-    private static NyxIdReadAuthorityRef ReadAuthority(string commandId) => new()
-    {
-        SecretRef = NyxIdActionReadAuthorityPort.BuildRequestedRef(
-            CredentialSecretPurposes.NyxIdChatActionReadAuthority,
-            "scope-alpha",
-            "owner-alpha",
-            commandId),
-        Purpose = CredentialSecretPurposes.NyxIdChatActionReadAuthority,
-        ScopeId = "scope-alpha",
-        OwnerSubject = "owner-alpha",
-        Version = 1,
-        ExpiresAtUnixMs = Now.ToDateTimeOffset().AddMinutes(10).ToUnixTimeMilliseconds(),
-    };
-
-    private static NyxIdChatPlanResolveCommand ResolvePlanCommand(
-        NyxIdChatPlanGate gate,
-        bool confirmed) => new()
-    {
-        ScopeId = "scope-alpha",
-        ConversationActorId = "conversation-alpha",
-        TaskId = gate.TaskId,
-        PlanId = gate.PlanId,
-        PlanRevision = gate.PlanRevision,
-        RequestId = gate.RequestId,
-        ClientRequestId = confirmed ? "confirm-action-alpha" : "reject-action-alpha",
-        Confirmed = confirmed,
-        ExpectedStateVersion = 17,
-    };
-
-    private static string[] RevisionHistory(NyxIdChatTaskState task) =>
-        task.PlanRevisions
-            .Select(static revision => revision.ToByteString().ToBase64())
-            .ToArray();
 
     private static NyxIdChatActionReport ActionReport(
         string actionRequestId,

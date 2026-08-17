@@ -21,7 +21,8 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
     {
         var reader = new RecordingReader<StudioMemberCurrentStateDocument>(new StudioMemberCurrentStateDocument
         {
-            StateVersion = 3,
+            StateVersion = 420,
+            AuthorizationRevision = 3,
             ImplementationWorkflowId = "wf-alpha",
             LastBoundRevisionId = "rev-alpha",
             PublishedServiceId = "svc-alpha",
@@ -32,10 +33,47 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         reader.Key.Should().Be("studio-member:scope-alpha:m-alpha");
         result.Should().NotBeNull();
-        result!.StateVersion.Should().Be(3);
+        result!.AuthorizationRevision.Should().Be(3);
         result.DraftWorkflowId.Should().Be("wf-alpha");
         result.WorkflowRevisionId.Should().Be("rev-alpha");
         result.PublishedServiceId.Should().Be("svc-alpha");
+    }
+
+    [Fact]
+    public async Task MemberPort_ShouldMapLegacyZeroToStableBaseline_IgnoringAggregateVersion()
+    {
+        var reader = new RecordingReader<StudioMemberCurrentStateDocument>(new StudioMemberCurrentStateDocument
+        {
+            StateVersion = 427,
+            AuthorizationRevision = 0,
+            ImplementationWorkflowId = "wf-alpha",
+            LastBoundRevisionId = "rev-alpha",
+            PublishedServiceId = "svc-alpha",
+        });
+
+        var result = await new ProjectionScheduledInvocationMemberQueryPort(reader)
+            .GetAsync("scope-alpha", "m-alpha");
+
+        result.Should().NotBeNull();
+        result!.AuthorizationRevision.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MemberPort_ShouldFailClosed_WhenAuthorizationRevisionIsNegative()
+    {
+        var reader = new RecordingReader<StudioMemberCurrentStateDocument>(new StudioMemberCurrentStateDocument
+        {
+            StateVersion = 427,
+            AuthorizationRevision = -1,
+            ImplementationWorkflowId = "wf-alpha",
+            LastBoundRevisionId = "rev-alpha",
+            PublishedServiceId = "svc-alpha",
+        });
+
+        var result = await new ProjectionScheduledInvocationMemberQueryPort(reader)
+            .GetAsync("scope-alpha", "m-alpha");
+
+        result.Should().BeNull();
     }
 
     [Fact]

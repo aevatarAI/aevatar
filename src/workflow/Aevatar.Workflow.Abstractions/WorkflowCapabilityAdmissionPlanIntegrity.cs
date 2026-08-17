@@ -28,10 +28,11 @@ public sealed record WorkflowCapabilityAdmissionCompatibilityResult(
 
 public static class WorkflowCapabilityAdmissionPlanIntegrity
 {
-    public const string SchemaVersion = "external-capability-admission.v5";
+    public const string SchemaVersion = "external-capability-admission.v6";
     public const string LegacySchemaVersion = "external-capability-admission.v2";
     public const string OpenApiSchemaVersion = "external-capability-admission.v3";
     public const string PreviousSchemaVersion = "external-capability-admission.v4";
+    public const string CodeRouteSchemaVersion = "external-capability-admission.v5";
     public const string RebindRequiredCode = "CAPABILITY_ADMISSION_REBIND_REQUIRED";
     public const string NyxIdAuthority = "nyxid";
 
@@ -286,6 +287,14 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             .Select(static invocation => invocation.Clone())
             .OrderBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
             .ToArray();
+        if (!string.Equals(plan.SchemaVersion, SchemaVersion, StringComparison.Ordinal) &&
+            (expected.Any(static invocation => invocation.ResponseProjection is not null) ||
+             plan.InvocationAdmissions.Any(static admission => admission.ResponseProjection is not null)))
+        {
+            return Failed(
+                WorkflowCapabilityAdmissionCompatibilityFailure.RebindRequiredSchema,
+                new WorkflowCapabilityAdmissionRebindRequiredException());
+        }
         if (string.Equals(plan.SchemaVersion, PreviousSchemaVersion, StringComparison.Ordinal))
         {
             // V4 predates code-execution admission proofs. Preserve existing plans while runtime
@@ -380,7 +389,10 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             }
 
             if (!string.Equals(expected[index].CallSiteId, actual[index].CallSiteId, StringComparison.Ordinal) ||
-                !selectorMatches)
+                !selectorMatches ||
+                !WorkflowToolResponseProjectionContract.AreEquivalent(
+                    expected[index].ResponseProjection,
+                    actual[index].ResponseProjection))
             {
                 return Failed(
                     WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch,
@@ -650,6 +662,18 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 throw new InvalidOperationException("Workflow external invocation tool name is invalid.");
             }
             ValidateSelector(invocation.Selector);
+            if (invocation.ResponseProjection is not null)
+            {
+                if (!string.Equals(invocation.ToolName, "nyxid_proxy", StringComparison.OrdinalIgnoreCase) ||
+                    invocation.Selector.SelectorCase is not (
+                        ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation or
+                        ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdRequest))
+                {
+                    throw new InvalidOperationException(
+                        "Workflow tool response projection is only valid for a NyxID proxy invocation.");
+                }
+                WorkflowToolResponseProjectionContract.ValidateOrThrow(invocation.ResponseProjection);
+            }
         }
         EnsureUniqueCallSites(invocations.Select(static invocation => invocation.CallSiteId));
     }
@@ -681,6 +705,18 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         {
             throw new InvalidOperationException(
                 "Workflow capability invocation admission proof is required.");
+        }
+
+        if (admission.ResponseProjection is not null)
+        {
+            if (admission.Capability.CapabilityCase is not (
+                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService or
+                    ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest))
+            {
+                throw new InvalidOperationException(
+                    "Workflow tool response projection is not valid for this capability proof.");
+            }
+            WorkflowToolResponseProjectionContract.ValidateOrThrow(admission.ResponseProjection);
         }
 
         switch (admission.Capability.CapabilityCase)
@@ -956,7 +992,8 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
 
     public static bool RequiresRebind(string? schemaVersion) =>
         string.Equals(schemaVersion, LegacySchemaVersion, StringComparison.Ordinal) ||
-        string.Equals(schemaVersion, OpenApiSchemaVersion, StringComparison.Ordinal);
+        string.Equals(schemaVersion, OpenApiSchemaVersion, StringComparison.Ordinal) ||
+        string.Equals(schemaVersion, CodeRouteSchemaVersion, StringComparison.Ordinal);
 
     public static bool IsSupportedSchemaVersion(string? schemaVersion) =>
         string.Equals(schemaVersion, SchemaVersion, StringComparison.Ordinal) ||

@@ -41,7 +41,8 @@ public sealed class ServiceDeploymentCatalogQueryReader : IServiceDeploymentCata
                     x.PrimaryActorId,
                     x.Status,
                     x.ActivatedAt,
-                    x.UpdatedAt))
+                    x.UpdatedAt,
+                    x.ArtifactHash))
                 .ToList(),
             readModel.ActivationFailures
                 .OrderByDescending(x => x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch)
@@ -50,7 +51,8 @@ public sealed class ServiceDeploymentCatalogQueryReader : IServiceDeploymentCata
                     x.RevisionId,
                     x.FailureCode,
                     x.FailureReason,
-                    x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch))
+                    x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch,
+                    x.ActivationAttemptId))
                 .ToList(),
             readModel.UpdatedAt);
     }

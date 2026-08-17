@@ -508,6 +508,17 @@ internal static class StudioMemberAutomationEndpoints
                     retryable = true,
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioMemberAutomationCatalogRouteUnresolvedException unresolved => Results.Json(
+                new
+                {
+                    code = "TEAM_AUTOMATION_AUTHORIZATION_ROUTE_UNRESOLVED",
+                    message = unresolved.Message,
+                    retryable = false,
+                    refreshFailureCode =
+                        StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode,
+                    requiredUserServiceIds = unresolved.RequiredUserServiceIds,
+                },
+                statusCode: StatusCodes.Status409Conflict),
             StudioScheduledCredentialMaterializationException materialization
                 when !string.IsNullOrWhiteSpace(materialization.FailureCode) => Results.Json(
                     new

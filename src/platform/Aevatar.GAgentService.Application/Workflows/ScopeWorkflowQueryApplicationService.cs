@@ -152,14 +152,6 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         if (distinctDescriptors.Length == 1)
         {
             var explicitIdentity = BuildIdentity(distinctDescriptors[0]);
-            if (conventionalService != null && !HasSameIdentity(conventionalIdentity, explicitIdentity))
-            {
-                return new ScopeWorkflowLookupResult(
-                    ScopeWorkflowLookupStatus.Stale,
-                    Workflow: null,
-                    Reason: "published_service_descriptor_conflicts_with_conventional_identity");
-            }
-
             identity = explicitIdentity;
             serviceSnapshot = HasSameIdentity(conventionalIdentity, explicitIdentity)
                 ? conventionalService

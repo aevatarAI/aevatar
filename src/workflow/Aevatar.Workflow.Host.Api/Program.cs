@@ -37,19 +37,8 @@ builder.AddAevatarAuthentication();
 // NyxID-backed current-user resolver plus aevatar admin access policy.
 builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
 builder.Services.AddChronoSandboxCodeExecution();
-builder.Services.AddNyxIdTools(options =>
+builder.Services.AddNyxIdTools(builder.Configuration, options =>
 {
-    // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
-    // non-empty value; an absent/empty config key must NOT clobber the default to null.
-    var nyxTransportBaseUrl = FirstConfiguredValue(
-        builder.Configuration,
-        "Aevatar:NyxId:InternalApiBaseUrl",
-        "Aevatar:NyxId:ApiBaseUrl",
-        "Aevatar:NyxId:Authority",
-        "Cli:App:NyxId:Authority",
-        "Aevatar:Authentication:Authority");
-    if (nyxTransportBaseUrl is not null)
-        options.BaseUrl = nyxTransportBaseUrl;
     if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
         options.ProxyFileArtifactMaxBytes = maxBytes;
 });
@@ -61,15 +50,3 @@ var app = builder.Build();
 app.UseAevatarDefaultHost();
 
 app.Run();
-
-static string? FirstConfiguredValue(IConfiguration configuration, params string[] keys)
-{
-    foreach (var key in keys)
-    {
-        var value = configuration[key];
-        if (!string.IsNullOrWhiteSpace(value))
-            return value.Trim();
-    }
-
-    return null;
-}

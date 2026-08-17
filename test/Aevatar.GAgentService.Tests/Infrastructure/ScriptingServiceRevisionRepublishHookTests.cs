@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.Scripting.Abstractions;
 using FluentAssertions;
@@ -36,7 +37,8 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
                         null),
                 ],
             },
-            commandPort);
+            commandPort,
+            [new FakeScriptingImplementationAdapter()]);
 
         await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
         {
@@ -51,12 +53,10 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
             "CreateRevisionAsync",
             "PrepareRevisionAsync",
             "PublishRevisionAsync",
-            "SetDefaultServingRevisionAsync",
             "ActivateServiceRevisionAsync",
             "CreateRevisionAsync",
             "PrepareRevisionAsync",
             "PublishRevisionAsync",
-            "SetDefaultServingRevisionAsync",
             "ActivateServiceRevisionAsync");
 
         var createA = (CreateServiceRevisionCommand)commandPort.Calls[0].Command;
@@ -70,11 +70,18 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
         });
         createA.Spec.RevisionId.Should().StartWith("rev-old-a-script-script-rev-2-");
         createA.Spec.RevisionId.Length.Should().BeGreaterThan("rev-old-a-script-script-rev-2-".Length);
+        var prepareA = (PrepareServiceRevisionCommand)commandPort.Calls[1].Command;
+        var publishA = (PublishServiceRevisionCommand)commandPort.Calls[2].Command;
+        prepareA.PreparationSpec.Should().BeEquivalentTo(createA.Spec);
+        publishA.PublicationSpec.Should().BeEquivalentTo(createA.Spec);
+        var activateA = (ActivateServiceRevisionCommand)commandPort.Calls[3].Command;
+        activateA.ExpectedArtifactHash.Should().NotBeNullOrWhiteSpace();
 
-        var activateB = (ActivateServiceRevisionCommand)commandPort.Calls[9].Command;
+        var activateB = (ActivateServiceRevisionCommand)commandPort.Calls[7].Command;
         activateB.Identity.Should().BeEquivalentTo(GAgentService.Tests.TestSupport.GAgentServiceTestKit.CreateIdentity("svc-b"));
         activateB.RevisionId.Should().StartWith("rev-old-b-script-script-rev-2-");
         activateB.RevisionId.Length.Should().BeGreaterThan("rev-old-b-script-script-rev-2-".Length);
+        activateB.ExpectedArtifactHash.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -94,7 +101,8 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
                         null),
                 ],
             },
-            commandPort);
+            commandPort,
+            [new FakeScriptingImplementationAdapter()]);
 
         await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
         {
@@ -113,7 +121,10 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
     {
         var commandPort = new RecordingServiceCommandPort();
         var reader = new FakeCandidateQueryReader();
-        var hook = new ScriptingServiceRevisionRepublishHook(reader, commandPort);
+        var hook = new ScriptingServiceRevisionRepublishHook(
+            reader,
+            commandPort,
+            [new FakeScriptingImplementationAdapter()]);
 
         await hook.BeforePublishAsync(
             CreateContext(new ScriptCatalogRollbackRequestedEvent
@@ -136,7 +147,10 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
     {
         var commandPort = new RecordingServiceCommandPort();
         var reader = new FakeCandidateQueryReader();
-        var hook = new ScriptingServiceRevisionRepublishHook(reader, commandPort);
+        var hook = new ScriptingServiceRevisionRepublishHook(
+            reader,
+            commandPort,
+            [new FakeScriptingImplementationAdapter()]);
 
         await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
         {
@@ -169,7 +183,8 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
                         null),
                 ],
             },
-            commandPort);
+            commandPort,
+            [new FakeScriptingImplementationAdapter()]);
 
         await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
         {
@@ -184,7 +199,6 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
             "CreateRevisionAsync",
             "PrepareRevisionAsync",
             "PublishRevisionAsync",
-            "SetDefaultServingRevisionAsync",
             "ActivateServiceRevisionAsync");
     }
 
@@ -208,7 +222,8 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
                         null),
                 ],
             },
-            commandPort);
+            commandPort,
+            [new FakeScriptingImplementationAdapter()]);
 
         var act = async () => await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
         {
@@ -242,7 +257,8 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
                         null),
                 ],
             },
-            commandPort);
+            commandPort,
+            [new FakeScriptingImplementationAdapter()]);
 
         await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
         {
@@ -275,7 +291,8 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
                         null),
                 ],
             },
-            commandPort);
+            commandPort,
+            [new FakeScriptingImplementationAdapter()]);
 
         await hook.BeforePublishAsync(CreateContext(new ScriptCatalogRevisionPromotedEvent
         {
@@ -326,6 +343,45 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
         }
     }
 
+    private sealed class FakeScriptingImplementationAdapter : IServiceImplementationAdapter
+    {
+        public ServiceImplementationKind ImplementationKind => ServiceImplementationKind.Scripting;
+
+        public Task<PreparedServiceRevisionArtifact> PrepareRevisionAsync(
+            PrepareServiceRevisionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var spec = request.Spec.ScriptingSpec;
+            return Task.FromResult(new PreparedServiceRevisionArtifact
+            {
+                Identity = request.Spec.Identity.Clone(),
+                RevisionId = request.Spec.RevisionId,
+                ImplementationKind = ServiceImplementationKind.Scripting,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "script.command",
+                        DisplayName = "script.command",
+                        Kind = ServiceEndpointKind.Command,
+                        RequestTypeUrl = "type.googleapis.com/test.ScriptCommand",
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    ScriptingPlan = new ScriptingServiceDeploymentPlan
+                    {
+                        ScriptId = spec.ScriptId,
+                        Revision = spec.Revision,
+                        DefinitionActorId = spec.DefinitionActorId,
+                        SourceHash = spec.SourceHash,
+                    },
+                },
+            });
+        }
+    }
+
     private sealed class RecordingServiceCommandPort : IServiceCommandPort
     {
         private static readonly ServiceCommandAcceptedReceipt Receipt = new("actor", "cmd", "corr");
@@ -368,12 +424,6 @@ public sealed class ScriptingServiceRevisionRepublishHookTests
 
         public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default) =>
             Task.FromResult(Receipt);
-
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
-        {
-            Calls.Add((nameof(SetDefaultServingRevisionAsync), command));
-            return Task.FromResult(Receipt);
-        }
 
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {

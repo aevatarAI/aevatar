@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
-public sealed class WorkflowConsoleStaticAssetEndpointTests
+public sealed partial class WorkflowConsoleStaticAssetEndpointTests
 {
     [Theory]
     [InlineData("admin-observatory", "Workflow Run Observatory")]
@@ -33,11 +33,12 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         using var reader = new StreamReader(http.Response.Body);
         var html = await reader.ReadToEndAsync();
         html.Should().Contain(marker);
-        html.Should().Contain("https://id.example.test");
+        html.Should().Contain("https://authority.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
         html.Should().Contain("https://api.example.test/api/v1/proxy/s/aevatar");
-        html.Should().Contain("\"nyxidWeb\":\"https://web.example.test\"");
+        html.Should().Contain("\"nyxidWeb\":\"https://api.example.test\"");
+        html.Should().NotContain("http://nyxid.internal:3001");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (endpoint == "admin-observatory")
@@ -54,8 +55,28 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("const url = CFG.nyxidApi + \"/api/v1/admin/users");
             html.Should().NotContain("const url = CFG.authority + \"/api/v1/admin/users");
             html.Should().Contain("\"aria-label\":\"完整 run id\"");
+            html.Should().Contain("/api/workflow/observatory/activity-runs");
+            html.Should().Contain("请求轨迹");
+            html.Should().Contain("function normalizeActivityRunFeed(");
+            html.Should().Contain("data-duration=\"");
             html.Should().Contain("/api/workflow/observatory/admin/runs/");
             html.Should().Contain("detail.diagnostics");
+            html.Should().Contain("function buildOperationRecords(detail)");
+            html.Should().Contain("function renderDurationOverview(detail,records)");
+            html.Should().Contain("aria-label\":\"Input Model Tools Duration 总览\"");
+            html.Should().Contain("{id:\"input\",label:\"Input\"");
+            html.Should().Contain("{id:\"model\",label:\"Model\"");
+            html.Should().Contain("{id:\"tools\",label:\"Tools\"");
+            html.Should().Contain("function renderOperationDetail(record)");
+            html.Should().Contain("function renderOperationLedger(records)");
+            html.Should().Contain("aria-label\":\"逐条 operation 记录\"");
+            html.Should().Contain("Operation ledger");
+            html.Should().Contain("state.expandedOperations.has(record.key)");
+            html.Should().Contain("wrap.appendChild(renderDurationOverview(detail,records))");
+            html.Should().Contain("wrap.appendChild(renderOperationLedger(records))");
+            html.Should().NotContain("operationRecordKey(\"step\"");
+            html.Should().NotContain("operationLaneForStep(");
+            html.Should().NotContain("data-kind=\"step\"");
             html.Should().NotContain("indexOf(\":run:\")");
         }
         else
@@ -69,6 +90,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().NotContain("class=\"workflow-nav\"");
             html.Should().Contain("id=\"servicesButton\"");
             html.Should().Contain("id=\"mobileInspectorButton\"");
+            html.Should().Contain("id=\"traceViewButton\"");
+            html.Should().Contain("id=\"requestTracePanel\"");
+            html.Should().Contain("id=\"traceReadonlyNotice\"");
             html.Should().Contain("\"enableStudioWireInspector\":false");
             html.Should().NotContain("class=\"studio-tabs\"");
             html.Should().Contain("<div class=\"group-label\">当前实录</div>");
@@ -76,2119 +100,6 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             html.Should().NotContain("themeButton");
             html.Should().NotContain("workflow: \"studio\"");
         }
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ChatTransport_ShouldMapOnlyCanonicalAssistantCommands()
-    {
-        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-
-            function functionSource(name, nextName) {
-              const starts = [
-                source.indexOf('function ' + name + '('),
-                source.indexOf('async function ' + name + '('),
-                source.indexOf('export function ' + name + '(')
-              ].filter(index => index !== -1);
-              const start = starts.length ? Math.min(...starts) : -1;
-              const ends = [
-                source.indexOf('\nfunction ' + nextName + '(', start),
-                source.indexOf('\nasync function ' + nextName + '(', start),
-                source.indexOf('\nexport function ' + nextName + '(', start)
-              ].filter(index => index !== -1);
-              const end = ends.length ? Math.min(...ends) : -1;
-              assert.notEqual(start, -1, name + ' must exist in the served Studio transport');
-              assert.notEqual(end, -1, nextName + ' must follow ' + name);
-              return source.slice(start, end).replace(/^export /, '');
-            }
-
-            const context = {
-              JSON,
-              structuredClone,
-              crypto:{randomUUID:()=> 'generated-alpha'}
-            };
-            vm.createContext(context);
-            vm.runInContext(`
-              ${functionSource('mapAttachment', 'canonicalAssistantRequest')}
-              ${functionSource('canonicalAssistantRequest', 'forwardAssistant')}
-            `, context);
-
-            assert.deepEqual(JSON.parse(JSON.stringify(context.canonicalAssistantRequest({
-              surface:'nyxid-chat', type:'text', clientRequestId:'request-first',
-              prompt:'Create a workflow', attachment:null
-            }))), {
-              type:'text', clientRequestId:'request-first', prompt:'Create a workflow'
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(context.canonicalAssistantRequest({
-              surface:'nyxid-chat', type:'text', conversationId:'conversation-alpha',
-              clientRequestId:'request-second', prompt:'Inspect this file',
-              attachment:{name:'input.txt',mediaType:'text/plain',dataBase64:'aGVsbG8='}
-            }))), {
-              type:'text', conversationId:'conversation-alpha',
-              clientRequestId:'request-second', prompt:'Inspect this file',
-              inputParts:[{type:'file',name:'input.txt',mediaType:'text/plain',dataBase64:'aGVsbG8='}]
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(context.canonicalAssistantRequest({
-              surface:'nyxid-chat', type:'approval.resolve', conversationId:'conversation-alpha',
-              requestId:'approval-alpha', approved:true, reason:'Approved by user'
-            }, 'approval-alpha'))), {
-              type:'approval.resolve', conversationId:'conversation-alpha',
-              requestId:'approval-alpha', approved:true, reason:'Approved by user',
-              clientRequestId:'client-approval-approval-alpha'
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(context.canonicalAssistantRequest({
-              surface:'nyxid-chat', type:'task.stop', conversationId:'conversation-alpha',
-              turnId:'turn-alpha', stopRequestId:'stop-alpha', clientRequestId:'client-stop-alpha',
-              expectedStateVersion:7
-            }))), {
-              type:'task.stop', conversationId:'conversation-alpha', turnId:'turn-alpha',
-              stopRequestId:'stop-alpha', clientRequestId:'client-stop-alpha', expectedStateVersion:7
-            });
-            """;
-
-        var result = await RunNodeAsync(script, transport);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-        transport.Should().Contain("authorizedFetch(\"/api/chat\"");
-        transport.Should().Contain("\"Idempotency-Key\": clientRequestId");
-        transport.Should().NotContain("workflow: \"studio\"");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ActionProtocol_ShouldAdmitExactKeyActionsAndFailClosed()
-    {
-        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
-            const context = { structuredClone, TextDecoder, URL, console };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            const identity = {
-              schemaVersion:4,
-              actorId:'conversation-alpha',
-              originTurnId:'turn-alpha',
-              taskId:'task-alpha',
-              stepId:'step-alpha',
-              actionRequestId:'action-alpha'
-            };
-            const create = context.validateActionRequest({
-              ...identity,
-              action:'key.create',
-              params:{
-                name:'studio-agent',
-                platform:'codex',
-                allowedServiceIds:['service-alpha','service-beta']
-              }
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(create)), {
-              ...identity,
-              action:'key.create',
-              params:{
-                name:'studio-agent',
-                platform:'codex',
-                allowedServiceIds:['service-alpha','service-beta']
-              }
-            });
-            assert.equal(Object.isFrozen(create), true);
-            assert.equal(Object.isFrozen(create.params.allowedServiceIds), true);
-
-            const rotate = context.validateActionRequest({
-              ...identity,
-              actionRequestId:'action-rotate',
-              action:'key.rotate',
-              params:{keyId:'key-predecessor'}
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(rotate.params)), {keyId:'key-predecessor'});
-
-            const invalid = [
-              {...identity,action:'key.create',params:{name:'studio-agent',platform:'codex',allowedServiceIds:[]}},
-              {...identity,action:'key.create',params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha','service-alpha']}},
-              {...identity,action:'key.create',params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service/alpha']}},
-              {...identity,action:'key.create',params:{name:' studio-agent',platform:'codex',allowedServiceIds:['service-alpha']}},
-              {...identity,action:'key.create',params:{name:'studio-agent',platform:'Bearer secret-value',allowedServiceIds:['service-alpha']}},
-              {...identity,action:'key.create',params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha'],allowAllServices:true}},
-              {...identity,action:'key.rotate',params:{keyId:'key-predecessor',replacementKeyId:'key-successor'}},
-              {...identity,action:'key.rotate',params:{keyId:'key/predecessor'}},
-              {...identity,action:'key.delete',params:{keyId:'key-predecessor'}}
-            ];
-            for (const value of invalid) {
-              assert.throws(() => context.validateActionRequest(value), context.ProtocolValidationError);
-            }
-            """;
-
-        var result = await RunNodeAsync(script, protocol);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ActionContinuation_ShouldRequireActionSpecificCompletedResources()
-    {
-        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
-            const context = { structuredClone, TextDecoder, URL, console };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            const continuation = (disposition, resource) => ({
-              type:'action.continue',
-              clientRequestId:'client-action-alpha',
-              originTurnId:'turn-alpha',
-              actions:[{
-                actionRequestId:'action-alpha',
-                originTurnId:'turn-alpha',
-                disposition,
-                ...(resource ? {resource} : {})
-              }]
-            });
-
-            for (const action of ['key.create','key.rotate']) {
-              const accepted = context.validateActionContinuation(
-                continuation('completed', {key:{keyId:'key-successor'}}),
-                {expectedAction:action}
-              );
-              assert.equal(accepted.actions[0].resource.key.keyId, 'key-successor');
-              assert.throws(
-                () => context.validateActionContinuation(
-                  continuation('completed', {userService:{userServiceId:'service-alpha'}}),
-                  {expectedAction:action}
-                ),
-                context.ProtocolValidationError
-              );
-              assert.throws(
-                () => context.validateActionContinuation(continuation('completed'), {expectedAction:action}),
-                context.ProtocolValidationError
-              );
-              const declined = context.validateActionContinuation(
-                continuation('declined'),
-                {expectedAction:action}
-              );
-              assert.equal(declined.actions[0].disposition, 'declined');
-              assert.equal(Object.prototype.hasOwnProperty.call(declined.actions[0], 'resource'), false);
-            }
-
-            assert.throws(
-              () => context.validateActionContinuation(
-                continuation('completed', {key:{keyId:'key-successor'}}),
-                {expectedAction:'service.connect'}
-              ),
-              context.ProtocolValidationError
-            );
-            """;
-
-        var result = await RunNodeAsync(script, protocol);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_KeyActionTransport_ShouldConstructAllowlistedMutationsAndNormalizeEffects()
-    {
-        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('const KEY_ACTION_SECRET_FIELD');
-            const end = source.indexOf('\nfunction proxyResourceForSlug(', start);
-            assert.notEqual(start, -1, 'key action transport helpers must exist');
-            assert.notEqual(end, -1, 'key action helper boundary must exist');
-            const context = { URL, Date, structuredClone };
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end).replace(/^export /gm, ''), context);
-
-            const created = context.buildKeyActionMutation('key.create', {
-              actionRequestId:'action-create',
-              name:'studio-agent',
-              platform:'codex',
-              allowedServiceIds:['service-alpha','service-beta']
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(created)), {
-              path:'/api/v1/assistant/actions/key-create',
-              body:{
-                actionRequestId:'action-create',
-                name:'studio-agent',
-                platform:'codex',
-                allowedServiceIds:['service-alpha','service-beta']
-              }
-            });
-
-            const rotated = context.buildKeyActionMutation('key.rotate', {
-              actionRequestId:'action-rotate', keyId:'key-predecessor'
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(rotated)), {
-              path:'/api/v1/assistant/actions/key-rotate',
-              body:{actionRequestId:'action-rotate',keyId:'key-predecessor'}
-            });
-            assert.throws(
-              () => context.buildKeyActionMutation('key.create', {
-                actionRequestId:'action-create', name:'studio-agent', platform:'codex',
-                allowedServiceIds:['service-alpha'], rawBearer:'forbidden'
-              }),
-              context.KeyActionVerificationError
-            );
-            assert.throws(
-              () => context.buildKeyActionMutation('key.delete', {actionRequestId:'action-delete'}),
-              context.KeyActionVerificationError
-            );
-
-            const effect = context.normalizeKeyActionEffect('key.create', {
-              resource:{keyId:'key-created'}, replayed:false, fullKey:'nyxid_ag_one_time_value'
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(effect)), {
-              resource:{keyId:'key-created'}, replayed:false, fullKey:'nyxid_ag_one_time_value'
-            });
-            const replay = context.normalizeKeyActionEffect('key.create', {
-              resource:{keyId:'key-created'}, replayed:true
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(replay)), {
-              resource:{keyId:'key-created'}, replayed:true
-            });
-            const rotateEffect = context.normalizeKeyActionEffect('key.rotate', {
-              resource:{keyId:'key-successor'}, replayed:false,
-              requestedAt:'2026-08-13T08:00:00Z', fullKey:'nyxid_ag_rotated_once'
-            });
-            assert.equal(rotateEffect.requestedAt, '2026-08-13T08:00:00Z');
-            assert.throws(
-              () => context.normalizeKeyActionEffect('key.create', {
-                resource:{keyId:'key-created'}, replayed:true, fullKey:'must-not-replay'
-              }),
-              context.KeyActionVerificationError
-            );
-            assert.throws(
-              () => context.normalizeKeyActionEffect('key.rotate', {
-                resource:{keyId:'key-successor'}, replayed:false,
-                requestedAt:'not-a-time', fullKey:'nyxid_ag_rotated_once'
-              }),
-              context.KeyActionVerificationError
-            );
-            """;
-
-        var result = await RunNodeAsync(script, transport);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-        transport.Should().Contain("/api/nyxid/assistant-actions/key-create");
-        transport.Should().Contain("/api/nyxid/assistant-actions/key-rotate");
-        transport.Should().Contain("/api/nyxid/api-keys/");
-        transport.Should().Contain("/api/nyxid/keys/");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_KeyCreateReadBack_ShouldRequirePersonalServicesAndExactLeastScope()
-    {
-        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('const KEY_ACTION_SECRET_FIELD');
-            const end = source.indexOf('\nfunction proxyResourceForSlug(', start);
-            assert.notEqual(start, -1, 'key action transport helpers must exist');
-            assert.notEqual(end, -1, 'key action helper boundary must exist');
-            const context = { URL, Date, structuredClone };
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end).replace(/^export /gm, ''), context);
-
-            const request = {
-              params:{
-                name:'studio-agent', platform:'codex',
-                allowedServiceIds:['service-alpha','service-beta']
-              }
-            };
-            const effect = {resource:{keyId:'key-created'},replayed:false,fullKey:'one-time'};
-            const service = id => ({
-              id, is_active:true, credential_source:{type:'personal'},
-              name:'Service', status:'connected'
-            });
-            assert.equal(
-              context.verifyPersonalServiceReadBack('service-alpha', service('service-alpha')).verified,
-              true
-            );
-            for (const invalid of [
-              null,
-              service('service-other'),
-              {...service('service-alpha'),is_active:false},
-              {...service('service-alpha'),credential_source:{type:'org',org_id:'org-alpha'}},
-              {...service('service-alpha'),oauth_client_secret:'forbidden'}
-            ]) {
-              assert.throws(
-                () => context.verifyPersonalServiceReadBack('service-alpha', invalid),
-                context.KeyActionVerificationError
-              );
-            }
-
-            const exact = {
-              id:'key-created', name:'studio-agent', platform:'codex', scopes:'proxy',
-              is_active:true,
-              allowed_service_ids:['service-beta','service-alpha'],
-              allowed_node_ids:[], allow_all_services:false, allow_all_nodes:false,
-              state_version:1
-            };
-            const verified = context.verifyKeyCreateReadBack(request, effect, exact);
-            assert.deepEqual(JSON.parse(JSON.stringify(verified)), {
-              verified:true,keyId:'key-created'
-            });
-
-            const invalidKeys = [
-              null,
-              {...exact,id:'key-other'},
-              {...exact,name:'other-agent'},
-              {...exact,platform:'other-platform'},
-              {...exact,scopes:'proxy read'},
-              {...exact,is_active:false},
-              {...exact,allowed_service_ids:['service-alpha']},
-              {...exact,allowed_service_ids:['service-alpha','service-beta','service-beta']},
-              {...exact,allowed_node_ids:['node-alpha']},
-              {...exact,allow_all_services:true},
-              {...exact,allow_all_nodes:true},
-              {...exact,key_hash:'forbidden'}
-            ];
-            for (const invalid of invalidKeys) {
-              assert.throws(
-                () => context.verifyKeyCreateReadBack(request, effect, invalid),
-                context.KeyActionVerificationError
-              );
-            }
-            """;
-
-        var result = await RunNodeAsync(script, transport);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_KeyRotateReadBack_ShouldRequireFreshExactLineage()
-    {
-        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('const KEY_ACTION_SECRET_FIELD');
-            const end = source.indexOf('\nfunction proxyResourceForSlug(', start);
-            assert.notEqual(start, -1, 'key action transport helpers must exist');
-            assert.notEqual(end, -1, 'key action helper boundary must exist');
-            const context = { URL, Date, structuredClone };
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end).replace(/^export /gm, ''), context);
-
-            const request = {params:{keyId:'key-predecessor'}};
-            const effect = {
-              resource:{keyId:'key-successor'}, replayed:false,
-              requestedAt:'2026-08-13T08:00:00Z', fullKey:'one-time'
-            };
-            const exact = {
-              id:'key-successor', is_active:true,
-              rotation_predecessor_id:'key-predecessor', state_version:2,
-              created_at:'2026-08-13T08:00:01Z', updated_at:'2026-08-13T08:00:02Z'
-            };
-            const verified = context.verifyKeyRotateReadBack(request, effect, exact);
-            assert.deepEqual(JSON.parse(JSON.stringify(verified)), {
-              verified:true,keyId:'key-successor'
-            });
-
-            const invalid = [
-              null,
-              {...exact,id:'key-other'},
-              {...exact,id:'key-predecessor'},
-              {...exact,rotation_predecessor_id:null},
-              {...exact,rotation_predecessor_id:'key-other'},
-              {...exact,state_version:0},
-              {...exact,state_version:'2'},
-              {...exact,is_active:false},
-              {...exact,created_at:'2026-08-13T07:59:59Z'},
-              {...exact,updated_at:'2026-08-13T07:59:59Z'},
-              {...exact,created_at:'2026-08-13T08:00:03Z',updated_at:'2026-08-13T08:00:02Z'},
-              {...exact,created_at:'invalid'},
-              {...exact,refresh_token:'forbidden'}
-            ];
-            for (const value of invalid) {
-              assert.throws(
-                () => context.verifyKeyRotateReadBack(request, effect, value),
-                context.KeyActionVerificationError
-              );
-            }
-            """;
-
-        var result = await RunNodeAsync(script, transport);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_KeyActionCard_ShouldExposeOnlySafeFactsAndAwaitActorVerification()
-    {
-        var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8')
-              .replace(/^import[^;]+;\s*/m, '')
-              .replace(/^export /gm, '');
-            const context = { validateActionRequest:value => value };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            const identity = {
-              schemaVersion:4, actorId:'conversation-alpha', originTurnId:'turn-alpha',
-              taskId:'task-alpha', stepId:'step-alpha', actionRequestId:'action-alpha'
-            };
-            const created = context.buildKeyActionCardBlock({
-              ...identity,
-              action:'key.create',
-              params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha','service-beta']}
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(created)), {
-              type:'key_action_card', block_id:'action-alpha', action:'key.create',
-              identity:{
-                actorId:'conversation-alpha',originTurnId:'turn-alpha',taskId:'task-alpha',
-                stepId:'step-alpha',actionRequestId:'action-alpha'
-              },
-              title:'创建 API key', subtitle:'studio-agent · codex',
-              facts:[
-                {label:'名称',value:'studio-agent'},
-                {label:'平台',value:'codex'},
-                {label:'允许的 Services',value:'service-alpha, service-beta'}
-              ],
-              state:'ready', steps:[
-                {title:'执行 NyxID 密钥操作',body:'浏览器直接调用 NyxID；完整密钥不会发送给 Aevatar。',done:false},
-                {title:'精确读取并确认密钥',body:'读取同一 key identity，验证最小权限，并确认一次性密钥已安全保存。',done:false},
-                {title:'报告 key reference 并等待 Actor 验证',body:'仅报告 keyId；Actor postcondition 精确匹配后才显示成功。',done:false}
-              ],
-              footer:'完整密钥仅在当前对话框显示一次 · Aevatar 只接收 keyId'
-            });
-
-            const rotated = context.buildKeyActionCardBlock({
-              ...identity, actionRequestId:'action-rotate', action:'key.rotate',
-              params:{keyId:'key-predecessor'}
-            });
-            assert.equal(rotated.title, '轮换 API key');
-            assert.deepEqual(JSON.parse(JSON.stringify(rotated.facts)), [
-              {label:'原 Key ID',value:'key-predecessor'}
-            ]);
-            const serialized = JSON.stringify({created,rotated});
-            for (const forbidden of ['fullKey','full_key','keyHash','accessToken','refreshToken']) {
-              assert.equal(serialized.includes(forbidden), false);
-            }
-            """;
-
-        var result = await RunNodeAsync(script, blocks);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_KeyActionCompletion_ShouldRequireBrowserVerificationAndExactActorProof()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        const string script = """
-            (async () => {
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('const KEY_ACTION_CARD_ACTIONS');
-            const end = source.indexOf('\nfunction connectDeepLink(', start);
-            assert.notEqual(start, -1, 'key action card helpers must exist');
-            assert.notEqual(end, -1, 'key action helper boundary must exist');
-            const context = { JSON };
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end).replace(/^export /gm, ''), context);
-
-            assert.equal(context.keyActionResourceId({key:{keyId:'key-created'}}), 'key-created');
-            assert.equal(context.keyActionResourceId({keyId:'key-created'}), 'key-created');
-            assert.equal(context.keyActionResourceId({
-              key:{keyId:'key-created'},userService:{userServiceId:'service-alpha'}
-            }), '');
-            assert.equal(context.keyActionResourceId({
-              keyId:'key-created',userServiceId:'service-alpha'
-            }), '');
-
-            const request = {
-              schemaVersion:4,actorId:'conversation-alpha',originTurnId:'turn-alpha',
-              taskId:'task-alpha',stepId:'step-alpha',actionRequestId:'action-alpha',
-              action:'key.create',
-              params:{name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha']}
-            };
-            const effect = {
-              resource:{keyId:'key-created'},replayed:false,fullKey:'nyxid_ag_one_time_value'
-            };
-            assert.throws(
-              () => context.buildKeyActionCompletedResource(request, effect, {browserVerified:false,savedConfirmed:true}),
-              context.KeyActionCardError
-            );
-            assert.throws(
-              () => context.buildKeyActionCompletedResource(request, effect, {browserVerified:true,savedConfirmed:false}),
-              context.KeyActionCardError
-            );
-            assert.deepEqual(JSON.parse(JSON.stringify(
-              context.buildKeyActionCompletedResource(request, effect, {browserVerified:true,savedConfirmed:true})
-            )), {key:{keyId:'key-created'}});
-            assert.deepEqual(JSON.parse(JSON.stringify(
-              context.buildKeyActionCompletedResource(request, {...effect,replayed:true,fullKey:undefined}, {
-                browserVerified:true,savedConfirmed:false
-              })
-            )), {key:{keyId:'key-created'}});
-
-            const card = {
-              request,report:{disposition:'completed',resource:{key:{keyId:'key-created'}}},
-              status:'awaiting_verification',busy:false,error:'',note:''
-            };
-            const confirmedStep = {steps:new Map([['postcondition',{
-              actionRequestId:'action-alpha',kind:'postcondition',status:'done',externalEffect:'confirmed'
-            }]])};
-            assert.equal(context.applyActorActionProof(card, {
-              postconditionResult:null
-            }, confirmedStep), false);
-            assert.equal(card.status, 'awaiting_verification');
-
-            const invalidProofs = [
-              {verified:false,actionRequestId:'action-alpha',disposition:'completed',resource:{key:{keyId:'key-created'}}},
-              {verified:true,actionRequestId:'action-other',disposition:'completed',resource:{key:{keyId:'key-created'}}},
-              {verified:true,actionRequestId:'action-alpha',disposition:'failed',resource:{key:{keyId:'key-created'}}},
-              {verified:true,actionRequestId:'action-alpha',disposition:'completed',resource:{userService:{userServiceId:'key-created'}}},
-              {verified:true,actionRequestId:'action-alpha',disposition:'completed',resource:{key:{keyId:'key-other'}}}
-            ];
-            for (const proof of invalidProofs) {
-              card.status = 'awaiting_verification';
-              assert.equal(context.applyActorActionProof(card, {postconditionResult:proof}, {steps:new Map()}), false);
-              assert.equal(card.status, 'awaiting_verification');
-            }
-
-            assert.equal(context.applyActorActionProof(card, {postconditionResult:{
-              verified:true,actionRequestId:'action-alpha',disposition:'completed',
-              resource:{key:{keyId:'key-created'}}
-            }}, {steps:new Map()}), true);
-            assert.equal(card.status, 'verified');
-            assert.equal(JSON.stringify(card).includes('nyxid_ag_one_time_value'), false);
-            const journeyCard = {
-              request,status:'ready',busy:false,error:'',note:'',report:null,
-              effectKeyId:'',replayed:null,requestedAt:'',browserVerified:false
-            };
-            const requests = [];
-            const ioAdapter = context.createKeyActionIo(async (url, init = {}) => {
-              requests.push({url,method:init.method || 'GET',body:init.body || ''});
-              if (url.endsWith('/keys/service-alpha')) {
-                return {ok:true,async json(){return {id:'service-alpha'};}};
-              }
-              if (url.endsWith('/assistant-actions/key-create')) {
-                return {ok:true,async json(){return {resource:{keyId:'key-created'}};}};
-              }
-              if (url.endsWith('/api-keys/key-created')) {
-                return {ok:true,async json(){return {id:'key-created'};}};
-              }
-              return {ok:false,async json(){throw new Error('upstream secret body');}};
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(await ioAdapter.readService('service-alpha'))), {
-              id:'service-alpha'
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(await ioAdapter.mutate(request))), {
-              resource:{keyId:'key-created'}
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(await ioAdapter.readKey('key-created'))), {
-              id:'key-created'
-            });
-            assert.deepEqual(requests, [
-              {url:'/api/nyxid/keys/service-alpha',method:'GET',body:''},
-              {url:'/api/nyxid/assistant-actions/key-create',method:'POST',body:JSON.stringify({
-                actionRequestId:'action-alpha',name:'studio-agent',platform:'codex',
-                allowedServiceIds:['service-alpha']
-              })},
-              {url:'/api/nyxid/api-keys/key-created',method:'GET',body:''}
-            ]);
-            await assert.rejects(
-              ioAdapter.readKey('key-unavailable'),
-              error => error?.name === 'KeyActionCardError' &&
-                error?.code === 'NYXID_KEY_ACTION_IO_UNAVAILABLE' &&
-                error.message.includes('upstream secret body') === false
-            );
-            const journey = context.createKeyActionDialogState(journeyCard);
-            let mutationCalls = 0;
-            let serviceReads = 0;
-            let keyReads = 0;
-            const io = {
-              async readService(serviceId) {
-                serviceReads += 1;
-                return {id:serviceId,is_active:true,credential_source:{type:'personal'}};
-              },
-              verifyService(serviceId, snapshot) {
-                assert.equal(snapshot.id, serviceId);
-              },
-              async mutate(candidate) {
-                mutationCalls += 1;
-                assert.equal(candidate.action, 'key.create');
-                return {
-                  resource:{keyId:'key-created'},replayed:false,
-                  fullKey:'nyxid_ag_one_time_value'
-                };
-              },
-              async readKey(keyId) {
-                keyReads += 1;
-                assert.equal(keyId, 'key-created');
-                if (keyReads === 1) throw new Error('raw upstream secret detail');
-                return {id:keyId};
-              },
-              verifyCreate(candidate, effectValue, snapshot) {
-                assert.equal(candidate.actionRequestId, 'action-alpha');
-                assert.equal(effectValue.resource.keyId, snapshot.id);
-              },
-              verifyRotate() {
-                throw new Error('wrong verifier');
-              }
-            };
-            await assert.rejects(
-              context.runKeyActionMutation(journey, io),
-              context.KeyActionCardError
-            );
-            assert.equal(mutationCalls, 1);
-            assert.equal(serviceReads, 1);
-            assert.equal(keyReads, 1);
-            assert.equal(journey.effect.resource.keyId, 'key-created');
-            assert.equal(journey.phase, 'verification_error');
-            assert.equal(journey.error.includes('raw upstream secret detail'), false);
-            assert.equal(JSON.stringify(journeyCard).includes('nyxid_ag_one_time_value'), false);
-            await context.runKeyActionReadBack(journey, io);
-            assert.equal(mutationCalls, 1, 'read-back retry must not repeat mutation');
-            assert.equal(serviceReads, 1, 'read-back retry must not repeat service validation');
-            assert.equal(keyReads, 2);
-            assert.equal(journey.browserVerified, true);
-            assert.throws(
-              () => context.keyActionDialogCompletedResource(journey),
-              context.KeyActionCardError
-            );
-            assert.equal(context.keyActionDialogCanClose(journey), false);
-            journey.savedConfirmed = true;
-            assert.deepEqual(JSON.parse(JSON.stringify(
-              context.keyActionDialogCompletedResource(journey)
-            )), {key:{keyId:'key-created'}});
-            assert.equal(context.keyActionDialogCanClose(journey), true);
-            context.clearKeyActionDialogState(journey);
-            assert.equal(journey.effect, null);
-            assert.equal(journey.browserVerified, false);
-            assert.equal(JSON.stringify(journey).includes('nyxid_ag_one_time_value'), false);
-
-            const rotateRequest = {
-              ...request,actionRequestId:'action-rotate',action:'key.rotate',
-              params:{keyId:'key-predecessor'}
-            };
-            const rotateJourney = context.createKeyActionDialogState({
-              request:rotateRequest,status:'ready',busy:false,error:'',note:'',report:null,
-              effectKeyId:'',replayed:null,requestedAt:'',browserVerified:false
-            });
-            let rotateVerifierCalls = 0;
-            await context.runKeyActionMutation(rotateJourney, {
-              async readService() { throw new Error('rotate must not read services'); },
-              verifyService() { throw new Error('rotate must not verify services'); },
-              async mutate() {
-                return {resource:{keyId:'key-successor'},replayed:true,
-                  requestedAt:'2026-08-13T08:00:00Z'};
-              },
-              async readKey(keyId) { return {id:keyId}; },
-              verifyCreate() { throw new Error('wrong verifier'); },
-              verifyRotate(candidate, effectValue, snapshot) {
-                rotateVerifierCalls += 1;
-                assert.equal(candidate.params.keyId, 'key-predecessor');
-                assert.equal(effectValue.resource.keyId, snapshot.id);
-              }
-            });
-            assert.equal(rotateVerifierCalls, 1);
-            assert.equal(rotateJourney.effect.replayed, true);
-            assert.equal(Object.hasOwn(rotateJourney.effect, 'fullKey'), false);
-            assert.equal(rotateJourney.savedConfirmed, false);
-            assert.equal(rotateJourney.browserVerified, true);
-            assert.equal(context.keyActionDialogCanClose(rotateJourney), true);
-            assert.deepEqual(JSON.parse(JSON.stringify(
-              context.keyActionDialogCompletedResource(rotateJourney)
-            )), {key:{keyId:'key-successor'}});
-            })().catch((error) => {
-              console.error(error);
-              process.exitCode = 1;
-            });
-            """;
-
-        var result = await RunNodeAsync(script, app);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_KeyActionRecovery_ShouldProjectPendingAndRecentSafeActions()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
-        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const assets = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
-            const context = { structuredClone, TextDecoder, URL, console };
-            vm.createContext(context);
-            vm.runInContext(assets.protocol.replace(/^export /gm, ''), context);
-            vm.runInContext(assets.actorState
-              .replace(/^import[^;]+;\s*/m, '')
-              .replace(/^export /gm, ''), context);
-            const start = assets.app.indexOf('function actorStateWithActionHistory(');
-            const end = assets.app.indexOf('\nasync function refreshActorState(', start);
-            assert.notEqual(start, -1, 'action recovery helper must exist');
-            assert.notEqual(end, -1, 'action recovery helper boundary must exist');
-            vm.runInContext(assets.app.slice(start, end), context);
-
-            const pending = {
-              schemaVersion:4,actionRequestId:'action-create',originTurnId:'turn-alpha',
-              taskId:'task-alpha',stepId:'step-create',action:'key.create',
-              request:{schemaVersion:4,actorId:'conversation-alpha',originTurnId:'turn-alpha',
-                taskId:'task-alpha',stepId:'step-create',actionRequestId:'action-create',
-                action:'key.create',params:{
-                name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha']
-              }},reports:[],postconditionResult:null
-            };
-            const recent = {
-              schemaVersion:4,actionRequestId:'action-rotate',originTurnId:'turn-alpha',
-              taskId:'task-alpha',stepId:'step-rotate',action:'key.rotate',
-              request:{schemaVersion:4,actorId:'conversation-alpha',originTurnId:'turn-alpha',
-                taskId:'task-alpha',stepId:'step-rotate',actionRequestId:'action-rotate',
-                action:'key.rotate',params:{keyId:'key-predecessor'}},
-              reports:[{disposition:'completed',resource:{key:{keyId:'key-successor'}}}],
-              postconditionResult:{verified:true,actionRequestId:'action-rotate',disposition:'completed',
-                resource:{key:{keyId:'key-successor'}}}
-            };
-            const envelope = context.actorStateWithActionHistory({
-              status:'current',stateVersion:7,snapshot:{actorId:'conversation-alpha',
-                pendingActions:[pending],recentActions:[recent]}
-            });
-            assert.deepEqual(JSON.parse(JSON.stringify(
-              envelope.snapshot.pendingActions.map(action => action.actionRequestId)
-            )), ['action-create','action-rotate']);
-            assert.deepEqual(JSON.parse(JSON.stringify(envelope.snapshot.recentActions)), [recent]);
-            assert.equal(JSON.stringify(envelope).includes('fullKey'), false);
-            const entry = {actorId:'conversation-alpha',actionFrameCache:new Map()};
-            context.restoreCurrentStateActionRequests(entry, envelope);
-            assert.equal(entry.actionFrameCache.get('action-create').action, 'key.create');
-            assert.deepEqual(JSON.parse(JSON.stringify(
-              entry.actionFrameCache.get('action-create').params
-            )), {name:'studio-agent',platform:'codex',allowedServiceIds:['service-alpha']});
-            assert.equal(entry.actionFrameCache.get('action-rotate').action, 'key.rotate');
-
-            const mismatched = context.actorStateWithActionHistory({
-              status:'current',stateVersion:8,snapshot:{actorId:'conversation-alpha',pendingActions:[{
-                ...pending,actionRequestId:'action-other'
-              }],recentActions:[]}
-            });
-            context.restoreCurrentStateActionRequests(entry, mismatched);
-            assert.equal(entry.actionFrameCache.has('action-other'), false);
-            const wrongOwner = context.actorStateWithActionHistory({
-              status:'current',stateVersion:9,snapshot:{actorId:'conversation-other',
-                pendingActions:[pending],recentActions:[]}
-            });
-            const wrongOwnerEntry = {actorId:'conversation-alpha',actionFrameCache:new Map()};
-            context.restoreCurrentStateActionRequests(wrongOwnerEntry, wrongOwner);
-            assert.equal(wrongOwnerEntry.actionFrameCache.size, 0);
-            assert.equal(JSON.stringify([...entry.actionFrameCache.values()]).includes('fullKey'), false);
-            """;
-
-        var input = System.Text.Json.JsonSerializer.Serialize(new { app, actorState, protocol });
-        var result = await RunNodeAsync(script, input);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_AssistantAssets_ShouldShipNyxIdV4FeatureParity()
-    {
-        var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
-        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
-        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
-        var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
-        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
-        var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
-        var lucide = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantLucide);
-        var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
-        var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
-
-        app.Should().Contain("verifyKeyCreateReadBack,");
-        app.Should().Contain("verifyKeyRotateReadBack,");
-        app.Should().Contain("verifyPersonalServiceReadBack,");
-        app.Should().Contain("async function sendPrompt(");
-        app.Should().Contain("async function loadConversations(");
-        app.Should().Contain("async function refreshActorState(");
-        app.Should().Contain("async function submitActorControl(");
-        app.Should().Contain("async function submitNeedsYouDecision(");
-        app.Should().Contain("async function submitPendingInputFromComposer(");
-        app.Should().Contain("async function submitComposer(");
-        app.Should().Contain("async function loadReadiness(");
-        app.Should().Contain("describeReadinessFailure(state.readiness.error)");
-        app.Should().Contain("state.pendingFirstTurn ||=");
-        app.Should().Contain("已受理，等待 Actor 确认");
-        app.Should().Contain("async function submitApproval(");
-        app.Should().Contain("async function submitActionContinuation(");
-        app.Should().Contain("function createKeyActionCard(");
-        app.Should().Contain("function renderKeyActionCard(");
-        app.Should().Contain("function createKeyActionDialogState(");
-        app.Should().Contain("function openKeyActionDialog(");
-        app.Should().Contain("function renderKeyActionDialog(");
-        app.Should().Contain("function closeKeyActionDialog(");
-        app.Should().Contain("export function createKeyActionIo(");
-        app.Should().Contain("async function runKeyActionMutation(");
-        app.Should().Contain("async function runKeyActionReadBack(");
-        app.Should().Contain("renderActionCard(card);");
-        app.Should().Contain("window.addEventListener(\"pagehide\"");
-        app.Should().Contain("async function selectAttachment(");
-        app.Should().Contain("conversationStates: new Map()");
-        protocol.Should().Contain("export function normalizeFrame(");
-        protocol.Should().Contain("export function validateActionContinuation(");
-        protocol.Should().Contain("schemaVersion !== 4");
-        protocol.Should().Contain("\"nyxid.input.request\": \"input_requested\"");
-        protocol.Should().Contain("\"nyxid.approval.request\": \"approval_requested\"");
-        protocol.Should().Contain("value.step = normalizeStep(value.step)");
-        actorState.Should().Contain("export function reduceActorEvent(");
-        actorState.Should().Contain("export function applyCurrentStateResult(");
-        actorState.Should().Contain("pendingInput: null");
-        actorState.Should().Contain("latestApprovalResolution: null");
-        readiness.Should().Contain("export function normalizeReadinessSnapshot(");
-        readiness.Should().Contain("Readiness snapshot contains secret fields");
-        transport.Should().Contain("/api/v1/assistant/readiness");
-        transport.Should().Contain("const errorCode = refreshResult.errorCode");
-        transport.Should().Contain("authorizedFetch(\"/api/chat\"");
-        transport.Should().Contain("ADR-0018");
-        transport.Should().NotContain("append(\"resource\"");
-        blocks.Should().Contain("export function buildConnectCardBlock(");
-        html.Should().Contain("id=\"readinessPanel\"");
-        html.Should().Contain("id=\"readinessRecovery\"");
-        html.Should().Contain("id=\"readinessRecoveryButton\"");
-        html.Should().Contain("id=\"needsYouFilterButton\"");
-        html.Should().NotContain("id=\"taskPhaseList\"");
-        html.Should().Contain("id=\"composerInputRequest\"");
-        html.Should().Contain("<dialog class=\"key-action-dialog\" id=\"keyActionDialog\"");
-        html.Should().Contain("id=\"keyActionSecretInput\"");
-        html.Should().Contain("id=\"keyActionSavedConfirm\"");
-        html.Should().Contain("id=\"copyKeyActionSecretButton\"");
-        html.Should().Contain("class=\"hidden\" id=\"eventsTabButton\"");
-        html.Should().Contain("/workflow/studio/assets/vendor/lucide.min.js");
-        html.Should().Contain("/workflow/studio/assets/vendor/marked.min.js");
-        html.Should().Contain("/workflow/studio/assets/vendor/purify.min.js");
-        html.Should().NotContain("https://unpkg.com");
-        lucide.Should().Contain("@license lucide v0.563.0 - ISC");
-        marked.Should().Contain("marked v15.0.12");
-        purify.Should().Contain("DOMPurify 3.2.6");
-        styles.Should().Contain(".connect-card");
-        styles.Should().Contain(".key-action-dialog");
-        styles.Should().Contain(".key-action-secret-row");
-        styles.Should().Contain(".key-action-dialog-actions");
-        styles.Should().Contain("""
-            .key-action-dialog-actions {
-              height: auto;
-              min-height: 58px;
-              flex: 0 0 auto;
-            """);
-        styles.Should().Contain(".readiness-panel");
-        styles.Should().Contain(".needs-you-panel");
-        styles.Should().Contain(".history-filter");
-        styles.Should().Contain(".actor-plan-meta");
-        styles.Should().Contain(".actor-substeps");
-        styles.Should().Contain(".actor-task.collapsed");
-        styles.Should().Contain(".cc-progress");
-        styles.Should().Contain(".activity-card.collapsed");
-        styles.Should().Contain("--assistant-card-max-width: 720px");
-        styles.Should().Contain("--assistant-card-inline-gutter: 40px");
-        styles.Should().Contain("--workspace-max-width: 1240px");
-        styles.Should().Contain("--sidebar-width: 240px");
-        styles.Should().Contain("--conversation-max-width: 760px");
-        styles.Should().Contain("--conversation-inline-gutter: 40px");
-        styles.Should().Contain("width: min(448px, calc(100% - 48px))");
-        styles.Should().Contain("grid-template-columns: var(--sidebar-width) minmax(0, 1fr)");
-        app.Should().Contain("展开计划详情");
-        app.Should().Contain("root.dataset.collapsed = \"false\"");
-        app.Should().NotContain("root.dataset.collapsed = \"true\"");
-        app.Should().Contain("state.config.enableStudioWireInspector === true && state.auth.authenticated");
-        transport.Should().Contain("backendConfig.enableStudioWireInspector === true");
-        app.Should().NotContain("https://aevatar-console-backend-api.aevatar.ai");
-        app.Should().NotContain("https://nyx-api.chrono-ai.fun");
-        app.Should().Contain("cc-progress-step");
-        app.Should().NotContain("function setStudioTab(tab)");
-        app.Should().NotContain("尚未取得必需能力的有效证明");
-        app.Should().NotContain("暂时无法确认运行准备状态");
-        html.Should().NotContain("id=\"assistantNavButton\"");
-        html.Should().NotContain("id=\"openSettingsNav\"");
-        styles.Should().NotContain(".studio-tabs");
-        styles.Should().Contain(".composer-wrap {\n  position: relative;");
-        styles.Should().Contain(".chat-column {\n  min-width: 0;\n  min-height: 0;\n  height: 100%;\n  overflow: hidden;");
-        app.Should().Contain("await submitActorControl(\"steer\", null, instruction)");
-        app.Should().Contain("type: \"input.resolve\"");
-        app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
-        styles.Should().Contain("@media (max-width:");
-        html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260813-p0-key-actions");
-        html.Should().Contain("styles.css?v=20260813-p0-key-actions");
-        html.Should().Contain("vendor/lucide.min.js?v=20260808-m42-card-scale-tighten");
-        html.Should().Contain("vendor/marked.min.js?v=20260808-m42-card-scale-tighten");
-        html.Should().Contain("vendor/purify.min.js?v=20260808-m42-card-scale-tighten");
-        app.Should().Contain("transport.js?v=20260813-p0-key-actions");
-        app.Should().Contain("protocol.js?v=20260813-p0-key-actions");
-        app.Should().Contain("blocks.js?v=20260813-p0-key-actions");
-        app.Should().Contain("actor-state.js?v=20260813-p0-key-actions");
-        app.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
-        transport.Should().Contain("readiness.js?v=20260807-m40-thread-polish");
-        actorState.Should().Contain("protocol.js?v=20260813-p0-key-actions");
-        blocks.Should().Contain("protocol.js?v=20260813-p0-key-actions");
-        html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
-        html.Should().NotContain("class=\"brand-mark\"");
-        styles.Should().Contain("color-scheme: only light");
-        styles.Should().NotContain("color-scheme: dark");
-        styles.Should().NotContain("prefers-color-scheme");
-        styles.Should().Contain("--bg: #eceff4");
-        styles.Should().Contain("--accent: #2f5cf6");
-        styles.Should().Contain("--accent-strong: #1e44d8");
-        styles.Should().Contain("--success: #12a15c");
-        styles.Should().NotContain("--accent: #0f766e");
-        styles.Should().NotContain("--accent-secondary: #df6b45");
-        styles.Should().Contain("overflow-y: scroll");
-        styles.Should().Contain("scrollbar-gutter: stable");
-        styles.Should().Contain(".thread::-webkit-scrollbar-thumb");
-        styles.Should().Contain("scrollbar-color: var(--tertiary) var(--surface)");
-        styles.Should().Contain("min-height: 108px;\n  flex-direction: column;");
-        styles.Should().Contain("width: 100%;\n  min-width: 0;\n  height: 40px;");
-        styles.Should().Contain(".recent-session-list {\n  min-height: 0;\n  flex: 1 1 0;");
-        styles.Should().NotContain("min-height: 480px");
-        styles.Should().NotContain("data-theme");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_LoadConversation_ShouldNotMoveFocusToComposer()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        var start = app.IndexOf("async function loadConversation(", StringComparison.Ordinal);
-        var end = app.IndexOf("\nfunction actorStateTurnId(", start, StringComparison.Ordinal);
-
-        start.Should().BeGreaterThanOrEqualTo(0);
-        end.Should().BeGreaterThan(start);
-        var loadConversation = app[start..end];
-        loadConversation.Should().NotContain("dom.promptInput.focus()");
-        loadConversation.Should().Contain("scrollThread()");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_Composer_ShouldRoutePendingInputAndActiveTaskCommands()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        const string script = """
-            (async () => {
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('function activePendingInputContext()');
-            const end = source.indexOf('\nasync function sendPrompt(', start);
-            assert.notEqual(start, -1);
-            assert.notEqual(end, -1);
-
-            const entry = {
-              actorId:'actor-alpha', actorProjection:null, draft:'',
-              needsYouDrafts:new Map(), needsYouSubmissions:new Map()
-            };
-            let acceptsInput = true;
-            const decisions = [];
-            const controls = [];
-            const messages = [];
-            let sends = 0;
-            const context = {
-              Map, Set,
-              state:{activeConversation:entry,config:{surface:'nyxid-chat'}},
-              dom:{promptInput:{value:''}},
-              entryActorProjection:(candidate) => candidate?.actorProjection || null,
-              needsYouKey:(kind, requestId) => `${kind}:${requestId}`,
-              createId:(prefix) => `${prefix}-alpha`,
-              submitNeedsYouDecision:async (...args) => {
-                decisions.push(args);
-                return acceptsInput;
-              },
-              submitActorControl:async (...args) => { controls.push(args); },
-              sendPrompt:async () => { sends += 1; },
-              withConversationState:(_candidate, action) => action(),
-              addUserMessage:(message) => { messages.push(message); },
-              autoResizeComposer:() => {},
-              persistConversationState:() => {},
-              renderComposerInputRequest:() => {}
-            };
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end), context);
-
-            entry.actorProjection = {
-              stateVersion:7,
-              pendingInput:{
-                requestId:'request-alpha', allowFreeText:true,
-                options:[{optionId:'option-alpha',label:'建议答案'}]
-              }
-            };
-            context.dom.promptInput.value = '完整回答';
-            entry.draft = '完整回答';
-            await context.submitComposer();
-            assert.equal(decisions.length, 1);
-            assert.equal(decisions[0][1], 'input');
-            assert.equal(decisions[0][2], 'request-alpha');
-            assert.deepEqual(JSON.parse(JSON.stringify(decisions[0][3])), {
-              type:'input.resolve', answer:{freeText:'完整回答'}
-            });
-            assert.equal(context.dom.promptInput.value, '');
-            assert.equal(entry.draft, '');
-            assert.deepEqual(messages, ['完整回答']);
-            assert.equal(controls.length, 0);
-            assert.equal(sends, 0);
-
-            acceptsInput = false;
-            context.dom.promptInput.value = '失败后保留';
-            entry.draft = '失败后保留';
-            await context.submitPendingInputFromComposer();
-            assert.equal(decisions.length, 2);
-            assert.equal(context.dom.promptInput.value, '失败后保留');
-            assert.equal(entry.draft, '失败后保留');
-            assert.deepEqual(messages, ['完整回答']);
-
-            entry.actorProjection = {
-              stateVersion:8, pendingInput:null,
-              activeTurn:{turnId:'turn-alpha'}, task:{status:'active'}
-            };
-            context.dom.promptInput.value = '改为只处理后端';
-            await context.submitComposer();
-            assert.deepEqual(controls, [['steer', null, '改为只处理后端']]);
-            assert.equal(sends, 0);
-
-            entry.actorProjection = {stateVersion:9,pendingInput:null,task:{status:'succeeded'}};
-            context.dom.promptInput.value = '开始新任务';
-            await context.submitComposer();
-            assert.equal(sends, 1);
-            })().catch((error) => {
-              console.error(error);
-              process.exitCode = 1;
-            });
-            """;
-
-        var result = await RunNodeAsync(script, app);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_TaskStepProtocol_ShouldDecodeWrappedV4PlanChange()
-    {
-        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
-            const context = { structuredClone, TextDecoder, URL, console };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            const event = context.normalizeFrame({
-              type:'CUSTOM', sequence:41, custom:{name:'nyxid.task.step.changed', payload:{
-                taskId:'task-alpha', planRevision:2,
-                changeKind:'NYX_ID_CHAT_STEP_CHANGE_KIND_ADDED',
-                step:{
-                  stepId:'step-tool', order:2, kind:'NYX_ID_CHAT_STEP_KIND_TOOL',
-                  status:'NYX_ID_CHAT_STEP_STATUS_RUNNING',
-                  externalEffect:'NYX_ID_CHAT_EFFECT_EVIDENCE_NOT_STARTED',
-                  addedBy:'NYX_ID_CHAT_STEP_ADDED_BY_REPLAN', dependsOn:['step-plan'],
-                  estimate:{kind:'NYX_ID_CHAT_STEP_ESTIMATE_KIND_DURATION',seconds:20},
-                  substeps:[{substepId:'substep-alpha',title:'Validate repository',
-                    status:'NYX_ID_CHAT_SUBSTEP_STATUS_DONE'}]
-                }
-              }}
-            });
-
-            assert.equal(event.type, 'task_step_changed');
-            assert.equal(event.sequence, 41);
-            assert.equal(event.payload.taskId, 'task-alpha');
-            assert.equal(event.payload.planRevision, 2);
-            assert.equal(event.payload.changeKind, 'added');
-            assert.equal(event.payload.step.kind, 'tool');
-            assert.equal(event.payload.step.status, 'running');
-            assert.equal(event.payload.step.addedBy, 'replan');
-            assert.deepEqual(JSON.parse(JSON.stringify(event.payload.step.dependsOn)), ['step-plan']);
-            assert.equal(event.payload.step.estimate.kind, 'duration');
-            assert.equal(event.payload.step.substeps[0].status, 'done');
-            """;
-
-        var result = await RunNodeAsync(script, protocol);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_TaskStepProtocol_ShouldDecodeConditionStepsAndExpiredNeedsYouOutcomes()
-    {
-        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
-            const context = { structuredClone, TextDecoder, URL, console };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            // Conditional branches commit a condition step, and local approval expiry commits an
-            // expired needs-you resolution. normalizeEnum throws NYXID_ENUM_INVALID on any value
-            // the decoder never declared, and consumeSse then degrades the whole frame to a
-            // protocol error, so an undeclared value silently stops the run card from rendering.
-            const conditionStep = context.normalizeFrame({
-              type:'CUSTOM', sequence:51, custom:{name:'nyxid.task.step.changed', payload:{
-                taskId:'task-alpha', planRevision:3,
-                changeKind:'NYX_ID_CHAT_STEP_CHANGE_KIND_STATUS',
-                step:{
-                  stepId:'step-condition', order:3, kind:'NYX_ID_CHAT_STEP_KIND_CONDITION',
-                  status:'NYX_ID_CHAT_STEP_STATUS_DONE',
-                  externalEffect:'NYX_ID_CHAT_EFFECT_EVIDENCE_NOT_APPLIED',
-                  addedBy:'NYX_ID_CHAT_STEP_ADDED_BY_INITIAL'
-                }
-              }}
-            });
-
-            assert.equal(conditionStep.type, 'task_step_changed');
-            assert.equal(conditionStep.payload.step.kind, 'condition');
-            assert.equal(conditionStep.payload.step.externalEffect, 'not_applied');
-
-            // The numeric wire form resolves positionally, so the declared order must stay in
-            // proto field-number order (condition is 8).
-            const numericConditionStep = context.normalizeFrame({
-              type:'CUSTOM', sequence:52, custom:{name:'nyxid.task.step.changed', payload:{
-                taskId:'task-alpha', planRevision:3, changeKind:1,
-                step:{ stepId:'step-condition', order:3, kind:8, status:4,
-                  externalEffect:2, addedBy:1 }
-              }}
-            });
-
-            assert.equal(numericConditionStep.payload.step.kind, 'condition');
-
-            const expiredNeedsYou = context.normalizeFrame({
-              type:'CUSTOM', sequence:53, custom:{name:'nyxid.input.changed', payload:{
-                requestId:'input-alpha', clientRequestId:'client-input',
-                outcome:'NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_EXPIRED'
-              }}
-            });
-
-            assert.equal(expiredNeedsYou.type, 'input_changed');
-            assert.equal(expiredNeedsYou.payload.outcome, 'expired');
-            """;
-
-        var result = await RunNodeAsync(script, protocol);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_Protocol_ShouldNormalizePlanGateStatusFromEveryWireForm()
-    {
-        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
-            const context = { structuredClone, TextDecoder, URL, console };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            const snapshotWith = (gate) => context.normalizeFrame({
-              type:'CUSTOM', sequence:61, custom:{name:'nyxid.task.snapshot', payload:{
-                schemaVersion:4, actorId:'conversation-alpha', turnId:'turn-alpha',
-                taskId:'task-alpha', planId:'plan-alpha', planRevision:2,
-                title:'Post the update', status:'active', gate,
-                steps:[{stepId:'step-plan',order:1,kind:'llm',status:'done',
-                  externalEffect:'not_started',addedBy:'initial'}]
-              }}
-            });
-
-            const prefixed = snapshotWith({
-              mode:'NYX_ID_CHAT_PLAN_GATE_MODE_CONFIRM',
-              status:'NYX_ID_CHAT_PLAN_GATE_STATUS_PENDING',
-              reason:'Effect-capable step', requestId:'gate-alpha',
-              planId:'plan-alpha', planRevision:2
-            });
-            assert.equal(prefixed.payload.gate.mode, 'confirm');
-            assert.equal(prefixed.payload.gate.status, 'pending');
-            assert.equal(prefixed.payload.gate.planRevision, 2);
-
-            const lowercase = snapshotWith({ mode:'confirm', status:'satisfied' });
-            assert.equal(lowercase.payload.gate.status, 'satisfied');
-
-            const numeric = snapshotWith({ mode:2, status:3 });
-            assert.equal(numeric.payload.gate.status, 'rejected');
-
-            // The projected gate defaults status to an empty string before the actor decides
-            // anything; that must stay absent rather than throwing or resolving to a decision.
-            const empty = snapshotWith({ mode:'auto', status:'' });
-            assert.equal(empty.payload.gate.status, '');
-
-            // An undeclared status fails the frame closed rather than rendering an invented
-            // decision: the decoder degrades it to a typed protocol error.
-            const invalid = snapshotWith({ mode:'confirm', status:'approved' });
-            assert.equal(invalid.type, 'protocol_error');
-            assert.equal(invalid.code, 'NYXID_ENUM_INVALID');
-            """;
-
-        var result = await RunNodeAsync(script, protocol);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_PlanGate_ShouldDecideThroughTheActorOwnedPlanResolveCommand()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-
-        // The decision must ride the typed plan.resolve command with the gate's own requestId
-        // and the exact plan identity, never a synthesized local admission.
-        app.Should().Contain("type: \"plan.resolve\"");
-        app.Should().Contain("submitNeedsYouDecision(entry, \"plan\", gate.requestId");
-        app.Should().Contain("planRevision: gate.planRevision");
-
-        // Availability is actor-owned: the affordance exists only while the committed gate
-        // status is pending, and an unknown status never reads as satisfied.
-        app.Should().Contain("actorPendingPlanGate");
-        app.Should().Contain("actorPlanGateStatus(projection.task) !== \"pending\"");
-
-        // Confirming a plan is local admission only; it must not be presented as NyxID
-        // authorization or as proof that an external effect happened.
-        app.Should().Contain("不授予 NyxID 访问权限");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_TaskStepSourceLabel_ShouldUseTypedPostconditionCheck()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-
-        app.Should().Contain("source.postcondition.check");
-        app.Should().NotContain("source.postcondition.postconditionKind");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_Protocol_ShouldPreserveTypedRunStoppedPayload()
-    {
-        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
-            const context = { structuredClone, TextDecoder, URL, console };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            const event = context.normalizeFrame({
-              type:'RUN_STOPPED',
-              runStopped:{
-                status:'stopped', detail:'Stopped after committed partial work.',
-                partialWork:{stateVersion:17,effectEvidence:'confirmed'}
-              }
-            });
-
-            assert.equal(event.type, 'run_stopped');
-            assert.equal(event.status, 'stopped');
-            assert.equal(event.detail, 'Stopped after committed partial work.');
-            assert.equal(event.partialWork.stateVersion, 17);
-            assert.equal(event.partialWork.effectEvidence, 'confirmed');
-            """;
-
-        var result = await RunNodeAsync(script, protocol);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_WireInspector_ShouldRequireHostFlagAndAuthenticatedSession()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-
-            function functionSource(name, nextName) {
-              const start = source.indexOf('function ' + name + '(');
-              const end = source.indexOf('\nfunction ' + nextName + '(', start);
-              assert.notEqual(start, -1, name + ' must exist');
-              assert.notEqual(end, -1, nextName + ' must follow ' + name);
-              return source.slice(start, end);
-            }
-
-            function element() {
-              const classes = new Set();
-              const attributes = new Map();
-              return {
-                classes, attributes,
-                classList:{toggle(name, enabled){
-                  if (enabled) classes.add(name); else classes.delete(name);
-                }},
-                setAttribute(name, value){attributes.set(name, value);}
-              };
-            }
-
-            const context = {
-              state:{config:{enableStudioWireInspector:true},auth:{authenticated:false}},
-              dom:{
-                runPanel:element(), eventsPanel:element(), runTabButton:element(),
-                eventsTabButton:element()
-              }
-            };
-            vm.createContext(context);
-            vm.runInContext(`
-              ${functionSource('configureWireInspector', 'updateElapsed')}
-              ${functionSource('setInspectorTab', 'openMobilePanel')}
-            `, context);
-
-            context.configureWireInspector();
-            assert.equal(context.dom.eventsTabButton.classes.has('hidden'), true);
-            assert.equal(context.dom.eventsTabButton.attributes.get('aria-hidden'), 'true');
-            context.setInspectorTab('events');
-            assert.equal(context.dom.runPanel.classes.has('hidden'), false);
-            assert.equal(context.dom.eventsPanel.classes.has('hidden'), true);
-
-            context.state.auth.authenticated = true;
-            context.configureWireInspector();
-            assert.equal(context.dom.eventsTabButton.classes.has('hidden'), false);
-            assert.equal(context.dom.eventsTabButton.attributes.get('aria-hidden'), 'false');
-            context.setInspectorTab('events');
-            assert.equal(context.dom.runPanel.classes.has('hidden'), true);
-            assert.equal(context.dom.eventsPanel.classes.has('hidden'), false);
-
-            context.state.config.enableStudioWireInspector = false;
-            context.setInspectorTab('events');
-            assert.equal(context.dom.runPanel.classes.has('hidden'), false);
-            assert.equal(context.dom.eventsPanel.classes.has('hidden'), true);
-            """;
-
-        var result = await RunNodeAsync(script, app);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ReadinessAsset_ShouldDescribeActionableRecovery()
-    {
-        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
-            const context = { URL, Date, Set, Error };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            const inactive = context.describeReadinessFailure({status:401,code:'OAUTH_CLIENT_INACTIVE'});
-            assert.equal(inactive.freshness, '登录配置不可用');
-            assert.match(inactive.summary, /已停用/);
-            assert.match(inactive.guidance, /重复登录不会恢复/);
-            assert.equal(inactive.action, 'retry');
-            assert.equal(inactive.actionLabel, '修复后重新检查');
-
-            const expired = context.describeReadinessFailure({status:401,code:'AUTH_REQUIRED'});
-            assert.equal(expired.action, 'login');
-            assert.equal(expired.actionLabel, '重新登录');
-
-            const forbidden = context.describeReadinessFailure({status:403});
-            assert.equal(forbidden.action, 'account');
-            assert.match(forbidden.guidance, /访问策略/);
-
-            const missingEndpoint = context.describeReadinessFailure({status:404});
-            assert.match(missingEndpoint.summary, /尚未提供/);
-            assert.match(missingEndpoint.guidance, /部署 assistant readiness 接口/);
-
-            const invalid = context.describeReadinessFailure({
-              status:502, code:'READINESS_INVALID',
-              reason:'Capability has unknown fields: platformEvidence'
-            });
-            assert.equal(invalid.freshness, '契约不匹配');
-            assert.match(invalid.summary, /契约不一致：Capability has unknown fields: platformEvidence/);
-            assert.match(invalid.guidance, /nyxid-assistant-readiness\.v1/);
-            assert.equal(invalid.action, 'retry');
-
-            const invalidWithoutReason = context.describeReadinessFailure({status:502,code:'READINESS_INVALID'});
-            assert.equal(invalidWithoutReason.summary, 'NyxID readiness 响应与 Studio 契约不一致。');
-
-            const secretReason = context.describeReadinessFailure({
-              status:502, code:'READINESS_INVALID', reason:'Bearer leaked-token-value'
-            });
-            assert.doesNotMatch(secretReason.summary, /leaked-token-value/);
-
-            const upstreamBadGateway = context.describeReadinessFailure({status:502});
-            assert.match(upstreamBadGateway.summary, /暂时无法提供/);
-            assert.equal(upstreamBadGateway.freshness, '服务暂时不可用');
-
-            const unavailable = context.describeReadinessFailure({status:503});
-            assert.match(unavailable.summary, /暂时无法提供/);
-
-            const disconnected = context.describeReadinessFailure(new TypeError('Failed to fetch'));
-            assert.match(disconnected.summary, /无法连接/);
-            assert.match(disconnected.guidance, /网络或 VPN/);
-
-            const unexpected = context.describeReadinessFailure({status:418});
-            assert.equal(unexpected.freshness, '检查失败 (418)');
-            """;
-
-        var result = await RunNodeAsync(script, readiness);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-        readiness.Should().NotContain("状态格式不兼容");
-        readiness.Should().NotContain("无法识别的运行状态");
-        readiness.Should().NotContain("契约版本一致");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ReadinessAsset_ShouldAcceptTheDeployedNyxIdContractAcrossSplitHosts()
-    {
-        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
-            const context = { URL, Date, Set, Error };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            // Same shape as the live nyxid-assistant-readiness.v1 response: the
-            // managementUrl origin is NyxID's web frontend, which differs from the
-            // OIDC authority (API host) in a split-host deployment.
-            const fixture = {
-              revision:'nyxid-assistant-readiness.v1',
-              evaluatedAt:'2026-08-07T06:50:21.842990344Z',
-              capabilities:[{
-                capabilityId:'api-github', label:'GitHub', required:false, status:'cannot_use',
-                connectionState:'connected', grantState:'missing', requestedScopes:['repo'],
-                managementUrl:'https://nyx-web.example.test/keys', reasonCode:'grant_missing'
-              }]
-            };
-
-            const splitHost = context.normalizeReadinessSnapshot(fixture, {
-              managementOrigins:['https://nyx-web.example.test', 'https://nyx-api.example.test']
-            });
-            assert.equal(splitHost.revision, 'nyxid-assistant-readiness.v1');
-            assert.equal(splitHost.evaluatedAt, '2026-08-07T06:50:21.842Z');
-            assert.equal(splitHost.capabilities[0].status, 'cannot_use');
-            assert.equal(splitHost.capabilities[0].grantState, 'missing');
-            assert.equal(splitHost.capabilities[0].reasonCode, 'grant_missing');
-            assert.equal(splitHost.capabilities[0].managementUrl, 'https://nyx-web.example.test/keys');
-            assert.deepEqual(JSON.parse(JSON.stringify(splitHost.managementUrlDrops)), []);
-
-            // A console that only trusts the API origin keeps the capability facts
-            // and drops the unproven link instead of rejecting the snapshot.
-            const apiOnly = context.normalizeReadinessSnapshot(fixture, {
-              managementOrigins:['https://nyx-api.example.test']
-            });
-            assert.equal(apiOnly.capabilities[0].status, 'cannot_use');
-            assert.equal(apiOnly.capabilities[0].managementUrl, null);
-            assert.deepEqual(JSON.parse(JSON.stringify(apiOnly.managementUrlDrops)), [{
-              capabilityId:'api-github', origin:'https://nyx-web.example.test'
-            }]);
-
-            const nullLink = context.normalizeReadinessSnapshot({
-              ...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:null}]
-            }, {managementOrigins:['https://nyx-web.example.test']});
-            assert.equal(nullLink.capabilities[0].managementUrl, null);
-            assert.deepEqual(JSON.parse(JSON.stringify(nullLink.managementUrlDrops)), []);
-            """;
-
-        var result = await RunNodeAsync(script, readiness);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ReadinessAsset_ShouldRejectIncompatiblePayloadsWithSafeSpecificReasons()
-    {
-        var readiness = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantReadiness);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8').replace(/^export /gm, '');
-            const context = { URL, Date, Set, Error };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            const fixture = {
-              revision:'nyxid-assistant-readiness.v1',
-              evaluatedAt:'2026-08-07T06:50:21.842990344Z',
-              capabilities:[{
-                capabilityId:'api-github', label:'GitHub', required:false, status:'cannot_use',
-                connectionState:'connected', grantState:'missing', requestedScopes:['repo'],
-                managementUrl:'https://nyx-web.example.test/keys', reasonCode:'grant_missing'
-              }]
-            };
-            const origins = {managementOrigins:['https://nyx-web.example.test']};
-            const capture = (mutated) => {
-              try {
-                context.normalizeReadinessSnapshot(mutated, origins);
-                assert.fail('expected rejection');
-              } catch (error) {
-                assert.equal(error.code, 'READINESS_INVALID');
-                return error;
-              }
-            };
-
-            const unknownField = capture({...fixture, platformEvidence:{}});
-            assert.equal(unknownField.reason, 'Readiness snapshot has unknown fields: platformEvidence');
-            const unknownCapabilityField = capture({
-              ...fixture, capabilities:[{...fixture.capabilities[0], evidenceKind:'platform'}]
-            });
-            assert.equal(unknownCapabilityField.reason, 'Capability has unknown fields: evidenceKind');
-
-            const withoutGrantState = {...fixture.capabilities[0]};
-            delete withoutGrantState.grantState;
-            assert.equal(capture({...fixture, capabilities:[withoutGrantState]}).reason, 'grantState is missing');
-            assert.equal(
-              capture({...fixture, capabilities:[{...fixture.capabilities[0], status:'maybe'}]}).reason,
-              'status is invalid');
-            assert.equal(
-              capture({...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'http://nyx-web.example.test/keys'}]}).reason,
-              'managementUrl must be https');
-            assert.equal(
-              capture({...fixture, capabilities:[{...fixture.capabilities[0], managementUrl:'not a url'}]}).reason,
-              'managementUrl is invalid');
-
-            const secretField = capture({...fixture, accessToken:'nyx_0123456789abcdef'});
-            assert.equal(secretField.reason, 'Readiness snapshot contains secret fields');
-            assert.doesNotMatch(String(secretField.message), /nyx_0123456789abcdef/);
-            const secretValue = capture({
-              ...fixture, capabilities:[{...fixture.capabilities[0], label:'Bearer nyx-secret-value'}]
-            });
-            assert.equal(secretValue.reason, 'Readiness snapshot contains secret values');
-            assert.doesNotMatch(String(secretValue.message), /nyx-secret-value/);
-            """;
-
-        var result = await RunNodeAsync(script, readiness);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_FirstTurn_ShouldOnlyBlockOnMissingRequiredCapabilities()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('function firstTurnReadinessBlocked()');
-            const end = source.indexOf('\nasync function loadServices(', start);
-            assert.notEqual(start, -1, 'firstTurnReadinessBlocked must exist in the served Studio app');
-            assert.notEqual(end, -1, 'loadServices must follow firstTurnReadinessBlocked');
-
-            const context = {
-              state:{
-                config:{surface:'nyxid-chat'},
-                actorId:null,
-                readiness:{loading:false, error:null, snapshot:null}
-              }
-            };
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end), context);
-            const blocked = () => vm.runInContext('firstTurnReadinessBlocked()', context);
-
-            context.state.readiness = {loading:true, error:null, snapshot:null};
-            assert.equal(blocked(), true, 'an in-flight check holds the first turn');
-
-            context.state.readiness = {loading:false, error:null, snapshot:null};
-            assert.equal(blocked(), true, 'an unchecked session holds the first turn');
-
-            // The optional api-github capability may be unusable (grant_missing)
-            // without holding the first run.
-            context.state.readiness = {loading:false, error:null, snapshot:{capabilities:[{
-              capabilityId:'api-github', required:false, status:'cannot_use'
-            }]}};
-            assert.equal(blocked(), false);
-
-            context.state.readiness = {loading:false, error:null, snapshot:{capabilities:[{
-              capabilityId:'model', required:true, status:'missing'
-            }]}};
-            assert.equal(blocked(), true, 'a missing required capability holds the first turn');
-
-            // A failed advisory check must not deadlock the chat.
-            context.state.readiness = {loading:false, error:{status:502}, snapshot:null};
-            assert.equal(blocked(), false);
-
-            context.state.actorId = 'conversation-alpha';
-            context.state.readiness = {loading:true, error:null, snapshot:null};
-            assert.equal(blocked(), false, 'existing conversations never re-gate');
-            """;
-
-        var result = await RunNodeAsync(script, app);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ReadinessPanel_ShouldKeepOptionalCapabilitiesQuiet()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('const readinessStatusCopy = {');
-            const end = source.indexOf('\nfunction renderReadiness(', start);
-            assert.notEqual(start, -1, 'readiness status copy must exist in the served Studio app');
-            assert.notEqual(end, -1, 'renderReadiness must follow the readiness copy maps');
-
-            const context = {};
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end), context);
-            const label = (capability) => vm.runInContext('readinessStatusLabel', context)(capability);
-
-            // Optional capabilities read as neutral on/off facts; only required
-            // capabilities keep the blocking state words.
-            assert.equal(label({required:false, status:'cannot_use'}), '未启用');
-            assert.equal(label({required:false, status:'missing'}), '未启用');
-            assert.equal(label({required:false, status:'cannot_check'}), '未启用');
-            assert.equal(label({required:false, status:'available'}), '可用');
-            assert.equal(label({required:true, status:'missing'}), '缺失');
-            assert.equal(label({required:true, status:'cannot_use'}), '不可使用');
-            assert.equal(label({required:true, status:'available'}), '可用');
-            """;
-
-        var result = await RunNodeAsync(script, app);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-        app.Should().Contain("readiness-optional");
-        app.Should().Contain("不影响使用");
-        app.Should().Contain("state.readinessOptionalOpen");
-        var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
-        styles.Should().Contain(".readiness-row.optional .readiness-status");
-        styles.Should().Contain(".readiness-optional > summary");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ActorTaskCard_ShouldStayAnchoredAfterTheNewestUserMessage()
-    {
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('function mountActorTask(');
-            const end = source.indexOf('\nasync function submitActorControl(', start);
-            assert.notEqual(start, -1, 'mountActorTask must exist in the served Studio app');
-            assert.notEqual(end, -1, 'submitActorControl must follow mountActorTask');
-
-            const context = {};
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end), context);
-            const mount = vm.runInContext('mountActorTask', context);
-
-            function fakeThread() {
-              const children = [];
-              const thread = {
-                children,
-                querySelectorAll(selector) {
-                  assert.equal(selector, ':scope > .message.user');
-                  return children.filter((child) => child.kind === 'user');
-                },
-                append(node) {
-                  remove(node);
-                  children.push(node);
-                  node.connected = true;
-                },
-              };
-              function remove(node) {
-                const index = children.indexOf(node);
-                if (index >= 0) children.splice(index, 1);
-              }
-              function decorate(node) {
-                Object.defineProperty(node, 'nextElementSibling', {
-                  get() {
-                    const index = children.indexOf(node);
-                    return index >= 0 ? children[index + 1] ?? null : null;
-                  },
-                });
-                node.after = (inserted) => {
-                  remove(inserted);
-                  children.splice(children.indexOf(node) + 1, 0, inserted);
-                  inserted.connected = true;
-                };
-                return node;
-              }
-              thread.add = (kind, name) => {
-                const node = decorate({ kind, name });
-                thread.append(node);
-                return node;
-              };
-              return thread;
-            }
-
-            const thread = fakeThread();
-            const card = { kind: 'actor-task', name: 'card', get isConnected() { return this.connected === true; } };
-            Object.defineProperty(card, 'nextElementSibling', {
-              get() {
-                const index = thread.children.indexOf(card);
-                return index >= 0 ? thread.children[index + 1] ?? null : null;
-              },
-            });
-            card.after = () => { throw new Error('the card itself is never an anchor'); };
-
-            // The assistant shell can arrive before the first actor snapshot; the
-            // card still lands between the user message and the reply.
-            const user1 = thread.add('user', 'user1');
-            const assistant1 = thread.add('assistant', 'assistant1');
-            mount(thread, card);
-            assert.deepEqual(thread.children.map((child) => child.name), ['user1', 'card', 'assistant1']);
-
-            // Re-rendering without new messages keeps the card where it is.
-            mount(thread, card);
-            assert.deepEqual(thread.children.map((child) => child.name), ['user1', 'card', 'assistant1']);
-
-            // A later turn pulls the card down next to the newest user message
-            // instead of stranding it inside history.
-            const user2 = thread.add('user', 'user2');
-            const assistant2 = thread.add('assistant', 'assistant2');
-            mount(thread, card);
-            assert.deepEqual(
-              thread.children.map((child) => child.name),
-              ['user1', 'assistant1', 'user2', 'card', 'assistant2']);
-
-            // Without any user message (restored empty view) the card appends once.
-            const bare = fakeThread();
-            const bareCard = { kind: 'actor-task', name: 'bare-card', get isConnected() { return this.connected === true; } };
-            mount(bare, bareCard);
-            mount(bare, bareCard);
-            assert.deepEqual(bare.children.map((child) => child.name), ['bare-card']);
-            """;
-
-        var result = await RunNodeAsync(script, app);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-        app.Should().NotContain("if (!root.isConnected) entry.thread.append(root);");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_AssetCacheKeys_ShouldTrackChangedEntryAssetsAndStableImports()
-    {
-        var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
-        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
-        var transport = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantTransport);
-        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
-        var blocks = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantBlocks);
-
-        var firstPartyEntryVersions = System.Text.RegularExpressions.Regex.Matches(
-                html,
-                @"/workflow/studio/assets/(?:app\.js|styles\.css)\?v=([A-Za-z0-9-]+)")
-            .Select(match => match.Groups[1].Value)
-            .ToList();
-        var vendorEntryVersions = System.Text.RegularExpressions.Regex.Matches(
-                html,
-                @"/workflow/studio/assets/vendor/[^""?]+\?v=([A-Za-z0-9-]+)")
-            .Select(match => match.Groups[1].Value)
-            .ToList();
-        var changedTransitiveVersions = new[] { app, actorState, blocks }
-            .SelectMany(source => System.Text.RegularExpressions.Regex.Matches(
-                source,
-                @"(?:transport|protocol|blocks|actor-state)\.js\?v=([A-Za-z0-9-]+)")
-                .Select(match => match.Groups[1].Value))
-            .ToList();
-        var stableTransitiveVersions = new[] { app, transport }
-            .SelectMany(source => System.Text.RegularExpressions.Regex.Matches(
-                source,
-                @"readiness\.js\?v=([A-Za-z0-9-]+)")
-                .Select(match => match.Groups[1].Value))
-            .ToList();
-
-        firstPartyEntryVersions.Should().HaveCount(2);
-        firstPartyEntryVersions.Should().OnlyContain(static version =>
-            version == "20260813-p0-key-actions");
-        vendorEntryVersions.Should().HaveCount(3);
-        vendorEntryVersions.Should().OnlyContain(static version =>
-            version == "20260808-m42-card-scale-tighten");
-        changedTransitiveVersions.Should().NotBeEmpty();
-        changedTransitiveVersions.Should().OnlyContain(static version =>
-            version == "20260813-p0-key-actions");
-        stableTransitiveVersions.Should().HaveCount(2);
-        stableTransitiveVersions.Should().OnlyContain(static version =>
-            version == "20260807-m40-thread-polish");
-        html.Should().Contain("styles.css?v=");
-        html.Should().Contain("app.js?v=");
-        app.Should().Contain("transport.js?v=");
-        app.Should().Contain("readiness.js?v=");
-        transport.Should().Contain("readiness.js?v=");
-        actorState.Should().Contain("protocol.js?v=");
-        blocks.Should().Contain("protocol.js?v=");
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ActorProjection_ShouldConvergeNeedsYouFactsFromLiveAndCurrentState()
-    {
-        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8')
-              .replace(/^import[^;]+;\s*/m, '')
-              .replace(/^export /gm, '');
-            const context = { structuredClone, validateActionRequest:value => value };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            let live = context.createActorProjection('conversation-alpha');
-            live = context.reduceActorEvent(live, {type:'task_snapshot', sequence:20, payload:{
-              schemaVersion:4, actorId:'conversation-alpha', turnId:'turn-alpha',
-              taskId:'task-alpha', planId:'plan-alpha', planRevision:1,
-              title:'Update GitHub safely', status:'active', gate:{mode:'auto',reason:null},
-              steps:[{stepId:'step-plan',order:1,kind:'llm',status:'done',
-                externalEffect:'not_started',addedBy:'initial'}]
-            }});
-            live = context.reduceActorEvent(live, {type:'task_step_changed', sequence:21, payload:{
-              taskId:'task-alpha', planRevision:2, changeKind:'added', step:{
-                stepId:'step-tool',order:2,kind:'tool',status:'running',
-                externalEffect:'not_started',addedBy:'replan',dependsOn:['step-plan'],
-                estimate:{kind:'duration',seconds:20},substeps:[{
-                  substepId:'substep-alpha',title:'Validate repository',status:'done'}]
-              }
-            }});
-            assert.equal(live.task.planId, 'plan-alpha');
-            assert.equal(live.task.planRevision, 2);
-            assert.equal(live.steps.size, 2);
-            assert.deepEqual(live.steps.get('step-tool').dependsOn, ['step-plan']);
-            live = context.reduceActorEvent(live, {type:'input_requested', sequence:23, payload:{
-              requestId:'input-alpha', turnId:'turn-alpha', taskId:'task-alpha', stepId:'step-input',
-              prompt:'Select regions', options:[{optionId:'option-sg',label:'Singapore'}],
-              allowFreeText:false, multiSelect:true, askedAt:'2026-08-01T12:00:00Z'
-            }});
-            assert.equal(live.pendingInput.requestId, 'input-alpha');
-            assert.equal(live.attentionKind, 'input');
-            live = context.reduceActorEvent(live, {type:'input_changed', sequence:24, payload:{
-              requestId:'input-alpha', clientRequestId:'client-input', outcome:'accepted'
-            }});
-            assert.equal(live.pendingInput, null);
-            assert.equal(live.latestInputResolution.requestId, 'input-alpha');
-
-            let current = context.createActorProjection('conversation-alpha');
-            const applied = context.applyCurrentStateResult(current, {status:'current', stateVersion:31, snapshot:{
-              actorId:'conversation-alpha', scopeId:'scope-alpha', stateVersion:31, progressSequence:31,
-              activeTurn:null, latestTurn:null, recentTerminalTurns:[], activeTask:{
-                schemaVersion:4, actorId:'conversation-alpha', turnId:'turn-alpha',
-                taskId:'task-alpha', planId:'plan-alpha', planRevision:2,
-                title:'Update GitHub safely', status:'active', gate:{mode:'confirm',reason:'Effect'},
-                steps:[{stepId:'step-tool',order:2,kind:'tool',status:'waiting',
-                  externalEffect:'not_started',addedBy:'replan',dependsOn:['step-plan'],
-                  substeps:[{substepId:'substep-alpha',title:'Validate repository',status:'done'}]}]
-              },
-              pendingInput:null, pendingApproval:{
-                approvalRequestId:'approval-alpha', turnId:'turn-alpha', taskId:'task-alpha',
-                stepId:'step-tool', toolName:'repository_delete', action:'repository.delete',
-                target:'repository:repo-alpha', reversibility:'irreversible', grantBoundary:'within_grant'
-              }, latestInputResolution:null, latestApprovalResolution:null, taskStatus:'active',
-              attentionKind:'approval', attentionSince:'2026-08-01T12:05:00Z',
-              activeStepSummary:'Delete repository.', pendingActions:[], controlFence:null,
-              latestControlResult:null, continuationAdmission:null
-            }});
-            assert.equal(applied.projection.pendingApproval.approvalRequestId, 'approval-alpha');
-            assert.equal(applied.projection.pendingApproval.reversibility, 'irreversible');
-            assert.equal(applied.projection.attentionKind, 'approval');
-            assert.equal(applied.projection.task.planId, 'plan-alpha');
-            assert.equal(applied.projection.task.planRevision, 2);
-            assert.equal(applied.projection.steps.get('step-tool').substeps[0].status, 'done');
-            assert.equal(applied.reloadWithoutCursor, false);
-            """;
-
-        var result = await RunNodeAsync(script, actorState);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_Uc2Projection_ShouldConvergeSteerStopReloadAndDistinctRestart()
-    {
-        var actorState = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantActorState);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8')
-              .replace(/^import[^;]+;\s*/m, '')
-              .replace(/^export /gm, '');
-            const context = { structuredClone, validateActionRequest:value => value };
-            vm.createContext(context);
-            vm.runInContext(source, context);
-
-            const completedSearch = {
-              stepId:'step-uc2-search',order:2,kind:'tool',status:'done',
-              description:'Aevatar web search - find Greek dinner candidates.',
-              source:{tool:{toolName:'web_search'}},externalEffect:'not_applied',
-              operation:{key:{conversationActorId:'conversation-uc2',turnId:'turn-uc2-1',
-                taskId:'task-uc2',stepId:'step-uc2-search',
-                operationId:'operation-uc2-search',operationGeneration:1},
-                kind:'tool',phase:'succeeded',mayChangeExternalState:false,
-                idempotent:true,idempotencyKey:'operation-uc2-search'},
-              addedBy:'replan',dependsOn:['step-uc2-gaps'],availableActions:{},
-              substeps:[
-                {substepId:'prepare-operation',title:'Build search query',status:'done'},
-                {substepId:'execute-operation',title:'Search current web results',status:'done'}
-              ]
-            };
-            const inputStep = {
-              stepId:'step-uc2-gaps',order:1,kind:'input',status:'done',
-              source:{input:{requestId:'input-uc2-gaps'}},externalEffect:'not_applied',
-              addedBy:'initial',availableActions:{}
-            };
-            let live = context.createActorProjection('conversation-uc2');
-            live = context.reduceActorEvent(live, {type:'task_snapshot',sequence:20,payload:{
-              schemaVersion:4,actorId:'conversation-uc2',turnId:'turn-uc2-1',
-              taskId:'task-uc2',planId:'plan-uc2',planRevision:2,
-              title:'Research a ready-to-book dinner shortlist',status:'active',
-              gate:{mode:'auto',reason:'Read and draft only.'},steps:[
-                inputStep,completedSearch,{
-                  stepId:'step-uc2-compare',order:3,kind:'llm',status:'running',
-                  source:{llm:{}},externalEffect:'not_started',addedBy:'replan',
-                  dependsOn:['step-uc2-search'],availableActions:{stop:true}
-                }
-              ]
-            }});
-            live = context.reduceActorEvent(live, {type:'task_snapshot',sequence:31,payload:{
-              schemaVersion:4,actorId:'conversation-uc2',turnId:'turn-uc2-2',
-              taskId:'task-uc2',planId:'plan-uc2',planRevision:3,
-              title:'Refine for 7 pm and a private room',status:'active',
-              gate:{mode:'auto',reason:'Read and draft only.'},steps:[
-                inputStep,completedSearch,{
-                  stepId:'step-uc2-compare',order:3,kind:'llm',status:'cancelled',
-                  source:{llm:{}},externalEffect:'not_started',addedBy:'replan',availableActions:{}
-                },{
-                  stepId:'step-uc2-refine',order:4,kind:'llm',status:'running',
-                  source:{llm:{}},externalEffect:'not_started',addedBy:'steering',
-                  operation:{key:{conversationActorId:'conversation-uc2',turnId:'turn-uc2-2',
-                    taskId:'task-uc2',stepId:'step-uc2-refine',
-                    operationId:'operation-uc2-refine',operationGeneration:1},
-                    kind:'llm',phase:'running',mayChangeExternalState:false,
-                    idempotent:true,idempotencyKey:'operation-uc2-refine'},
-                  dependsOn:['step-uc2-search'],availableActions:{stop:true}
-                }
-              ]
-            }});
-            assert.equal(live.task.taskId, 'task-uc2');
-            assert.equal(live.task.turnId, 'turn-uc2-2');
-            assert.equal(live.task.planRevision, 3);
-            assert.equal(live.steps.get('step-uc2-search').source.tool.toolName, 'web_search');
-            assert.equal(live.steps.get('step-uc2-search').substeps.length, 2);
-            assert.equal(live.steps.get('step-uc2-search').substeps[0].substepId, 'prepare-operation');
-            assert.equal(live.steps.get('step-uc2-search').operation.key.operationId, 'operation-uc2-search');
-            assert.equal(live.steps.get('step-uc2-compare').status, 'cancelled');
-            assert.equal(live.steps.get('step-uc2-refine').addedBy, 'steering');
-
-            const receipt = 'Stopped. Partial-work receipt: 2 completed steps were retained. ' +
-              'Retained: Answer logistics and agree to research-only scope; ' +
-              'Aevatar web search - find Greek dinner candidates. ' +
-              'Unfinished work was fenced; the in-flight operation could not be proven cancelled. ' +
-              'Fenced: Refine for 7 pm and a private room. No external effect was applied. ' +
-              'Late evidence cannot advance this stopped task.';
-            const stopped = context.applyCurrentStateResult(
-              context.createActorProjection('conversation-uc2'), {
-                status:'current',stateVersion:36,snapshot:{
-                  actorId:'conversation-uc2',scopeId:'scope-uc2',stateVersion:36,
-                  progressSequence:36,
-                  activeTurn:{turnId:'turn-uc2-2',taskId:'task-uc2',status:'stopped'},
-                  latestTurn:{turnId:'turn-uc2-2',taskId:'task-uc2',status:'stopped',safeMessage:receipt},
-                  recentTerminalTurns:[{turnId:'turn-uc2-2',taskId:'task-uc2',status:'stopped'}],
-                  activeTask:{schemaVersion:4,actorId:'conversation-uc2',turnId:'turn-uc2-2',
-                    taskId:'task-uc2',planId:'plan-uc2',planRevision:3,status:'stopped',
-                    safeMessage:receipt,gate:{mode:'auto',reason:'Read and draft only.'},steps:[
-                      inputStep,completedSearch,{
-                        stepId:'step-uc2-compare',order:3,kind:'llm',status:'cancelled',
-                        source:{llm:{}},externalEffect:'not_started',addedBy:'replan',availableActions:{}
-                      },{
-                        stepId:'step-uc2-refine',order:4,kind:'llm',status:'cancelled',
-                        source:{llm:{}},externalEffect:'not_applied',addedBy:'steering',
-                        operation:{key:{conversationActorId:'conversation-uc2',turnId:'turn-uc2-2',
-                          taskId:'task-uc2',stepId:'step-uc2-refine',
-                          operationId:'operation-uc2-refine',operationGeneration:1},
-                          kind:'llm',phase:'running',mayChangeExternalState:false,
-                          idempotent:true,idempotencyKey:'operation-uc2-refine'},availableActions:{}
-                      }
-                    ]},
-                  pendingInput:null,pendingApproval:null,latestInputResolution:null,
-                  latestApprovalResolution:null,taskStatus:'stopped',attentionKind:'none',
-                  activeStepSummary:null,pendingActions:[],
-                  controlFence:{kind:'stop',requestId:'stop-uc2-1',clientRequestId:'client-stop-uc2-1',
-                    turnId:'turn-uc2-2',taskId:'task-uc2',outcome:'uncancellable',safeMessage:receipt},
-                  latestControlResult:null,continuationAdmission:null
-                }
-              });
-            assert.equal(stopped.reloadWithoutCursor, false);
-            assert.equal(stopped.projection.task.status, 'stopped');
-            assert.equal(stopped.projection.controlFence.requestId, 'stop-uc2-1');
-            assert.equal(stopped.projection.controlFence.outcome, 'uncancellable');
-            assert.match(stopped.projection.controlFence.safeMessage, /No external effect was applied/);
-            assert.equal(stopped.projection.steps.get('step-uc2-search').substeps.length, 2);
-            assert.equal(stopped.projection.steps.get('step-uc2-search').operation.phase, 'succeeded');
-            assert.equal(stopped.projection.steps.get('step-uc2-refine').status, 'cancelled');
-
-            const restarted = context.applyCurrentStateResult(stopped.projection, {
-              status:'current',stateVersion:48,snapshot:{
-                actorId:'conversation-uc2',scopeId:'scope-uc2',stateVersion:48,progressSequence:48,
-                activeTurn:{turnId:'turn-uc2b-1',taskId:'task-uc2b',status:'active'},
-                latestTurn:{turnId:'turn-uc2b-1',taskId:'task-uc2b',status:'active'},
-                recentTerminalTurns:[{turnId:'turn-uc2-2',taskId:'task-uc2',status:'stopped'}],
-                activeTask:{schemaVersion:4,actorId:'conversation-uc2',turnId:'turn-uc2b-1',
-                  taskId:'task-uc2b',planId:'plan-uc2b',planRevision:1,status:'active',
-                  gate:{mode:'auto',reason:'Read and draft only.'},steps:[{
-                    stepId:'step-uc2b-search',order:1,kind:'tool',status:'running',
-                    source:{tool:{toolName:'web_search'}},externalEffect:'not_started',
-                    operation:{key:{conversationActorId:'conversation-uc2',turnId:'turn-uc2b-1',
-                      taskId:'task-uc2b',stepId:'step-uc2b-search',
-                      operationId:'operation-uc2b-search',operationGeneration:1},
-                      kind:'tool',phase:'running',mayChangeExternalState:false,
-                      idempotent:true,idempotencyKey:'operation-uc2b-search'},
-                    addedBy:'initial',availableActions:{stop:true}
-                  }]},
-                pendingInput:null,pendingApproval:null,latestInputResolution:null,
-                latestApprovalResolution:null,taskStatus:'active',attentionKind:'none',
-                activeStepSummary:null,pendingActions:[],controlFence:null,
-                latestControlResult:null,continuationAdmission:null
-              }
-            });
-            assert.equal(restarted.projection.task.taskId, 'task-uc2b');
-            assert.equal(restarted.projection.task.turnId, 'turn-uc2b-1');
-            assert.equal(restarted.projection.steps.has('step-uc2-refine'), false);
-            assert.equal(restarted.projection.steps.get('step-uc2b-search').source.tool.toolName, 'web_search');
-            assert.equal(restarted.projection.steps.get('step-uc2b-search').operation.key.taskId, 'task-uc2b');
-            assert.equal(restarted.projection.controlFence, null);
-            """;
-
-        var result = await RunNodeAsync(script, actorState);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
-    }
-
-    [Fact]
-    public async Task WorkflowStudio_ConversationProtocol_ShouldPreserveAuthoritativeAttentionSummary()
-    {
-        var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
-        const string script = """
-            const assert = require('node:assert/strict');
-            const vm = require('node:vm');
-            const source = require('node:fs').readFileSync(0, 'utf8');
-            const start = source.indexOf('export function normalizeConversationIndex(');
-            const end = source.indexOf('\nexport function normalizeStoredMessages(', start);
-            assert.notEqual(start, -1);
-            assert.notEqual(end, -1);
-            const context = {};
-            vm.createContext(context);
-            vm.runInContext(source.slice(start, end).replace(/^export /, ''), context);
-            const result = context.normalizeConversationIndex({conversations:[{
-              id:'conversation-alpha', title:'Deploy', attentionKind:'approval',
-              attentionSince:'2026-08-01T12:05:00Z', activeStepSummary:'Delete repository.',
-              taskStatus:'active', stateVersion:31
-            }]});
-            assert.deepEqual(JSON.parse(JSON.stringify(result[0])), {
-              id:'conversation-alpha', title:'Deploy', serviceId:'', serviceKind:'', createdAt:null,
-              updatedAt:null, messageCount:0, llmRoute:null, llmModel:null, taskStatus:'active',
-              attentionKind:'approval', attentionSince:'2026-08-01T12:05:00Z',
-              activeStepSummary:'Delete repository.', stateVersion:31
-            });
-            """;
-
-        var result = await RunNodeAsync(script, protocol);
-
-        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
@@ -2291,7 +202,7 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
-    public async Task WorkflowObservatory_ShouldOwnRouteStateAndOwnerOnlyApprovalActions()
+    public async Task WorkflowObservatory_ShouldOwnRouteStateAndOwnerOnlyRunControlActions()
     {
         var html = await GetObservatoryHtmlAsync();
         const string script = """
@@ -2300,8 +211,16 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             const html = require('node:fs').readFileSync(0, 'utf8');
 
             function functionSource(name, nextName) {
-              const start = html.indexOf('function ' + name + '(');
-              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
               assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
               assert.notEqual(end, -1, nextName + ' must follow ' + name);
               return html.slice(start, end);
@@ -2312,6 +231,9 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             vm.runInContext(`
               ${functionSource('readObservatoryRoute', 'writeObservatoryRoute')}
               ${functionSource('runDetailRequestPath', 'runGraphRequestPath')}
+              ${functionSource('resolveRunControlTarget', 'canStopRun')}
+              ${functionSource('canStopRun', 'buildStopRequest')}
+              ${functionSource('buildStopRequest', 'requestStopRun')}
               ${functionSource('findActiveApproval', 'canApproveRun')}
               ${functionSource('canApproveRun', 'buildApprovalRequest')}
               ${functionSource('buildApprovalRequest', 'renderApprovalPanel')}
@@ -2329,10 +251,41 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(vm.runInContext('runDetailRequestPath', context)('run-external', { isAdmin:true, currentScope:null, ownScope:'scope-owner' }, [], false), '/api/workflow/observatory/admin/runs/run-external');
             assert.equal(vm.runInContext('runDetailRequestPath', context)('run-external', { isAdmin:true, currentScope:'scope-external', ownScope:'scope-owner' }, [], false), '/api/workflow/observatory/runs/run-external?scope=scope-external');
 
-            const detail = { summary: { runId: 'run-alpha', scopeId: 'scope-alpha' }, steps: [
+            const detail = { summary: { runId: 'run-alpha', scopeId: 'scope-alpha', status: 'running' }, steps: [
               { stepId: 'named-approval-only', suspensionType: '', completedAtUtc: null },
               { stepId: 'review', suspensionType: 'human_approval', completedAtUtc: null }
             ] };
+            const stopDetail = { summary: { runId: 'run alpha/1', scopeId: 'scope-alpha', status: 'running' } };
+            const target = vm.runInContext('resolveRunControlTarget', context)(stopDetail, 'run alpha/1', [{
+              runId: 'run alpha/1', actorId: 'actor-alpha', scopeId: 'scope-alpha', status: 'running'
+            }]);
+            assert.deepEqual(JSON.parse(JSON.stringify(target)), {
+              scopeId: 'scope-alpha', runId: 'run alpha/1', actorId: 'actor-alpha'
+            });
+            assert.equal(vm.runInContext('canStopRun', context)(target, 'scope-alpha'), true);
+            assert.equal(vm.runInContext('canStopRun', context)(target, 'scope-admin'), false);
+            assert.equal(vm.runInContext('canStopRun', context)(target, ''), false);
+            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('buildStopRequest', context)(target, 'stop-command-alpha'))), {
+              path: '/api/scopes/scope-alpha/runs/run%20alpha%2F1:stop',
+              body: { reason: 'user requested stop', commandId: 'stop-command-alpha', actorId: 'actor-alpha' }
+            });
+            const deepLinkTarget = vm.runInContext('resolveRunControlTarget', context)(
+              { summary: { runId: 'run-deep-link', scopeId: 'scope-alpha', status: 'running' } },
+              'run-deep-link', []);
+            assert.deepEqual(JSON.parse(JSON.stringify(deepLinkTarget)), {
+              scopeId: 'scope-alpha', runId: 'run-deep-link', actorId: ''
+            });
+            assert.equal(vm.runInContext('resolveRunControlTarget', context)(
+              { summary: { runId: 'run-stale', scopeId: 'scope-alpha', status: 'running' } },
+              'run alpha/1', [{ runId: 'run alpha/1', actorId: 'actor-alpha', scopeId: 'scope-alpha' }]
+            ), null);
+            assert.equal(vm.runInContext('resolveRunControlTarget', context)(
+              { summary: { runId: 'run alpha/1', scopeId: 'scope-alpha', status: 'stopped' } },
+              'run alpha/1', [{ runId: 'run alpha/1', actorId: 'actor-alpha', scopeId: 'scope-alpha' }]
+            ), null);
+            assert.equal(vm.runInContext('resolveRunControlTarget', context)(stopDetail, 'run alpha/1', [{
+              runId: 'run alpha/1', actorId: 'actor-other', scopeId: 'scope-other'
+            }]), null);
             const approval = vm.runInContext('findActiveApproval', context)(detail);
             assert.equal(approval.stepId, 'review');
             assert.equal(vm.runInContext('canApproveRun', context)(detail, 'scope-alpha'), true);
@@ -2358,15 +311,1142 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
               }
             });
             assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('detailTabIds()', context))),
-              ['timeline', 'steps', 'diagnostics', 'logs', 'artifacts', 'graph']);
+              ['timeline', 'trajectory', 'steps', 'diagnostics', 'logs', 'artifacts', 'graph']);
             """;
 
         var result = await RunNodeAsync(script, html);
 
         result.ExitCode.Should().Be(0, result.Error);
         html.Should().Contain("批准并继续");
+        html.Should().Contain("停止当前运行");
+        html.Should().Contain("停止请求已受理，等待 committed 状态更新");
+        html.Should().Contain("stop-not-accepted");
         html.Should().Contain("/api/scopes/");
         html.Should().Contain(":resume");
+        html.Should().Contain(":stop");
+        html.Should().NotContain("不可修改任何运行");
+        html.Should().Contain("function renderTimeline(detail)");
+        html.Should().Contain("function renderTrajectory(detail)");
+        html.Should().Contain("aria-label\":\"事件时间线\"");
+        html.Should().Contain("id:\"panel-trajectory\"");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_ApiRequest_ShouldTreatOnlyGetNotFoundAsEmpty()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+            function response(status, body) {
+              return {
+                status,
+                ok: status >= 200 && status < 300,
+                async json(){ return body; },
+                async text(){ return body == null ? '' : JSON.stringify(body); }
+              };
+            }
+
+            let nextResponse = null;
+            const calls = [];
+            const context = {
+              fetchWithConsoleAuth: async (path, options) => {
+                calls.push({ path, options: options || {} });
+                return nextResponse;
+              }
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('apiRequest', 'api')}
+              ${functionSource('buildStopRequest', 'requestStopRun')}
+              ${functionSource('requestStopRun', 'stopTargetKey')}
+            `, context);
+
+            (async function(){
+              nextResponse = response(404, { code:'QUERY_NOT_FOUND' });
+              assert.equal(await context.apiRequest('/api/query/missing'), null);
+
+              for(const [status, code] of [[404,'SCOPE_RUN_NOT_FOUND'],[403,'SCOPE_ACCESS_DENIED'],[409,'SCOPE_RUN_AMBIGUOUS'],[500,'STOP_FAILED']]){
+                nextResponse = response(status, { code });
+                await assert.rejects(
+                  () => context.apiRequest('/api/scopes/scope-alpha/runs/run-alpha:stop', { method:'POST' }),
+                  new RegExp(code)
+                );
+              }
+
+              nextResponse = response(202, { accepted:true, acceptedCommandId:'command-alpha' });
+              assert.deepEqual(
+                JSON.parse(JSON.stringify(await context.apiRequest('/api/scopes/scope-alpha/runs/run-alpha:stop', { method:'POST' }))),
+                { accepted:true, acceptedCommandId:'command-alpha' }
+              );
+              assert.equal(calls.at(-1).options.method, 'POST');
+
+              nextResponse = response(202, { accepted:true, acceptedCommandId:'command-alpha' });
+              assert.deepEqual(
+                JSON.parse(JSON.stringify(await context.requestStopRun(
+                  { scopeId:'scope alpha', runId:'run alpha/1', actorId:'actor-alpha' },
+                  'command-alpha'))),
+                { accepted:true, acceptedCommandId:'command-alpha' }
+              );
+              const stopCall = calls.at(-1);
+              assert.equal(stopCall.path, '/api/scopes/scope%20alpha/runs/run%20alpha%2F1:stop');
+              assert.equal(stopCall.options.method, 'POST');
+              assert.equal(stopCall.options.headers['Content-Type'], 'application/json');
+              assert.deepEqual(JSON.parse(stopCall.options.body), {
+                reason:'user requested stop', commandId:'command-alpha', actorId:'actor-alpha'
+              });
+
+              nextResponse = response(202, { accepted:false });
+              await assert.rejects(
+                () => context.requestStopRun(
+                  { scopeId:'scope-alpha', runId:'run-alpha', actorId:'actor-alpha' },
+                  'command-alpha'),
+                /stop-not-accepted/
+              );
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_StopControl_ShouldLockAttemptsReuseCommandIdAndIgnoreStaleCompletion()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            const targetStart = html.indexOf('function resolveRunControlTarget(');
+            const buildRequestStart = html.indexOf('\nfunction buildStopRequest(', targetStart);
+            const stateStart = html.indexOf('function stopTargetKey(');
+            const end = html.indexOf('\nfunction findActiveApproval(', stateStart);
+            assert.notEqual(targetStart, -1, 'stop target resolution must exist in the served observatory asset');
+            assert.notEqual(buildRequestStart, -1, 'buildStopRequest must follow stop target resolution');
+            assert.notEqual(stateStart, -1, 'stop control state must exist in the served observatory asset');
+            assert.notEqual(end, -1, 'approval helpers must follow the stop control');
+
+            let renderCount = 0;
+            const context = {
+              randomString: () => 'stable-command-suffix',
+              render: () => { renderCount += 1; },
+              requestStopRun: null,
+              document: { getElementById: () => null },
+              setTimeout: () => 0
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(targetStart, buildRequestStart) + '\n' + html.slice(stateStart, end), context);
+
+            const targetA = { scopeId:'scope-alpha', runId:'run-alpha', actorId:'actor-alpha' };
+            const targetB = { scopeId:'scope-alpha', runId:'run-beta', actorId:'actor-beta' };
+
+            (async function(){
+              const calls = [];
+              let releaseFirst;
+              context.requestStopRun = (target, commandId) => {
+                calls.push({ target, commandId });
+                return new Promise(resolve => { releaseFirst = resolve; });
+              };
+              const first = context.submitStopRun(targetA);
+              const duplicate = await context.submitStopRun(targetA);
+              assert.equal(duplicate, false);
+              assert.equal(calls.length, 1, 'pending lock must prevent a duplicate stop command');
+              releaseFirst({ accepted:true });
+              assert.equal(await first, true);
+              let state = vm.runInContext('stopControlState', context);
+              assert.equal(state.accepted, true);
+              assert.equal(state.commandId, 'observatory-stop-stable-command-suffix');
+
+              context.resetStopControlState();
+              context.requestStopRun = async (target, commandId) => {
+                calls.push({ target, commandId });
+                throw new Error('network-down');
+              };
+              assert.equal(await context.submitStopRun(targetA), false);
+              const retryCommandId = vm.runInContext('stopControlState.commandId', context);
+              assert.equal(await context.submitStopRun(targetA), false);
+              assert.equal(vm.runInContext('stopControlState.commandId', context), retryCommandId);
+              assert.equal(calls.at(-1).commandId, retryCommandId, 'manual retry must reuse the same command id');
+
+              context.resetStopControlState();
+              let releaseStale;
+              context.requestStopRun = () => new Promise(resolve => { releaseStale = resolve; });
+              const stale = context.submitStopRun(targetA);
+              context.syncStopControlState(targetB);
+              releaseStale({ accepted:true });
+              assert.equal(await stale, false);
+              state = vm.runInContext('stopControlState', context);
+              assert.equal(state.key, 'scope-alpha\nrun-beta');
+              assert.equal(state.accepted, false, 'an old response must not mark the newly selected run accepted');
+
+              context.resetStopControlState();
+              context.openStopConfirmation({scopeId:'scope-alpha', runId:'run-alpha', actorId:''});
+              const hydratedCommandId = vm.runInContext('stopControlState.commandId', context);
+              context.syncStopControlState(targetA);
+              state = vm.runInContext('stopControlState', context);
+              assert.equal(state.key, 'scope-alpha\nrun-alpha');
+              assert.equal(state.commandId, hydratedCommandId, 'actor id hydration must preserve command identity');
+              assert.equal(state.confirming, true, 'actor id hydration must preserve confirmation state');
+
+              function createNode(tag, attrs = {}, content) {
+                const listeners = {};
+                return {
+                  tag, attrs:{...attrs}, children:[], innerHTML:content == null ? '' : String(content),
+                  disabled:false, listeners,
+                  appendChild(child){ this.children.push(child); return child; },
+                  addEventListener(type, listener){ listeners[type] = listener; },
+                  querySelector(){ return null; },
+                  focus(){},
+                };
+              }
+              function createHead(){
+                const top = createNode('div', {class:'rh-top'});
+                const head = createNode('header');
+                head.querySelector = selector => selector === '.rh-top' ? top : null;
+                return {head, top};
+              }
+
+              context.el = createNode;
+              context.ICON = {stop:'[stop]'};
+              context.esc = value => String(value).replace(/[&<>\"]/g, character => ({
+                '&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;',
+              })[character]);
+              context.state = {selectedRunId:'run-alpha'};
+              context.cache = {runs:[{runId:'run-alpha', actorId:'actor-alpha', scopeId:'scope-alpha'}]};
+              context.adminState = {ownScope:'scope-alpha'};
+              const detail = {summary:{runId:'run-alpha', scopeId:'scope-alpha', status:'running'}};
+
+              context.resetStopControlState();
+              let rendered = createHead();
+              context.renderStopControl(detail, rendered.head);
+              assert.equal(rendered.top.children.length, 1, 'own-scope running detail must show one stop control');
+              const stopButton = rendered.top.children[0].children[0];
+              assert.equal(stopButton.attrs.id, 'stopCurrentRunButton');
+              stopButton.listeners.click();
+              assert.equal(vm.runInContext('stopControlState.confirming', context), true);
+
+              rendered = createHead();
+              context.renderStopControl(detail, rendered.head);
+              assert.equal(rendered.head.children.length, 1, 'confirmation panel must render below the header');
+              const panel = rendered.head.children[0];
+              assert.equal(panel.attrs.role, 'group', 'inline confirmation must not claim modal dialog behavior');
+              const confirmationCommandId = vm.runInContext('stopControlState.commandId', context);
+              let escaped = false;
+              panel.listeners.keydown({key:'Escape', preventDefault(){ escaped = true; }});
+              assert.equal(escaped, true);
+              assert.equal(vm.runInContext('stopControlState.confirming', context), false);
+              assert.equal(
+                vm.runInContext('stopControlState.commandId', context), confirmationCommandId,
+                'cancel/reopen must keep the same idempotency key for the selected run');
+
+              context.adminState.ownScope = 'scope-other';
+              rendered = createHead();
+              context.renderStopControl(detail, rendered.head);
+              assert.equal(rendered.top.children.length, 0, 'cross-scope detail must stay read-only');
+
+              context.adminState.ownScope = 'scope-alpha';
+              context.resetStopControlState();
+              context.syncStopControlState(targetA);
+              vm.runInContext('stopControlState.accepted = true', context);
+              rendered = createHead();
+              context.renderStopControl(detail, rendered.head);
+              assert.equal(rendered.top.children[0].children[0].attrs.role, 'status');
+              assert.ok(renderCount > 0);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_Timeline_ShouldRemainDefaultAndKeepCompleteEventDetailsBesideTrajectory()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function functionSourceToMarker(name, marker) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf(marker, start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, marker + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function createNode(tag, attrs = {}, content) {
+              const node = {
+                tag, attrs: {...attrs}, className: attrs.class || '', children: [], style: {},
+                innerHTML: content == null ? '' : String(content),
+                appendChild(child) { this.children.push(child); return child; },
+                setAttribute(key, value) { this.attrs[key] = String(value); },
+                insertAdjacentHTML(_position, value) { this.innerHTML += String(value); },
+                addEventListener() {},
+                querySelector() { return null; },
+                classList: { add() {}, toggle() { return false; } },
+              };
+              return node;
+            }
+
+            function treeText(node) {
+              return [node.innerHTML, ...node.children.map(treeText)].filter(Boolean).join('\n');
+            }
+
+            const routeContext = {URLSearchParams, decodeURIComponent};
+            vm.createContext(routeContext);
+            vm.runInContext(functionSource('readObservatoryRoute', 'writeObservatoryRoute'), routeContext);
+            assert.equal(routeContext.readObservatoryRoute('', '').tab, 'timeline');
+            assert.equal(routeContext.readObservatoryRoute('?tab=trajectory', '').tab, 'trajectory');
+            assert.equal(routeContext.readObservatoryRoute('?tab=unknown', '').tab, 'timeline');
+
+            const detailSource = functionSource('renderDetail', 'parseRunId');
+            assert.match(detailSource,
+              /timelinePanel\.appendChild\(renderTimeline\(detail\)\)/,
+              'the original Timeline panel must remain wired to renderTimeline');
+            assert.match(detailSource,
+              /if\(state\.activeTab !== "timeline"\) timelinePanel\.hidden = true/,
+              'Timeline must remain visible for the default timeline tab');
+            assert.match(detailSource,
+              /trajectoryPanel\.appendChild\(renderTrajectory\(detail\)\)/,
+              'Trajectory must render through its own sibling panel');
+            assert.match(detailSource,
+              /if\(state\.activeTab !== "trajectory"\) trajectoryPanel\.hidden = true/,
+              'Trajectory visibility must be independent from Timeline');
+            assert.ok(
+              detailSource.indexOf('tp.appendChild(timelinePanel)') <
+                detailSource.indexOf('tp.appendChild(trajectoryPanel)'),
+              'Trajectory must be appended beside, not in place of, Timeline');
+
+            const selectionContext = {
+              state: {
+                selectedRunId: null, scenario: 'normal', activeTab: 'trajectory',
+                expandedOperations: new Set(['model:old']), selectedNodeId: 'node-old', graphView: {},
+              },
+              pendingDetailScrollReset: false,
+              routePatch: null,
+              writeObservatoryRoute: null,
+              document: {body: {setAttribute() {}}},
+              resetStopControlState() {},
+              render() {},
+              loadDetail() {},
+            };
+            selectionContext.writeObservatoryRoute = patch => { selectionContext.routePatch = patch; };
+            vm.createContext(selectionContext);
+            vm.runInContext(functionSource('selectRun', 'fetchMe'), selectionContext);
+            selectionContext.selectRun('run-new');
+            assert.equal(selectionContext.state.activeTab, 'timeline');
+            assert.deepEqual(JSON.parse(JSON.stringify(selectionContext.routePatch)),
+              {run: 'run-new', tab: 'timeline'});
+            assert.equal(selectionContext.state.expandedOperations.size, 0);
+
+            const renderContext = {
+              el: createNode,
+              esc: value => String(value == null ? '' : value).replace(/[&<>\"]/g, character => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;',
+              })[character]),
+              initials: value => String(value || '').slice(0, 2).toUpperCase(),
+              clockUTC: value => String(value).slice(11, 19),
+              kindIcon: kind => '[' + kind + ']',
+              fmtNum: value => String(value),
+              colorJSON: value => 'JSON:' + String(value),
+              dataLookup(data, keys) {
+                if (!data) return '';
+                const entries = Object.entries(data);
+                for (const key of keys) {
+                  const found = entries.find(([candidate]) => candidate.toLowerCase() === key.toLowerCase());
+                  if (found && String(found[1]).trim()) return String(found[1]);
+                }
+                return '';
+              },
+              KIND: {
+                Message: {label: '模型回复'}, ToolCall: {label: '工具调用'},
+                HumanInputRequest: {label: '待人工确认'}, StepFinished: {label: '步骤完成'},
+                RunError: {label: '运行错误'},
+              },
+              REPLY_KINDS: new Set(['Message', 'TextMessage']),
+              STEPTYPE_LABEL: {llm: '模型', tool: '工具', human: '人工'},
+              DATA_MODEL_KEYS: ['model', 'model_id', 'modelId', 'provider'],
+              DATA_TOKEN_KEYS: [
+                ['prompt', ['prompt_tokens', 'promptTokens']],
+                ['completion', ['completion_tokens', 'completionTokens']],
+                ['total', ['total_tokens', 'totalTokens']],
+              ],
+              TOKEN_CHIP_LABEL: {prompt: '输入', completion: '输出', total: '合计'},
+              DATA_CHIP_KEYS: new Set([
+                'model', 'model_id', 'modelid', 'provider', 'prompt_tokens', 'prompttokens',
+                'completion_tokens', 'completiontokens', 'total_tokens', 'totaltokens',
+                'call_id', 'arguments_json', 'result_json', 'success', 'error',
+              ]),
+              ICON: {chevron: '[chevron]', human: '[human]', lock: '[lock]', check: '[check]', x: '[x]', copy: '[copy]'},
+              state: {expanded: new Set(['call-success', 'call-failure'])},
+              setTimeout,
+            };
+            vm.createContext(renderContext);
+            vm.runInContext(`
+              ${functionSource('renderReplyBubble', 'renderDataDetails')}
+              ${functionSource('renderDataDetails', 'operationTypeIcon')}
+              ${functionSource('renderTimeline', 'renderToolCall')}
+              ${functionSource('renderToolCall', 'jsonField')}
+              ${functionSourceToMarker('jsonField', '\n/* ---- Graph')}
+            `, renderContext);
+
+            const rendered = renderContext.renderTimeline({
+              summary: {status: 'completed'},
+              timeline: [
+                {
+                  kind: 'Message', timestampUtc: '2026-08-14T01:00:00Z', stepId: 'step-alpha',
+                  stepType: 'llm', agentId: 'agent-alpha', content: 'Deployment is degraded.',
+                  data: {
+                    model: 'deepseek-chat', prompt_tokens: '120', completion_tokens: '20',
+                    total_tokens: '140', finish_reason: 'stop',
+                  },
+                },
+                {
+                  kind: 'ToolCall', timestampUtc: '2026-08-14T01:00:01Z',
+                  toolCall: {
+                    callId: 'call-success', toolName: 'search', success: true,
+                    argumentsJson: '{\"query\":\"deployment status\"}',
+                    resultJson: '{\"status\":\"degraded\"}', error: '',
+                  },
+                },
+                {
+                  kind: 'ToolCall', timestampUtc: '2026-08-14T01:00:02Z',
+                  toolCall: {
+                    callId: 'call-failure', toolName: 'fetch_details', success: false,
+                    argumentsJson: '{\"id\":\"deployment-alpha\"}', resultJson: '',
+                    error: 'upstream unavailable',
+                  },
+                },
+                {
+                  kind: 'HumanInputRequest', timestampUtc: '2026-08-14T01:00:03Z',
+                  message: 'Approve deployment?',
+                },
+                {
+                  kind: 'StepFinished', timestampUtc: '2026-08-14T01:00:04Z',
+                  stepId: 'step-alpha', message: '120 ms · 140 tokens',
+                },
+                {
+                  kind: 'RunError', timestampUtc: '2026-08-14T01:00:05Z',
+                  message: 'provider unavailable',
+                },
+              ],
+            });
+
+            const timeline = rendered.children[1];
+            assert.equal(timeline.tag, 'ol');
+            assert.equal(timeline.attrs['aria-label'], '事件时间线');
+            assert.equal(timeline.children.length, 6, 'trajectory must not replace or filter timeline events');
+            const text = treeText(rendered);
+            for (const expected of [
+              '按时间自上而下 · 时间戳为 UTC', '模型回复', 'step-alpha', '@agent-alpha',
+              'Deployment is degraded.', 'deepseek-chat', '120', '20', '140',
+              '详情 · 1', 'finish_reason', 'search', 'call-success', '参数 · arguments',
+              'JSON:{\"query\":\"deployment status\"}', '结果 · result',
+              'JSON:{\"status\":\"degraded\"}', 'call-failure', '错误 · error',
+              'upstream unavailable', '需要关注 · 等待人工确认', 'Approve deployment?',
+              '120 ms', '140 tokens', 'provider unavailable',
+            ]) assert.ok(text.includes(expected), 'timeline must retain ' + expected);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        html.Should().Contain(".tabs::-webkit-scrollbar { display: none; }");
+        html.Should().Contain("display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px;");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_RequestTraceFeed_ShouldNormalizeCoverageAndScopeTheActivityRequest()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function singleLineFunctionSource(name) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\n', start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, name + ' must end on its declaration line');
+              return html.slice(start, end);
+            }
+
+            const context = {
+              URLSearchParams,
+              adminState: { isAdmin: false, currentScope: null },
+              filterState: { status: '', origin: '', definition: '', schedule: '', from: '', to: '' },
+              cache: { runs: ['preserved'], runFeed: { marker: 'preserved' } },
+              state: { scenario: 'normal' },
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('isActivityRunFeedEnvelope', 'normalizeActivityRunFeed')}
+              ${functionSource('normalizeActivityRunFeed', 'activityRunFeedRequestPath')}
+              ${singleLineFunctionSource('activityRunFeedRequestPath')}
+              ${functionSource('listQueryParams', 'hasActiveFilters')}
+              ${functionSource('requestTraceCountLabel', 'requestTraceCoverageLabel')}
+              ${functionSource('requestTraceCoverageLabel', 'requestTracePreview')}
+            `, context);
+
+            const feed = {
+              items: [{ runId: 'run-alpha' }, { runId: 'run-beta' }],
+              nextCursor: 'cursor-beta',
+              hasMore: true,
+              totalCount: 247,
+            };
+            assert.equal(vm.runInContext('isActivityRunFeedEnvelope', context)(feed), true);
+            assert.equal(vm.runInContext('isActivityRunFeedEnvelope', context)({ items: [], hasMore: 'false' }), false);
+            assert.equal(vm.runInContext('isActivityRunFeedEnvelope', context)({ hasMore: false }), false);
+
+            const normalized = vm.runInContext('normalizeActivityRunFeed', context)(feed);
+            assert.deepEqual(JSON.parse(JSON.stringify(normalized)), feed);
+            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('normalizeActivityRunFeed', context)({
+              items: 'invalid', nextCursor: 7, hasMore: 'true', totalCount: -1,
+            }))), {
+              items: [], nextCursor: null, hasMore: false, totalCount: null,
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(vm.runInContext('normalizeActivityRunFeed', context)(null))), {
+              items: [], nextCursor: null, hasMore: false, totalCount: null,
+            });
+
+            assert.equal(
+              vm.runInContext('activityRunFeedRequestPath', context)('?take=100&includeTotalCount=true'),
+              '/api/workflow/observatory/activity-runs?take=100&includeTotalCount=true',
+            );
+            assert.equal(
+              vm.runInContext('requestTraceCountLabel', context)(feed, 100),
+              '100 / 247',
+            );
+            assert.equal(
+              vm.runInContext('requestTraceCoverageLabel', context)(feed, 100),
+              '显示最近 100 条，共 247 条；仍有更多请求轨迹',
+            );
+            assert.equal(
+              vm.runInContext('requestTraceCountLabel', context)({ items: [], hasMore: true }, 100),
+              '100+',
+            );
+            assert.equal(
+              vm.runInContext('requestTraceCoverageLabel', context)({ items: [], hasMore: false, totalCount: 2 }, 2),
+              '共 2 条请求轨迹',
+            );
+
+            assert.equal(
+              vm.runInContext('listQueryParams', context)(),
+              '?take=100&includeTotalCount=true',
+            );
+            assert.equal(
+              vm.runInContext('listQueryParams', context)('cursor alpha+/='),
+              '?take=100&includeTotalCount=true&cursor=cursor+alpha%2B%2F%3D',
+            );
+            assert.equal(
+              vm.runInContext('listQueryParams', context)('cursor-alpha', 240),
+              '?take=240&includeTotalCount=true&cursor=cursor-alpha',
+            );
+            assert.equal(
+              vm.runInContext('listQueryParams', context)(null, 999),
+              '?take=500&includeTotalCount=true',
+            );
+            assert.equal(
+              vm.runInContext('listQueryParams', context)(null, -5),
+              '?take=1&includeTotalCount=true',
+            );
+            context.adminState.isAdmin = true;
+            context.adminState.currentScope = 'scope alpha';
+            Object.assign(context.filterState, {
+              status: 'failed',
+              origin: 'ad-hoc-chat',
+              definition: 'wf/alpha',
+              schedule: 'schedule-alpha',
+              from: '2026-08-12T00:00:00Z',
+              to: '2026-08-13T00:00:00Z',
+            });
+            assert.equal(
+              vm.runInContext('listQueryParams', context)(),
+              '?scope=scope+alpha&status=failed&origin=ad-hoc-chat&definition=wf%2Falpha&schedule=schedule-alpha&from=2026-08-12T00%3A00%3A00Z&to=2026-08-13T00%3A00%3A00Z&take=100&includeTotalCount=true',
+            );
+            context.adminState.currentScope = '__all__';
+            assert.match(vm.runInContext('listQueryParams', context)(), /^\?scope=__all__&/);
+
+            context.api = async path => {
+              assert.equal(path, '/api/workflow/observatory/activity-runs?invalid=1');
+              return { items: [] };
+            };
+            context.activityRunFeedRequestPath = query => '/api/workflow/observatory/activity-runs' + query;
+            context.listQueryParams = () => '?invalid=1';
+            vm.runInContext(functionSource('refreshRuns', 'refreshDetail'), context);
+            (async () => {
+              assert.equal(await vm.runInContext('refreshRuns', context)(), false);
+              assert.equal(context.state.scenario, 'globalError');
+              assert.deepEqual(context.cache.runs, ['preserved']);
+              assert.deepEqual(context.cache.runFeed, { marker: 'preserved' });
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        html.Should().Contain("throw new Error(\"invalid-activity-run-feed\")");
+        html.Should().NotContain("/api/workflow/observatory/runs/activity");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_OperationLedger_ShouldKeepRepeatedSessionRepliesAndHonestDurations()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            const context = {
+              Date, Number,
+              REPLY_KINDS: new Set(['Message', 'TextMessage']),
+              DATA_MODEL_KEYS: ['model', 'model_id', 'modelId'],
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('dataLookup', 'parseT')}
+              ${functionSource('parseT', 'clockUTC')}
+              ${functionSource('operationTimestamp', 'openOperationRecord')}
+            `, context);
+
+            const detail = {
+              summary: {
+                runId: 'run-alpha',
+                startedAtUtc: '2026-08-14T01:00:00.000Z',
+              },
+              input: 'Inspect deployment status',
+              inputSummary: 'Inspect deployment status',
+              timeline: [
+                {stage: 'workflow.start', timestampUtc: '2026-08-14T01:00:00.000Z'},
+                {
+                  kind: 'Message', stage: 'role.reply', agentId: 'assistant',
+                  timestampUtc: '2026-08-14T01:00:00.100Z', content: '',
+                  data: {sessionId: 'session-shared', model: 'deepseek-chat'},
+                },
+                {
+                  kind: 'ToolCall', stage: 'tool.call', message: 'search',
+                  timestampUtc: '2026-08-14T01:00:00.200Z',
+                  toolCall: {
+                    callId: 'call-search', toolName: 'search',
+                    argumentsJson: '{"query":"deployment status"}',
+                    resultJson: '{"status":"degraded"}', success: true, error: '',
+                  },
+                },
+                {
+                  kind: 'TextMessage', stage: 'role.reply', agentId: 'assistant',
+                  timestampUtc: '2026-08-14T01:00:00.300Z', content: 'Deployment is degraded.',
+                  data: {session_id: 'session-shared', model: 'deepseek-chat'},
+                },
+              ],
+            };
+
+            const records = context.buildOperationRecords(detail);
+            assert.deepEqual(JSON.parse(JSON.stringify(records.map(record => record.type))),
+              ['input', 'model', 'tool', 'model']);
+            assert.equal(records.length, 4);
+            const models = records.filter(record => record.type === 'model');
+            assert.equal(models.length, 2, 'each LLM reply is a separate historical operation');
+            assert.equal(models[0].sessionId, 'session-shared');
+            assert.equal(models[1].sessionId, 'session-shared');
+            assert.notEqual(models[0].key, models[1].key,
+              'a shared role-chat session cannot collapse separate LLM replies');
+            assert.equal(models[0].content, '', 'tool-call-only replies remain inspectable');
+            assert.equal(models[1].content, 'Deployment is degraded.');
+
+            const tool = records.find(record => record.type === 'tool');
+            assert.equal(tool.key, 'tool:run-alpha:call-search');
+            assert.equal(tool.tool.argumentsJson, '{"query":"deployment status"}');
+            assert.equal(tool.tool.resultJson, '{"status":"degraded"}');
+            assert.equal(tool.status, '成功');
+            for (const record of records) {
+              assert.equal(record.durationMs, null,
+                'a committed point must not be presented as an invented duration interval');
+            }
+
+            const typedRecords = context.buildOperationRecords({
+              summary: {runId: 'run-typed', startedAtUtc: '2026-08-14T01:00:00.000Z'},
+              inputSummary: 'Inspect deployment status',
+              timeline: [],
+              operations: [
+                {
+                  kind: 'tool', operationId: 'tool-1', toolCallId: 'call-1', toolName: 'search',
+                  progressSequence: 20,
+                  startedAtUtc: '2026-08-14T01:00:00.200Z',
+                  completedAtUtc: '2026-08-14T01:00:00.300Z', success: true,
+                },
+                {
+                  kind: 'model', operationId: 'model-0', round: 0,
+                  progressSequence: 12,
+                  startedAtUtc: '2026-08-14T01:00:00.800Z',
+                  completedAtUtc: '2026-08-14T01:00:00.900Z', success: true,
+                },
+              ],
+            });
+            assert.deepEqual(JSON.parse(JSON.stringify(typedRecords.map(record => record.type))),
+              ['input', 'model', 'tool'], 'committed sequence outranks skewed timestamps');
+            assert.equal(typedRecords[1].round, 0);
+            assert.equal(typedRecords[1].title, 'Model round 0');
+            assert.equal(typedRecords[1].durationMs, 100);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_RequestTracePagination_ShouldAppendIdempotentlyAndRecoverTransientNotFound()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function singleLineFunctionSource(name) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\n', start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, name + ' must end on its declaration line');
+              return html.slice(start, end);
+            }
+
+            const firstPageRuns = [
+              { runId: 'run-new', status: 'running', updatedAtUtc: '2026-08-13T10:00:00Z' },
+              { runId: 'run-overlap', status: 'running', updatedAtUtc: '2026-08-13T09:00:00Z', page: 1 },
+            ];
+            const requestedPaths = [];
+            const context = {
+              Map,
+              URLSearchParams,
+              Date,
+              adminState: { isAdmin: true, currentScope: 'scope-alpha' },
+              filterState: { status: 'running', origin: '', definition: '', schedule: '', from: '', to: '' },
+              cache: {
+                runs: firstPageRuns,
+                runFeed: {
+                  items: firstPageRuns,
+                  nextCursor: 'cursor older+/=',
+                  hasMore: true,
+                  totalCount: 5,
+                },
+                details: {},
+              },
+              state: { scenario: 'normal', loadingMore: false },
+              renderCalls: 0,
+              render: () => { context.renderCalls++; },
+              api: async path => {
+                requestedPaths.push(path);
+                return {
+                  items: [
+                    { runId: 'run-overlap', status: 'completed', updatedAtUtc: '2026-08-13T09:30:00Z', page: 2 },
+                    { runId: 'run-old', status: 'completed', updatedAtUtc: '2026-08-13T08:00:00Z' },
+                  ],
+                  nextCursor: null,
+                  hasMore: false,
+                  totalCount: 5,
+                };
+              },
+              lastRunsSig: '',
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('isActivityRunFeedEnvelope', 'normalizeActivityRunFeed')}
+              ${functionSource('normalizeActivityRunFeed', 'activityRunFeedRequestPath')}
+              ${singleLineFunctionSource('activityRunFeedRequestPath')}
+              ${functionSource('listQueryParams', 'hasActiveFilters')}
+              ${functionSource('runsSig', 'detailSig')}
+              ${functionSource('loadMoreRequestTraces', 'refreshDetail')}
+            `, context);
+
+            (async () => {
+              assert.equal(await vm.runInContext('loadMoreRequestTraces', context)(), true);
+              assert.deepEqual(requestedPaths, [
+                '/api/workflow/observatory/activity-runs?scope=scope-alpha&status=running&take=100&includeTotalCount=true&cursor=cursor+older%2B%2F%3D',
+              ]);
+              assert.deepEqual(JSON.parse(JSON.stringify(context.cache.runs.map(run => run.runId))), [
+                'run-new', 'run-overlap', 'run-old',
+              ]);
+              assert.equal(context.cache.runs[1].page, 2, 'a repeated run id is updated in place rather than duplicated');
+              assert.equal(context.cache.runFeed.items, context.cache.runs);
+              assert.equal(context.cache.runFeed.totalCount, 5);
+              assert.equal(context.cache.runFeed.hasMore, false);
+              assert.equal(context.cache.runFeed.nextCursor, null);
+              assert.equal(context.state.loadingMore, false);
+              assert.equal(context.renderCalls, 2, 'loading and settled states both render');
+
+              assert.equal(await vm.runInContext('loadMoreRequestTraces', context)(), false);
+              assert.equal(requestedPaths.length, 1, 'the exhausted feed cannot fetch the same page again');
+              assert.equal(context.renderCalls, 2);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var paginationResult = await RunNodeAsync(script, html);
+
+        paginationResult.ExitCode.Should().Be(0, paginationResult.Error + paginationResult.Output);
+
+        const string recoveryScript = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('async function poll()');
+            const end = html.indexOf('\nfunction startPolling()', start);
+            assert.notEqual(start, -1, 'poll must exist in the served observatory asset');
+            assert.notEqual(end, -1, 'startPolling must follow poll');
+
+            const context = {
+              Date,
+              document: { hidden: false, getElementById: () => null },
+              state: {
+                signedIn: true,
+                scenario: 'notFound',
+                selectedRunId: 'run-eventually-visible',
+                lastSyncedAtUtc: null,
+              },
+              cache: { runs: [], runFeed: { items: [], hasMore: false, totalCount: 0 }, details: {} },
+              lastRunsSig: 'stable',
+              lastDetailSig: 'none',
+              refreshDetailCalls: 0,
+              renderCalls: 0,
+              refreshRuns: async () => true,
+              runsSig: () => 'stable',
+              detailSig: detail => detail ? 'recovered' : 'none',
+              refreshDetail: async runId => {
+                context.refreshDetailCalls++;
+                assert.equal(runId, 'run-eventually-visible');
+                if (context.refreshDetailCalls === 1) return false;
+                context.cache.details[runId] = { summary: { status: 'running', stateVersion: 1 } };
+                context.state.scenario = 'normal';
+                return true;
+              },
+              render: () => { context.renderCalls++; },
+              setTimeout,
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async () => {
+              await vm.runInContext('poll', context)();
+              assert.equal(context.refreshDetailCalls, 1);
+              assert.equal(context.state.scenario, 'notFound');
+              assert.equal(context.renderCalls, 0);
+              assert.equal(context.state.lastSyncedAtUtc, null);
+
+              await vm.runInContext('poll', context)();
+              assert.equal(context.refreshDetailCalls, 2, 'notFound remains eligible for a recovery probe');
+              assert.equal(context.state.scenario, 'normal');
+              assert.equal(context.renderCalls, 1);
+              assert.ok(context.state.lastSyncedAtUtc);
+
+              context.state.polling = true;
+              await vm.runInContext('poll', context)();
+              assert.equal(context.refreshDetailCalls, 2, 'an in-flight poll prevents overlapping requests');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var recoveryResult = await RunNodeAsync(recoveryScript, html);
+
+        recoveryResult.ExitCode.Should().Be(0, recoveryResult.Error + recoveryResult.Output);
+        html.Should().Contain("class:\"trace-load-more\"");
+        html.Should().Contain("加载更早的请求轨迹");
+        html.Should().Contain("if(state.selectedRunId){");
+        html.Should().Contain("if(document.hidden || !state.signedIn || state.polling) return;");
+        html.Should().Contain("state.polling=false;");
+        html.Should().NotContain("state.selectedRunId && state.scenario !== \"notFound\"");
+    }
+
+    [Fact]
+    public async Task WorkflowObservatory_RequestTraceListRaces_ShouldPreserveLoadedWindowAndDiscardStalePages()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const starts = [
+                html.indexOf('function ' + name + '('),
+                html.indexOf('async function ' + name + '('),
+              ].filter(index => index !== -1);
+              const start = starts.length ? Math.min(...starts) : -1;
+              const ends = [
+                html.indexOf('\nfunction ' + nextName + '(', start),
+                html.indexOf('\nasync function ' + nextName + '(', start),
+              ].filter(index => index !== -1);
+              const end = ends.length ? Math.min(...ends) : -1;
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+
+            function singleLineFunctionSource(name) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\n', start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, name + ' must end on its declaration line');
+              return html.slice(start, end);
+            }
+
+            function installRefresh(context) {
+              vm.createContext(context);
+              vm.runInContext(`
+                ${functionSource('isActivityRunFeedEnvelope', 'normalizeActivityRunFeed')}
+                ${functionSource('normalizeActivityRunFeed', 'activityRunFeedRequestPath')}
+                ${singleLineFunctionSource('activityRunFeedRequestPath')}
+                ${functionSource('listQueryParams', 'hasActiveFilters')}
+                ${functionSource('refreshRuns', 'loadMoreRequestTraces')}
+              `, context);
+            }
+
+            function installLoadMore(context) {
+              vm.createContext(context);
+              vm.runInContext(`
+                ${functionSource('isActivityRunFeedEnvelope', 'normalizeActivityRunFeed')}
+                ${functionSource('normalizeActivityRunFeed', 'activityRunFeedRequestPath')}
+                ${singleLineFunctionSource('activityRunFeedRequestPath')}
+                ${functionSource('listQueryParams', 'hasActiveFilters')}
+                ${functionSource('runsSig', 'detailSig')}
+                ${functionSource('loadMoreRequestTraces', 'refreshDetail')}
+              `, context);
+            }
+
+            (async () => {
+              const oldRuns = Array.from({ length: 600 }, (_, index) => {
+                const number = String(index + 1).padStart(3, '0');
+                return {
+                  runId: `old-${number}`,
+                  stateVersion: 1,
+                  status: 'completed',
+                  updatedAtUtc: `2026-08-12T${String(index % 24).padStart(2, '0')}:00:00Z`,
+                };
+              });
+              const insertedRuns = Array.from({ length: 10 }, (_, index) => ({
+                runId: `new-${String(index + 1).padStart(2, '0')}`,
+                stateVersion: 1,
+                status: 'running',
+                updatedAtUtc: '2026-08-13T12:00:00Z',
+              }));
+              const refreshedOldHead = oldRuns.slice(0, 490).map(run => ({
+                ...run,
+                stateVersion: 2,
+                source: 'latest-head',
+              }));
+              const refreshPaths = [];
+              const refreshContext = {
+                Map,
+                URLSearchParams,
+                adminState: { isAdmin: false, currentScope: null },
+                filterState: { status: '', origin: '', definition: '', schedule: '', from: '', to: '' },
+                cache: {
+                  runs: oldRuns,
+                  runFeed: {
+                    items: oldRuns,
+                    nextCursor: 'old-loaded-window-cursor',
+                    hasMore: true,
+                    totalCount: 600,
+                  },
+                },
+                state: { scenario: 'normal', loadingMore: false, listRequestEpoch: 7 },
+                api: async path => {
+                  refreshPaths.push(path);
+                  return {
+                    items: [...insertedRuns, ...refreshedOldHead],
+                    nextCursor: 'refreshed-head-cursor',
+                    hasMore: true,
+                    totalCount: 610,
+                  };
+                },
+              };
+              installRefresh(refreshContext);
+
+              assert.equal(await vm.runInContext('refreshRuns', refreshContext)(), true);
+              assert.deepEqual(refreshPaths, [
+                '/api/workflow/observatory/activity-runs?take=500&includeTotalCount=true',
+              ]);
+              assert.equal(refreshContext.state.listRequestEpoch, 8);
+              assert.equal(refreshContext.cache.runs.length, 610);
+              const refreshedIds = refreshContext.cache.runs.map(run => run.runId);
+              const uniqueIds = new Set(refreshedIds);
+              assert.equal(uniqueIds.size, 610, 'head refresh must not duplicate existing run ids');
+              for (let index = 1; index <= 600; index++) {
+                assert.equal(uniqueIds.has(`old-${String(index).padStart(3, '0')}`), true,
+                  `loaded run old-${String(index).padStart(3, '0')} must survive the bounded head refresh`);
+              }
+              for (let index = 1; index <= 10; index++) {
+                assert.equal(uniqueIds.has(`new-${String(index).padStart(2, '0')}`), true);
+              }
+              assert.equal(refreshContext.cache.runs[500].runId, 'old-491');
+              assert.equal(refreshContext.cache.runs[509].runId, 'old-500');
+              assert.equal(refreshContext.cache.runs[609].runId, 'old-600');
+              assert.equal(refreshContext.cache.runs.find(run => run.runId === 'old-001').stateVersion, 2);
+              assert.equal(refreshContext.cache.runs.find(run => run.runId === 'old-001').source, 'latest-head');
+              assert.equal(refreshContext.cache.runFeed.items, refreshContext.cache.runs);
+              assert.equal(refreshContext.cache.runFeed.nextCursor, 'old-loaded-window-cursor');
+              assert.equal(refreshContext.cache.runFeed.hasMore, true);
+              assert.equal(refreshContext.cache.runFeed.totalCount, 610);
+
+              const refreshCount = refreshPaths.length;
+              const epochBeforeBusyPoll = refreshContext.state.listRequestEpoch;
+              refreshContext.state.loadingMore = true;
+              assert.equal(await vm.runInContext('refreshRuns', refreshContext)(), false);
+              assert.equal(refreshPaths.length, refreshCount, 'poll refresh must not race an active page request');
+              assert.equal(refreshContext.state.listRequestEpoch, epochBeforeBusyPoll);
+
+              let resolveOldPage;
+              const stalePaths = [];
+              const oldPageResponse = new Promise(resolve => { resolveOldPage = resolve; });
+              const staleContext = {
+                Map,
+                URLSearchParams,
+                adminState: { isAdmin: false, currentScope: null },
+                filterState: { status: '', origin: '', definition: '', schedule: '', from: '', to: '' },
+                cache: {
+                  runs: [{ runId: 'old-filter-run', status: 'running', updatedAtUtc: '2026-08-13T10:00:00Z' }],
+                  runFeed: {
+                    items: [],
+                    nextCursor: 'stale page cursor',
+                    hasMore: true,
+                    totalCount: 2,
+                  },
+                },
+                state: { scenario: 'normal', loadingMore: false, listRequestEpoch: 20 },
+                lastRunsSig: 'replacement-signature',
+                renderCalls: 0,
+                render: () => { staleContext.renderCalls++; },
+                api: path => {
+                  stalePaths.push(path);
+                  return oldPageResponse;
+                },
+              };
+              installLoadMore(staleContext);
+
+              const staleRequest = vm.runInContext('loadMoreRequestTraces', staleContext)();
+              assert.equal(staleContext.state.loadingMore, true);
+              assert.equal(staleContext.state.listRequestEpoch, 21);
+              assert.equal(staleContext.renderCalls, 1);
+              assert.deepEqual(stalePaths, [
+                '/api/workflow/observatory/activity-runs?take=100&includeTotalCount=true&cursor=stale+page+cursor',
+              ]);
+
+              const replacementRuns = [{ runId: 'new-filter-run', status: 'completed' }];
+              const replacementFeed = {
+                items: replacementRuns,
+                nextCursor: null,
+                hasMore: false,
+                totalCount: 1,
+              };
+              const replacementCache = { runs: replacementRuns, runFeed: replacementFeed, details: {} };
+              staleContext.state.listRequestEpoch++;
+              staleContext.state.loadingMore = false;
+              staleContext.cache = replacementCache;
+              resolveOldPage({
+                items: [{ runId: 'stale-page-run', status: 'completed' }],
+                nextCursor: null,
+                hasMore: false,
+                totalCount: 2,
+              });
+
+              assert.equal(await staleRequest, false);
+              assert.equal(staleContext.cache, replacementCache);
+              assert.equal(staleContext.cache.runs, replacementRuns);
+              assert.equal(staleContext.cache.runFeed, replacementFeed);
+              assert.deepEqual(staleContext.cache.runs.map(run => run.runId), ['new-filter-run']);
+              assert.equal(staleContext.state.loadingMore, false);
+              assert.equal(staleContext.state.scenario, 'normal');
+              assert.equal(staleContext.lastRunsSig, 'replacement-signature');
+              assert.equal(staleContext.renderCalls, 1,
+                'a stale page may render its initial loading state but cannot render after query reset');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        html.Should().Contain("if(state.loadingMore) return false;");
+        html.Should().Contain("requestEpoch!==state.listRequestEpoch");
+        html.Should().Contain("if(requestEpoch===state.listRequestEpoch)");
     }
 
     [Fact]
@@ -2568,11 +1648,12 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Aevatar:BackendConsole:OidcAuthority"] = "https://id.example.test",
+                ["Aevatar:BackendConsole:OidcAuthority"] = "https://authority.example.test",
                 ["Aevatar:BackendConsole:OidcClientId"] = "client-example",
                 ["Aevatar:BackendConsole:OidcScope"] = "openid profile",
-                ["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test",
-                ["Aevatar:NyxId:Authority"] = "https://web.example.test",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://api.example.test",
+                ["Aevatar:NyxId:Authority"] = "https://authority.example.test",
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
                 ["Aevatar:BackendConsole:StorageKey"] = "console:test",
             })
             .Build();

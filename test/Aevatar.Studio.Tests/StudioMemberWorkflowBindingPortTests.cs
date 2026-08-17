@@ -157,8 +157,11 @@ public sealed class StudioMemberWorkflowBindingPortTests
         memberCommandPort.LastRecordPublishedBinding.RevisionId.Should().Be("revision-new");
     }
 
-    [Fact]
-    public async Task BindAsync_WithExistingPlan_ShouldOnlyRevalidateWithoutFreshConfirmation()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BindAsync_WithExistingPlan_ShouldUseCredentialAwareAdmissionPath(
+        bool includeCallerCredential)
     {
         var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
         var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
@@ -190,11 +193,14 @@ public sealed class StudioMemberWorkflowBindingPortTests
         {
             WorkflowId = "wf-alpha",
             RevisionId = "rev-alpha",
-            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(existingPlan: plan),
+            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                existingPlan: plan,
+                includeCallerCredential: includeCallerCredential),
         });
 
         admission.Requests.Should().BeEmpty();
-        admission.PersistedRequests.Should().ContainSingle();
+        admission.RefreshRequests.Should().HaveCount(includeCallerCredential ? 1 : 0);
+        admission.PersistedRequests.Should().HaveCount(includeCallerCredential ? 0 : 1);
         memberService.LastRequest.Should().NotBeNull();
     }
 

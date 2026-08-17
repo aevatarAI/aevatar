@@ -65,6 +65,35 @@ public sealed class LLMStreamChunk
 
     /// <summary>Runtime lifecycle carrier yielded for every completed tool, including ordinary success.</summary>
     public ToolCallCompletedChunk? ToolCallCompleted { get; init; }
+
+    /// <summary>Runtime lifecycle carrier yielded immediately before a provider model round starts.</summary>
+    public LLMInvocationStartedChunk? LLMInvocationStarted { get; init; }
+
+    /// <summary>Runtime lifecycle carrier yielded when a provider model round reaches a terminal outcome.</summary>
+    public LLMInvocationCompletedChunk? LLMInvocationCompleted { get; init; }
+}
+
+public sealed class LLMInvocationStartedChunk
+{
+    public required string OperationId { get; init; }
+    public required int Round { get; init; }
+    public string Model { get; init; } = string.Empty;
+    public string Provider { get; init; } = string.Empty;
+    public string InputSummary { get; init; } = string.Empty;
+    public IReadOnlyList<string> AvailableToolNames { get; init; } = [];
+}
+
+public sealed class LLMInvocationCompletedChunk
+{
+    public required string OperationId { get; init; }
+    public required int Round { get; init; }
+    public string Model { get; init; } = string.Empty;
+    public string Content { get; init; } = string.Empty;
+    public string ReasoningContent { get; init; } = string.Empty;
+    public TokenUsage? Usage { get; init; }
+    public string FinishReason { get; init; } = string.Empty;
+    public bool Success { get; init; }
+    public string Error { get; init; } = string.Empty;
 }
 
 public sealed class ToolCallStartedChunk

@@ -2185,6 +2185,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         ErrorCode(output).Should().Be(expectedCode);
         ErrorMessage(output).Should().Be(expectedMessage);
+        if (exception is StudioMemberAutomationCatalogRouteUnresolvedException unresolved)
+        {
+            ErrorRequiredUserServiceIds(output).Should()
+                .Equal(unresolved.RequiredUserServiceIds);
+        }
         schedulePort.WritePreflightRequests.Should().ContainSingle();
         schedulePort.CreateCallCount.Should().Be(0);
     }
@@ -3159,6 +3164,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
             "The authorization catalog could not be refreshed. Retry this request."
         },
         {
+            new StudioMemberAutomationCatalogRouteUnresolvedException(["service-alpha"]),
+            "authorization_catalog_route_unresolved",
+            "NyxID could not resolve a configured route required by this workflow. Repair or deactivate the route before retrying."
+        },
+        {
             new StudioMemberAutomationCatalogRefreshSupersededException(),
             "authorization_catalog_refresh_superseded",
             "A newer authorization catalog refresh superseded this request. Retry this request."
@@ -3197,6 +3207,16 @@ public sealed class ProvisionWorkflowScheduleToolTests
             && error.TryGetProperty("authorization_plan_mismatch_reason", out var reason)
             ? reason.GetString()
             : null;
+    }
+
+    private static IReadOnlyList<string> ErrorRequiredUserServiceIds(string output)
+    {
+        using var document = JsonDocument.Parse(output);
+        return document.RootElement.GetProperty("error")
+            .GetProperty("required_user_service_ids")
+            .EnumerateArray()
+            .Select(static item => item.GetString()!)
+            .ToArray();
     }
 
     private sealed class RecordingProvisioningPort : IWorkflowScheduleProvisioningPort

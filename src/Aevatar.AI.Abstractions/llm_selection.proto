@@ -10,6 +10,16 @@ enum LLMRouteKind {
   LLM_ROUTE_KIND_NYX_ID_USER_SERVICE = 2;
 }
 
+// Exact runtime target for one NyxID-backed LLM call. The service slug is a
+// public namespace snapshot; exact service identities remain authoritative.
+message LLMRouteTarget {
+  oneof source_identity {
+    string catalog_service_id = 1;
+    string user_service_id = 2;
+  }
+  string service_slug_snapshot = 3;
+}
+
 enum LLMModelSelectionKind {
   LLM_MODEL_SELECTION_KIND_UNSPECIFIED = 0;
   LLM_MODEL_SELECTION_KIND_PROVIDER_DEFAULT = 1;

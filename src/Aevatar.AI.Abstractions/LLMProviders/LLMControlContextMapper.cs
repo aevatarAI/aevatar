@@ -14,7 +14,10 @@ public static class LLMControlContextMapper
             LLMControlContext.Normalize(payload.ModelOverride),
             LLMControlContext.Normalize(payload.NyxIdRoutePreference),
             payload.HasMaxToolRoundsOverride ? payload.MaxToolRoundsOverride : null,
-            LLMControlContext.Normalize(payload.UserMemoryPrompt));
+            LLMControlContext.Normalize(payload.UserMemoryPrompt))
+        {
+            RouteTarget = payload.RouteTarget?.Clone(),
+        };
     }
 
     public static LLMControlContextPayload ToPayload(this LLMControlContext context)
@@ -29,6 +32,7 @@ public static class LLMControlContextMapper
             ModelOverride = context.ModelOverride ?? string.Empty,
             NyxIdRoutePreference = context.NyxIdRoutePreference ?? string.Empty,
             UserMemoryPrompt = context.UserMemoryPrompt ?? string.Empty,
+            RouteTarget = context.RouteTarget?.Clone(),
         };
 
         if (context.MaxToolRoundsOverride.HasValue)

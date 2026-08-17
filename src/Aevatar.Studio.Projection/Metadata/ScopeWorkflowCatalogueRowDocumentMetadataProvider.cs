@@ -33,6 +33,8 @@ public sealed class ScopeWorkflowCatalogueRowDocumentMetadataProvider
                 ["active_revision_id"] = Keyword(),
                 ["deployment_id"] = Keyword(),
                 ["deployment_status"] = Keyword(),
+                ["service_app_id"] = Keyword(),
+                ["service_namespace"] = Keyword(),
                 ["published_service_id"] = Keyword(),
             },
         },

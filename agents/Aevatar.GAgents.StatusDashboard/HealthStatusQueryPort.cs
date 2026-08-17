@@ -1,4 +1,5 @@
 using Aevatar.GAgents.StatusDashboard.Configuration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.StatusDashboard;
@@ -11,12 +12,14 @@ public sealed class HealthStatusQueryPort : IHealthStatusQueryPort
 
     public HealthStatusQueryPort(
         IHealthProbeOperationalSnapshotStore store,
-        IOptions<StatusDashboardOptions> options)
+        IOptions<StatusDashboardOptions> options,
+        IConfiguration configuration)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(configuration);
         _manifestSlugs = StatusDashboardManifest
-            .FromOptions(options.Value ?? new StatusDashboardOptions())
+            .FromOptions(options.Value ?? new StatusDashboardOptions(), configuration)
             .Descriptors
             .Select(static descriptor => descriptor.Slug)
             .Where(static slug => !RetiredStatusProbeTargets.Contains(slug))

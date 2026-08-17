@@ -20,6 +20,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Capabilities;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Studio.Hosting.Auth;
 using Google.Protobuf.WellKnownTypes;
 using System.Text.Json;
 namespace Aevatar.Studio.Hosting.Endpoints;
@@ -184,7 +185,7 @@ internal static class StudioEndpoints
         return $"{prefix}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
     }
 
-    private static async Task<AppAuthMeResponse> HandleGetAuthMeAsync(HttpContext http, CancellationToken ct)
+    internal static async Task<AppAuthMeResponse> HandleGetAuthMeAsync(HttpContext http, CancellationToken ct)
     {
         var user = http.User;
         var isAuthenticated = user?.Identity?.IsAuthenticated == true;
@@ -208,6 +209,11 @@ internal static class StudioEndpoints
             providerDisplayName,
             authEnabled,
             invokeAuthMode);
+        var claimsProfile = BuildAuthProfile(user, isAuthenticated);
+        var profileResolver = http.RequestServices.GetService<IAppAuthProfileResolver>();
+        var profile = profileResolver is null
+            ? claimsProfile
+            : await profileResolver.ResolveAsync(http, claimsProfile, ct);
 
         return new AppAuthMeResponse(
             Enabled: authEnabled,
@@ -215,9 +221,9 @@ internal static class StudioEndpoints
             ProviderDisplayName: providerDisplayName,
             LoginUrl: loginUrl,
             LogoutUrl: logoutUrl,
-            Name: user?.Identity?.Name,
-            Email: user?.FindFirst("email")?.Value,
-            Profile: BuildAuthProfile(user, isAuthenticated),
+            Name: profile?.Name,
+            Email: profile?.Email,
+            Profile: profile,
             Session: new AppAuthSessionResponse(
                 Authenticated: isAuthenticated,
                 ProviderDisplayName: providerDisplayName,

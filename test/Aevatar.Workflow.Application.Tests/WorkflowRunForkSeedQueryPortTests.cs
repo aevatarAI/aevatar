@@ -63,6 +63,97 @@ public sealed class WorkflowRunForkSeedQueryPortTests
     }
 
     [Fact]
+    public void ForkSeedReadModelMapper_ShouldMergeDurableForEachChildOutputsWithoutOverwritingKernelVariables()
+    {
+        var state = BuildWorkflowRunState("run-foreach", "failed", "foreach failed");
+        state.ExecutionStates["kernel-state"] = Any.Pack(new WorkflowExecutionKernelState
+        {
+            CurrentStepId = "foreach-parent",
+            Variables =
+            {
+                ["input"] = "source-input",
+                ["foreach-parent_item_0"] = "kernel-wins",
+            },
+        });
+        var forEachState = new ForEachModuleState
+        {
+            CompletedChildOutputsRunId = "run-foreach",
+            CompletedChildOutputs =
+            {
+                ["foreach-parent_item_0"] = "completed-must-not-overwrite-kernel",
+                ["foreach-parent_item_1"] = "completed-output",
+                ["foreach-parent_item_2"] = "older-completed-output",
+            },
+        };
+        forEachState.Parents["run-foreach:foreach-parent:execution:active"] = new ForEachParentState
+        {
+            ParentRunId = "run-foreach",
+            Collected =
+            {
+                new ForEachItemResult
+                {
+                    StepId = "foreach-parent_item_2",
+                    Index = 2,
+                    Success = true,
+                    Output = "active-output",
+                },
+                new ForEachItemResult
+                {
+                    Index = 3,
+                    Success = true,
+                    Output = "legacy-result-without-step-id",
+                },
+            },
+        };
+        forEachState.Parents["stale-run:foreach-parent:execution:stale"] = new ForEachParentState
+        {
+            ParentRunId = "stale-run",
+            Collected =
+            {
+                new ForEachItemResult
+                {
+                    StepId = "stale-child",
+                    Index = 0,
+                    Success = true,
+                    Output = "stale-output",
+                },
+            },
+        };
+        state.ExecutionStates["foreach-state"] = Any.Pack(forEachState);
+
+        var snapshot = new WorkflowRunForkSeedReadModelMapper().ToProjectionSnapshot(state);
+
+        snapshot.Variables.Should().Contain("foreach-parent_item_0", "kernel-wins");
+        snapshot.Variables.Should().Contain("foreach-parent_item_1", "completed-output");
+        snapshot.Variables.Should().Contain("foreach-parent_item_2", "active-output");
+        snapshot.Variables.Should().NotContainValue("legacy-result-without-step-id");
+        snapshot.Variables.Should().NotContainKey("stale-child");
+        snapshot.CompletedStepIds.Should().Equal(
+            "foreach-parent_item_0",
+            "foreach-parent_item_1",
+            "foreach-parent_item_2");
+    }
+
+    [Fact]
+    public void ForkSeedReadModelMapper_ShouldIgnoreCompletedForEachOutputsFromAnotherRun()
+    {
+        var state = BuildWorkflowRunState("current-run", "failed", "failed");
+        state.ExecutionStates["foreach-state"] = Any.Pack(new ForEachModuleState
+        {
+            CompletedChildOutputsRunId = "previous-run",
+            CompletedChildOutputs =
+            {
+                ["previous-child"] = "previous-output",
+            },
+        });
+
+        var snapshot = new WorkflowRunForkSeedReadModelMapper().ToProjectionSnapshot(state);
+
+        snapshot.Variables.Should().BeEmpty();
+        snapshot.CompletedStepIds.Should().BeEmpty();
+    }
+
+    [Fact]
     public void ForkSeedReadModelMapper_ShouldCarryOriginalRunIdFromLineage()
     {
         var mapper = new WorkflowRunForkSeedReadModelMapper();

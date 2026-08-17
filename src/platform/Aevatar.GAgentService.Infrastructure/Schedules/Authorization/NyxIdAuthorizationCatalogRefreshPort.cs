@@ -193,6 +193,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         NyxIdAuthorizationCatalogRefreshPort.CatalogObservationTimeout;
 
     private const string CatalogMismatchFailureCode = "nyxid_scope_plan_catalog_mismatch";
+    private const string ScopePlanClockSkewExceededFailureCode = "nyxid_scope_plan_clock_skew_exceeded";
     private const string ProviderTimedOutFailureCode = "nyxid_catalog_refresh_provider_timed_out";
     private const string LLMModelsTransportFailureCode = "nyxid_llm_models_transport_failure";
     private const string LLMTargetInventoryMismatchFailureCode = "nyxid_llm_target_inventory_mismatch";
@@ -337,17 +338,23 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                 }
                 catch
                 {
-                    var observation = ObserveLosingProviderTask(providerTask, providerCancellation);
+                    var observation = new LosingProviderTaskObservation(
+                        providerTask,
+                        providerCancellation,
+                        _logger);
                     providerCancellationTransferred = true;
-                    CancelProviderWithoutThrowing(observation);
+                    observation.CancelWithoutThrowing();
                     throw;
                 }
 
                 if (terminal.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
                 {
-                    var observation = ObserveLosingProviderTask(providerTask, providerCancellation);
+                    var observation = new LosingProviderTaskObservation(
+                        providerTask,
+                        providerCancellation,
+                        _logger);
                     providerCancellationTransferred = true;
-                    CancelProviderWithoutThrowing(observation);
+                    observation.CancelWithoutThrowing();
                     return terminal;
                 }
 
@@ -530,7 +537,9 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
             return;
         }
 
+        var scopePlanRequestedAt = _timeProvider.GetUtcNow();
         string scopePlanResponse;
+        DateTimeOffset scopePlanReceivedAt;
         try
         {
             scopePlanResponse = await client.PlanApiKeyScopeAsync(
@@ -538,6 +547,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                 selectedServiceIds,
                 targetOrganizationId: null,
                 ct);
+            scopePlanReceivedAt = _timeProvider.GetUtcNow();
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -556,6 +566,25 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
 
         var scopePlan = scopePlanResult.Value!;
+        if (!NyxIdAuthorizationCatalogIntegrity.IsProviderEvaluationWithinRequestWindow(
+                scopePlanRequestedAt,
+                scopePlanReceivedAt,
+                scopePlan.EvaluatedAtUtc))
+        {
+            LogWithoutThrowing(
+                LogLevel.Warning,
+                "NyxID scope-plan evaluation time exceeded the allowed clock-skew window. requestStartedAtUtc={RequestStartedAtUtc} responseReceivedAtUtc={ResponseReceivedAtUtc} providerEvaluatedAtUtc={ProviderEvaluatedAtUtc} maximumProviderClockSkew={MaximumProviderClockSkew}",
+                scopePlanRequestedAt,
+                scopePlanReceivedAt,
+                scopePlan.EvaluatedAtUtc,
+                NyxIdAuthorizationCatalogIntegrity.MaximumProviderClockSkew);
+            await RecordCatalogUnstableRefreshAsync(
+                normalizedOwner,
+                refreshId,
+                ScopePlanClockSkewExceededFailureCode,
+                ct).ConfigureAwait(false);
+            return;
+        }
         if (!MatchesPersonalCatalog(scopePlan, normalizedOwner, eligibleServices))
         {
             await InvalidateUnstableAsync(
@@ -567,7 +596,7 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
 
         var inventoryById = eligibleServices.ToDictionary(static service => service.Id, StringComparer.Ordinal);
-        var observedAt = _timeProvider.GetUtcNow();
+        var observedAt = scopePlanReceivedAt;
         var freshUntil = observedAt.Add(CatalogFreshnessLifetime);
         var services = scopePlan.Services
             .Select(grant => MapServiceEvidence(
@@ -927,67 +956,6 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
     }
 
-    private LosingProviderTaskObservation ObserveLosingProviderTask(
-        Task providerTask,
-        CancellationTokenSource providerCancellation)
-    {
-        var observation = new LosingProviderTaskObservation(providerCancellation, _logger);
-        _ = providerTask.ContinueWith(
-            static (completed, state) =>
-            {
-                var observation = (LosingProviderTaskObservation)state!;
-                try
-                {
-                    if (completed.IsCanceled)
-                    {
-                        LogWithoutThrowing(
-                            observation.Logger,
-                            LogLevel.Debug,
-                            "Canceled the losing NyxID catalog refresh provider task after terminal observation.");
-                    }
-                    else if (completed.IsFaulted)
-                    {
-                        _ = completed.Exception;
-                        LogWithoutThrowing(
-                            observation.Logger,
-                            LogLevel.Warning,
-                            "The losing NyxID catalog refresh provider task failed after terminal observation.");
-                    }
-                }
-                catch
-                {
-                    _ = completed.Exception;
-                }
-                finally
-                {
-                    observation.MarkProviderCompletion();
-                }
-            },
-            observation,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-        return observation;
-    }
-
-    private void CancelProviderWithoutThrowing(LosingProviderTaskObservation observation)
-    {
-        try
-        {
-            observation.Cancellation.Cancel();
-        }
-        catch
-        {
-            LogWithoutThrowing(
-                LogLevel.Warning,
-                "A NyxID catalog refresh provider cancellation callback failed after terminal observation.");
-        }
-        finally
-        {
-            observation.MarkCancellationAttemptCompletion();
-        }
-    }
-
     private void LogWithoutThrowing(LogLevel logLevel, string message, params object?[] args) =>
         LogWithoutThrowing(_logger, logLevel, message, args);
 
@@ -1008,22 +976,83 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
     }
 
-    private sealed class LosingProviderTaskObservation(
-        CancellationTokenSource cancellation,
-        ILogger<NyxIdAuthorizationCatalogRefreshPort> logger)
+    internal sealed class LosingProviderTaskObservation
     {
         private int _providerCompletionMarked;
         private int _cancellationAttemptCompletionMarked;
         private int _remainingLifetimeOwners = 2;
 
-        public CancellationTokenSource Cancellation { get; } = cancellation;
+        private CancellationTokenSource Cancellation { get; }
 
-        public ILogger<NyxIdAuthorizationCatalogRefreshPort> Logger { get; } = logger;
+        private ILogger<NyxIdAuthorizationCatalogRefreshPort> Logger { get; }
 
-        public void MarkProviderCompletion() =>
+        public LosingProviderTaskObservation(
+            Task providerTask,
+            CancellationTokenSource cancellation,
+            ILogger<NyxIdAuthorizationCatalogRefreshPort> logger)
+        {
+            Cancellation = cancellation;
+            Logger = logger;
+            _ = providerTask.ContinueWith(
+                static (completed, state) =>
+                {
+                    var observation = (LosingProviderTaskObservation)state!;
+                    try
+                    {
+                        if (completed.IsCanceled)
+                        {
+                            LogWithoutThrowing(
+                                observation.Logger,
+                                LogLevel.Debug,
+                                "Canceled the losing NyxID catalog refresh provider task after terminal observation.");
+                        }
+                        else if (completed.IsFaulted)
+                        {
+                            _ = completed.Exception;
+                            LogWithoutThrowing(
+                                observation.Logger,
+                                LogLevel.Warning,
+                                "The losing NyxID catalog refresh provider task failed after terminal observation.");
+                        }
+                    }
+                    catch
+                    {
+                        _ = completed.Exception;
+                    }
+                    finally
+                    {
+                        observation.MarkProviderCompletion();
+                    }
+                },
+                this,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        public void CancelWithoutThrowing()
+        {
+            try
+            {
+                Cancellation.Cancel();
+            }
+            catch
+            {
+                LogWithoutThrowing(
+                    Logger,
+                    LogLevel.Warning,
+                    "A NyxID catalog refresh provider cancellation callback failed after terminal observation.");
+            }
+            finally
+            {
+                MarkCancellationAttemptCompletion();
+            }
+        }
+
+        private void MarkProviderCompletion() =>
             ReleaseLifetimeOwner(ref _providerCompletionMarked);
 
-        public void MarkCancellationAttemptCompletion() =>
+        private void MarkCancellationAttemptCompletion() =>
             ReleaseLifetimeOwner(ref _cancellationAttemptCompletionMarked);
 
         private void ReleaseLifetimeOwner(ref int completionMarker)

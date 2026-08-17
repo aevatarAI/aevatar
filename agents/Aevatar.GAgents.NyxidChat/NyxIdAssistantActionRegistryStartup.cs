@@ -1,6 +1,8 @@
 using System.Collections.Frozen;
 using Aevatar.AI.ToolProviders.NyxId;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -129,7 +131,7 @@ internal sealed class NyxIdAssistantActionRegistryHttpSource
 
     public async Task<string> FetchAsync(CancellationToken ct)
     {
-        var baseUrl = _options.BaseUrl?.Trim();
+        var baseUrl = _options.EffectiveApiBaseUrl?.Trim();
         if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri) ||
             (!string.Equals(baseUri.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal) &&
              !string.Equals(baseUri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)))
@@ -179,15 +181,26 @@ internal sealed class NyxIdAssistantActionRegistryStartupService : IHostedServic
     private readonly INyxIdAssistantActionRegistrySource _source;
     private readonly NyxIdAssistantActionRegistrySnapshot _snapshot;
     private readonly NyxIdAssistantActionsOptions _options;
+    private readonly ILogger<NyxIdAssistantActionRegistryStartupService> _logger;
 
     public NyxIdAssistantActionRegistryStartupService(
         INyxIdAssistantActionRegistrySource source,
         NyxIdAssistantActionRegistrySnapshot snapshot,
-        NyxIdAssistantActionsOptions options)
+        NyxIdAssistantActionsOptions options,
+        ILogger<NyxIdAssistantActionRegistryStartupService>? logger = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _logger = logger ?? NullLogger<NyxIdAssistantActionRegistryStartupService>.Instance;
+    }
+
+    public NyxIdAssistantActionRegistryStartupService(
+        INyxIdAssistantActionRegistrySource source,
+        NyxIdAssistantActionRegistrySnapshot snapshot,
+        ILogger<NyxIdAssistantActionRegistryStartupService>? logger = null)
+        : this(source, snapshot, new NyxIdAssistantActionsOptions(), logger)
+    {
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -198,9 +211,13 @@ internal sealed class NyxIdAssistantActionRegistryStartupService : IHostedServic
             var registry = NyxIdAssistantActionRegistry.Load(json);
             _snapshot.Initialize(registry);
         }
-        catch (Exception exception)
-            when (IsRegistryAvailabilityFailure(exception, cancellationToken))
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             var failureCode = exception switch
             {
                 NyxIdAssistantActionRegistryException registryException => registryException.Code,
@@ -210,20 +227,13 @@ internal sealed class NyxIdAssistantActionRegistryStartupService : IHostedServic
             _snapshot.Initialize(
                 NyxIdAssistantActionRegistry.CreateDisabled(),
                 NyxIdAssistantActionRegistryReadinessSnapshot.Unavailable(failureCode));
+            _logger.LogError(
+                "NyxID Assistant action registry startup failed ({FailureType}); Assistant actions are disabled for this process",
+                exception.GetType().Name);
             if (_options.Required)
                 throw;
         }
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-    private static bool IsRegistryAvailabilityFailure(
-        Exception exception,
-        CancellationToken cancellationToken) =>
-        exception is NyxIdAssistantActionRegistryException or
-            NyxIdActionSecretPolicyException or
-            HttpRequestException or
-            IOException or
-            InvalidOperationException ||
-        exception is OperationCanceledException && !cancellationToken.IsCancellationRequested;
 }

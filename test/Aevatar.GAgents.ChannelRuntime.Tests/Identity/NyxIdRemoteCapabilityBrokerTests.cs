@@ -22,7 +22,6 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     private static readonly byte[] HmacKey =
         Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     private const string OAuthAuthority = "https://id.example.test";
-    private const string InternalApiBaseUrl = "http://nyxid.internal:3001";
     private const string ResourceServerBaseUrl = "https://api.example.test";
     private const string RequiredLlmServiceSlug = "chrono-llm-public";
     private const string RequiredOrnnServiceSlug = "ornn-api";
@@ -434,7 +433,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 
         result.AccessToken.Should().Be(accessToken);
         handler.Requests.Should().HaveCount(2);
-        handler.Requests[1].Uri.Should().Be($"{InternalApiBaseUrl}/api/v1/user-services");
+        handler.Requests[1].Uri.Should().Be($"{ResourceServerBaseUrl}/api/v1/user-services");
         handler.Requests[1].Authorization.Should().Be($"Bearer {accessToken}");
     }
 
@@ -590,13 +589,13 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var provider = new FakeOAuthClientProvider(snapshot);
         options ??= new NyxIdBrokerOptions
         {
-            TransportBaseUrl = $" {InternalApiBaseUrl}/// ",
+            PublicApiBaseUrl = $" {ResourceServerBaseUrl}/// ",
             ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ",
             RequiredLlmServiceSlug = RequiredLlmServiceSlug,
             AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
         };
-        if (string.IsNullOrWhiteSpace(options.TransportBaseUrl))
-            options.TransportBaseUrl = $" {InternalApiBaseUrl}/// ";
+        if (string.IsNullOrWhiteSpace(options.PublicApiBaseUrl))
+            options.PublicApiBaseUrl = $" {ResourceServerBaseUrl}/// ";
         if (string.IsNullOrWhiteSpace(options.ResourceServerBaseUrl))
             options.ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ";
         return new NyxIdRemoteCapabilityBroker(

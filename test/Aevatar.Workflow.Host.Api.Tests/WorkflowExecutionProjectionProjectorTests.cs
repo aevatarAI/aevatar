@@ -195,7 +195,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
-    public void ApplyReportBase_ShouldResolveFailedAndStoppedStatuses()
+    public void ApplyReportBase_ShouldResolveFailedStoppedAndTimedOutStatuses()
     {
         var observedAt = new DateTimeOffset(2026, 3, 18, 3, 45, 0, TimeSpan.Zero);
         var context = CreateContext();
@@ -235,6 +235,23 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             },
             observedAt);
 
+        var timedOutReport = new WorkflowRunInsightReportDocument();
+        WorkflowExecutionArtifactMaterializationSupport.ApplyReportBase(
+            timedOutReport,
+            context,
+            new WorkflowRunState
+            {
+                WorkflowName = "wf-timed-out",
+                Status = "timed_out",
+                FinalError = "deadline exceeded",
+            },
+            new StateEvent
+            {
+                Version = 5,
+                EventId = "evt-timed-out",
+            },
+            observedAt);
+
         failedReport.WorkflowName.Should().Be("wf-failed");
         failedReport.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Failed);
         failedReport.Success.Should().BeFalse();
@@ -244,6 +261,14 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         stoppedReport.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
         stoppedReport.Success.Should().BeFalse();
         stoppedReport.EndedAt.Should().Be(observedAt);
+
+        timedOutReport.WorkflowName.Should().Be("wf-timed-out");
+        timedOutReport.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.TimedOut);
+        timedOutReport.Success.Should().BeFalse();
+        timedOutReport.EndedAt.Should().Be(observedAt);
+        var mappedTimedOutReport = new WorkflowExecutionReadModelMapper().ToRunReport(timedOutReport);
+        mappedTimedOutReport.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.TimedOut);
+        mappedTimedOutReport.Success.Should().BeFalse();
     }
 
     [Fact]
@@ -1086,8 +1111,14 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         fileRef.OwnerScopeId.Should().Be("scope-owner");
     }
 
-    [Fact]
-    public async Task WorkflowExecutionCurrentStateProjector_ShouldExposePendingToolApprovalStatus()
+    [Theory]
+    [InlineData("running", "awaiting_tool_approval", WorkflowRunCompletionStatus.AwaitingToolApproval, null)]
+    [InlineData("timed_out", "timed_out", WorkflowRunCompletionStatus.TimedOut, false)]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldPreserveTerminalStatusOverPendingToolApproval(
+        string stateStatus,
+        string expectedStatus,
+        WorkflowRunCompletionStatus expectedCompletionStatus,
+        bool? expectedSuccess)
     {
         var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
         var projector = new WorkflowExecutionCurrentStateProjector(
@@ -1096,7 +1127,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         var state = new WorkflowRunState
         {
             RunId = "run-approval",
-            Status = "running",
+            Status = stateStatus,
         };
         state.ExecutionStates["tool_call"] = Any.Pack(new ToolCallModuleState
         {
@@ -1126,10 +1157,11 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 state));
 
         var document = dispatcher.Upserts.Should().ContainSingle().Subject;
-        document.Status.Should().Be("awaiting_tool_approval");
+        document.Status.Should().Be(expectedStatus);
+        document.Success.Should().Be(expectedSuccess);
         new WorkflowExecutionReadModelMapper()
             .ToActorSnapshot(document)
-            .CompletionStatus.Should().Be(WorkflowRunCompletionStatus.AwaitingToolApproval);
+            .CompletionStatus.Should().Be(expectedCompletionStatus);
     }
 
     [Fact]
@@ -1816,6 +1848,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     public static IEnumerable<object?[]> CurrentStateStatusCases()
     {
         yield return ["completed", true];
+        yield return ["timed_out", false];
         yield return ["failed", false];
         yield return ["running", null];
         yield return ["unknown", null];

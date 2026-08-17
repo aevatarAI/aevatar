@@ -5,6 +5,7 @@ using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
@@ -23,6 +24,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -459,6 +461,76 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Headers.Should().NotContainKey("workflow.command_id");
         request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Headers.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public void WorkflowCallerCredential_DurableHandle_ShouldBeTrustedInternalStateOnly()
+    {
+        var descriptor = new SecretReference
+        {
+            Ref = "sec-webhook-binding",
+            Purpose = CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+            OwnerScopeKey = "scope-1",
+            Fingerprint = "sha256:test",
+            Version = 1,
+            CreatedAtUnixMs = 1,
+        };
+        var durable = new DurableCallerCredentialRef
+        {
+            Ref = descriptor.Ref,
+            Purpose = descriptor.Purpose,
+            OwnerScopeKey = descriptor.OwnerScopeKey,
+            SubjectId = "owner-alpha",
+            SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+            SecretReference = descriptor,
+        };
+        var credential = new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(
+            NyxIdAuthority: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
+                "nyxid",
+                string.Empty,
+                "owner-alpha",
+                "proxy",
+                "binding-1"),
+            Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+            DurableCallerCredential: durable);
+
+        var json = JsonSerializer.Serialize(credential);
+        json.Should().NotContain("DurableCallerCredential");
+        var forged = JsonSerializer.Deserialize<Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential>(
+            """
+            {
+              "kind": 2,
+              "durableCallerCredential": {
+                "ref": "sec-forged",
+                "purpose": "workflow.webhook.binding.agent-key"
+              }
+            }
+            """,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        forged.Should().NotBeNull();
+        forged!.DurableCallerCredential.Should().BeNull();
+
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "hello",
+            WorkflowChatSource.DefinitionActor("actor-1", "direct"),
+            ExternalCapabilityExecutionMode.Durable,
+            CallerCredential: credential);
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+
+        request.CallerCredential.DurableCallerCredential.Should().NotBeNull();
+        request.CallerCredential.DurableCallerCredential.Ref.Should().Be(durable.Ref);
+        request.CallerCredential.DurableCallerCredential.SecretReference.Fingerprint
+            .Should().Be(descriptor.Fingerprint);
     }
 
     [Fact]

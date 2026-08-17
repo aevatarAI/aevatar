@@ -22,7 +22,7 @@ internal enum NyxIdAssistantActionCapabilityKind
 internal enum NyxIdAssistantActionAuthorityRequirement
 {
     BrowserOwnerSubject = 1,
-    ExactKeyMutationAuthority = 2,
+    OwnerBoundTransientContext = 2,
 }
 
 internal enum NyxIdAssistantActionEvidenceStrategy
@@ -36,7 +36,7 @@ internal enum NyxIdAssistantActionEvidenceStrategy
 internal enum NyxIdAssistantActionRetryStrategy
 {
     StableBrowserActionRequest = 1,
-    AuthorityBoundGeneration = 2,
+    TransientContextGeneration = 2,
 }
 
 internal enum NyxIdAssistantActionReplayPolicy
@@ -88,9 +88,9 @@ internal static class NyxIdAssistantActionSemanticContracts
                 "key.create",
                 NyxIdAssistantActionKind.KeyCreate,
                 NyxIdChatSafeResourceRef.ResourceOneofCase.Key,
-                NyxIdAssistantActionAuthorityRequirement.ExactKeyMutationAuthority,
+                NyxIdAssistantActionAuthorityRequirement.OwnerBoundTransientContext,
                 NyxIdAssistantActionEvidenceStrategy.AgentApiKeyCurrentState,
-                NyxIdAssistantActionRetryStrategy.AuthorityBoundGeneration,
+                NyxIdAssistantActionRetryStrategy.TransientContextGeneration,
                 rememberEligible: false,
                 NyxIdAssistantActionReplayPolicy.ExactMutationGeneration,
                 NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate),
@@ -98,9 +98,9 @@ internal static class NyxIdAssistantActionSemanticContracts
                 "key.rotate",
                 NyxIdAssistantActionKind.KeyRotate,
                 NyxIdChatSafeResourceRef.ResourceOneofCase.Key,
-                NyxIdAssistantActionAuthorityRequirement.ExactKeyMutationAuthority,
+                NyxIdAssistantActionAuthorityRequirement.OwnerBoundTransientContext,
                 NyxIdAssistantActionEvidenceStrategy.KeyRotationLineage,
-                NyxIdAssistantActionRetryStrategy.AuthorityBoundGeneration,
+                NyxIdAssistantActionRetryStrategy.TransientContextGeneration,
                 rememberEligible: false,
                 NyxIdAssistantActionReplayPolicy.ExactMutationGeneration,
                 NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate),
@@ -1156,11 +1156,11 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                     NyxIdAssistantActionAuthorityRequirement.BrowserOwnerSubject,
                     NyxIdChatBrowserActions.OwnerSubjectsMatch),
                 new(NyxIdAssistantActionKind.KeyCreate,
-                    NyxIdAssistantActionAuthorityRequirement.ExactKeyMutationAuthority,
-                    NyxIdActionReadAuthorityPort.OwnerSubjectsMatch),
+                    NyxIdAssistantActionAuthorityRequirement.OwnerBoundTransientContext,
+                    NyxIdChatBrowserActions.OwnerSubjectsMatch),
                 new(NyxIdAssistantActionKind.KeyRotate,
-                    NyxIdAssistantActionAuthorityRequirement.ExactKeyMutationAuthority,
-                    NyxIdActionReadAuthorityPort.OwnerSubjectsMatch),
+                    NyxIdAssistantActionAuthorityRequirement.OwnerBoundTransientContext,
+                    NyxIdChatBrowserActions.OwnerSubjectsMatch),
             ],
             [
                 new(NyxIdAssistantActionKind.ServiceConnect,
@@ -1176,13 +1176,13 @@ internal sealed class NyxIdAssistantActionCapabilityRegistrations
                     RegistryRevisions(
                         NyxIdAssistantActionRegistry.LeastScopeRegistryRevision,
                         NyxIdAssistantActionRegistry.SupportedRegistryRevision),
-                    NyxIdAssistantActionRetryStrategy.AuthorityBoundGeneration,
+                    NyxIdAssistantActionRetryStrategy.TransientContextGeneration,
                     NyxIdAssistantActionReplayPolicy.ExactMutationGeneration,
                     NyxIdChatBrowserActions.BuildStableIdentity),
                 new(NyxIdAssistantActionKind.KeyRotate,
                     RegistryRevisions(
                         NyxIdAssistantActionRegistry.SupportedRegistryRevision),
-                    NyxIdAssistantActionRetryStrategy.AuthorityBoundGeneration,
+                    NyxIdAssistantActionRetryStrategy.TransientContextGeneration,
                     NyxIdAssistantActionReplayPolicy.ExactMutationGeneration,
                     NyxIdChatBrowserActions.BuildStableIdentity),
             ]);

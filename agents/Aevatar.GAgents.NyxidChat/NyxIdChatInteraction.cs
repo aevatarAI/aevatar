@@ -164,7 +164,7 @@ public sealed record NyxIdActionContinuationCommand(
     IReadOnlyList<NyxIdChatActionReport> Actions,
     string? CommandId = null,
     string? CorrelationId = null,
-    NyxIdReadAuthorityRef? ReadAuthority = null)
+    AgentToolExecutionContextPayload? ToolContext = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -663,8 +663,9 @@ internal sealed class NyxIdActionContinuationCommandEnvelopeFactory
             ClientRequestId = command.ClientRequestId,
             CommandId = context.CommandId,
             CorrelationId = context.CorrelationId,
-            ReadAuthority = command.ReadAuthority?.Clone(),
         };
+        if (command.ToolContext is not null)
+            message.ToolContext = command.ToolContext.Clone();
         message.Actions.Add(command.Actions.Select(static action => action.Clone()));
 
         return new EventEnvelope

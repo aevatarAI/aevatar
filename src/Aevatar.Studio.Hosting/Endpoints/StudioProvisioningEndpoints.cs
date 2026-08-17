@@ -194,6 +194,17 @@ internal static class StudioProvisioningEndpoints
                     retryable = true,
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioMemberAutomationCatalogRouteUnresolvedException unresolved => Results.Json(
+                new
+                {
+                    code = "PROVISION_WORKFLOW_AUTHORIZATION_ROUTE_UNRESOLVED",
+                    message = unresolved.Message,
+                    retryable = false,
+                    refreshFailureCode =
+                        StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode,
+                    requiredUserServiceIds = unresolved.RequiredUserServiceIds,
+                },
+                statusCode: StatusCodes.Status409Conflict),
             StudioMemberAutomationPlanConflictException conflict => Results.Json(
                 new
                 {

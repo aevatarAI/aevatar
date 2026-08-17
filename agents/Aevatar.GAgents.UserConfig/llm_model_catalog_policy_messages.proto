@@ -1,0 +1,57 @@
+syntax = "proto3";
+package aevatar.gagents.user_config;
+option csharp_namespace = "Aevatar.GAgents.UserConfig";
+
+enum LLMModelCatalogPolicyOwnerType {
+  LLM_MODEL_CATALOG_POLICY_OWNER_TYPE_UNSPECIFIED = 0;
+  LLM_MODEL_CATALOG_POLICY_OWNER_TYPE_PLATFORM = 1;
+  LLM_MODEL_CATALOG_POLICY_OWNER_TYPE_SCOPE = 2;
+}
+
+enum LLMModelCatalogPolicyMode {
+  LLM_MODEL_CATALOG_POLICY_MODE_UNSPECIFIED = 0;
+  LLM_MODEL_CATALOG_POLICY_MODE_INHERIT_PLATFORM = 1;
+  LLM_MODEL_CATALOG_POLICY_MODE_CUSTOM = 2;
+}
+
+message NyxIDModelSourceReference {
+  oneof source_identity {
+    string catalog_service_id = 1;
+    string user_service_id = 2;
+  }
+  string service_slug_snapshot = 3;
+}
+
+message ExplicitLLMModelIDs {
+  repeated string upstream_model_ids = 1;
+}
+
+message LLMModelCatalogPolicySource {
+  NyxIDModelSourceReference source = 1;
+  ExplicitLLMModelIDs explicit_models = 2;
+}
+
+message LLMModelCatalogPolicyGAgentState {
+  LLMModelCatalogPolicyOwnerType owner_type = 1;
+  string scope_id = 2;
+  LLMModelCatalogPolicyMode mode = 3;
+  repeated LLMModelCatalogPolicySource sources = 4;
+  string last_mutation_id = 5;
+}
+
+message ReplaceLLMModelCatalogPolicyCommand {
+  LLMModelCatalogPolicyOwnerType owner_type = 1;
+  string scope_id = 2;
+  LLMModelCatalogPolicyMode mode = 3;
+  repeated LLMModelCatalogPolicySource sources = 4;
+  int64 expected_state_version = 5;
+  string mutation_id = 6;
+}
+
+message LLMModelCatalogPolicyReplacedEvent {
+  LLMModelCatalogPolicyOwnerType owner_type = 1;
+  string scope_id = 2;
+  LLMModelCatalogPolicyMode mode = 3;
+  repeated LLMModelCatalogPolicySource sources = 4;
+  string mutation_id = 5;
+}

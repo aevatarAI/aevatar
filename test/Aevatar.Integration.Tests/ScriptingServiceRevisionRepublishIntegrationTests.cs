@@ -668,11 +668,6 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
             CancellationToken ct = default) =>
             _inner.RetireRevisionAsync(command, ct);
 
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
-            SetDefaultServingRevisionCommand command,
-            CancellationToken ct = default) =>
-            _inner.SetDefaultServingRevisionAsync(command, ct);
-
         public async Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(
             ActivateServiceRevisionCommand command,
             CancellationToken ct = default)

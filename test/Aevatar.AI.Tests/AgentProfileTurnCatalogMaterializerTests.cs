@@ -1937,6 +1937,117 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolSetUnavailable);
     }
 
+    [Fact]
+    public void NarrowToVerifiedUserService_ShouldKeepOnlyExactAdmittedOperations()
+    {
+        IAgentTool[] tools =
+        [
+            new AdmittedTestTool(
+                "operation-alpha-read",
+                CreateReadAdmission("us-alpha", "service-alpha", "endpoint-read")),
+            new AdmittedTestTool(
+                "operation-alpha-list",
+                CreateReadAdmission("us-alpha", "service-alpha", "endpoint-list")),
+            new AdmittedTestTool(
+                "operation-beta-read",
+                CreateReadAdmission("us-beta", "service-beta", "endpoint-read")),
+            new TestTool("global-fallback"),
+        ];
+        var catalog = new AgentProfileTurnCatalog(
+            tools.Select(static tool => tool.Name),
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "general_nyxid_assistant",
+            candidateIntentId: "general_nyxid_assistant",
+            routeOwnedTools: tools);
+
+        var narrowed = AgentProfileTurnCatalogMaterializer.NarrowToVerifiedUserService(
+            catalog,
+            VerifiedAuthorization("us-alpha", "service-alpha"));
+
+        narrowed.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "operation-alpha-read",
+            "operation-alpha-list");
+        narrowed.RouteOwnedTools.Keys.Should().BeEquivalentTo(
+            "operation-alpha-read",
+            "operation-alpha-list");
+        narrowed.FinalAllowedToolNames.Should().NotContain("global-fallback");
+    }
+
+    [Theory]
+    [InlineData("us-other", "service-alpha")]
+    [InlineData("us-alpha", "service-other")]
+    public void NarrowToVerifiedUserService_WhenTypedIdentityDiffers_ShouldReturnRestrictedEmpty(
+        string userServiceId,
+        string serviceSlug)
+    {
+        IAgentTool[] tools =
+        [
+            new AdmittedTestTool(
+                "operation-alpha-read",
+                CreateReadAdmission("us-alpha", "service-alpha", "endpoint-read")),
+            new TestTool("global-fallback"),
+        ];
+        var catalog = new AgentProfileTurnCatalog(
+            tools.Select(static tool => tool.Name),
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "general_nyxid_assistant",
+            candidateIntentId: "general_nyxid_assistant",
+            routeOwnedTools: tools);
+
+        var narrowed = AgentProfileTurnCatalogMaterializer.NarrowToVerifiedUserService(
+            catalog,
+            VerifiedAuthorization(userServiceId, serviceSlug));
+
+        narrowed.FinalAllowedToolNames.Should().BeEmpty();
+        narrowed.ToolVisibility.IsRestricted.Should().BeTrue();
+        narrowed.RouteOwnedTools.Should().BeEmpty();
+    }
+
+    private static NyxIdChatVerifiedAuthorizationContinuation VerifiedAuthorization(
+        string userServiceId,
+        string serviceSlug) =>
+        new()
+        {
+            ActionRequestId = "action-alpha",
+            OriginTurnId = "turn-alpha",
+            SourceToolStepId = "step-tool-alpha",
+            PostconditionStepId = "step-postcondition-alpha",
+            VerifiedResource = new NyxIdChatSafeResourceRef
+            {
+                UserService = new NyxIdChatUserServiceRef
+                {
+                    UserServiceId = userServiceId,
+                },
+            },
+            ServiceSlug = serviceSlug,
+            ResumeRequirement =
+                NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest,
+        };
+
+    private static AgentToolOperationAdmission CreateReadAdmission(
+        string userServiceId,
+        string serviceSlug,
+        string endpointId) =>
+        new(
+            userServiceId,
+            serviceSlug,
+            new AgentToolOperationIdentity.PublishedEndpoint(endpointId),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/items",
+            "contract-digest-alpha",
+            [],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive]),
+            "catalog-digest-alpha");
+
     private static AgentProfileTurnCatalogMaterializer NewMaterializer(
         IToolSetRegistry registry,
         IAgentProfileTurnClassifier classifier,
@@ -2194,6 +2305,15 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         public string ParametersSchema => "{}";
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
+    }
+
+    private sealed class AdmittedTestTool(
+        string name,
+        AgentToolOperationAdmission operationAdmission) :
+        TestTool(name),
+        IAgentToolOperationAdmissionOwner
+    {
+        public AgentToolOperationAdmission OperationAdmission { get; } = operationAdmission;
     }
 
     private sealed class CapabilityTool(string name, IReadOnlyCollection<string> capabilities)

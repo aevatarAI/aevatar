@@ -119,7 +119,9 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
                     document.CommittedActorId,
                     document.ActiveRevisionId,
                     document.DeploymentId,
-                    document.DeploymentStatus)
+                    document.DeploymentStatus,
+                    document.ServiceAppId,
+                    document.ServiceNamespace)
                 : null,
             PublishedServiceId: ResolveOptional(document.PublishedServiceId));
     }

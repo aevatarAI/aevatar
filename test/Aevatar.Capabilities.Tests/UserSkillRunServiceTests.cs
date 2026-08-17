@@ -52,6 +52,39 @@ public sealed class UserSkillRunServiceTests
         dispatch.Request.CallerCredential.Should().BeSameAs(callerCredential);
         dispatch.Request.CallerCredential!.NyxIdAuthority!.ExternalUserId.Should().Be("nyx-user-alpha");
         dispatch.Request.CallerCredential.NyxIdAuthority.BindingId.Should().Be("binding-alpha");
+        dispatch.Request.CommandIdSeed.Should().MatchRegex("^[0-9a-f]{32}$");
+        dispatch.Request.CorrelationIdSeed.Should().Be(dispatch.Request.CommandIdSeed);
+    }
+
+    [Fact]
+    public async Task InvokeOnceAsync_ShouldUseDistinctCommandIdentityForEachInvocation()
+    {
+        var dispatch = new RecordingWorkflowChatDispatch();
+        var service = new UserSkillRunService(
+            new RecordingRemoteSkillFetcher(WorkflowSkill()),
+            dispatch,
+            new UnusedScheduleProvisioningPort(),
+            new NoOpSkillWorkflowConfirmationPort());
+        var callerCredential = SourceReadableCallerCredential();
+
+        await service.InvokeOnceAsync(
+            "skill-alpha",
+            callerCredential,
+            "scope-alpha",
+            "first run",
+            CancellationToken.None);
+        var firstCommandIdentity = dispatch.Request!.CommandIdSeed;
+
+        await service.InvokeOnceAsync(
+            "skill-alpha",
+            callerCredential,
+            "scope-alpha",
+            "second run",
+            CancellationToken.None);
+
+        dispatch.Request!.CommandIdSeed.Should().MatchRegex("^[0-9a-f]{32}$");
+        dispatch.Request.CommandIdSeed.Should().NotBe(firstCommandIdentity);
+        dispatch.Request.CorrelationIdSeed.Should().Be(dispatch.Request.CommandIdSeed);
     }
 
     [Fact]
@@ -382,6 +415,40 @@ public sealed class UserSkillRunServiceTests
         outcome.Succeeded.Should().BeFalse();
         outcome.ErrorCode.Should().Be("schedule_authorization_projection_pending");
         outcome.ErrorMessage.Should().Contain("Required state version: 23");
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_WhenRequiredRouteIsUnresolved_ShouldReturnRepairableFailure()
+    {
+        var schedule = new RecordingScheduleProvisioningPort
+        {
+            Exception = new StudioMemberAutomationCatalogRouteUnresolvedException(
+                ["service-alpha"]),
+        };
+        var service = new UserSkillRunService(
+            new RecordingRemoteSkillFetcher(WorkflowSkill()),
+            new RecordingWorkflowChatDispatch(),
+            schedule,
+            new RecordingWorkflowConfirmationPort(ConfirmedWorkflow()));
+
+        var outcome = await service.ScheduleAsync(
+            "skill-alpha",
+            SourceReadableCallerCredential(),
+            "scope-alpha",
+            "run the check",
+            "*/15 * * * *",
+            "UTC",
+            "Codex Check",
+            "team-alpha",
+            "sha256:reviewed",
+            CancellationToken.None);
+
+        outcome.Succeeded.Should().BeFalse();
+        outcome.ErrorCode.Should().Be("schedule_authorization_route_unresolved");
+        outcome.ErrorMessage.Should().Be(
+            "NyxID could not resolve a configured route required by this workflow. " +
+            "Repair or deactivate the route before retrying.");
+        outcome.RequiredUserServiceIds.Should().Equal("service-alpha");
     }
 
     [Fact]

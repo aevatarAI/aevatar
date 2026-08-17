@@ -34,6 +34,9 @@ public sealed class StudioMemberBindingRunCurrentStateProjectorTests
             Status = StudioMemberBindingRunStatus.PlatformBindingPending,
             PlatformBindingCommandId = "platform-bind-1",
             AttemptCount = 1,
+            PlatformExecutionStage = StudioMemberPlatformBindingExecutionStage.ReadinessInFlight,
+            PlatformExecutionAttempt = 4,
+            LastPlatformReadinessStatus = StudioMemberPlatformBindingReadinessStatus.ServingSetMissing,
             UpdatedAtUtc = updatedAt,
         };
 
@@ -52,6 +55,9 @@ public sealed class StudioMemberBindingRunCurrentStateProjectorTests
         written.Status.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
         written.PlatformBindingCommandId.Should().Be("platform-bind-1");
         written.AttemptCount.Should().Be(1);
+        written.PlatformExecutionStage.Should().Be("readiness_in_flight");
+        written.PlatformExecutionAttempt.Should().Be(4);
+        written.LastReadinessStatus.Should().Be("serving_set_missing");
         written.UpdatedAt.Should().Be(updatedAt);
     }
 

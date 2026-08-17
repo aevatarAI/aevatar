@@ -114,6 +114,7 @@ public sealed record NyxIdUserServiceKey(
     string? NodeId,
     NyxIdUserServiceNodeStatus NodeStatus,
     NyxIdUserServiceCredentialSource CredentialSource,
+    string? CatalogServiceId,
     string? CatalogServiceSlug,
     bool Connected);
 
@@ -127,6 +128,10 @@ public sealed record NyxIdUserServiceAuthorizationEvidence(
     NyxIdOAuthConnectionStatus OAuthConnectionStatus,
     IReadOnlyList<string>? GrantedScopes,
     DateTimeOffset? LastAuthorizedAtUtc);
+
+public sealed record NyxIdServiceAccessEvidence(
+    string UserServiceId,
+    string ServiceSlug);
 
 public sealed record NyxIdApiKeyVersionEvidence(
     string? RotationPredecessorId,
@@ -293,7 +298,7 @@ public static class NyxIdApiAccessResponseParser
     public static NyxIdApiAccessResult<NyxIdUserServices> ParseUserServices(string response) =>
         Parse(response, UserServicesFailurePrefix, ParseUserServicesDocument);
 
-    public static NyxIdApiAccessResult<NyxIdUserServices> ParseCodeExecutionUserServices(
+    public static NyxIdApiAccessResult<NyxIdUserServices> ParseUserServiceRoutes(
         string response) =>
         Parse(
             response,
@@ -415,6 +420,7 @@ public static class NyxIdApiAccessResponseParser
                     serviceElement,
                     "credential_source",
                     JsonValueKind.Object)),
+                ReadOptionalNormalizedString(serviceElement, "catalog_service_id"),
                 ReadOptionalNormalizedString(serviceElement, "catalog_service_slug"),
                 RequireBoolean(serviceElement, "connected")));
         }

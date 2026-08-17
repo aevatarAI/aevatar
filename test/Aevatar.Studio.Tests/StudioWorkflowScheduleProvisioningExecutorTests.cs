@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
@@ -87,6 +89,40 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenPublishedServiceIdContainsUnsafeCharacters_ShouldCreateScheduleWithSafeStableId()
+    {
+        var port = new RecordingSchedulePort();
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution(publishedServiceId: "scope-1/service:workflow-alpha"));
+
+        result.Success.Should().BeTrue();
+        result.ScheduleId.Should().StartWith("provision-");
+        result.ScheduleId.Should().MatchRegex("^provision-[a-f0-9]{32}$");
+        port.CreateRequests.Should().ContainSingle();
+        port.CreateRequests[0].ScheduleId.Should().Be(result.ScheduleId);
+        port.CreateRequests[0].AcceptedBinding!.PublishedServiceId.Should().Be("scope-1/service:workflow-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenUnsafePublishedServiceIdFirstGenerationIsTombstoned_ShouldCreateSecondSafeGeneration()
+    {
+        const string publishedServiceId = "scope-1/service:workflow-alpha";
+        var expectedFirst = $"provision-{HashSuffix(publishedServiceId)}";
+        var port = new RecordingSchedulePort();
+        port.TombstonedScheduleIds.Add(expectedFirst);
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution(publishedServiceId: publishedServiceId));
+
+        result.Success.Should().BeTrue();
+        result.ScheduleId.Should().Be($"{expectedFirst}.2");
+        port.GetScheduleIds.Should().Equal(expectedFirst, $"{expectedFirst}.2");
+        port.CreateRequests.Select(static request => request.ScheduleId).Should()
+            .Equal(expectedFirst, $"{expectedFirst}.2");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenAuthorizationPlanChangesBeforeWrite_ShouldRetryWithFreshPreflight()
     {
         var port = new RecordingSchedulePort
@@ -172,6 +208,81 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenExistingScheduleTargetsDifferentService_ShouldFailClosed()
+    {
+        var port = new RecordingSchedulePort
+        {
+            Existing = NewExistingAutomation("rev-2", publishedServiceId: "svc-other"),
+        };
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var action = () => sut.ExecuteAsync(NewExecution());
+
+        var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>();
+        conflict.Which.Code.Should().Be("schedule_target_changed");
+        port.ReplaceRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenExistingScheduleAlreadyMatchesRevisionAndOperation_ShouldReturnExistingSchedule()
+    {
+        var execution = NewExecution();
+        var createPort = new RecordingSchedulePort();
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(createPort);
+        var created = await sut.ExecuteAsync(execution);
+        var expectedOperationId = created.OperationId;
+        var port = new RecordingSchedulePort
+        {
+            Existing = NewExistingAutomation("rev-2", operationId: expectedOperationId),
+        };
+        sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(execution);
+
+        result.Success.Should().BeTrue();
+        result.ScheduleId.Should().Be("provision-svc-1");
+        result.OperationId.Should().Be(expectedOperationId);
+        port.CreateRequests.Should().BeEmpty();
+        port.ReplaceRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenIntentIsOneShot_ShouldCreateOneShotSchedule()
+    {
+        var fireAt = DateTimeOffset.Parse("2026-08-13T10:30:00+08:00");
+        var port = new RecordingSchedulePort();
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution(
+            scheduleMode: ScheduledDispatchScheduleMode.OneShotAtUtc,
+            cronExpression: null,
+            timezone: null,
+            oneShotFireAt: fireAt));
+
+        result.Success.Should().BeTrue();
+        var request = port.CreateRequests.Should().ContainSingle().Subject;
+        request.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.OneShotAtUtc);
+        request.ScheduleCron.Should().BeEmpty();
+        request.ScheduleTimezone.Should().Be(ScheduledDispatchCalculator.DefaultTimezone);
+        request.OneShotFireAt.Should().Be(fireAt.ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenOneShotFireAtIsMissing_ShouldFailFast()
+    {
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(new RecordingSchedulePort());
+
+        var action = () => sut.ExecuteAsync(NewExecution(
+            scheduleMode: ScheduledDispatchScheduleMode.OneShotAtUtc,
+            cronExpression: null,
+            timezone: null,
+            oneShotFireAt: null));
+
+        var failure = await action.Should().ThrowAsync<InvalidOperationException>();
+        failure.Which.Message.Should().Be("one_shot_fire_at_required");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenLiveSchedulePinsOlderRevision_ShouldReplaceAndPinNewRevision()
     {
         var port = new RecordingSchedulePort
@@ -208,14 +319,61 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
             .Equal("provision-svc-1", "provision-svc-1.2");
     }
 
-    private static StudioWorkflowScheduleProvisioningExecution NewExecution() =>
+    [Fact]
+    public async Task ExecuteAsync_WhenExplicitOperationIdentityIsProvided_ShouldUseItVerbatim()
+    {
+        var port = new RecordingSchedulePort();
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution(
+            scheduleOperationId: "custom-operation-id",
+            scheduleIdempotencyKey: "custom-idempotency-key"));
+
+        result.Success.Should().BeTrue();
+        port.CreateRequests.Should().ContainSingle();
+        port.CreateRequests[0].OperationId.Should().Be("custom-operation-id");
+        port.CreateRequests[0].IdempotencyKey.Should().Be("custom-idempotency-key");
+        port.CreateRequests[0].OperationId.Should().NotStartWith("studio-workflow-provision-create:");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAllScheduleGenerationsAreTombstoned_ShouldFailAfterExhaustion()
+    {
+        var port = new RecordingSchedulePort();
+        for (var generation = 1; generation <= 50; generation++)
+        {
+            port.TombstonedScheduleIds.Add(generation == 1 ? "provision-svc-1" : $"provision-svc-1.{generation}");
+        }
+
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution());
+
+        result.Success.Should().BeFalse();
+        result.Retryable.Should().BeFalse();
+        result.FailureCode.Should().Be("schedule_generations_exhausted");
+        port.CreateRequests.Should().HaveCount(50);
+        port.GetScheduleIds.Should().HaveCount(50);
+    }
+
+    private static string HashSuffix(string value) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)).AsSpan(0, 16));
+
+    private static StudioWorkflowScheduleProvisioningExecution NewExecution(
+        string publishedServiceId = "svc-1",
+        ScheduledDispatchScheduleMode scheduleMode = ScheduledDispatchScheduleMode.RecurringCron,
+        string? cronExpression = "0 9 * * *",
+        string? timezone = "UTC",
+        DateTimeOffset? oneShotFireAt = null,
+        string? scheduleOperationId = null,
+        string? scheduleIdempotencyKey = null) =>
         new(
             new StudioWorkflowScheduleProvisioningIntent(
                 "schedule-provisioning-1",
                 "scope-1",
                 "team-1",
                 "m-1",
-                "svc-1",
+                publishedServiceId,
                 "wf-1",
                 "rev-2",
                 "Monitor",
@@ -231,20 +389,27 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
                     string.Empty,
                     "owner-1",
                     "binding-1"),
-                ScheduledDispatchScheduleMode.RecurringCron,
-                "0 9 * * *",
-                "UTC",
+                scheduleMode,
+                cronExpression,
+                timezone,
                 30,
-                "bind-1"),
-            null);
+                "bind-1")
+            {
+                ScheduleOperationId = scheduleOperationId,
+                ScheduleIdempotencyKey = scheduleIdempotencyKey,
+            },
+            oneShotFireAt);
 
-    private static StudioMemberAutomationView NewExistingAutomation(string revisionId) =>
+    private static StudioMemberAutomationView NewExistingAutomation(
+        string revisionId,
+        string publishedServiceId = "svc-1",
+        string operationId = "studio-workflow-provision-create:old") =>
         new(
             "scope-1",
             "team-1",
             "m-1",
             "provision-svc-1",
-            "svc-1",
+            publishedServiceId,
             "Monitor",
             "old run",
             "0 8 * * *",
@@ -253,7 +418,7 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
             "active",
             DateTimeOffset.UtcNow.AddDays(1),
             string.Empty,
-            "studio-workflow-provision-create:old",
+            operationId,
             1,
             false,
             DateTimeOffset.UtcNow.AddHours(1),

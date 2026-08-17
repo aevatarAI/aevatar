@@ -145,6 +145,11 @@ public sealed class ChatRuntimeStreamingBufferTests
         var tool = new CapturingTool();
         var tools = new ToolManager();
         tools.Register(tool);
+        var routeTarget = new LLMRouteTarget
+        {
+            UserServiceId = "user-service-chrono",
+            ServiceSlugSnapshot = "chrono-llm-public",
+        };
         var baseToolContext = AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(null, null, null, 1_785_484_800_000),
@@ -173,6 +178,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                     "response-1",
                     new LLMRequestCallerCredentials("typed-bearer")),
                 ToolContext = baseToolContext,
+                RouteTarget = routeTarget.Clone(),
                 Tools = [tool],
             });
         var executor = runtime.CreateStepExecutor(turnCatalog: null);
@@ -210,6 +216,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         stepRequest.ToolContext.Request.CallId.Should().Be("req-123");
         stepRequest.ToolContext.Routing.ModelOverride.Should().Be("model-a");
         stepRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
+        stepRequest.RouteTarget.Should().BeEquivalentTo(routeTarget);
         stepRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("capture");
 
         var chunks = new List<LLMStreamChunk>();
@@ -241,6 +248,7 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         finalRequest.Tools.Should().BeNull();
         finalRequest.ToolContext!.Request.CallId.Should().Be("req-123:final");
+        finalRequest.RouteTarget.Should().BeEquivalentTo(routeTarget);
 
         var runtimeChunks = new List<LLMStreamChunk>();
         await foreach (var chunk in runtime.ChatStreamAsync(
@@ -261,6 +269,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.Requests[1].Metadata.Should().BeEquivalentTo(stepRequest.Metadata);
         provider.Requests[1].CallerContext.Should().BeEquivalentTo(stepRequest.CallerContext);
         provider.Requests[1].ToolContext.Should().BeEquivalentTo(stepRequest.ToolContext);
+        provider.Requests[1].RouteTarget.Should().BeEquivalentTo(routeTarget);
         provider.Requests[1].Tools.Should().ContainSingle().Which.Name.Should().Be("capture");
         runtimeChunks.Should().ContainSingle(chunk => chunk.DeltaContent == "answer");
 
@@ -1779,7 +1788,11 @@ public sealed class ChatRuntimeStreamingBufferTests
         await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
-        chunks.Should().BeEmpty();
+        chunks.Should().NotBeEmpty();
+        chunks.Should().OnlyContain(chunk =>
+            chunk.LLMInvocationStarted != null || chunk.LLMInvocationCompleted != null);
+        chunks.Should().Contain(chunk => chunk.LLMInvocationStarted != null);
+        chunks.Should().Contain(chunk => chunk.LLMInvocationCompleted != null);
     }
 
     private static bool IsSafeRejectedToolFailure(ChatMessage message, string toolName) =>

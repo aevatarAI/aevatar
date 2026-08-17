@@ -192,6 +192,74 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             toolCallId,
             argumentsSha256);
         var requiresApproval = RequiresApproval(tool, callSafety);
+        if (request.ApprovalGrant is not null && request.UnattendedAuthorization is not null)
+        {
+            var denied = CreateDenied(
+                tool,
+                toolName,
+                toolCallId,
+                callSafety,
+                isMutation,
+                "conflicting_tool_authorization",
+                "A tool call cannot use human approval and unattended authorization together.",
+                AgentToolExecutionFailureStage.Approval,
+                approvalRequestId);
+            return await CompleteBeforeTerminalAsync(
+                tool,
+                denied,
+                credentialDecision.ExecutionContext,
+                credentialDecision.CredentialSource,
+                executionOwner,
+                requestId,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                callSafety,
+                ct).ConfigureAwait(false);
+        }
+
+        if (request.UnattendedAuthorization is not null)
+        {
+            if (!MatchesUnattendedAuthorization(
+                    request.UnattendedAuthorization,
+                    request.ApprovalContinuationMode,
+                    requiresApproval,
+                    isMutation,
+                    callSafety,
+                    credentialDecision.ExecutionContext,
+                    executionOwner,
+                    requestId,
+                    toolName,
+                    toolCallId,
+                    argumentsSha256))
+            {
+                var denied = CreateDenied(
+                    tool,
+                    toolName,
+                    toolCallId,
+                    callSafety,
+                    isMutation,
+                    "unattended_authorization_mismatch",
+                    "The unattended authorization does not match this exact tool call.",
+                    AgentToolExecutionFailureStage.Approval,
+                    approvalRequestId);
+                return await CompleteBeforeTerminalAsync(
+                    tool,
+                    denied,
+                    credentialDecision.ExecutionContext,
+                    credentialDecision.CredentialSource,
+                    executionOwner,
+                    requestId,
+                    toolName,
+                    toolCallId,
+                    argumentsSha256,
+                    callSafety,
+                    ct).ConfigureAwait(false);
+            }
+
+            requiresApproval = false;
+        }
+
         if (request.ApprovalGrant is not null &&
             !MatchesGrant(
                 request.ApprovalGrant,
@@ -367,7 +435,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             runningReceipt,
             AuditOutcome.Accepted,
             isMutation,
-            ct).ConfigureAwait(false);
+            ct,
+            request.UnattendedAuthorization).ConfigureAwait(false);
         return await ExecuteTerminalAsync(
             tool,
             toolName,
@@ -381,6 +450,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             credentialDecision,
             runningAppend,
             reconciledOutcome,
+            request.UnattendedAuthorization,
             ct).ConfigureAwait(false);
     }
 
@@ -397,6 +467,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         CredentialDecision credentialDecision,
         AuditTrailAppendResult runningAppend,
         AgentToolTerminalOutcome? reconciledOutcome,
+        AgentToolUnattendedExecutionAuthorization? unattendedAuthorization,
         CancellationToken ct)
     {
         using var activity = GenAIActivitySource.StartExecuteTool(toolName, toolCallId);
@@ -486,7 +557,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             outcome.Receipt,
             MapAuditOutcome(outcome),
             isMutation,
-            ct).ConfigureAwait(false);
+            ct,
+            unattendedAuthorization).ConfigureAwait(false);
         var auditCompleted = IsAuditRecorded(runningAppend) && IsAuditRecorded(terminalAppend);
         if (auditCompleted)
             return outcome with { AuditCompleted = true };
@@ -744,7 +816,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolReceipt receipt,
         AuditOutcome outcome,
         bool isMutation,
-        CancellationToken ct)
+        CancellationToken ct,
+        AgentToolUnattendedExecutionAuthorization? unattendedAuthorization = null)
     {
         try
         {
@@ -760,7 +833,9 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 credentialSource,
                 receipt,
                 outcome,
-                isMutation);
+                isMutation,
+                unattendedAuthorization is null ? null : "unattended_exact",
+                unattendedAuthorization?.AuthorizationId);
             return await _auditTrailAppender.AppendAsync(record, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -855,7 +930,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             false,
             context,
             AgentToolCredentialSource.ChannelRegistration,
-            $"Tool '{toolName}' was not executed because sender binding '{senderBindingId}' has no valid NyxID credential.");
+            $"Tool '{toolName}' was not executed because the bound sender has no valid NyxID credential.");
     }
 
     private static bool RequiresApproval(IAgentTool tool, AgentToolCallSafety callSafety)
@@ -885,6 +960,59 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         string.Equals(NormalizeIdentity(grant.ToolName), toolName, StringComparison.Ordinal) &&
         string.Equals(NormalizeIdentity(grant.ToolCallId), toolCallId, StringComparison.Ordinal) &&
         string.Equals(NormalizeIdentity(grant.ArgumentsSha256), argumentsSha256, StringComparison.Ordinal);
+
+    private static bool MatchesUnattendedAuthorization(
+        AgentToolUnattendedExecutionAuthorization authorization,
+        AgentToolApprovalContinuationMode continuationMode,
+        bool requiresApproval,
+        bool isMutation,
+        AgentToolCallSafety callSafety,
+        AgentToolExecutionContext executionContext,
+        ExecutionOwnerIdentity executionOwner,
+        string requestId,
+        string toolName,
+        string toolCallId,
+        string argumentsSha256)
+    {
+        var admission = executionContext.OperationAdmission;
+        return authorization.Kind == AgentToolUnattendedAuthorizationKind.WorkflowWebhookExact &&
+               continuationMode == AgentToolApprovalContinuationMode.ActorOwned &&
+               requiresApproval &&
+               isMutation &&
+               !callSafety.IsReadOnly &&
+               !callSafety.IsDestructive &&
+               executionContext.InvocationSurface == AgentToolInvocationSurface.WorkflowToolCall &&
+               executionContext.Credentials.NyxIdCredentialKind ==
+                   AgentToolNyxIdCredentialKind.ProxyDelegation &&
+               !string.IsNullOrWhiteSpace(executionContext.Credentials.NyxIdAccessToken) &&
+               !string.IsNullOrWhiteSpace(executionContext.NyxIdAuthority.Platform) &&
+               !string.IsNullOrWhiteSpace(executionContext.NyxIdAuthority.ExternalUserId) &&
+               string.Equals(toolName, "nyxid_proxy", StringComparison.Ordinal) &&
+               MatchesExecutionOwner(authorization.ExecutionOwner, executionOwner) &&
+               string.Equals(NormalizeIdentity(authorization.RequestId), requestId, StringComparison.Ordinal) &&
+               string.Equals(NormalizeIdentity(authorization.ToolName), toolName, StringComparison.Ordinal) &&
+               string.Equals(NormalizeIdentity(authorization.ToolCallId), toolCallId, StringComparison.Ordinal) &&
+               string.Equals(NormalizeIdentity(authorization.ArgumentsSha256), argumentsSha256, StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(authorization.AuthorizationId) &&
+               !string.IsNullOrWhiteSpace(authorization.CallSiteId) &&
+               admission is
+               {
+                   AuthorizationBasis: AgentToolOperationAuthorizationBasis.ExplicitRequest,
+                   Identity: AgentToolOperationIdentity.AuthoredRequest,
+                   ExecutionPolicy:
+                   {
+                       Risk: AgentToolOperationRisk.Write,
+                       Approval: AgentToolOperationApproval.Required,
+                       EnforcementOwner: AgentToolOperationEnforcementOwner.Aevatar,
+                   },
+               } &&
+               admission.ExecutionPolicy.AllowedExecutionModes.Contains(
+                   AgentToolOperationExecutionMode.Durable) &&
+               string.Equals(
+                   NormalizeIdentity(authorization.OperationSelectorDigest),
+                   AgentToolOperationSelector.ComputeDigest(admission),
+                   StringComparison.Ordinal);
+    }
 
     private static AgentToolExecutionOutcome CreateDenied(
         IAgentTool tool,

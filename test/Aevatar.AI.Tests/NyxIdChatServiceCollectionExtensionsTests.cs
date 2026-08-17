@@ -104,38 +104,17 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddNyxIdChat_ShouldBindPlanGateConfirmationThreshold()
+    public void AddNyxIdChat_ShouldNotRegisterDurableActionReadAuthority()
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Aevatar:NyxId:PlanGate:ConfirmationThresholdSeconds"] = "900",
-            })
-            .Build();
         var services = new ServiceCollection();
 
-        services.AddNyxIdChat(configuration);
-        using var provider = services.BuildServiceProvider();
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
 
-        provider.GetRequiredService<NyxIdChatPlanGateOptions>()
-            .ConfirmationThresholdSeconds.Should().Be(900);
-    }
-
-    [Fact]
-    public void AddNyxIdChat_ShouldRejectNonPositivePlanGateThreshold()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Aevatar:NyxId:PlanGate:ConfirmationThresholdSeconds"] = "0",
-            })
-            .Build();
-        var services = new ServiceCollection();
-
-        Action add = () => services.AddNyxIdChat(configuration);
-
-        add.Should().Throw<InvalidOperationException>()
-            .WithMessage("*ConfirmationThresholdSeconds must be positive*");
+        services.Should().NotContain(descriptor =>
+            string.Equals(
+                descriptor.ServiceType.Name,
+                "INyxIdActionReadAuthorityPort",
+                StringComparison.Ordinal));
     }
 
     [Fact]

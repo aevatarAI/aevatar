@@ -19,6 +19,15 @@ namespace Aevatar.Workflow.Core.Primitives;
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
 internal sealed class SubWorkflowOrchestrator
 {
+    internal sealed class SubWorkflowStartDispatchPendingException
+        : Exception, IRuntimeEnvelopeRetryableException
+    {
+        public SubWorkflowStartDispatchPendingException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+    }
+
     private static readonly WorkflowParser DefinitionParser = new();
     private const int DefaultDefinitionResolutionTimeoutMs = 30_000;
     private const string WorkflowCallMetadataPrefix = "workflow_call.";
@@ -122,6 +131,30 @@ internal sealed class SubWorkflowOrchestrator
             return;
         }
 
+        if (TryGetPendingInvocationByChildRunId(state, invocationId, out var existingPending))
+        {
+            if (!PendingInvocationMatchesRequest(
+                    existingPending,
+                    parentRunId,
+                    parentStepId,
+                    workflowName,
+                    lifecycle))
+            {
+                throw new InvalidOperationException(
+                    $"workflow_call invocation '{invocationId}' conflicts with its committed pending handoff.");
+            }
+
+            var existingDefinition = TryResolvePendingInvocationDefinitionSnapshot(existingPending, state)
+                ?? throw new InvalidOperationException(
+                    $"workflow_call pending invocation '{invocationId}' cannot recover its definition snapshot.");
+            await DrivePendingSubWorkflowInvocationHandoffAsync(
+                existingPending,
+                existingDefinition,
+                state,
+                ct);
+            return;
+        }
+
         var rootRunId = ResolveRootRunId(request.RootRunId, state, parentRunId);
         var parentDepth = ResolveParentDepth(state, parentRunId);
         var requestedDepth = WorkflowCallLimitPolicy.ResolveChildDepth(request.RequestedDepth, parentDepth);
@@ -134,6 +167,16 @@ internal sealed class SubWorkflowOrchestrator
         if (!admission.Accepted)
         {
             await PublishWorkflowCallFailureAsync(parentStepId, parentRunId, admission.Error, ct);
+            return;
+        }
+
+        if (IsSingletonBusy(state, workflowName, lifecycle, invocationId))
+        {
+            await PublishWorkflowCallFailureAsync(
+                parentStepId,
+                parentRunId,
+                BuildSingletonBusyError(workflowName),
+                ct);
             return;
         }
 
@@ -213,6 +256,10 @@ internal sealed class SubWorkflowOrchestrator
                     RequestedDefinitionActorId = definitionActorId,
                 },
                 ct);
+        }
+        catch (SubWorkflowStartDispatchPendingException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -295,7 +342,20 @@ internal sealed class SubWorkflowOrchestrator
         ArgumentNullException.ThrowIfNull(state);
 
         if (!TryGetPendingDefinitionResolution(state, resolved.InvocationId, out var pending))
+        {
+            if (TryGetPendingInvocationByChildRunId(state, resolved.InvocationId, out var existingPending))
+            {
+                var existingDefinition = TryResolvePendingInvocationDefinitionSnapshot(existingPending, state)
+                    ?? throw new InvalidOperationException(
+                        $"workflow_call pending invocation '{existingPending.InvocationId}' cannot recover its definition snapshot.");
+                await DrivePendingSubWorkflowInvocationHandoffAsync(
+                    existingPending,
+                    existingDefinition,
+                    state,
+                    ct);
+            }
             return;
+        }
 
         await _persistDomainEventAsync(resolved, ct);
 
@@ -337,6 +397,10 @@ internal sealed class SubWorkflowOrchestrator
                 state,
                 ct);
             await TryCancelDefinitionResolutionTimeoutAsync(pending, CancellationToken.None);
+        }
+        catch (SubWorkflowStartDispatchPendingException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -412,6 +476,20 @@ internal sealed class SubWorkflowOrchestrator
         ArgumentNullException.ThrowIfNull(state);
         ValidateDefinitionSnapshotOrThrow(definition);
 
+        if (IsSingletonBusy(state, definition.WorkflowName, lifecycle, invocationId))
+        {
+            await _persistDomainEventAsync(new SubWorkflowDefinitionResolutionClearedEvent
+            {
+                InvocationId = invocationId,
+            }, ct);
+            await PublishWorkflowCallFailureAsync(
+                parentStepId,
+                parentRunId,
+                BuildSingletonBusyError(definition.WorkflowName),
+                ct);
+            return;
+        }
+
         var registered = BuildPendingSubWorkflowInvocation(
             invocationId,
             parentRunId,
@@ -443,6 +521,7 @@ internal sealed class SubWorkflowOrchestrator
             Depth = registered.Depth,
             InlineWorkflowYamls = { registered.InlineWorkflowYamls },
             InputFileRefs = { CloneFileRefs(registered.InputFileRefs) },
+            BindingGeneration = registered.BindingGeneration,
         }, ct);
 
         await DrivePendingSubWorkflowInvocationHandoffAsync(registered, definition, state, ct);
@@ -639,6 +718,14 @@ internal sealed class SubWorkflowOrchestrator
             if (!BindingMatches(existing, workflowName, definitionActorId, lifecycle))
                 continue;
 
+            if (evt.BindingGeneration < existing.BindingGeneration ||
+                (evt.BindingGeneration == existing.BindingGeneration &&
+                 existing.BindingGeneration > 0 &&
+                 !string.Equals(existing.ChildActorId, childActorId, StringComparison.Ordinal)))
+            {
+                return current;
+            }
+
             next.SubWorkflowBindings[i] = new WorkflowRunState.Types.SubWorkflowBinding
             {
                 WorkflowName = workflowName,
@@ -646,6 +733,7 @@ internal sealed class SubWorkflowOrchestrator
                 Lifecycle = lifecycle,
                 DefinitionActorId = definitionActorId,
                 DefinitionVersion = evt.DefinitionVersion,
+                BindingGeneration = evt.BindingGeneration,
             };
             return next;
         }
@@ -657,6 +745,7 @@ internal sealed class SubWorkflowOrchestrator
             Lifecycle = lifecycle,
             DefinitionActorId = definitionActorId,
             DefinitionVersion = evt.DefinitionVersion,
+            BindingGeneration = evt.BindingGeneration,
         });
         return next;
     }
@@ -739,6 +828,7 @@ internal sealed class SubWorkflowOrchestrator
             Depth = Math.Max(0, evt.Depth),
             InlineWorkflowYamls = { evt.InlineWorkflowYamls },
             InputFileRefs = { CloneFileRefs(evt.InputFileRefs) },
+            BindingGeneration = evt.BindingGeneration,
         };
         RemovePendingDefinitionResolution(next, invocationId);
         RemovePendingInvocation(next, invocationId, childRunId);
@@ -819,6 +909,7 @@ internal sealed class SubWorkflowOrchestrator
         var normalizedLifecycle = WorkflowCallLifecycle.Normalize(lifecycle);
         var childRunId = invocationId;
         var childActorId = ResolveSubWorkflowActorId(invocationId, definition, normalizedLifecycle, state);
+        var bindingGeneration = ResolveBindingGeneration(invocationId, definition, normalizedLifecycle, state);
         var pending = new WorkflowRunState.Types.PendingSubWorkflowInvocation
         {
             InvocationId = invocationId,
@@ -839,6 +930,7 @@ internal sealed class SubWorkflowOrchestrator
             RootRunId = ResolveRootRunId(rootRunId, state, parentRunId),
             Depth = Math.Max(0, depth),
             InputFileRefs = { CloneFileRefs(inputFileRefs) },
+            BindingGeneration = bindingGeneration,
         };
 
         foreach (var (inlineWorkflowName, inlineWorkflowYaml) in definition.InlineWorkflowYamls.Count > 0
@@ -872,11 +964,45 @@ internal sealed class SubWorkflowOrchestrator
         {
             var existingBinding = state.SubWorkflowBindings.FirstOrDefault(x =>
                 BindingMatches(x, normalizedWorkflowName, definitionActorId, normalizedLifecycle));
-            if (existingBinding != null && !string.IsNullOrWhiteSpace(existingBinding.ChildActorId))
+            if (existingBinding is { BindingGeneration: > 0 } &&
+                !string.IsNullOrWhiteSpace(existingBinding.ChildActorId))
                 return existingBinding.ChildActorId.Trim();
         }
 
         return BuildSubWorkflowActorId(definition, normalizedLifecycle, state.RunId, childRunId);
+    }
+
+    private static long ResolveBindingGeneration(
+        string invocationId,
+        WorkflowDefinitionSnapshot definition,
+        string lifecycle,
+        WorkflowRunState state)
+    {
+        if (!string.IsNullOrWhiteSpace(invocationId) &&
+            TryGetPendingInvocationByChildRunId(state, invocationId.Trim(), out var pending) &&
+            pending.BindingGeneration > 0)
+        {
+            return pending.BindingGeneration;
+        }
+
+        if (!string.Equals(
+                WorkflowCallLifecycle.Normalize(lifecycle),
+                WorkflowCallLifecycle.Singleton,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+
+        var workflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(definition.WorkflowName);
+        var definitionActorId = definition.DefinitionActorId?.Trim() ?? string.Empty;
+        var binding = state.SubWorkflowBindings.FirstOrDefault(candidate =>
+            BindingMatches(candidate, workflowName, definitionActorId, WorkflowCallLifecycle.Singleton));
+        if (binding is not { BindingGeneration: > 0 })
+            return 1;
+        if (binding.BindingGeneration == long.MaxValue)
+            throw new InvalidOperationException("workflow_call singleton binding generation is exhausted.");
+
+        return binding.BindingGeneration + 1;
     }
 
     public async Task RecoverPendingSubWorkflowInvocationsAsync(
@@ -887,8 +1013,7 @@ internal sealed class SubWorkflowOrchestrator
 
         foreach (var pending in state.PendingSubWorkflowInvocations.ToList())
         {
-            if (pending.HandoffPhase == SubWorkflowInvocationHandoffPhase.StartDispatched ||
-                pending.HandoffPhase == SubWorkflowInvocationHandoffPhase.StartFailed)
+            if (pending.HandoffPhase == SubWorkflowInvocationHandoffPhase.StartDispatched)
             {
                 continue;
             }
@@ -943,6 +1068,7 @@ internal sealed class SubWorkflowOrchestrator
                     WorkflowCallLifecycle.Normalize(pending.Lifecycle),
                     definition.DefinitionActorId ?? string.Empty,
                     definition.DefinitionVersion,
+                    pending.BindingGeneration,
                     ct);
             }
 
@@ -976,7 +1102,8 @@ internal sealed class SubWorkflowOrchestrator
         var existingBinding = state.SubWorkflowBindings.FirstOrDefault(x =>
             BindingMatches(x, normalizedWorkflowName, definitionActorId, normalizedLifecycle));
 
-        if (existingBinding != null && !string.IsNullOrWhiteSpace(existingBinding.ChildActorId))
+        if (existingBinding is { BindingGeneration: > 0 } &&
+            !string.IsNullOrWhiteSpace(existingBinding.ChildActorId))
         {
             var existingActorId = existingBinding.ChildActorId.Trim();
             if (await _runtime.ExistsAsync(existingActorId))
@@ -985,7 +1112,10 @@ internal sealed class SubWorkflowOrchestrator
                 if (existingActor != null)
                 {
                     pending.ChildActorId = existingActor.Id;
-                    return (existingActor, !BindingVersionMatches(existingBinding, definition));
+                    return (
+                        existingActor,
+                        pending.BindingGeneration > existingBinding.BindingGeneration ||
+                        !BindingVersionMatches(existingBinding, definition));
                 }
             }
         }
@@ -1033,6 +1163,7 @@ internal sealed class SubWorkflowOrchestrator
                 RootRunId = NormalizeRootRunId(pending.RootRunId, pending.ParentRunId),
                 Depth = Math.Max(0, pending.Depth),
             },
+            BindingGeneration = pending.BindingGeneration,
         };
         start.InputFileRefs.Add(CloneFileRefs(pending.InputFileRefs));
         start.Parameters[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
@@ -1055,21 +1186,9 @@ internal sealed class SubWorkflowOrchestrator
         }
         catch (Exception ex)
         {
-            await AdvancePendingSubWorkflowInvocationHandoffAsync(
-                pending,
-                SubWorkflowInvocationHandoffPhase.StartFailed,
-                ct);
-            await _persistDomainEventAsync(
-                new SubWorkflowInvocationCompletedEvent
-                {
-                    InvocationId = pending.InvocationId,
-                    ChildRunId = pending.ChildRunId,
-                    Success = false,
-                    Error = $"workflow_call failed to dispatch StartWorkflowEvent: {ex.Message}",
-                },
-                ct);
-            await TryFinalizeNonSingletonChildAsync(pending, ct);
-            throw;
+            throw new SubWorkflowStartDispatchPendingException(
+                $"workflow_call StartWorkflowEvent dispatch remains pending for invocation '{pending.InvocationId}'.",
+                ex);
         }
     }
 
@@ -1116,6 +1235,7 @@ internal sealed class SubWorkflowOrchestrator
         string lifecycle,
         string definitionActorId,
         int definitionVersion,
+        long bindingGeneration,
         CancellationToken ct)
     {
         await _persistDomainEventAsync(new SubWorkflowBindingUpsertedEvent
@@ -1125,6 +1245,7 @@ internal sealed class SubWorkflowOrchestrator
             Lifecycle = lifecycle,
             DefinitionActorId = definitionActorId,
             DefinitionVersion = definitionVersion,
+            BindingGeneration = bindingGeneration,
         }, ct);
     }
 
@@ -1448,7 +1569,7 @@ internal sealed class SubWorkflowOrchestrator
             return $"{_ownerActorIdAccessor()}:workflow:{workflowSegment}:{parentRunSegment}:{childRunSegment}";
         }
 
-        return $"{_ownerActorIdAccessor()}:workflow:{workflowSegment}";
+        return $"{_ownerActorIdAccessor()}:workflow:{workflowSegment}:serial-v1";
     }
 
     private async Task<IActor> ResolveOrCreateWorkflowActorByIdAsync(string actorId)
@@ -1496,6 +1617,11 @@ internal sealed class SubWorkflowOrchestrator
                 inlineWorkflowYamls[key] = value;
         }
 
+        var serialSingleton = pending.BindingGeneration > 0 &&
+                              string.Equals(
+                                  WorkflowCallLifecycle.Normalize(pending.Lifecycle),
+                                  WorkflowCallLifecycle.Singleton,
+                                  StringComparison.OrdinalIgnoreCase);
         var bindDefinition = new BindWorkflowRunDefinitionEvent
         {
             DefinitionActorId = definition.DefinitionActorId ?? string.Empty,
@@ -1513,6 +1639,14 @@ internal sealed class SubWorkflowOrchestrator
             //   Behavior: child workflow runs expose their parent/root run lineage as typed bind facts.
             //   Why this shape: the child actor commits lineage from the call-site handoff instead of deriving it from runtime topology.
             InitialLineage = BuildChildInitialLineage(pending, _ownerActorIdAccessor()),
+            // A generation-zero pending singleton was committed by the legacy
+            // runtime. Finish that one handoff on its original single-run actor;
+            // new invocations migrate to the serial singleton generation fence.
+            ReusePolicy = serialSingleton
+                ? WorkflowRunActorReusePolicy.SerialSingleton
+                : WorkflowRunActorReusePolicy.SingleRun,
+            BindingGeneration = pending.BindingGeneration,
+            ReuseAuthorityActorId = serialSingleton ? _ownerActorIdAccessor() : string.Empty,
         };
 
         return new EventEnvelope
@@ -1595,6 +1729,67 @@ internal sealed class SubWorkflowOrchestrator
 
         return string.Equals(binding.WorkflowName, workflowName, StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool PendingInvocationMatchesRequest(
+        WorkflowRunState.Types.PendingSubWorkflowInvocation pending,
+        string parentRunId,
+        string parentStepId,
+        string workflowName,
+        string lifecycle) =>
+        string.Equals(
+            WorkflowRunIdNormalizer.Normalize(pending.ParentRunId),
+            WorkflowRunIdNormalizer.Normalize(parentRunId),
+            StringComparison.Ordinal) &&
+        string.Equals(pending.ParentStepId?.Trim(), parentStepId?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(
+            WorkflowRunIdNormalizer.NormalizeWorkflowName(pending.WorkflowName),
+            WorkflowRunIdNormalizer.NormalizeWorkflowName(workflowName),
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            WorkflowCallLifecycle.Normalize(pending.Lifecycle),
+            WorkflowCallLifecycle.Normalize(lifecycle),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSingletonBusy(
+        WorkflowRunState state,
+        string? workflowName,
+        string? lifecycle,
+        string? invocationId)
+    {
+        if (!string.Equals(
+                WorkflowCallLifecycle.Normalize(lifecycle),
+                WorkflowCallLifecycle.Singleton,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(workflowName);
+        var normalizedInvocationId = invocationId?.Trim() ?? string.Empty;
+        return state.PendingSubWorkflowInvocations.Any(pending =>
+                   !string.Equals(pending.InvocationId, normalizedInvocationId, StringComparison.Ordinal) &&
+                   string.Equals(
+                       WorkflowCallLifecycle.Normalize(pending.Lifecycle),
+                       WorkflowCallLifecycle.Singleton,
+                       StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(
+                       WorkflowRunIdNormalizer.NormalizeWorkflowName(pending.WorkflowName),
+                       normalizedWorkflowName,
+                       StringComparison.OrdinalIgnoreCase)) ||
+               state.PendingSubWorkflowDefinitionResolutions.Any(pending =>
+                   !string.Equals(pending.InvocationId, normalizedInvocationId, StringComparison.Ordinal) &&
+                   string.Equals(
+                       WorkflowCallLifecycle.Normalize(pending.Lifecycle),
+                       WorkflowCallLifecycle.Singleton,
+                       StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(
+                       WorkflowRunIdNormalizer.NormalizeWorkflowName(pending.WorkflowName),
+                       normalizedWorkflowName,
+                       StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string BuildSingletonBusyError(string? workflowName) =>
+        $"workflow_call singleton is busy for workflow '{WorkflowRunIdNormalizer.NormalizeWorkflowName(workflowName)}'";
 
     private static bool BindingVersionMatches(
         WorkflowRunState.Types.SubWorkflowBinding binding,

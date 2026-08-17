@@ -362,7 +362,7 @@ internal sealed class NyxIdIdentityAssertionValidator
 
     private string? ResolveNyxIdAuthority() =>
         NormalizeOptional(_options.Issuer)?.TrimEnd('/')
-        ?? NormalizeOptional(_nyxIdOptions?.BaseUrl)?.TrimEnd('/');
+        ?? NormalizeOptional(_nyxIdOptions?.EffectiveAuthority)?.TrimEnd('/');
 
     private static long? ReadNumericDateClaim(ClaimsPrincipal principal, string claimType)
     {

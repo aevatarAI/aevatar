@@ -10,6 +10,7 @@ public sealed class WorkflowExecutionReadModelMapperTests
     [Theory]
     [InlineData("running", WorkflowRunCompletionStatus.Running)]
     [InlineData("completed", WorkflowRunCompletionStatus.Completed)]
+    [InlineData("timed_out", WorkflowRunCompletionStatus.TimedOut)]
     [InlineData("failed", WorkflowRunCompletionStatus.Failed)]
     [InlineData("stopped", WorkflowRunCompletionStatus.Stopped)]
     [InlineData("not_found", WorkflowRunCompletionStatus.NotFound)]

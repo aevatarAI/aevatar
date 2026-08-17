@@ -37,6 +37,7 @@ using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourc
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
+[Collection(ChannelRuntimeTestCollections.NyxIdInventoryRequestContext)]
 public sealed class ConversationReplyGeneratorTests
 {
     private static readonly IBuiltInPromptFloorProvider BuiltInPromptFloorProvider =
@@ -4209,6 +4210,8 @@ public sealed class ConversationReplyGeneratorTests
                           "service_id": "catalog-github-alpha",
                           "label": "GitHub",
                           "is_active": true,
+                          "connected": true,
+                          "status": "active",
                           "credential_source": { "type": "personal" }
                         }
                       ]

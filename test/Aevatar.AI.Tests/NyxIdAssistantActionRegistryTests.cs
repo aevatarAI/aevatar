@@ -7,6 +7,8 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Tests;
 
@@ -924,7 +926,8 @@ public sealed class NyxIdAssistantActionRegistryTests
                 new NyxIdAssistantActionsOptions
                 {
                     Enabled = true,
-                });
+                },
+                NullLogger<NyxIdAssistantActionRegistryStartupService>.Instance);
 
             await service.StartAsync(CancellationToken.None);
 
@@ -963,6 +966,80 @@ public sealed class NyxIdAssistantActionRegistryTests
             await service.StopAsync(CancellationToken.None);
             source.FetchCount.Should().Be(1);
         }
+    }
+
+    [Theory]
+    [InlineData("http")]
+    [InlineData("timeout")]
+    [InlineData("read")]
+    public async Task StartupService_ShouldDisableAssistantActionsAndScrubDependencyFailureDetails(
+        string failureKind)
+    {
+        const string sensitiveDetail = "response-contained-secret-token";
+        Exception failure = failureKind switch
+        {
+            "http" => new HttpRequestException(sensitiveDetail),
+            "timeout" => new TaskCanceledException(sensitiveDetail),
+            "read" => new IOException(sensitiveDetail),
+            _ => throw new InvalidOperationException("Unsupported test failure kind."),
+        };
+        var source = new FailingRegistrySource(failure);
+        var snapshot = new NyxIdAssistantActionRegistrySnapshot();
+        var logger = new RecordingLogger<NyxIdAssistantActionRegistryStartupService>();
+        var service = new NyxIdAssistantActionRegistryStartupService(source, snapshot, logger);
+
+        await service.StartAsync(CancellationToken.None);
+
+        var registry = snapshot.GetRequired();
+        registry.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        Action validate = () => registry.ValidateRequest(
+            "service.connect",
+            """{"catalogService":{"serviceSlug":"api-github"}}""");
+        validate.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        logger.Entries.Should().ContainSingle();
+        logger.Entries.Single().Level.Should().Be(LogLevel.Error);
+        logger.Entries.Single().Message.Should().Contain(failure.GetType().Name);
+        logger.Entries.Single().Message.Should().NotContain(sensitiveDetail);
+        logger.Entries.Single().Exception.Should().BeNull();
+        var readiness = snapshot.GetReadinessRequired();
+        readiness.Status.Should().Be(
+            NyxIdAssistantActionRegistryReadinessStatus.Unavailable);
+        readiness.FailureCode.Should().Be(
+            NyxIdAssistantActionRegistryReadinessSnapshot.UnavailableFailureCode);
+    }
+
+    [Fact]
+    public async Task StartupService_ShouldDisableAssistantActionsWhenRegistryContractIsInvalid()
+    {
+        var snapshot = new NyxIdAssistantActionRegistrySnapshot();
+        var service = new NyxIdAssistantActionRegistryStartupService(
+            new RecordingRegistrySource("not-json"),
+            snapshot,
+            NullLogger<NyxIdAssistantActionRegistryStartupService>.Instance);
+
+        await service.StartAsync(CancellationToken.None);
+
+        snapshot.GetRequired().TryGetDefinition("service.connect", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task StartupService_ShouldPropagateHostCancellationWithoutInitializingFallback()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var snapshot = new NyxIdAssistantActionRegistrySnapshot();
+        var service = new NyxIdAssistantActionRegistryStartupService(
+            new RecordingRegistrySource(RegistryJson()),
+            snapshot,
+            NullLogger<NyxIdAssistantActionRegistryStartupService>.Instance);
+
+        Func<Task> start = () => service.StartAsync(cts.Token);
+
+        await start.Should().ThrowAsync<OperationCanceledException>();
+        Action read = () => snapshot.GetRequired();
+        read.Should().Throw<InvalidOperationException>()
+            .WithMessage("*not initialized*");
     }
 
     [Fact]
@@ -1085,7 +1162,11 @@ public sealed class NyxIdAssistantActionRegistryTests
         var client = new HttpClient(handler);
         var source = new NyxIdAssistantActionRegistryHttpSource(
             new StubHttpClientFactory(client),
-            new NyxIdToolOptions { BaseUrl = "https://nyxid.example.test/" });
+            new NyxIdToolOptions
+            {
+                BaseUrl = "http://nyxid.internal:3001/",
+                ApiBaseUrl = "https://nyxid.example.test/",
+            });
 
         var json = await source.FetchAsync(CancellationToken.None);
 
@@ -1478,6 +1559,35 @@ public sealed class NyxIdAssistantActionRegistryTests
     {
         public Task<string> FetchAsync(CancellationToken ct) =>
             Task.FromException<string>(exception);
+    }
+
+    private sealed class FailingRegistrySource(Exception exception)
+        : INyxIdAssistantActionRegistrySource
+    {
+        public Task<string> FetchAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromException<string>(exception);
+        }
+    }
+
+    private sealed record LogEntry(LogLevel Level, string Message, Exception? Exception);
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<LogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception), exception));
     }
 
     private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory

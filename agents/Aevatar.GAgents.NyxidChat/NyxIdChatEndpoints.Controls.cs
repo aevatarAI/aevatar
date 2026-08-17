@@ -32,9 +32,6 @@ public static partial class NyxIdChatEndpoints
             "/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip",
             HandleSkipControlAsync);
         group.MapPost(
-            "/{scopeId}/nyxid-chat/conversations/{actorId}/plans/{taskId}:resolve",
-            HandlePlanResolveControlAsync);
-        group.MapPost(
             "/{scopeId}/nyxid-chat/conversations/{actorId}:arm-effect-fault-canary",
             HandleCanaryEffectFaultArmControlAsync);
     }
@@ -377,73 +374,6 @@ public static partial class NyxIdChatEndpoints
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
 
-    private static async Task<IResult> HandlePlanResolveControlAsync(
-        HttpContext http,
-        string scopeId,
-        string actorId,
-        string taskId,
-        NyxIdChatPlanResolveRequest request,
-        [FromServices] IScopeResourceAdmissionPort admissionPort,
-        [FromServices] INyxIdChatControlCommandPort commandPort,
-        CancellationToken ct)
-    {
-        if (!TryValidateNeedsYouRequest(
-                scopeId,
-                actorId,
-                request.RequestId,
-                request.ClientRequestId,
-                request.ExpectedStateVersion,
-                out var identity) ||
-            !TryValidateControlIdentity(taskId, out var normalizedTaskId) ||
-            !TryValidateControlIdentity(request.PlanId, out var normalizedPlanId) ||
-            request.PlanRevision <= 0)
-        {
-            return InvalidControlRequest();
-        }
-
-        var credentials = ExtractNyxIdCredentials(http);
-        if (string.IsNullOrWhiteSpace(credentials?.NyxIdAccessToken))
-            return Results.Unauthorized();
-        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(
-                http.User,
-                out var ownerSubject))
-        {
-            return Results.Unauthorized();
-        }
-        var admissionError = await AuthorizeConversationAsync(
-            admissionPort,
-            identity.ScopeId,
-            identity.ActorId,
-            ScopeResourceOperation.Control,
-            ct).ConfigureAwait(false);
-        if (admissionError is not null)
-            return admissionError;
-
-        var (commandId, correlationId) = CreateControlTraceIdentity();
-        var receipt = await commandPort.DispatchPlanResolveAsync(new NyxIdChatPlanResolveCommand
-        {
-            ScopeId = identity.ScopeId,
-            ConversationActorId = identity.ActorId,
-            TaskId = normalizedTaskId,
-            PlanId = normalizedPlanId,
-            OwnerSubject = ownerSubject,
-            PlanRevision = request.PlanRevision,
-            RequestId = identity.RequestId,
-            ClientRequestId = identity.ClientRequestId,
-            Confirmed = request.Confirmed,
-            ExpectedStateVersion = request.ExpectedStateVersion,
-            CommandId = commandId,
-            CorrelationId = correlationId,
-            ToolContext = BuildAuthenticatedOwnerControlToolContext(
-                identity.ScopeId,
-                identity.ActorId,
-                identity.RequestId,
-                ownerSubject,
-                credentials!),
-        }, ct).ConfigureAwait(false);
-        return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
-    }
-
     private static async Task<IResult> HandleCanaryEffectFaultArmControlAsync(
         HttpContext http,
         string scopeId,
@@ -467,12 +397,12 @@ public static partial class NyxIdChatEndpoints
             !TryValidateControlIdentity(actorId, out var normalizedActorId) ||
             !TryValidateControlIdentity(request.ArmId, out var armId) ||
             !TryValidateControlIdentity(request.ClientRequestId, out var clientRequestId) ||
-            !TryValidateControlIdentity(request.TurnId, out var turnId) ||
-            !TryValidateControlIdentity(request.TaskId, out var taskId) ||
-            !TryValidateControlIdentity(request.StepId, out var stepId) ||
-            !TryValidateControlIdentity(request.OperationId, out var operationId) ||
+            !TryValidateControlIdentity(request.SourceTurnId, out var sourceTurnId) ||
+            !TryValidateControlIdentity(request.SourceTaskId, out var sourceTaskId) ||
+            !TryValidateControlIdentity(request.SourceStepId, out var sourceStepId) ||
+            !TryValidateControlIdentity(request.SourceOperationId, out var sourceOperationId) ||
             !TryValidateControlIdentity(request.ServiceInstanceId, out var serviceInstanceId) ||
-            request.OperationGeneration != 1 ||
+            request.SourceOperationGeneration <= 0 ||
             request.ExpectedStateVersion < 0 ||
             request.ExpiresAt <= DateTimeOffset.UtcNow)
         {
@@ -496,14 +426,14 @@ public static partial class NyxIdChatEndpoints
                 ConversationActorId = normalizedActorId,
                 ArmId = armId,
                 ClientRequestId = clientRequestId,
-                Key = new NyxIdChatOperationKey
+                SourceOperationKey = new NyxIdChatOperationKey
                 {
                     ConversationActorId = normalizedActorId,
-                    TurnId = turnId,
-                    TaskId = taskId,
-                    StepId = stepId,
-                    OperationId = operationId,
-                    OperationGeneration = request.OperationGeneration,
+                    TurnId = sourceTurnId,
+                    TaskId = sourceTaskId,
+                    StepId = sourceStepId,
+                    OperationId = sourceOperationId,
+                    OperationGeneration = request.SourceOperationGeneration,
                 },
                 ServiceInstanceId = serviceInstanceId,
                 OwnerSubject = ownerSubject,
@@ -785,23 +715,16 @@ public static partial class NyxIdChatEndpoints
         string? Reason,
         long ExpectedStateVersion);
 
-    public sealed record NyxIdChatPlanResolveRequest(
-        string? RequestId,
-        string? ClientRequestId,
-        string? PlanId,
-        int PlanRevision,
-        bool Confirmed,
-        long ExpectedStateVersion);
-
     public sealed record NyxIdChatCanaryEffectFaultArmRequest(
         string? ArmId,
         string? ClientRequestId,
-        string? TurnId,
-        string? TaskId,
-        string? StepId,
-        string? OperationId,
-        long OperationGeneration,
+        string? SourceTurnId,
+        string? SourceTaskId,
+        string? SourceStepId,
+        string? SourceOperationId,
+        long SourceOperationGeneration,
         string? ServiceInstanceId,
         DateTimeOffset ExpiresAt,
         long ExpectedStateVersion);
+
 }

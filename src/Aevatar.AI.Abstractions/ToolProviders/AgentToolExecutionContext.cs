@@ -206,12 +206,20 @@ public enum AgentToolNyxIdCredentialKind
     ProxyDelegation = 2,
 }
 
+public enum AgentToolNyxIdCredentialAuthority
+{
+    Unspecified = 0,
+    ToolExecutionContext = 1,
+}
+
 public sealed record AgentToolCredentials(
     string? NyxIdAccessToken,
     string? NyxIdOrgToken,
     string? SenderNyxIdAccessToken,
     AgentToolNyxIdCredentialKind NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
-    string? SourceReadableNyxIdAccessToken = null)
+    string? SourceReadableNyxIdAccessToken = null,
+    AgentToolNyxIdCredentialAuthority NyxIdCredentialAuthority =
+        AgentToolNyxIdCredentialAuthority.Unspecified)
 {
     public static AgentToolCredentials Empty { get; } = new(null, null, null);
 }

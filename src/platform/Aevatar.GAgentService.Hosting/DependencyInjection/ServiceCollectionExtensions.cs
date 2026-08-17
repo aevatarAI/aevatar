@@ -149,6 +149,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILlmRunExecutionService>(sp => sp.GetRequiredService<LlmRunExecutor>());
         services.TryAddSingleton(WorkflowCompatibilityProfile.AevatarV1);
         services.TryAddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
+        services.TryAddSingleton<IScopeWorkflowCatalogueRowCommandPort, ActorDispatchScopeWorkflowCatalogueRowCommandPort>();
         services.TryAddSingleton<ScopeWorkflowCatalogueRowMaterializer>();
         // Off-grain run execution (epic #2271 root fix): the scheduler enqueues to an
         // in-process bounded queue that a hosted background worker drains off any Orleans

@@ -10,6 +10,7 @@
     <InternalsVisibleTo Include="Aevatar.GAgents.StatusDashboard.Tests" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
   </ItemGroup>

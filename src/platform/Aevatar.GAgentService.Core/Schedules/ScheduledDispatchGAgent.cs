@@ -1117,7 +1117,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         try
         {
             var prepared = await BuildDispatchEnvelopeAsync(scheduledFireAt, idempotencyKey, ct);
-            var receipt = await DispatchPreparedTargetAsync(prepared, ct);
+            var receipt = await DispatchPreparedTargetAsync(prepared, scheduledFireAt, ct);
             if (!receipt.Accepted)
             {
                 await PersistFireFailedAsync(
@@ -1210,6 +1210,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private async Task<ScheduledDispatchReceipt> DispatchPreparedTargetAsync(
         ScheduledDispatchEnvelope prepared,
+        DateTimeOffset scheduledFireAt,
         CancellationToken ct)
     {
         if (prepared.TargetKind == ScheduledDispatchTargetKindState.ServiceInvocation)
@@ -1269,7 +1270,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     ProjectNyxIdAccessTokenToWorkflowCallerCredential:
                         State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow,
                     ScheduleId: ResolveScheduleId(),
-                    AuthorizationFact: ToRuntimeAuthorizationFact(effectiveAuthorizationFact)),
+                    AuthorizationFact: ToRuntimeAuthorizationFact(effectiveAuthorizationFact),
+                    FireContext: new ScheduledDispatchFireContext(
+                        scheduledFireAt,
+                        State.Timezone),
+                    ScheduleOperationId: State.TeamAutomationOperationId),
                 ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,
@@ -2687,6 +2692,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw TeamAutomationCommandRejectedException.InvalidRequest(
                 "team_automation_activation_decision_invalid");
         }
+
+        var promptValidation = ScheduledDispatchPromptTemplate.ValidatePayload(decision.Payload);
+        if (!promptValidation.Succeeded)
+        {
+            throw TeamAutomationCommandRejectedException.InvalidRequest(
+                "team_automation_activation_decision_invalid");
+        }
     }
 
     private static TeamAutomationActivationDecisionState CreateTeamAutomationActivationDecision(
@@ -2973,6 +2985,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (target == null || target.Kind == ScheduledDispatchTargetKindState.Unspecified)
             throw new ArgumentException("Scheduled dispatch typed target is required.", nameof(target));
         var normalizedTarget = NormalizeTarget(target, scheduleKind);
+        var promptValidation = ScheduledDispatchPromptTemplate.ValidatePayload(
+            normalizedTarget.ServiceInvocation?.Payload);
+        if (!promptValidation.Succeeded)
+            throw new ArgumentException(promptValidation.Error, nameof(target));
         if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.Envelope &&
             !HasTrustedInternalEnvelopeAuthority(normalizedTarget))
         {

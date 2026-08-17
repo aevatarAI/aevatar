@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
@@ -118,6 +119,34 @@ public sealed record ProvisionWorkflowRequest(
 }
 
 /// <summary>
+/// Secret-free result of workflow provisioning admission. The plan is suitable
+/// for durable persistence and is cloned at the boundary so callers cannot
+/// mutate the admitted snapshot after it has been accepted.
+/// </summary>
+public sealed class ProvisionWorkflowPreparation
+{
+    private readonly WorkflowCapabilityAdmissionPlan _capabilityAdmissionPlan;
+
+    public ProvisionWorkflowPreparation(
+        string workflowId,
+        string revisionId,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan)
+    {
+        WorkflowId = workflowId;
+        RevisionId = revisionId;
+        _capabilityAdmissionPlan = capabilityAdmissionPlan?.Clone()
+            ?? throw new ArgumentNullException(nameof(capabilityAdmissionPlan));
+    }
+
+    public string WorkflowId { get; }
+
+    public string RevisionId { get; }
+
+    public WorkflowCapabilityAdmissionPlan CapabilityAdmissionPlan =>
+        _capabilityAdmissionPlan.Clone();
+}
+
+/// <summary>
 /// Result of a single-call provision. The bind and the run are both asynchronous,
 /// so no run id is returned at provision time. The schedule id is absent until
 /// actor-owned provisioning succeeds and becomes visible in the member read model.
@@ -149,4 +178,10 @@ public sealed record ProvisionWorkflowResponse(
     public string? ScheduleProvisioningStatus { get; init; }
 
     public string StudioUrl { get; init; } = string.Empty;
+
+    public string WorkflowId { get; init; } = string.Empty;
+
+    public string PublishedServiceId { get; init; } = string.Empty;
+
+    public string RevisionId { get; init; } = string.Empty;
 }

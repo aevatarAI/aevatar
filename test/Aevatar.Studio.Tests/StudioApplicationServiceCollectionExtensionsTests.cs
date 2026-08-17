@@ -3,6 +3,7 @@ using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -14,6 +15,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -85,8 +87,24 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
             .Which.ImplementationType.Should().Be(typeof(UserConfigService));
         services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ILLMModelCatalogPolicyApplicationService) &&
+            x.ImplementationType == typeof(LLMModelCatalogPolicyApplicationService) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ILLMModelDiscoveryApplicationService) &&
+            x.ImplementationType == typeof(LLMModelDiscoveryApplicationService) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(ILLMModelRouteApplicationService) &&
+            x.ImplementationType == typeof(LLMModelRouteApplicationService) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IScopeWorkflowPublishedServiceDescriptorSource) &&
             x.ImplementationType == typeof(StudioMemberScopeWorkflowDescriptorSource) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IScopeWorkflowPublishedServiceDescriptorSource) &&
+            x.ImplementationType == typeof(CatalogueScopeWorkflowDescriptorSource) &&
             x.Lifetime == ServiceLifetime.Singleton);
     }
 
@@ -136,6 +154,190 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkOrderExecutionWorker));
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliverySectionIsMissing_ShouldUseShippedWorkflowAllowlist()
+    {
+        var options = ResolveDeliveryOptions(new ConfigurationBuilder().Build());
+
+        options.AllowedWorkflowNames.Should().Equal(
+            "hr_onboarding_email_approval",
+            "hr_monthly_attendance_approval",
+            "hr_attendance_fill_reminder",
+            "fin_invoice_precheck_approval",
+            "fin_budget_variance_monitor");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliveryAllowlistIsConfigured_ShouldPreserveExactSubset()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream("""
+                {"Aevatar":{"Delivery":{"UseShippedWorkflowAllowlist":true}}}
+                """u8.ToArray()))
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:0"] =
+                    "fin_invoice_precheck_approval",
+                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:1"] =
+                    "hr_onboarding_email_approval",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().Equal(
+            "fin_invoice_precheck_approval",
+            "hr_onboarding_email_approval");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliveryAllowlistIsExplicitlyEmpty_ShouldRemainEmpty()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream("""
+                {"Aevatar":{"Delivery":{"UseShippedWorkflowAllowlist":true}}}
+                """u8.ToArray()))
+            .AddJsonStream(new MemoryStream("""
+                {"Aevatar":{"Delivery":{"AllowedWorkflowNames":[]}}}
+                """u8.ToArray()))
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenShippedAllowlistIsExplicitlyEnabled_ShouldUseShippedWorkflows()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliverySectionOmitsAllowlistAndOptIn_ShouldRemainEmpty()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:PackageDirectory"] = "delivery-workflows",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("https://aevatar-console.aevatar.ai")]
+    [InlineData("http://localhost:8000")]
+    public void AddStudioHostingCore_WhenConsoleWebBaseUrlIsAValidOrigin_ShouldKeepIt(string value)
+    {
+        var options = ResolveDeliveryOptions(DeliveryConfiguration("ConsoleWebBaseUrl", value));
+
+        options.ConsoleWebBaseUrl.Should().Be(value);
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenConsoleWebBaseUrlIsUnset_ShouldRemainEmpty()
+    {
+        var options = ResolveDeliveryOptions(new ConfigurationBuilder().Build());
+
+        options.ConsoleWebBaseUrl.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("/scopes")]
+    [InlineData("http://aevatar-console.aevatar.ai")]
+    [InlineData("https://aevatar-console.aevatar.ai?next=/scopes")]
+    public void AddStudioHostingCore_WhenConsoleWebBaseUrlIsInvalid_ShouldFailFastInsteadOfDroppingTheConsoleLink(
+        string value)
+    {
+        var action = () => ResolveDeliveryOptions(DeliveryConfiguration("ConsoleWebBaseUrl", value));
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ConsoleWebBaseUrl*");
+    }
+
+    // The production ConfigMap carries the product-console URL. Adding that section is what makes
+    // `Aevatar:Delivery` exist, which flips the allowlist from "absent, use shipped" to
+    // "present, fail closed" — so the deployed config must opt in explicitly or every
+    // package disappears.
+    [Fact]
+    public void AddStudioHostingCore_WhenDeliverySectionCarriesOnlyConsoleWebUrl_ShouldExposeNoPackages()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "https://console.example.com",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenConsoleWebUrlIsCombinedWithTheShippedOptIn_ShouldKeepBoth()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "https://console.example.com",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
+        options.ConsoleWebBaseUrl.Should().Be("https://console.example.com");
+    }
+
+    [Fact]
+    public void MainnetDistributedDeliveryConfiguration_ShouldKeepTheShippedAllowlistWithConsoleWebUrl()
+    {
+        using var stream = File.OpenRead(Path.Combine(
+            Aevatar.Configuration.AevatarPaths.RepoRoot,
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "appsettings.Distributed.json"));
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(stream)
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
+        options.ConsoleWebBaseUrl.Should().Be("https://aevatar-console.aevatar.ai");
+    }
+
+    private static IConfiguration DeliveryConfiguration(string key, string value) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:{key}"] = value,
+            })
+            .Build();
+
+    private static WorkflowDeliveryOptions ResolveDeliveryOptions(IConfiguration configuration)
+    {
+        var services = new ServiceCollection();
+        services.AddStudioHostingCore(configuration);
+        using var provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<IOptions<WorkflowDeliveryOptions>>().Value;
     }
 
     private static void AddSchedulePortDependencies(IServiceCollection services)

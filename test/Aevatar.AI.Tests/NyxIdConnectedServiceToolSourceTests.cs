@@ -178,6 +178,63 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.ProxyRequests.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("expired", true, null, null)]
+    [InlineData("pending_auth", true, null, null)]
+    [InlineData("active", false, null, null)]
+    [InlineData("active", true, "node-alpha", "offline")]
+    public async Task DiscoverToolsAsync_NonExecutableKeyReadiness_DoesNotExposeOperations(
+        string status,
+        bool connected,
+        string? nodeId,
+        string? nodeStatus)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance(
+                "usvc-alpha",
+                "api-shop",
+                "svc-shop",
+                status: status,
+                connected: connected,
+                nodeId: nodeId,
+                nodeStatus: nodeStatus));
+        handler.McpConfigByToken["user-token"] = ExactMcpCatalog;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+        handler.McpConfigRequests.Should().Be(0);
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("node-alpha", "online")]
+    public async Task DiscoverToolsAsync_ExecutableKeyReadiness_ExposesOperation(
+        string? nodeId,
+        string? nodeStatus)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance(
+                "usvc-alpha",
+                "api-shop",
+                "svc-shop",
+                nodeId: nodeId,
+                nodeStatus: nodeStatus));
+        handler.McpConfigByToken["user-token"] = ExactMcpCatalog;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle();
+        handler.McpConfigRequests.Should().Be(1);
+    }
+
     [Fact]
     public async Task DiscoverToolsAsync_AuthoritativeReadinessBinding_ProjectsDistinctNyxIdIdentities()
     {
@@ -568,10 +625,11 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
-    public async Task DynamicOperation_CatalogDigestDrift_FailsBeforeProxy()
+    public async Task DynamicOperation_RootCatalogDigestDrift_ContinuesExactRevalidationAndProxy()
     {
         var handler = ExactOperationHandler();
-        var source = CreateSource(handler);
+        var logger = new RecordingLogger<NyxIdConnectedServiceToolSource>();
+        var source = CreateSource(handler, logger: logger);
 
         using var scope = PushContext("user-token");
         var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
@@ -584,9 +642,11 @@ public class NyxIdConnectedServiceToolSourceTests
             tool.Name,
             """{"path_params":{"orderId":"order-alpha"}}""");
 
-        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
-        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_CATALOG_DRIFT");
-        handler.ProxyRequests.Should().BeEmpty();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        handler.McpConfigRequests.Should().Be(2);
+        handler.ProxyRequests.Should().ContainSingle();
+        logger.Output.Should().Contain(
+            "Root catalog revision changed; continuing exact service and endpoint revalidation.");
     }
 
     [Fact]
@@ -914,24 +974,18 @@ public class NyxIdConnectedServiceToolSourceTests
                 },
             },
             now);
-        planned.NextCommand.Should().BeNull();
-        planned.State.ActiveTask.Gate.Mode.Should().Be(NyxIdChatPlanGateMode.Confirm);
-        planned.State.ActiveTask.Gate.Status.Should().Be(NyxIdChatPlanGateStatus.Pending);
-        var confirmed = ConfirmPendingPlan(planned.State, now);
-        confirmed.ShouldCommit.Should().BeTrue();
-        confirmed.NextCommand.Should().NotBeNull();
-        var effectCommand = confirmed.NextCommand!;
+        planned.NextCommand.Should().NotBeNull();
+        var effectCommand = planned.NextCommand!;
         effectCommand.InputCase.Should().Be(
-            NyxIdChatOperationDispatchCommand.InputOneofCase.PlanGateContinuation);
-        var effectAdmission = effectCommand.PlanGateContinuation;
-        effectAdmission.ArgumentsSha256.Should().Equal(
-            NyxIdChatPlanGateDecisions.HashArguments(arguments));
+            NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+        var effectAdmission = effectCommand.Tool;
+        effectAdmission.ArgumentsJson.Should().Be(arguments);
 
         var effectContext = AgentToolExecutionContext.Empty with
         {
             Request = new AgentToolRequestIdentity(
                 "request-effect-alpha",
-                effectAdmission.ToolCallId) with
+                effectAdmission.CallId) with
             {
                 OperationId = effectCommand.Key.OperationId,
             },
@@ -965,7 +1019,7 @@ public class NyxIdConnectedServiceToolSourceTests
         effectOutcome.ResultJson.Should().NotContain("om_provider_alpha");
 
         var afterEffect = NyxIdChatTaskLifecycle.ApplyOperationResult(
-            confirmed.State,
+            planned.State,
             new NyxIdChatOperationResultSignal
             {
                 Key = effectCommand.Key.Clone(),
@@ -1477,42 +1531,15 @@ public class NyxIdConnectedServiceToolSourceTests
         };
     }
 
-    private static NyxIdChatPlanResolutionDecision ConfirmPendingPlan(
-        NyxIdChatConversationGAgentState state,
-        Timestamp now)
-    {
-        const long stateVersion = 17;
-        var gate = state.ActiveTask.Gate;
-        return NyxIdChatPlanGateDecisions.Resolve(
-            state,
-            new NyxIdChatPlanResolveCommand
-            {
-                ScopeId = state.ScopeId,
-                ConversationActorId = state.ConversationActorId,
-                TaskId = gate.TaskId,
-                PlanId = gate.PlanId,
-                PlanRevision = gate.PlanRevision,
-                RequestId = gate.RequestId,
-                ClientRequestId = "confirm-dynamic-effect-plan",
-                Confirmed = true,
-                ExpectedStateVersion = stateVersion,
-                ToolContext = new AgentToolExecutionContextPayload
-                {
-                    Credentials = new AgentToolCredentialsPayload
-                    {
-                        NyxIdAccessToken = "user-token",
-                    },
-                },
-            },
-            currentStateVersion: stateVersion,
-            now);
-    }
-
     private static string Instance(
         string id,
         string slug,
         string catalogServiceId,
-        string credentialSource = PersonalCredentialSource) => $$"""
+        string credentialSource = PersonalCredentialSource,
+        string status = "active",
+        bool connected = true,
+        string? nodeId = null,
+        string? nodeStatus = null) => $$"""
         {
           "id": "{{id}}",
           "slug": "{{slug}}",
@@ -1521,7 +1548,9 @@ public class NyxIdConnectedServiceToolSourceTests
           "endpoint_id": "instance-endpoint-alpha",
           "endpoint_url": "https://shop.test",
           "is_active": true,
-          "credential_source": {{credentialSource}}
+          "status": "{{status}}",
+          "connected": {{connected.ToString().ToLowerInvariant()}},
+          "credential_source": {{credentialSource}}{{NodeRouteFields(nodeId, nodeStatus)}}
         }
         """;
 
@@ -1539,6 +1568,8 @@ public class NyxIdConnectedServiceToolSourceTests
           "endpoint_url": "https://shop.test",
           "openapi_url": "{{openApiUrl}}",
           "is_active": true,
+          "status": "active",
+          "connected": true,
           "credential_source": {{PersonalCredentialSource}}
         }
         """;
@@ -1557,9 +1588,20 @@ public class NyxIdConnectedServiceToolSourceTests
           "endpoint_id": "instance-endpoint-alpha",
           "endpoint_url": "https://shop.test",
           "is_active": true,
+          "status": "active",
+          "connected": true,
           "credential_source": {{PersonalCredentialSource}}
         }
         """;
+
+    private static string NodeRouteFields(string? nodeId, string? nodeStatus) =>
+        nodeId is null
+            ? string.Empty
+            : $$"""
+              ,
+              "node_id": "{{nodeId}}",
+              "node_status": "{{nodeStatus}}"
+              """;
 
     private static string OrganizationCredentialSource(bool allowed) => $$"""
         {

@@ -10,8 +10,8 @@ internal sealed class NyxIdBrokerOptionsValidator : IValidateOptions<NyxIdBroker
 
         var failures = new List<string>();
         ValidateBaseUrl(
-            options.TransportBaseUrl,
-            nameof(NyxIdBrokerOptions.TransportBaseUrl),
+            options.PublicApiBaseUrl,
+            nameof(NyxIdBrokerOptions.PublicApiBaseUrl),
             failures);
         ValidateBaseUrl(
             options.ResourceServerBaseUrl,

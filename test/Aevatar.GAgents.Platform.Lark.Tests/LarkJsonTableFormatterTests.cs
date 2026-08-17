@@ -162,6 +162,41 @@ public sealed class LarkJsonTableFormatterTests
     }
 
     [Fact]
+    public void FormatAsKeyValueText_WhenStringValueIsMultiline_ShouldRenderIndentedBlock()
+    {
+        // Multiline text (card bodies, approval descriptions) must keep its
+        // line structure instead of being collapsed into "; "-joined prose.
+        var text = LarkJsonTableFormatter.FormatAsKeyValueText(
+            """{"period":"2026年8月","card_text_preview":"距月末还有 3 天：\n\n☐ 应出勤已更新\n☐ 病假已填写","side_effects":false}""");
+
+        text.ShouldBe(
+            """
+            period: 2026年8月
+            card_text_preview:
+                距月末还有 3 天：
+
+                ☐ 应出勤已更新
+                ☐ 病假已填写
+            side_effects: false
+            """);
+    }
+
+    [Fact]
+    public void FormatAsKeyValueText_WhenNestedStringValueIsMultiline_ShouldIndentBlockUnderParent()
+    {
+        var text = LarkJsonTableFormatter.FormatAsKeyValueText(
+            """{"report":{"summary":"line one\nline two"}}""");
+
+        text.ShouldBe(
+            """
+            report:
+                summary:
+                    line one
+                    line two
+            """);
+    }
+
+    [Fact]
     public void Compose_WhenJsonArrayExceedsRowLimit_ShouldKeepTableWithinOneHundredRows()
     {
         var json = "[" + string.Join(",", Enumerable.Range(1, 105).Select(index => $"{{\"id\":{index}}}")) + "]";

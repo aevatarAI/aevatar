@@ -58,6 +58,10 @@ public sealed class NyxIdAssistantActionRegistry
     public const string WaveOneDraftRegistryRevision = "nyxid-assistant-actions.v5";
     public const string LeastScopeRegistryRevision = "nyxid-assistant-actions.v6";
     public const string SupportedRegistryRevision = "nyxid-assistant-actions.v7";
+    public const string ServiceAccessReviewRegistryRevision =
+        "aevatar-nyxid-actions.v1";
+
+    private const string ServiceAccessReviewWireAction = "service.access_review";
 
     private const string SchemaUnsupported = "NYXID_ACTION_SCHEMA_UNSUPPORTED";
     private const string RevisionUnsupported = "NYXID_ACTION_REGISTRY_REVISION_UNSUPPORTED";
@@ -121,6 +125,19 @@ public sealed class NyxIdAssistantActionRegistry
                     NyxIdAssistantActionParamsSchemaVariant.KeyRotate)),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
+    private static readonly NyxIdAssistantActionDefinitionSnapshot ServiceAccessReviewDefinition =
+        new()
+        {
+            SchemaVersion = SupportedSchemaVersion,
+            RegistryRevision = ServiceAccessReviewRegistryRevision,
+            Action = NyxIdAssistantActionKind.ServiceAccessReview,
+            WireAction = ServiceAccessReviewWireAction,
+            Description = "Review access to one exact connected NyxID service.",
+            AdvisoryRisk = NyxIdAssistantActionRisk.Grant,
+            Tier = NyxIdAssistantActionTier.V1,
+            RememberEligible = false,
+        };
+
     private readonly FrozenDictionary<string, RegistryEntry> _entries;
     private readonly FrozenDictionary<string, NyxIdAssistantActionCapabilityReadinessSnapshot>
         _capabilityReadiness;
@@ -157,6 +174,10 @@ public sealed class NyxIdAssistantActionRegistry
             Array.Empty<string>().ToFrozenSet(StringComparer.Ordinal));
 
     internal static bool IsSupportedRegistryRevision(string revision) =>
+        string.Equals(
+            revision,
+            ServiceAccessReviewRegistryRevision,
+            StringComparison.Ordinal) ||
         RevisionContractsByRevision.ContainsKey(revision);
 
     internal static NyxIdAssistantActionRevisionContractSnapshot GetRevisionContractSnapshot(
@@ -171,6 +192,14 @@ public sealed class NyxIdAssistantActionRegistry
         string revision,
         NyxIdAssistantActionKind action)
     {
+        if (string.Equals(
+                revision,
+                ServiceAccessReviewRegistryRevision,
+                StringComparison.Ordinal))
+        {
+            return action == NyxIdAssistantActionKind.ServiceAccessReview;
+        }
+
         return RevisionContractsByRevision.TryGetValue(revision, out var revisionContract) &&
                NyxIdAssistantActionSemanticContracts.TryGet(action, out var semantic) &&
                revisionContract.Actions.TryGetValue(semantic.WireAction, out var descriptor) &&
@@ -342,6 +371,15 @@ public sealed class NyxIdAssistantActionRegistry
         out NyxIdAssistantActionDefinitionSnapshot definition)
     {
         var normalizedAction = wireAction?.Trim() ?? string.Empty;
+        if (string.Equals(
+                normalizedAction,
+                ServiceAccessReviewWireAction,
+                StringComparison.Ordinal))
+        {
+            definition = ServiceAccessReviewDefinition.Clone();
+            return true;
+        }
+
         if (_executableActions.Contains(normalizedAction) &&
             _entries.TryGetValue(normalizedAction, out var entry))
         {
@@ -427,6 +465,56 @@ public sealed class NyxIdAssistantActionRegistry
         return new NyxIdAssistantActionValidation(
             entry.Definition.Clone(),
             entry.RequestProducer(input));
+    }
+
+    public NyxIdAssistantActionValidation ResolveServiceAccessReview(
+        string userServiceId,
+        string serviceSlug,
+        string resourceUri)
+    {
+        var normalizedUserServiceId = NormalizeString(userServiceId, 256, required: true);
+        if (!string.Equals(userServiceId, normalizedUserServiceId, StringComparison.Ordinal) ||
+            normalizedUserServiceId.Any(char.IsWhiteSpace))
+        {
+            throw Error(ParamsInvalid, "The service access identity is invalid.");
+        }
+
+        var normalizedSlug = NormalizeString(serviceSlug, 128, required: true);
+        if (!string.Equals(serviceSlug, normalizedSlug, StringComparison.Ordinal) ||
+            !normalizedSlug.All(static character =>
+                char.IsAsciiLetterOrDigit(character) ||
+                character is '-' or '_' or '.'))
+        {
+            throw Error(ParamsInvalid, "The service access slug is invalid.");
+        }
+
+        var normalizedResourceUri = NormalizeString(resourceUri, 512, required: true);
+        var expectedPathSuffix =
+            $"/api/v1/proxy/s/{Uri.EscapeDataString(normalizedSlug)}";
+        if (!string.Equals(resourceUri, normalizedResourceUri, StringComparison.Ordinal) ||
+            !Uri.TryCreate(normalizedResourceUri, UriKind.Absolute, out var parsedResourceUri) ||
+            !string.Equals(parsedResourceUri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(parsedResourceUri.UserInfo) ||
+            !string.IsNullOrEmpty(parsedResourceUri.Query) ||
+            !string.IsNullOrEmpty(parsedResourceUri.Fragment) ||
+            !parsedResourceUri.AbsolutePath.EndsWith(
+                expectedPathSuffix,
+                StringComparison.Ordinal))
+        {
+            throw Error(ParamsInvalid, "The service access resource URI is invalid.");
+        }
+
+        return new NyxIdAssistantActionValidation(
+            ServiceAccessReviewDefinition.Clone(),
+            new NyxIdAssistantActionParams
+            {
+                ServiceAccessReview = new NyxIdServiceAccessReviewParams
+                {
+                    UserServiceId = normalizedUserServiceId,
+                    ServiceSlug = normalizedSlug,
+                    ResourceUri = normalizedResourceUri,
+                },
+            });
     }
 
     public NyxIdAssistantActionValidation ResolveKeyCreate(
