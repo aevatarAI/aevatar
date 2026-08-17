@@ -92,7 +92,10 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
             return;
 
         var deploymentCatalog = await _deploymentCatalogReader.GetAsync(serviceKey, ct);
-        var activeDeployment = ResolveActiveDeployment(deploymentCatalog?.Deployments);
+        if (deploymentCatalog == null)
+            return;
+
+        var activeDeployment = ResolveActiveDeployment(deploymentCatalog.Deployments);
         var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         var revisionCatalog = ToRevisionCatalogReadModel(
             context,

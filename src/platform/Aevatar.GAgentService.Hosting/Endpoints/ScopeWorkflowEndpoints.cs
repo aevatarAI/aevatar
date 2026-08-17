@@ -51,6 +51,7 @@ public static class ScopeWorkflowEndpoints
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
+        ScopeWorkflowScheduleEndpoints.Map(group);
         if (app.ServiceProvider.GetService<IAppScopedWorkflowCatalogueService>() != null)
         {
             group.MapGet("/{scopeId}/workflow-catalogue", HandleQueryWorkflowCatalogueAsync)

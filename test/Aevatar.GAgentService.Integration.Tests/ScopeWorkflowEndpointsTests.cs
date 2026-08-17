@@ -7,11 +7,13 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgents.Channel.Identity;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -1667,11 +1669,19 @@ public sealed class ScopeWorkflowEndpointsTests
         invocation.EndpointId.Should().Be("chat");
         invocation.RevisionId.Should().Be("rev-alpha");
         invocation.Auth.Should().NotBeNull();
+        var credentialSource = invocation.Auth!.Source
+            .Should().BeOfType<ScheduledServiceInvocationNyxIdCredentialSource>()
+            .Subject;
+        credentialSource.Subject.Platform.Should().Be(OwnerScope.NyxIdPlatform);
+        credentialSource.Subject.Tenant.Should().BeEmpty();
+        credentialSource.Subject.ExternalUserId.Should().Be("caller-alpha");
+        credentialSource.Scope.Should().Be("proxy");
+        credentialSource.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("run workflow");
         chat.Metadata.Should().Contain("trace", "enabled");
         schedules.CreateContexts.Should().ContainSingle().Which!.AuthenticatedNyxIdOwnerSubject
-            .Should().NotBeNull();
+            .Should().Be(new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "caller-alpha"));
     }
 
     [Fact]

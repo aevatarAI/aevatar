@@ -447,6 +447,47 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
     }
 
     [Fact]
+    public async Task RevisionSourceProjector_ShouldNotDeleteWorkflowSource_WhenDeploymentReadModelIsMissing()
+    {
+        var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");
+        var serviceKey = ServiceKeys.Build(identity);
+        var sourceWriter = new RecordingCatalogueSourceDispatcher();
+        var rowWriter = new RecordingCatalogueRowDispatcher();
+        var sourceReader = new RecordingCatalogueSourceReader(
+            [ExistingServiceSource("scope-1", "wf-published", "published-service-1")],
+            sourceWriter);
+        var serviceProjector = new ScopeWorkflowCatalogueServiceSourceProjector(
+            new KeyedProjectionDocumentReader<ServiceRevisionCatalogReadModel>([]),
+            new KeyedProjectionDocumentReader<ServiceDeploymentCatalogReadModel>([]),
+            sourceWriter,
+            new ScopeWorkflowCatalogueRowMaterializer(sourceReader, rowWriter),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-05T02:00:00Z")));
+        var revisionProjector = new ScopeWorkflowCatalogueRevisionSourceProjector(serviceProjector);
+        var revisionCatalog = WorkflowRevisionCatalog(serviceKey, "rev-live", "wf-published", "Published Workflow");
+        var revisionState = ToRevisionCatalogState(identity, revisionCatalog);
+
+        await revisionProjector.ProjectAsync(
+            new ServiceRevisionCatalogProjectionContext
+            {
+                RootActorId = "service-revisions:svc-key",
+                ProjectionKind = "service-revisions",
+            },
+            BuildRevisionEnvelope(
+                new ServiceRevisionPublishedEvent
+                {
+                    Identity = revisionState.Identity.Clone(),
+                    RevisionId = "rev-live",
+                    PublishedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-05T00:30:00Z")),
+                },
+                revisionState,
+                "evt-revision"));
+
+        sourceWriter.Upserts.Should().BeEmpty();
+        sourceWriter.DeleteMarkers.Should().BeEmpty();
+        rowWriter.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ServiceSourceProjector_ShouldUsePublishedServiceId_WhenWorkflowPlanHasNoExplicitBindingIdentity()
     {
         var identity = ServiceIdentity("scope-1", "workflow-app", "user", "published-service-1");
