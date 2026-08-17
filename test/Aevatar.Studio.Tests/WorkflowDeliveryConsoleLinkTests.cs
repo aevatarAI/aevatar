@@ -33,52 +33,52 @@ public sealed class WorkflowDeliveryConsoleLinkTests
     }
 
     [Fact]
-    public void BuildMemberWorkflowUrl_ShouldProduceAnAbsoluteConsoleUrl()
+    public void BuildMemberInvokeUrl_ShouldProduceAnAbsoluteConsoleUrl()
     {
         WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl("https://aevatar-console.aevatar.ai", out var baseUri)
             .Should().BeTrue();
 
-        var url = WorkflowDeliveryConsoleLink.BuildMemberWorkflowUrl(baseUri, "scope-a", "team-a", "member-a");
+        var url = WorkflowDeliveryConsoleLink.BuildMemberInvokeUrl(baseUri, "scope-a", "team-a", "member-a");
 
-        url.Should().Be("https://aevatar-console.aevatar.ai/scopes/scope-a/teams/team-a/members/member-a/workflow");
+        url.Should().Be("https://aevatar-console.aevatar.ai/scopes/scope-a/teams/team-a/members/member-a/invoke");
     }
 
     [Fact]
-    public void BuildMemberWorkflowUrl_ShouldPreserveAConfiguredPathBase()
+    public void BuildMemberInvokeUrl_ShouldPreserveAConfiguredPathBase()
     {
         WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl("https://aevatar.ai/console/", out var baseUri)
             .Should().BeTrue();
 
-        var url = WorkflowDeliveryConsoleLink.BuildMemberWorkflowUrl(baseUri, "scope-a", "team-a", "member-a");
+        var url = WorkflowDeliveryConsoleLink.BuildMemberInvokeUrl(baseUri, "scope-a", "team-a", "member-a");
 
-        url.Should().Be("https://aevatar.ai/console/scopes/scope-a/teams/team-a/members/member-a/workflow");
+        url.Should().Be("https://aevatar.ai/console/scopes/scope-a/teams/team-a/members/member-a/invoke");
     }
 
     [Fact]
-    public void BuildMemberWorkflowUrl_ShouldEscapeIdentitySegments()
+    public void BuildMemberInvokeUrl_ShouldEscapeIdentitySegments()
     {
         WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl("https://aevatar-console.aevatar.ai", out var baseUri)
             .Should().BeTrue();
 
-        var url = WorkflowDeliveryConsoleLink.BuildMemberWorkflowUrl(baseUri, "scope a", "team/a", "member?a");
+        var url = WorkflowDeliveryConsoleLink.BuildMemberInvokeUrl(baseUri, "scope a", "team/a", "member?a");
 
-        url.Should().Be("https://aevatar-console.aevatar.ai/scopes/scope%20a/teams/team%2Fa/members/member%3Fa/workflow");
+        url.Should().Be("https://aevatar-console.aevatar.ai/scopes/scope%20a/teams/team%2Fa/members/member%3Fa/invoke");
     }
 
     [Fact]
-    public void BuildMemberWorkflowUrl_WhenConsoleOriginIsUnconfigured_ShouldReturnNullRatherThanARelativePath()
+    public void BuildMemberInvokeUrl_WhenConsoleOriginIsUnconfigured_ShouldReturnNullRatherThanARelativePath()
     {
-        WorkflowDeliveryConsoleLink.BuildMemberWorkflowUrl(null, "scope-a", "team-a", "member-a")
+        WorkflowDeliveryConsoleLink.BuildMemberInvokeUrl(null, "scope-a", "team-a", "member-a")
             .Should().BeNull();
     }
 
     [Fact]
-    public void BuildMemberWorkflowUrl_WhenMemberIsNotProvisionedYet_ShouldReturnNull()
+    public void BuildMemberInvokeUrl_WhenMemberIsNotProvisionedYet_ShouldReturnNull()
     {
         WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl("https://aevatar-console.aevatar.ai", out var baseUri)
             .Should().BeTrue();
 
-        WorkflowDeliveryConsoleLink.BuildMemberWorkflowUrl(baseUri, "scope-a", "team-a", null)
+        WorkflowDeliveryConsoleLink.BuildMemberInvokeUrl(baseUri, "scope-a", "team-a", null)
             .Should().BeNull();
     }
 }

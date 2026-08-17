@@ -90,6 +90,9 @@ internal static class StudioHostingServiceCollectionExtensions
         services.TryAddSingleton<
             INyxIdModelDiscoveryPort,
             NyxIdModelDiscoveryHttpClient>();
+        services.TryAddSingleton<
+            INyxIdUserServiceInventoryPort,
+            NyxIdWorkflowDeliveryConnectionInventoryPort>();
         services.TryAddSingleton<NyxIdLlmCatalogHttpClient>();
         services.TryAddSingleton<IUserLlmCatalogPort>(sp => new CachedNyxIdLlmCatalogPort(
             sp.GetRequiredService<NyxIdLlmCatalogHttpClient>(),

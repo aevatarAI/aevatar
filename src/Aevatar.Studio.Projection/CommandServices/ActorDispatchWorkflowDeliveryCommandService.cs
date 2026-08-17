@@ -104,6 +104,31 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
         return DispatchAsync(mutation.DeliveryId, command, "update-connection", command.ToByteArray(), ct);
     }
 
+    public Task<DeliveryApplication.WorkflowDeliveryCommandReceipt> AttachConnectionAsync(
+        DeliveryApplication.AttachWorkflowDeliveryConnectionMutation mutation,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        var command = new AttachWorkflowDeliveryConnectionCommand
+        {
+            DeliveryId = mutation.DeliveryId,
+            TargetScopeId = mutation.TargetScopeId,
+            SlotKey = mutation.SlotKey,
+            ServiceSlug = mutation.ServiceSlug,
+            UserServiceId = mutation.UserServiceId,
+            AttachedAtUtc = Timestamp.FromDateTimeOffset(mutation.AttachedAtUtc),
+            ExpectedStateVersion = mutation.ExpectedStateVersion,
+        };
+        var stableCommand = command.Clone();
+        stableCommand.AttachedAtUtc = null;
+        return DispatchAsync(
+            mutation.DeliveryId,
+            command,
+            "attach-connection",
+            stableCommand.ToByteArray(),
+            ct);
+    }
+
     public Task<DeliveryApplication.WorkflowDeliveryCommandReceipt> StartInstallationAsync(
         DeliveryApplication.StartWorkflowInstallationMutation mutation,
         CancellationToken ct = default)
@@ -171,6 +196,30 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
             ct);
     }
 
+    public Task<DeliveryApplication.WorkflowDeliveryCommandReceipt> ClaimInstallationContinuationAsync(
+        DeliveryApplication.ClaimWorkflowInstallationContinuationMutation mutation,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        var command = new ClaimWorkflowInstallationContinuationCommand
+        {
+            DeliveryId = mutation.DeliveryId,
+            InstallationId = mutation.InstallationId,
+            ExpectedStatus = (WorkflowInstallationStatus)(int)mutation.ExpectedStatus,
+            Attempt = mutation.Attempt,
+            OperationId = mutation.OperationId,
+            ClaimId = mutation.ClaimId,
+            ClaimantId = mutation.ClaimantId,
+            RequestedDuration = Duration.FromTimeSpan(mutation.RequestedDuration),
+        };
+        return DispatchAsync(
+            mutation.DeliveryId,
+            command,
+            "claim-installation-continuation",
+            command.ToByteArray(),
+            ct);
+    }
+
     public Task<DeliveryApplication.WorkflowDeliveryCommandReceipt> RecordProvisioningAcceptedAsync(
         DeliveryApplication.RecordWorkflowProvisioningAcceptedMutation mutation,
         CancellationToken ct = default)
@@ -191,6 +240,8 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
             Attempt = mutation.Attempt,
             OperationId = mutation.OperationId,
             AcceptedAtUtc = Timestamp.FromDateTimeOffset(mutation.AcceptedAtUtc),
+            ContinuationClaimId = mutation.ContinuationClaimId,
+            ContinuationClaimantId = mutation.ContinuationClaimantId,
         };
         var stableCommand = command.Clone();
         stableCommand.AcceptedAtUtc = null;
@@ -215,6 +266,8 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
             Attempt = mutation.Attempt,
             OperationId = mutation.OperationId,
             ReadyAtUtc = Timestamp.FromDateTimeOffset(mutation.ReadyAtUtc),
+            ContinuationClaimId = mutation.ContinuationClaimId,
+            ContinuationClaimantId = mutation.ContinuationClaimantId,
         };
         var stableCommand = command.Clone();
         stableCommand.ReadyAtUtc = null;
@@ -241,6 +294,8 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
             Attempt = mutation.Attempt,
             OperationId = mutation.OperationId,
             FailedAtUtc = Timestamp.FromDateTimeOffset(mutation.FailedAtUtc),
+            ContinuationClaimId = mutation.ContinuationClaimId,
+            ContinuationClaimantId = mutation.ContinuationClaimantId,
         };
         var stableCommand = command.Clone();
         stableCommand.FailedAtUtc = null;

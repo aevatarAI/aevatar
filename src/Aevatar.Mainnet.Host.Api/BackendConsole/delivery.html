@@ -598,6 +598,9 @@
     const REFRESH_SKEW_MS = 60000;
     const REFRESH_RETRY_MS = 30000;
     const INSTALLATION_REFRESH_MS = 4000;
+    const PROJECTION_RETRY_MS = 500;
+    const PROJECTION_RETRY_ATTEMPTS = 20;
+    const PROJECTION_GRACE_MS = 90000;
 
     const app = document.getElementById("app");
     const announcer = document.getElementById("announcer");
@@ -1130,8 +1133,27 @@
           { method: "POST" }
         );
       }
+      existingConnections(scopeId, deliveryId, slotKey) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + "/connections/" + encodeURIComponent(slotKey) + "/available"
+        );
+      }
+      attachExistingConnection(scopeId, deliveryId, slotKey, userServiceId) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + "/connections/" + encodeURIComponent(slotKey) + ":attach",
+          { method: "POST", body: JSON.stringify({ userServiceId: userServiceId }) }
+        );
+      }
       teams(scopeId) {
         return this.request("/api/scopes/" + encodeURIComponent(scopeId) + "/teams");
+      }
+      refreshAuthorizationCatalog() {
+        return this.request(
+          "/api/auth/nyxid/authorization-catalog:refresh",
+          { method: "POST" }
+        );
       }
       createTeam(scopeId, displayName) {
         return this.request(
@@ -1304,14 +1326,13 @@
       if (!(error instanceof ApiError)) {
         return { tone: "danger", title: "页面载入失败", message: error && error.message ? error.message : String(error) };
       }
-      // Publish resolves a NyxID automation authority that only the product console's login
-      // commits. A customer who reached this page from a delivery link alone has no such
-      // binding, and the server's raw message does not say where to get one.
+      // Ordinary Delivery login finalizes the NyxID binding server-side. A missing binding
+      // here therefore means that finalization or its committed projection is not ready yet.
       if (error.code === "DELIVERY_AUTHORIZATION_BINDING_REQUIRED") {
         return {
           tone: "warning",
-          title: "需要先在 Aevatar Console 完成一次 NyxID 登录",
-          message: "发布需要一条由 Aevatar Console 登录流程写入的 NyxID 授权绑定，当前账号还没有。请先用同一个 NyxID 账号登录 Aevatar Console，然后回到本页重试发布。"
+          title: "NyxID 授权绑定尚未就绪",
+          message: "请稍后重试发布；若持续出现，请退出后使用同一个 NyxID 账号重新登录 Delivery Center。"
         };
       }
       const states = {
@@ -1886,6 +1907,11 @@
       return object(first(data, ["installation", "item"], data));
     }
 
+    function deliveryStateVersion(value) {
+      const parsed = Number(first(value, ["deliveryStateVersion", "stateVersion"], 0));
+      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+    }
+
     function customerScopeId(detail) {
       return text(first(detail, ["targetScopeId", "scopeId"], ""));
     }
@@ -1918,6 +1944,7 @@
         deliveryId: deliveryIdValue,
         detail: detail,
         teams: [],
+        pendingTeams: Object.create(null),
         teamsError: null,
         fields: fields,
         values: schemaDefaults(fields, existing),
@@ -1933,9 +1960,15 @@
         installationError: null,
         acceptedHttpStatus: 0,
         acceptedAtMs: 0,
+        installationProjectionBaselineVersion: 0,
+        deliveryStateVersion: deliveryStateVersion(detail),
         idempotencyKey: "",
         connectionRuntime: Object.create(null),
         connectionErrors: Object.create(null),
+        existingConnections: Object.create(null),
+        existingConnectionErrors: Object.create(null),
+        existingConnectionLoading: Object.create(null),
+        selectedExistingConnectionIds: Object.create(null),
         consoleUrl: absoluteHttpUrl(first(detail, ["consoleUrl"], "")),
         newTeamName: "",
         busy: "",
@@ -1956,9 +1989,24 @@
     async function loadCustomerDetail(deliveryIdValue, sequence) {
       renderCustomerDetailLoading();
       try {
-        const result = isAdminSession()
-          ? await api.getRequest(deliveryIdValue)
-          : await api.validateAccess(deliveryIdValue);
+        let result = null;
+        for (let attempt = 0; attempt < PROJECTION_RETRY_ATTEMPTS; attempt += 1) {
+          try {
+            result = isAdminSession()
+              ? await api.getRequest(deliveryIdValue)
+              : await api.validateAccess(deliveryIdValue);
+            break;
+          } catch (error) {
+            const retryableProjectionMiss = error instanceof ApiError && error.status === 404 &&
+              attempt + 1 < PROJECTION_RETRY_ATTEMPTS;
+            if (!retryableProjectionMiss) throw error;
+            await new Promise(function (resolve) { window.setTimeout(resolve, PROJECTION_RETRY_MS); });
+            if (sequence !== state.routeSequence) return;
+          }
+        }
+        if (!result) {
+          throw new ApiError(503, "交付读模型暂不可用。", {}, "delivery_projection_unavailable");
+        }
         if (sequence !== state.routeSequence) return;
         const detail = customerDetailFromResponse(result.data);
         const returnedId = deliveryId(detail);
@@ -1970,7 +2018,10 @@
         state.customer = initCustomerState(deliveryIdValue, detail);
         renderCustomerDetail();
 
-        const tasks = [loadTeams(scopeId, deliveryIdValue, sequence)];
+        const tasks = [
+          loadTeams(scopeId, deliveryIdValue, sequence),
+          loadExistingConnections(scopeId, deliveryIdValue, sequence)
+        ];
         if (state.customer.installationId) {
           tasks.push(loadInstallation(scopeId, state.customer.installationId, sequence, true));
         }
@@ -1981,15 +2032,52 @@
       }
     }
 
+    function normalizeCreatedTeam(data, expectedScopeId) {
+      const createdTeam = object(first(data, ["team", "item"], data));
+      const createdTeamId = teamId(createdTeam);
+      const createdScopeId = text(first(createdTeam, ["scopeId"], ""));
+      if (!createdTeamId) {
+        throw new ApiError(503, "创建 Team 的响应缺少 teamId，无法继续发布。", createdTeam, "missing_team_id");
+      }
+      if (!createdScopeId) {
+        throw new ApiError(503, "创建 Team 的响应缺少 scopeId，无法确认归属。", createdTeam, "missing_team_scope");
+      }
+      if (createdScopeId !== expectedScopeId) {
+        throw new ApiError(409, "创建 Team 的响应 scope 与当前交付不一致。", createdTeam, "team_scope_mismatch");
+      }
+      return createdTeam;
+    }
+
+    function mergeTeamRoster(authoritativeTeams, pendingTeams) {
+      const teams = array(authoritativeTeams).slice();
+      const seenTeamIds = new Set(teams.map(teamId).filter(Boolean));
+      Object.keys(object(pendingTeams)).forEach(function (id) {
+        if (seenTeamIds.has(id)) {
+          delete pendingTeams[id];
+          return;
+        }
+        teams.push(pendingTeams[id]);
+      });
+      return teams;
+    }
+
     async function loadTeams(scopeId, deliveryIdValue, sequence) {
       try {
         const result = await api.teams(scopeId);
         if (sequence !== state.routeSequence || !state.customer || state.customer.deliveryId !== deliveryIdValue) return;
-        state.customer.teams = items(result.data, ["items", "teams"]);
+        state.customer.teams = mergeTeamRoster(
+          items(result.data, ["items", "teams"]),
+          state.customer.pendingTeams
+        );
         state.customer.teamsError = null;
         renderCustomerDetail();
       } catch (error) {
         if (sequence !== state.routeSequence || !state.customer) return;
+        if (Object.keys(state.customer.pendingTeams).length && state.customer.teams.length) {
+          state.customer.teamsError = null;
+          renderCustomerDetail();
+          return;
+        }
         state.customer.teamsError = error;
         renderCustomerDetail();
       }
@@ -2106,8 +2194,39 @@
       return text(first(team, ["teamId", "id"], ""));
     }
 
+    function teamLifecycleStage(team) {
+      return text(first(team, ["lifecycleStage"], "")).toLowerCase();
+    }
+
+    function teamPublishability(team) {
+      const lifecycleStage = teamLifecycleStage(team);
+      if (lifecycleStage === "archived") {
+        return { canPublish: false, detail: "Team 已归档，不能发布。", status: "blocked", label: "已归档" };
+      }
+      if (lifecycleStage !== "active") {
+        return { canPublish: false, detail: "Team 当前状态不可发布。", status: "blocked", label: "不可发布" };
+      }
+      if (first(team, ["canPublish", "canWrite"], true) === false) {
+        return { canPublish: false, detail: "没有发布权限", status: "blocked", label: "只读" };
+      }
+      return {
+        canPublish: true,
+        detail: text(first(team, ["permission", "role"], ""), "可发布"),
+        status: "valid",
+        label: "可发布"
+      };
+    }
+
     function teamCanPublish(team) {
-      return first(team, ["canPublish", "canWrite"], true) !== false;
+      return teamPublishability(team).canPublish;
+    }
+
+    function selectedTeamCanPublish() {
+      if (!state.customer || !state.customer.selectedTeamId) return false;
+      const selectedTeam = array(state.customer.teams).find(function (team) {
+        return teamId(team) === state.customer.selectedTeamId;
+      });
+      return Boolean(selectedTeam && teamCanPublish(selectedTeam));
     }
 
     function renderTeamSection() {
@@ -2149,8 +2268,9 @@
       }
       return h("div", { className: "team-list" }, state.customer.teams.map(function (team) {
         const id = teamId(team);
-        const selected = id && id === state.customer.selectedTeamId;
-        const canPublish = teamCanPublish(team);
+        const publishability = teamPublishability(team);
+        const canPublish = publishability.canPublish;
+        const selected = canPublish && id && id === state.customer.selectedTeamId;
         return h("button", {
           className: "team-option" + (selected ? " selected" : ""),
           type: "button",
@@ -2165,9 +2285,9 @@
           h("span", { className: "radio", "aria-hidden": "true" }),
           h("span", null,
             h("strong", { text: text(first(team, ["displayName", "name"], ""), id || "未命名 Team") }),
-            h("p", { text: canPublish ? text(first(team, ["permission", "role"], ""), "可发布") : "没有发布权限" })
+            h("p", { text: publishability.detail })
           ),
-          badge(canPublish ? "valid" : "blocked", canPublish ? "可发布" : "只读")
+          badge(publishability.status, publishability.label)
         );
       }));
     }
@@ -2216,15 +2336,19 @@
 
     async function createConnection(slotKey) {
       if (!state.customer || state.customer.busy || !slotKey) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
       state.customer.busy = "connect:" + slotKey;
       delete state.customer.connectionErrors[slotKey];
       renderCustomerDetail();
       try {
         const result = await api.createConnectLink(
-          customerScopeId(state.customer.detail),
-          state.customer.deliveryId,
+          scopeId,
+          deliveryIdValue,
           slotKey
         );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const response = object(first(result.data, ["connection", "result"], result.data));
         const returnedSlot = text(first(response, ["slotKey", "key"], ""));
         if (returnedSlot && returnedSlot !== slotKey) {
@@ -2238,35 +2362,122 @@
         invalidateValidation();
         state.notice = { tone: "info", title: "连接链接已创建", message: "请在 NyxID 完成连接，然后返回这里显式检查状态。" };
       } catch (error) {
-        state.customer.connectionErrors[slotKey] = error;
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.connectionErrors[slotKey] = error;
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
+    }
+
+    async function loadExistingConnections(scopeId, deliveryIdValue, sequence) {
+      const slotKeys = connectionSlots().map(connectionSlotKey).filter(Boolean);
+      await Promise.all(slotKeys.map(async function (slotKey) {
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        state.customer.existingConnectionLoading[slotKey] = true;
+        delete state.customer.existingConnectionErrors[slotKey];
+        try {
+          const result = await api.existingConnections(scopeId, deliveryIdValue, slotKey);
+          if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+          const response = object(result.data);
+          const returnedSlot = text(first(response, ["slotKey", "key"], ""));
+          if (returnedSlot && returnedSlot !== slotKey) {
+            throw new ApiError(409, "服务端返回的已有连接 slot 与当前交付不一致。", response, "connection_slot_mismatch");
+          }
+          const candidates = items(response, ["items", "connections"]);
+          state.customer.existingConnections[slotKey] = candidates;
+          const selected = text(state.customer.selectedExistingConnectionIds[slotKey]);
+          if (!candidates.some(function (candidate) {
+            return text(first(candidate, ["userServiceId", "id"], "")) === selected;
+          })) {
+            state.customer.selectedExistingConnectionIds[slotKey] = candidates.length
+              ? text(first(candidates[0], ["userServiceId", "id"], ""))
+              : "";
+          }
+        } catch (error) {
+          if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+            state.customer.existingConnectionErrors[slotKey] = error;
+          }
+        } finally {
+          if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+            state.customer.existingConnectionLoading[slotKey] = false;
+            renderCustomerDetail();
+          }
+        }
+      }));
+    }
+
+    async function attachExistingConnection(slotKey) {
+      if (!state.customer || state.customer.busy || !slotKey) return;
+      const userServiceId = text(state.customer.selectedExistingConnectionIds[slotKey]);
+      if (!userServiceId) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      state.customer.busy = "attach:" + slotKey;
+      delete state.customer.connectionErrors[slotKey];
+      renderCustomerDetail();
+      try {
+        const result = await api.attachExistingConnection(
+          scopeId,
+          deliveryIdValue,
+          slotKey,
+          userServiceId
+        );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const response = object(first(result.data, ["connection", "result"], result.data));
+        const returnedSlot = text(first(response, ["slotKey", "key"], ""));
+        const returnedUserServiceId = text(first(response, ["userServiceId", "id"], ""));
+        if (returnedSlot !== slotKey || returnedUserServiceId !== userServiceId ||
+            connectionStatus(response) !== "completed") {
+          throw new ApiError(502, "服务端没有确认所选的 NyxID 连接。", response, "invalid_attach_receipt");
+        }
+        state.customer.connectionRuntime[slotKey] = response;
+        invalidateValidation();
+        state.notice = {
+          tone: "success",
+          title: "已使用现有 NyxID 连接",
+          message: "所选 UserService 已绑定到当前交付，可以继续校验并发布。"
+        };
+      } catch (error) {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.connectionErrors[slotKey] = error;
+        }
+      } finally {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
+      }
+    }
+
+    function customerRouteIsCurrent(deliveryIdValue, sequence) {
+      return Boolean(state.customer) && state.routeSequence === sequence &&
+        state.customer.deliveryId === deliveryIdValue;
+    }
+
+    function connectionPollingIsTerminal(status) {
+      return ["completed", "connected", "ready", "active", "failed", "expired"].indexOf(status) >= 0;
     }
 
     async function recheckConnection(slotKey) {
       if (!state.customer || state.customer.busy || !slotKey) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
       state.customer.busy = "connection-status:" + slotKey;
       delete state.customer.connectionErrors[slotKey];
       renderCustomerDetail();
       try {
-        const scopeId = customerScopeId(state.customer.detail);
-        const projectedSnapshots = array(first(state.customer.detail, ["connections"], []));
-        const baseline = object(projectedSnapshots.find(function (candidate) {
-          return connectionSlotKey(candidate) === slotKey;
-        }));
-        const baselineVersion = [
-          connectionStatus(baseline),
-          text(first(baseline, ["userServiceId", "connectionReference"], "")),
-          text(first(baseline, ["updatedAt", "updatedAtUtc"], ""))
-        ].join("|");
-
         const accepted = await api.refreshConnectStatus(
           scopeId,
-          state.customer.deliveryId,
+          deliveryIdValue,
           slotKey
         );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const acceptedBody = object(accepted.data);
         if (accepted.status !== 202 || text(first(acceptedBody, ["status"], "")) !== "refresh_accepted") {
           throw new ApiError(502, "服务端没有返回可验证的连接刷新受理回执。", acceptedBody, "invalid_refresh_receipt");
@@ -2280,27 +2491,23 @@
         renderCustomerDetail();
 
         let response = null;
-        for (let attempt = 0; attempt < 20; attempt += 1) {
+        for (let attempt = 0; attempt < PROJECTION_RETRY_ATTEMPTS; attempt += 1) {
           if (attempt > 0) {
-            await new Promise(function (resolve) { window.setTimeout(resolve, 500); });
+            await new Promise(function (resolve) { window.setTimeout(resolve, PROJECTION_RETRY_MS); });
+            if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
           }
           const result = await api.connectStatus(
             scopeId,
-            state.customer.deliveryId,
+            deliveryIdValue,
             slotKey
           );
+          if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
           response = object(first(result.data, ["connection", "result"], result.data));
           const returnedSlot = text(first(response, ["slotKey", "key"], ""));
           if (returnedSlot && returnedSlot !== slotKey) {
             throw new ApiError(409, "服务端返回的连接 slot 与当前操作不一致。", response, "connection_slot_mismatch");
           }
-          const projectedVersion = [
-            connectionStatus(response),
-            text(first(response, ["userServiceId", "connectionReference"], "")),
-            text(first(response, ["updatedAt", "updatedAtUtc"], ""))
-          ].join("|");
-          if (projectedVersion !== baselineVersion ||
-              ["completed", "connected", "ready", "active", "failed", "expired"].indexOf(connectionStatus(response)) >= 0) {
+          if (connectionPollingIsTerminal(connectionStatus(response))) {
             break;
           }
         }
@@ -2326,10 +2533,14 @@
         }
         invalidateValidation();
       } catch (error) {
-        state.customer.connectionErrors[slotKey] = error;
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.connectionErrors[slotKey] = error;
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2355,7 +2566,34 @@
         const honestStatus = connected ? "connected" : (pending ? "pending" : "needs_action");
         const busy = state.customer.busy.endsWith(":" + slotKey);
         const error = state.customer.connectionErrors[slotKey];
+        const inventoryError = state.customer.existingConnectionErrors[slotKey];
+        const inventoryLoading = state.customer.existingConnectionLoading[slotKey] === true;
+        const existing = array(state.customer.existingConnections[slotKey]);
+        const selectedExistingId = text(state.customer.selectedExistingConnectionIds[slotKey]);
         const actions = [];
+        if (!connected && !pending && existing.length) {
+          actions.push(h("select", {
+            className: "select",
+            "aria-label": label + " 已有 NyxID 连接",
+            value: selectedExistingId,
+            disabled: busy,
+            style: { width: "min(260px, 100%)" },
+            onChange: function (event) {
+              state.customer.selectedExistingConnectionIds[slotKey] = event.target.value;
+            }
+          }, existing.map(function (candidate) {
+            const id = text(first(candidate, ["userServiceId", "id"], ""));
+            const candidateLabel = text(first(candidate, ["label", "displayName"], ""), id);
+            return h("option", { value: id, selected: id === selectedExistingId, text: candidateLabel + " · " + id });
+          })));
+          actions.push(h("button", {
+            className: "button secondary",
+            type: "button",
+            disabled: busy || !selectedExistingId,
+            onClick: function () { attachExistingConnection(slotKey); },
+            text: busy ? "正在验证..." : "使用已有连接"
+          }));
+        }
         if (!connected && url) {
           actions.push(h("a", {
             className: "button secondary",
@@ -2389,9 +2627,12 @@
             h("p", {
               text: connected
                 ? (reference ? "连接引用 " + reference : "服务端已确认连接")
-                : (url ? "请在 NyxID 完成个人连接后显式检查状态。" : "needs_action：尚未创建可用的 NyxID 连接。")
+                : (url ? "请在 NyxID 完成个人连接后显式检查状态。" :
+                  (existing.length ? "可复用当前 NyxID 账号下已验证的个人连接。" :
+                    (inventoryLoading ? "正在检查已有 NyxID 连接。" : "needs_action：尚未创建可用的 NyxID 连接。")))
             }),
-            error ? h("div", { className: "field-error", text: errorDescription(error).message }) : null
+            error ? h("div", { className: "field-error", text: errorDescription(error).message }) : null,
+            inventoryError ? h("div", { className: "field-error", text: errorDescription(inventoryError).message }) : null
           ),
           h("div", { className: "inline-actions" }, badge(honestStatus), actions)
         );
@@ -2511,6 +2752,7 @@
     }
 
     function validationIsPublishable() {
+      if (!selectedTeamCanPublish()) return false;
       const validation = object(state.customer.validation);
       if (!state.customer.validation || validation.valid !== true) return false;
       if (Number(validation._httpStatus) === 202) return false;
@@ -2636,8 +2878,8 @@
 
     async function validateCustomerConfig() {
       if (!state.customer || state.customer.busy) return;
-      if (!state.customer.selectedTeamId) {
-        state.customer.clientError = "请先选择一个具备发布权限的 Team。";
+      if (!selectedTeamCanPublish()) {
+        state.customer.clientError = "请先选择一个 active 且具备发布权限的 Team。";
         renderCustomerDetail();
         return;
       }
@@ -2648,6 +2890,9 @@
         renderCustomerDetail();
         return;
       }
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
       state.customer.busy = "validate";
       state.customer.clientError = "";
       state.customer.validationError = null;
@@ -2655,11 +2900,26 @@
       state.customer.confirmedRisks.clear();
       renderCustomerDetail();
       try {
+        const triggerKind = text(first(object(body.triggerIntent), ["kind"], "")).toLowerCase();
+        if (triggerKind === "one_shot" || triggerKind === "cron") {
+          const catalogRefresh = await api.refreshAuthorizationCatalog();
+          if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+          const catalog = object(catalogRefresh.data);
+          if (first(catalog, ["ready"], false) !== true) {
+            throw new ApiError(
+              503,
+              "NyxID 持久授权目录仍在同步，请稍后重试校验。",
+              catalog,
+              "authorization_catalog_pending"
+            );
+          }
+        }
         const result = await api.validateConfig(
-          customerScopeId(state.customer.detail),
-          state.customer.deliveryId,
+          scopeId,
+          deliveryIdValue,
           body
         );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const validation = object(first(result.data, ["validation", "result"], result.data));
         validation._httpStatus = result.status;
         state.customer.validation = validation;
@@ -2668,10 +2928,14 @@
         }
         announce(result.status === 202 ? "校验请求已受理" : (validation.valid === true ? "配置校验通过" : "配置校验未通过"));
       } catch (error) {
-        state.customer.validationError = error;
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.validationError = error;
+        }
       } finally {
-        state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2685,6 +2949,9 @@
         return;
       }
       const validation = object(state.customer.validation);
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
       const idempotencyKey = text(state.customer.idempotencyKey);
       if (!idempotencyKey) {
         state.customer.clientError = "服务端校验未返回稳定 idempotencyKey，发布已 fail closed。";
@@ -2704,13 +2971,15 @@
 
       state.customer.busy = "publish";
       state.customer.clientError = "";
+      const projectionBaselineVersion = state.customer.deliveryStateVersion;
       renderCustomerDetail();
       try {
         const result = await api.publish(
-          customerScopeId(state.customer.detail),
-          state.customer.deliveryId,
+          scopeId,
+          deliveryIdValue,
           body
         );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const response = object(first(result.data, ["installation", "result"], result.data));
         const installationIdValue = text(first(response, ["installationId", "id"], ""));
         if (!installationIdValue) {
@@ -2719,6 +2988,9 @@
         state.customer.installationId = installationIdValue;
         state.customer.acceptedHttpStatus = result.status;
         state.customer.acceptedAtMs = result.status === 202 ? Date.now() : 0;
+        state.customer.installationProjectionBaselineVersion = result.status === 202
+          ? projectionBaselineVersion
+          : 0;
         state.customer.installation = response;
         state.customer.consoleUrl = absoluteHttpUrl(first(response, ["consoleUrl"], ""));
         state.notice = result.status === 202
@@ -2726,17 +2998,21 @@
           : { tone: "info", title: "已获得安装记录", message: "正在读取服务端安装状态。" };
         announce(result.status === 202 ? "发布请求已受理，尚未安装成功" : "已获得安装记录");
         await loadInstallation(
-          customerScopeId(state.customer.detail),
+          scopeId,
           installationIdValue,
-          state.routeSequence,
+          sequence,
           false
         );
       } catch (error) {
-        const description = errorDescription(error);
-        state.notice = { tone: description.tone, title: description.title, message: description.message };
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          const description = errorDescription(error);
+          state.notice = { tone: description.tone, title: description.title, message: description.message };
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2746,6 +3022,23 @@
 
     function installationNeedsRefresh(status) {
       return ["accepted", "accepted_for_dispatch", "pending", "processing", "running", "publishing", "validating", "provisioning_accepted", "provisioningaccepted", "awaiting_acceptance"].indexOf(status) >= 0;
+    }
+
+    function installationObservationIsPreAcceptance(customer, observed) {
+      const observedStatus = text(first(observed, ["status"], "")).toLowerCase();
+      const observedVersion = deliveryStateVersion(observed);
+      return observedStatus !== "ready" && Boolean(customer) && customer.acceptedHttpStatus === 202 &&
+        customer.acceptedAtMs > 0 && Date.now() - customer.acceptedAtMs < PROJECTION_GRACE_MS &&
+        customer.installationProjectionBaselineVersion > 0 &&
+        (observedVersion === 0 || observedVersion <= customer.installationProjectionBaselineVersion);
+    }
+
+    function markInstallationAwaitingProjection(customer) {
+      customer.installationError = null;
+      customer.installation = Object.assign({}, object(customer.installation), {
+        status: "accepted",
+        stage: "awaiting_projection"
+      });
     }
 
     function stopInstallationRefresh() {
@@ -2770,8 +3063,26 @@
       try {
         const result = await api.installation(scopeId, installationIdValue);
         if (sequence !== state.routeSequence || !state.customer || state.customer.installationId !== installationIdValue) return;
-        state.customer.installation = normalizeInstallation(result.data);
+        const observed = normalizeInstallation(result.data);
+        if (installationObservationIsPreAcceptance(state.customer, observed)) {
+          markInstallationAwaitingProjection(state.customer);
+          renderCustomerDetail();
+          scheduleInstallationRefresh(scopeId, installationIdValue, sequence);
+          return;
+        }
+        state.customer.installation = observed;
         state.customer.installationError = null;
+        const observedVersion = deliveryStateVersion(observed);
+        if (observedVersion > 0) state.customer.deliveryStateVersion = observedVersion;
+        state.customer.installationProjectionBaselineVersion = 0;
+        const observedStatus = text(first(observed, ["status"], "")).toLowerCase();
+        if (state.customer.acceptedHttpStatus !== 202 || !installationNeedsRefresh(observedStatus)) {
+          if (state.customer.acceptedHttpStatus === 202 && !installationNeedsRefresh(observedStatus)) {
+            state.notice = null;
+          }
+          state.customer.acceptedHttpStatus = 0;
+          state.customer.acceptedAtMs = 0;
+        }
         renderCustomerDetail();
         scheduleInstallationRefresh(scopeId, installationIdValue, sequence);
       } catch (error) {
@@ -2779,13 +3090,9 @@
         const awaitingProjection = error instanceof ApiError && error.status === 404 &&
           state.customer.acceptedHttpStatus === 202 &&
           state.customer.acceptedAtMs > 0 &&
-          Date.now() - state.customer.acceptedAtMs < 90000;
+          Date.now() - state.customer.acceptedAtMs < PROJECTION_GRACE_MS;
         if (awaitingProjection) {
-          state.customer.installationError = null;
-          state.customer.installation = Object.assign({}, object(state.customer.installation), {
-            status: "accepted",
-            stage: "awaiting_projection"
-          });
+          markInstallationAwaitingProjection(state.customer);
           renderCustomerDetail();
           scheduleInstallationRefresh(scopeId, installationIdValue, sequence);
           return;
@@ -2798,27 +3105,46 @@
 
     async function retryInstallation() {
       if (!state.customer || state.customer.busy || !state.customer.installationId) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      const installationIdValue = state.customer.installationId;
       state.customer.busy = "retry";
+      const projectionBaselineVersion = state.customer.deliveryStateVersion;
       renderCustomerDetail();
       try {
-        const scopeId = customerScopeId(state.customer.detail);
-        const result = await api.retry(scopeId, state.customer.installationId);
+        const result = await api.retry(scopeId, installationIdValue);
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
         const response = normalizeInstallation(result.data);
         const returnedId = text(first(response, ["installationId", "id"], ""));
         if (returnedId && returnedId !== state.customer.installationId) {
           state.customer.installationId = returnedId;
         }
         state.customer.acceptedHttpStatus = result.status;
+        state.customer.acceptedAtMs = result.status === 202 ? Date.now() : 0;
+        state.customer.installationProjectionBaselineVersion = result.status === 202
+          ? projectionBaselineVersion
+          : 0;
+        state.customer.installation = result.status === 202
+          ? Object.assign({}, object(state.customer.installation), response, {
+              status: "accepted",
+              stage: "awaiting_projection"
+            })
+          : response;
         state.notice = result.status === 202
           ? { tone: "info", title: "重试请求已受理", message: "仍需等待服务端安装状态变为 ready。" }
           : { tone: "info", title: "重试已提交", message: "正在读取服务端状态。" };
-        await loadInstallation(scopeId, state.customer.installationId, state.routeSequence, false);
+        await loadInstallation(scopeId, state.customer.installationId, sequence, false);
       } catch (error) {
-        const description = errorDescription(error);
-        state.notice = { tone: description.tone, title: description.title, message: description.message };
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          const description = errorDescription(error);
+          state.notice = { tone: description.tone, title: description.title, message: description.message };
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2834,19 +3160,30 @@
       renderCustomerDetail();
       const scopeId = customerScopeId(state.customer.detail);
       const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
       try {
-        await api.createTeam(scopeId, displayName);
+        const result = await api.createTeam(scopeId, displayName);
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const createdTeam = normalizeCreatedTeam(result.data, scopeId);
+        const createdTeamId = teamId(createdTeam);
+        state.customer.pendingTeams[createdTeamId] = createdTeam;
+        state.customer.teams = mergeTeamRoster(state.customer.teams, state.customer.pendingTeams);
+        state.customer.selectedTeamId = createdTeamId;
         state.customer.newTeamName = "";
-        state.notice = { tone: "success", title: "Team 已创建", message: "现在可以选择该 Team 并继续配置。" };
+        state.notice = { tone: "success", title: "Team 已创建并选中", message: "现在可以继续配置并发布工作流。" };
         announce("Team 已创建");
         state.customer.busy = "";
-        await loadTeams(scopeId, deliveryIdValue, state.routeSequence);
+        await loadTeams(scopeId, deliveryIdValue, sequence);
       } catch (error) {
-        const description = errorDescription(error);
-        state.notice = { tone: description.tone, title: description.title, message: description.message };
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          const description = errorDescription(error);
+          state.notice = { tone: description.tone, title: description.title, message: description.message };
+        }
       } finally {
-        if (state.customer) state.customer.busy = "";
-        renderCustomerDetail();
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
       }
     }
 
@@ -2877,7 +3214,7 @@
     // actually uses it (the product console and a bound messaging channel) are separate
     // surfaces this page cannot reach. Both entry points are therefore stated explicitly,
     // and each is omitted rather than guessed when the server did not return it.
-    function renderUsageSection(consoleUrl, channelRunCommand, workflowId) {
+    function renderUsageSection(consoleUrl, channelRunCommand, scopeId) {
       const rows = [];
       rows.push(
         h("div", { className: "stage-row" },
@@ -2885,7 +3222,7 @@
           h("div", null,
             h("strong", { text: "在 Aevatar Console 中运行" }),
             consoleUrl
-              ? h("p", { text: "打开该 Team 成员的 workflow 页面，可查看定义、手动运行并查看运行记录。" })
+              ? h("p", { text: "打开该 Team 成员的调用工作台，可手动运行已交付工作流并查看运行记录。" })
               : h("p", { text: "服务端未配置 Aevatar:Delivery:ConsoleWebBaseUrl，无法生成 Console 链接；请联系交付管理员补充该配置。" })
           ),
           consoleUrl
@@ -2905,7 +3242,7 @@
             h("span", { className: "stage-index", text: "2" }),
             h("div", null,
               h("strong", { text: "在已绑定的 Lark / 消息渠道中运行" }),
-              h("p", { text: "该指令在机器人注册所在的 scope 内解析 workflow，因此机器人必须注册在本次交付的目标 scope（" + text(first(installation, ["scopeId"], ""), "本 scope") + "）下，否则会提示未找到 workflow。" }),
+              h("p", { text: "该指令在机器人注册所在的 scope 内解析 workflow，因此机器人必须注册在本次交付的目标 scope（" + text(scopeId, "本 scope") + "）下，否则会提示未找到 workflow。" }),
               h("p", { className: "mono", text: channelRunCommand }),
               h("p", { text: "在会话中发送 /workflow list 可列出该 scope 的 workflow 及其运行指令。" })
             ),
@@ -2922,6 +3259,20 @@
         ),
         h("div", { className: "stage-list" }, rows)
       );
+    }
+
+    function installationStatusMessage(installation, status, acceptedHttpStatus) {
+      if (status === "ready") return "服务端 installation.status 已确认 ready。";
+      if (status === "failed") {
+        const failureCode = text(first(installation, ["errorCode", "code"], ""));
+        const failureMessage = text(first(installation, ["errorMessage", "error"], ""));
+        if (failureMessage) return failureCode ? failureCode + ": " + failureMessage : failureMessage;
+        return text(failureCode, "服务端报告安装失败。");
+      }
+      if (acceptedHttpStatus === 202) {
+        return "HTTP 202 仅表示已受理，当前仍以服务端状态为准。";
+      }
+      return text(first(installation, ["message", "nextAction"], ""), "尚未达到 ready。");
     }
 
     function renderInstallation() {
@@ -2960,13 +3311,13 @@
       const consoleUrl = absoluteHttpUrl(first(installation, ["consoleUrl"], "")) ||
         state.customer.consoleUrl;
       const channelRunCommand = text(first(installation, ["channelRunCommand"], ""));
-      const workflowId = text(first(installation, ["workflowId"], ""));
+      const installationScopeId = text(first(installation, ["scopeId"], ""));
       const title = ready ? "安装已就绪" : (status === "failed" ? "安装失败" : "安装状态");
-      const message = ready
-        ? "服务端 installation.status 已确认 ready。"
-        : (state.customer.acceptedHttpStatus === 202
-            ? "HTTP 202 仅表示已受理，当前仍以服务端状态为准。"
-            : text(first(installation, ["message", "nextAction", "errorMessage", "error"], ""), "尚未达到 ready。"));
+      const message = installationStatusMessage(
+        installation,
+        status,
+        state.customer.acceptedHttpStatus
+      );
       const header = notice(ready ? "success" : statusTone(status), title, message);
       const body = h("div", null, header);
       body.append(
@@ -2978,7 +3329,7 @@
         )
       );
       if (ready) {
-        body.append(renderUsageSection(consoleUrl, channelRunCommand, workflowId));
+        body.append(renderUsageSection(consoleUrl, channelRunCommand, installationScopeId));
       }
       if (stages.length) {
         body.append(
@@ -3168,7 +3519,7 @@
       );
 
       const validateDisabled = Boolean(state.customer.busy) ||
-        !state.customer.selectedTeamId ||
+        !selectedTeamCanPublish() ||
         Boolean(state.customer.teamsError);
       const publishDisabled = Boolean(state.customer.busy) || !validationIsPublishable();
       const actionBar = h("div", { className: "action-bar" },

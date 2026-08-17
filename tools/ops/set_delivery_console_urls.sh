@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Ensure the deployed Mainnet ConfigMap carries the two Workflow Delivery console URLs.
+# Ensure the deployed Mainnet ConfigMap carries the Workflow Delivery product-console URL.
 #
 # The deployment mounts appsettings.Distributed.json from a ConfigMap over the copy baked
 # into the image, so the values committed in this repository never reach production.
-# Without Aevatar:Delivery:ConsoleBaseUrl, NyxID connect-link creation fails closed with
-# 503 DELIVERY_CALLBACK_BASE_URL_UNAVAILABLE. Without Aevatar:Delivery:ConsoleWebBaseUrl,
-# delivery responses carry no product-console link.
+# Without Aevatar:Delivery:ConsoleWebBaseUrl, delivery responses carry no product-console link.
 #
-# Only those two keys are written; every other setting is preserved byte-for-byte by
+# Only the product-console key is written and the obsolete connect-callback key is removed;
+# every other setting is preserved byte-for-byte by
 # round-tripping the document through a JSON parser. Prints a diff and requires an
 # explicit APPLY=1 to write.
 set -euo pipefail
@@ -16,7 +15,6 @@ KUBECONFIG_PATH="${AEVATAR_PROD_KUBECONFIG:-$HOME/Code/aelf-shared-k8s-prod.yaml
 NAMESPACE="${AEVATAR_PROD_NAMESPACE:-aismart-app-mainnet}"
 CONFIGMAP="${AEVATAR_DELIVERY_CONFIGMAP:-aevatar-console-backend-appsettings-distributed}"
 FILE_KEY="appsettings.Distributed.json"
-CONSOLE_BASE_URL="${AEVATAR_DELIVERY_CONSOLE_BASE_URL:-https://aevatar-console-backend-api.aevatar.ai}"
 CONSOLE_WEB_BASE_URL="${AEVATAR_DELIVERY_CONSOLE_WEB_BASE_URL:-https://aevatar-console.aevatar.ai}"
 
 kube() { kubectl --kubeconfig="$KUBECONFIG_PATH" --insecure-skip-tls-verify -n "$NAMESPACE" "$@"; }
@@ -27,13 +25,13 @@ trap 'rm -rf "$workdir"' EXIT
 kube get configmap "$CONFIGMAP" -o "jsonpath={.data.${FILE_KEY//./\\.}}" > "$workdir/current.json"
 [ -s "$workdir/current.json" ] || { echo "error: $CONFIGMAP/$FILE_KEY is empty or unreadable" >&2; exit 1; }
 
-CONSOLE_BASE_URL="$CONSOLE_BASE_URL" CONSOLE_WEB_BASE_URL="$CONSOLE_WEB_BASE_URL" \
+CONSOLE_WEB_BASE_URL="$CONSOLE_WEB_BASE_URL" \
 python3 - "$workdir/current.json" "$workdir/next.json" <<'PY'
 import json, os, sys
 current, target = sys.argv[1], sys.argv[2]
 cfg = json.load(open(current))
 delivery = cfg.setdefault("Aevatar", {}).setdefault("Delivery", {})
-delivery["ConsoleBaseUrl"] = os.environ["CONSOLE_BASE_URL"]
+delivery.pop("ConsoleBaseUrl", None)
 delivery["ConsoleWebBaseUrl"] = os.environ["CONSOLE_WEB_BASE_URL"]
 # Creating this section is itself a behaviour change: the allowlist falls back to the
 # shipped packages only while Aevatar:Delivery is ABSENT. Once the section exists it fails

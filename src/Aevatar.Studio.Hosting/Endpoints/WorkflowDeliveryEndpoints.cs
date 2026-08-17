@@ -15,8 +15,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -48,6 +46,12 @@ internal static class WorkflowDeliveryEndpoints
         scoped.MapPost(
             "/delivery-requests/{deliveryId}/connections/{slotKey}:connect",
             CreateConnectLinkAsync);
+        scoped.MapGet(
+            "/delivery-requests/{deliveryId}/connections/{slotKey}/available",
+            ListExistingConnectionsAsync);
+        scoped.MapPost(
+            "/delivery-requests/{deliveryId}/connections/{slotKey}:attach",
+            AttachExistingConnectionAsync);
         scoped.MapGet(
             "/delivery-requests/{deliveryId}/connections/{slotKey}",
             GetConnectStatusAsync);
@@ -216,27 +220,17 @@ internal static class WorkflowDeliveryEndpoints
         string deliveryId,
         string slotKey,
         [FromServices] IWorkflowDeliveryService service,
-        [FromServices] IOptions<WorkflowDeliveryOptions> options,
-        [FromServices] IHostEnvironment environment,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
         if (!TryGetBearer(http, out var bearerToken))
             return Results.Unauthorized();
-        if (!TryBuildDeliveryCallbackUri(http, deliveryId, options.Value, environment, out var callbackUri))
-        {
-            return Error(
-                StatusCodes.Status503ServiceUnavailable,
-                "DELIVERY_CALLBACK_BASE_URL_UNAVAILABLE",
-                "Workflow delivery connect callbacks are not configured for this host.");
-        }
         return await ExecuteAsync(() => service.CreateConnectLinkAsync(
             deliveryId,
             scopeId,
             slotKey,
             bearerToken,
-            callbackUri,
             ct));
     }
 
@@ -254,6 +248,50 @@ internal static class WorkflowDeliveryEndpoints
             deliveryId,
             scopeId,
             slotKey,
+            ct));
+    }
+
+    internal static async Task<IResult> ListExistingConnectionsAsync(
+        HttpContext http,
+        string scopeId,
+        string deliveryId,
+        string slotKey,
+        [FromServices] IWorkflowDeliveryService service,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        if (!TryGetBearer(http, out var bearerToken))
+            return Results.Unauthorized();
+        return await ExecuteAsync(() => service.ListExistingConnectionsAsync(
+            deliveryId,
+            scopeId,
+            slotKey,
+            bearerToken,
+            ct));
+    }
+
+    internal static async Task<IResult> AttachExistingConnectionAsync(
+        HttpContext http,
+        string scopeId,
+        string deliveryId,
+        string slotKey,
+        WorkflowDeliveryAttachConnectionRequest? request,
+        [FromServices] IWorkflowDeliveryService service,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        if (!TryGetBearer(http, out var bearerToken))
+            return Results.Unauthorized();
+        if (request is null)
+            return Error(StatusCodes.Status422UnprocessableEntity, "INVALID_DELIVERY_REQUEST", "Request body is required.");
+        return await ExecuteAsync(() => service.AttachExistingConnectionAsync(
+            deliveryId,
+            scopeId,
+            slotKey,
+            request,
+            bearerToken,
             ct));
     }
 
@@ -519,81 +557,6 @@ internal static class WorkflowDeliveryEndpoints
             ? ExternalCapabilityExecutionMode.Durable
             : ExternalCapabilityExecutionMode.Interactive;
 
-    private static bool TryBuildDeliveryCallbackUri(
-        HttpContext http,
-        string deliveryId,
-        WorkflowDeliveryOptions options,
-        IHostEnvironment environment,
-        out Uri callbackUri)
-    {
-        callbackUri = null!;
-        var localOrTest = IsLocalOrTestEnvironment(environment);
-        var configuredBaseUrl = options.ConsoleBaseUrl?.Trim() ?? string.Empty;
-        Uri? consoleBaseUri;
-        if (configuredBaseUrl.Length != 0)
-        {
-            if (!TryNormalizeConsoleBaseUri(configuredBaseUrl, allowHttpLoopback: localOrTest, out consoleBaseUri))
-                return false;
-        }
-        else
-        {
-            if (!localOrTest || !TryBuildLoopbackRequestBaseUri(http, out consoleBaseUri))
-                return false;
-        }
-
-        var callbackBase = consoleBaseUri.GetLeftPart(UriPartial.Path).TrimEnd('/');
-        callbackUri = new Uri(
-            $"{callbackBase}/delivery?deliveryId={Uri.EscapeDataString(deliveryId)}",
-            UriKind.Absolute);
-        return true;
-    }
-
-    private static bool TryNormalizeConsoleBaseUri(
-        string value,
-        bool allowHttpLoopback,
-        out Uri consoleBaseUri)
-    {
-        consoleBaseUri = null!;
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var candidate) ||
-            !IsHttpScheme(candidate.Scheme) ||
-            !string.IsNullOrEmpty(candidate.UserInfo) ||
-            !string.IsNullOrEmpty(candidate.Query) ||
-            !string.IsNullOrEmpty(candidate.Fragment) ||
-            (string.Equals(candidate.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
-             (!allowHttpLoopback || !candidate.IsLoopback)))
-        {
-            return false;
-        }
-
-        consoleBaseUri = candidate;
-        return true;
-    }
-
-    private static bool TryBuildLoopbackRequestBaseUri(HttpContext http, out Uri consoleBaseUri)
-    {
-        consoleBaseUri = null!;
-        if (!IsHttpScheme(http.Request.Scheme) || !http.Request.Host.HasValue)
-            return false;
-
-        var value = $"{http.Request.Scheme}://{http.Request.Host.ToUriComponent()}" +
-            http.Request.PathBase.ToUriComponent();
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var candidate) || !candidate.IsLoopback)
-            return false;
-
-        consoleBaseUri = candidate;
-        return true;
-    }
-
-    private static bool IsLocalOrTestEnvironment(IHostEnvironment environment) =>
-        environment.IsDevelopment() ||
-        environment.IsEnvironment("PersistentLocal") ||
-        environment.IsEnvironment("Test") ||
-        environment.IsEnvironment("Testing");
-
-    private static bool IsHttpScheme(string? scheme) =>
-        string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase);
-
     private static IResult NotFound() =>
         Error(StatusCodes.Status404NotFound, "DELIVERY_NOT_FOUND", "Workflow delivery was not found.");
 
@@ -636,14 +599,14 @@ internal static class WorkflowDeliveryHttpErrorMapper
             WorkflowDeliveryPackageUnavailableException unavailable =>
                 Error(StatusCodes.Status503ServiceUnavailable, "DELIVERY_PACKAGE_UNAVAILABLE", unavailable.Message),
             NyxIdConnectLinkException connectLink => MapConnectLinkError(connectLink),
-            // Publish resolves this authority for every trigger intent, not only scheduled
-            // ones, and the binding is committed by the product console's login rather than
-            // by this page — so the remedy has to name that, not just say "reconnect".
+            NyxIdUserServiceInventoryException inventory => MapUserServiceInventoryError(inventory),
+            // Delivery login finalization commits this binding for every trigger intent.
+            // A miss here means that finalization or its projection is not ready yet.
             StudioMemberAutomationAuthorizationBindingRequiredException =>
                 Error(
                     StatusCodes.Status409Conflict,
                     "DELIVERY_AUTHORIZATION_BINDING_REQUIRED",
-                    "Sign in to the Aevatar console once with this NyxID account to establish its authorization binding, then retry publishing."),
+                    "Retry publishing shortly. If the binding remains unavailable, sign out and sign back in to Delivery Center with the same NyxID account."),
             StudioTeamNotFoundException missingTeam =>
                 Error(StatusCodes.Status404NotFound, "STUDIO_TEAM_NOT_FOUND", missingTeam.Message),
             StudioMemberAutomationProjectionPendingException pending =>
@@ -700,6 +663,20 @@ internal static class WorkflowDeliveryHttpErrorMapper
         _ => Error(StatusCodes.Status503ServiceUnavailable, "NYXID_CONNECT_UNAVAILABLE", exception.Message),
     };
 
+    private static IResult MapUserServiceInventoryError(
+        NyxIdUserServiceInventoryException exception) => exception.Kind switch
+    {
+        NyxIdUserServiceInventoryFailureKind.AuthenticationRejected =>
+            Error(StatusCodes.Status401Unauthorized, "NYXID_CONNECTION_INVENTORY_AUTHENTICATION_REJECTED", exception.Message),
+        NyxIdUserServiceInventoryFailureKind.Forbidden =>
+            Error(StatusCodes.Status403Forbidden, "NYXID_CONNECTION_INVENTORY_FORBIDDEN", exception.Message),
+        NyxIdUserServiceInventoryFailureKind.RateLimited =>
+            Error(StatusCodes.Status429TooManyRequests, "NYXID_CONNECTION_INVENTORY_RATE_LIMITED", exception.Message),
+        NyxIdUserServiceInventoryFailureKind.ResponseInvalid =>
+            Error(StatusCodes.Status502BadGateway, "NYXID_CONNECTION_INVENTORY_RESPONSE_INVALID", exception.Message),
+        _ => Error(StatusCodes.Status503ServiceUnavailable, "NYXID_CONNECTION_INVENTORY_UNAVAILABLE", exception.Message),
+    };
+
     private static IResult RetryableUnavailable(string code, string message) =>
         Results.Json(new { code, message, retryable = true }, statusCode: StatusCodes.Status503ServiceUnavailable);
 
@@ -709,12 +686,16 @@ internal static class WorkflowDeliveryHttpErrorMapper
             Error(StatusCodes.Status404NotFound, exception.Code, exception.Message),
         "DELIVERY_REVOKED" or "DELIVERY_EXPIRED" =>
             Error(StatusCodes.Status410Gone, exception.Code, exception.Message),
-        "PACKAGE_VERSION_CHANGED" or "CONFIRMATION_DIGEST_MISMATCH" or "CONNECTION_CONTRACT_MISMATCH" =>
+        "PACKAGE_VERSION_CHANGED" or "CONFIRMATION_DIGEST_MISMATCH" or "CONNECTION_CONTRACT_MISMATCH" or
+        "CONNECTIONS_LOCKED" or "CONNECTION_ALREADY_PENDING" or "CONNECTION_CHANGED" or
+        "EXISTING_CONNECTION_NOT_AVAILABLE" =>
             Error(StatusCodes.Status409Conflict, exception.Code, exception.Message),
         "PROVISIONING_UNAUTHORIZED" =>
             Error(StatusCodes.Status401Unauthorized, exception.Code, exception.Message),
         "PROVISIONING_FAILED" =>
             Error(StatusCodes.Status503ServiceUnavailable, exception.Code, "Workflow provisioning is temporarily unavailable."),
+        "CONNECTION_OBSERVATION_TIMEOUT" =>
+            RetryableUnavailable(exception.Code, exception.Message),
         _ => Error(StatusCodes.Status422UnprocessableEntity, exception.Code, exception.Message),
     };
 

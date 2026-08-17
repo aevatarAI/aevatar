@@ -1,4 +1,5 @@
 using System.Text;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
@@ -23,17 +24,21 @@ public sealed class ChannelWorkflowDraftRunSlashCommandHandler : IChannelSlashCo
     private static readonly char[] ArgumentSeparators = [' ', '\t', '\r', '\n'];
 
     private readonly IScopeWorkflowQueryPort? _workflowQueryPort;
+    private readonly IChannelWorkflowAuthorizedScopeResolver? _authorizedScopeResolver;
 
-    public ChannelWorkflowDraftRunSlashCommandHandler(IScopeWorkflowQueryPort? workflowQueryPort = null)
+    public ChannelWorkflowDraftRunSlashCommandHandler(
+        IScopeWorkflowQueryPort? workflowQueryPort = null,
+        IChannelWorkflowAuthorizedScopeResolver? authorizedScopeResolver = null)
     {
         _workflowQueryPort = workflowQueryPort;
+        _authorizedScopeResolver = authorizedScopeResolver;
     }
 
     public string Name => "workflow";
 
     public IReadOnlyList<string> Aliases { get; } = ["run-workflow"];
 
-    public bool RequiresBinding => false;
+    public bool RequiresBinding => true;
 
     public ChannelSlashCommandUsage Usage => new(
         Name,
@@ -57,10 +62,24 @@ public sealed class ChannelWorkflowDraftRunSlashCommandHandler : IChannelSlashCo
         ChannelSlashCommandContext context,
         CancellationToken ct)
     {
+        var authorization = _authorizedScopeResolver is null
+            ? ChannelWorkflowAuthorizedScopeResolution.Denied(
+                ChannelWorkflowScopeAuthorizationFailure.AuthorityUnavailable)
+            : await _authorizedScopeResolver
+                .ResolveAsync(context.Subject, context.RegistrationScopeId, ct)
+                .ConfigureAwait(false);
+        if (!authorization.IsAuthorized)
+        {
+            if (authorization.Failure == ChannelWorkflowScopeAuthorizationFailure.RegistrationScopeMissing)
+                return new MessageContent { Text = "无法确定当前 NyxID scope,暂不能列出 workflow。" };
+
+            return new MessageContent { Text = "当前 NyxID 身份无权查看该 bot scope 的 workflow。" };
+        }
+
         if (_workflowQueryPort is null)
             return new MessageContent { Text = "Workflow 查询服务暂不可用,请稍后重试。" };
 
-        var scopeId = context.RegistrationScopeId.Trim();
+        var scopeId = authorization.AuthorizedScopeId;
         if (scopeId.Length == 0)
             return new MessageContent { Text = "无法确定当前 NyxID scope,暂不能列出 workflow。" };
 
@@ -73,11 +92,29 @@ public sealed class ChannelWorkflowDraftRunSlashCommandHandler : IChannelSlashCo
             };
         }
 
+        var runnableWorkflows = new List<ScopeWorkflowSummary>(workflows.Count);
+        foreach (var workflow in workflows)
+        {
+            var lookup = await _workflowQueryPort
+                .LookupByWorkflowIdAsync(scopeId, workflow.WorkflowId, ct)
+                .ConfigureAwait(false);
+            if (lookup.IsRunnable)
+                runnableWorkflows.Add(lookup.Workflow!);
+        }
+
+        if (runnableWorkflows.Count == 0)
+        {
+            return new MessageContent
+            {
+                Text = "当前 scope 没有可运行的 workflow。已发布的 workflow 可能仍在部署中,请稍后重试。",
+            };
+        }
+
         var builder = new StringBuilder();
-        builder.Append("当前 scope 的 workflow（共 ")
-            .Append(workflows.Count)
+        builder.Append("当前 scope 可运行的 workflow（共 ")
+            .Append(runnableWorkflows.Count)
             .Append(" 个）:");
-        foreach (var workflow in workflows.Take(MaxListedWorkflows))
+        foreach (var workflow in runnableWorkflows.Take(MaxListedWorkflows))
         {
             var label = workflow.DisplayName.Trim().Length != 0
                 ? workflow.DisplayName.Trim()
@@ -90,7 +127,7 @@ public sealed class ChannelWorkflowDraftRunSlashCommandHandler : IChannelSlashCo
                 .Append(workflow.WorkflowId);
         }
 
-        if (workflows.Count > MaxListedWorkflows)
+        if (runnableWorkflows.Count > MaxListedWorkflows)
         {
             builder.Append('\n')
                 .Append("… 仅显示前 ")

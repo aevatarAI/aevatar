@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Security.Cryptography;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -129,6 +130,7 @@ internal static class GAgentServiceTestKit
         artifact.Endpoints.Add((endpoints.Length == 0
             ? [CreateEndpointDescriptor()]
             : endpoints).Select(x => x.Clone()));
+        artifact.ArtifactHash = Convert.ToHexString(SHA256.HashData(artifact.ToByteArray()));
         return artifact;
     }
 

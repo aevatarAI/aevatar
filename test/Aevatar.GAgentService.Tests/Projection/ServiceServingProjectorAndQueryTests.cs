@@ -46,6 +46,7 @@ public sealed class ServiceServingProjectorAndQueryTests
             DeploymentId = "dep-a",
             RevisionId = "r1",
             PrimaryActorId = "actor-a",
+            ArtifactHash = "HASH-A",
             Status = ServiceDeploymentStatus.Deactivated,
             ActivatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-15T02:00:00+00:00")),
             UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-15T03:00:00+00:00")),
@@ -81,6 +82,7 @@ public sealed class ServiceServingProjectorAndQueryTests
         snapshot!.Deployments.Select(x => x.DeploymentId).Should().Equal("dep-a", "dep-b");
         snapshot.Deployments[0].Status.Should().Be(ServiceDeploymentStatus.Deactivated.ToString());
         snapshot.Deployments[0].RevisionId.Should().Be("r1");
+        snapshot.Deployments[0].ArtifactHash.Should().Be("HASH-A");
         snapshot.Deployments[1].Status.Should().Be(ServiceDeploymentStatus.Active.ToString());
         snapshot.Deployments[1].RevisionId.Should().BeEmpty();
         snapshot.ActivationFailures.Should().ContainSingle();

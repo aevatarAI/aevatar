@@ -113,19 +113,25 @@ public static class ServiceCollectionExtensions
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
         services.TryAddSingleton<IAgentRunToolApprovalDecisionDispatcher, AgentRunToolApprovalDecisionDispatcher>();
+        services.TryAddSingleton<IChannelWorkflowAuthorizedScopeResolver>(sp =>
+            new ChannelWorkflowAuthorizedScopeResolver(
+                sp.GetService<Aevatar.GAgents.Channel.Identity.Abstractions.IOwnerScopeResolver>(),
+                sp.GetService<ILogger<ChannelWorkflowAuthorizedScopeResolver>>()));
         // The two-generic overload keeps the concrete implementation type visible to
         // TryAddEnumerable; a Func<IServiceProvider, IChannelSlashCommandHandler> factory
         // would be indistinguishable from every other handler registered for this service.
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>(sp =>
                 new ChannelWorkflowDraftRunSlashCommandHandler(
-                    sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>())));
+                    sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>(),
+                    sp.GetRequiredService<IChannelWorkflowAuthorizedScopeResolver>())));
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
         services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();
         services.TryAddSingleton<ChannelWorkflowDraftRunAdmission>(sp =>
             new ChannelWorkflowDraftRunAdmission(
                 sp.GetRequiredService<ChannelWorkflowDraftRunIntentParser>(),
-                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>()));
+                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>(),
+                sp.GetRequiredService<IChannelWorkflowAuthorizedScopeResolver>()));
         services.TryAddSingleton<WorkflowDraftRunReplyRenderer>();
         services.TryAddSingleton<IChannelWorkflowDraftRunInteractionPort>(sp =>
             new ChannelWorkflowDraftRunInteractionPort(

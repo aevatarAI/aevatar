@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
@@ -29,6 +30,7 @@ public interface IWorkflowDeliveryProvisioningExecutor
 {
     Task<WorkflowDeliveryProvisioningExecutionResult> ExecuteAsync(
         WorkflowDeliverySnapshot delivery,
+        string continuationClaimantId,
         CancellationToken ct = default);
 }
 
@@ -63,9 +65,12 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
 
     public async Task<WorkflowDeliveryProvisioningExecutionResult> ExecuteAsync(
         WorkflowDeliverySnapshot delivery,
+        string continuationClaimantId,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(delivery);
+        var claimantId = WorkflowDeliveryContinuationClaimPolicy.NormalizeClaimantId(
+            continuationClaimantId);
         var installation = delivery.Installation;
         if (installation == null || installation.Status != WorkflowInstallationStatus.Accepted)
         {
@@ -74,6 +79,21 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
                 installation?.InstallationId ?? string.Empty,
                 installation?.Attempt ?? 0,
                 installation?.OperationId ?? string.Empty);
+        }
+        var claim = installation.ContinuationClaim;
+        var now = _timeProvider.GetUtcNow();
+        if (!WorkflowDeliveryContinuationClaimPolicy.IsActiveFor(
+                installation,
+                claim,
+                WorkflowInstallationStatus.Accepted,
+                claimantId,
+                now))
+        {
+            return new WorkflowDeliveryProvisioningExecutionResult(
+                WorkflowDeliveryProvisioningExecutionStatus.Skipped,
+                installation.InstallationId,
+                installation.Attempt,
+                installation.OperationId);
         }
 
         ProvisionWorkflowResponse response;
@@ -140,6 +160,10 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
         {
             throw;
         }
+        catch (StudioMemberAutomationProjectionPendingException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             var (code, safeMessage) = MapFailure(exception);
@@ -159,7 +183,9 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
                     WorkflowInstallationStatus.Accepted,
                     installation.Attempt,
                     installation.OperationId,
-                    _timeProvider.GetUtcNow()),
+                    _timeProvider.GetUtcNow(),
+                    claim!.ClaimId,
+                    claim.ClaimantId),
                 ct);
             return new WorkflowDeliveryProvisioningExecutionResult(
                 WorkflowDeliveryProvisioningExecutionStatus.Failed,
@@ -185,7 +211,9 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
                     response.ScheduleProvisioningStatus,
                     installation.Attempt,
                     installation.OperationId,
-                    _timeProvider.GetUtcNow()),
+                    _timeProvider.GetUtcNow(),
+                    claim!.ClaimId,
+                    claim.ClaimantId),
                 ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -283,8 +311,8 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
     private static (string Code, string SafeMessage) MapFailure(Exception exception) => exception switch
     {
         WorkflowDeliveryException delivery => (delivery.Code, delivery.Message),
-        WorkflowExternalCapabilityAdmissionException =>
-            ("CAPABILITY_ADMISSION_FAILED", "The persisted workflow capability admission could not be revalidated."),
+        WorkflowExternalCapabilityAdmissionException admission =>
+            (admission.SafeBlockerCode, admission.SafeMessage),
         UnauthorizedAccessException =>
             ("PROVISIONING_UNAUTHORIZED", "The persisted NyxID provisioning authority could not be revalidated."),
         _ => ("PROVISIONING_FAILED", "Workflow provisioning failed."),

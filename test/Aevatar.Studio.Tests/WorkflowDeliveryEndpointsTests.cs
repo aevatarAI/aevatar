@@ -1,9 +1,12 @@
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application.Delivery;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -12,7 +15,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -130,12 +132,10 @@ public sealed class WorkflowDeliveryEndpointsTests
     }
 
     [Fact]
-    public async Task CreateConnectLink_ShouldUseConfiguredBaseUrlInsteadOfRequestHost()
+    public async Task CreateConnectLink_ShouldForwardBrowserBearerWithoutInventingCallbackAuthority()
     {
         var service = new RecordingWorkflowDeliveryService();
         var http = CreateContext(CustomerScopeId, CustomerUserId);
-        http.Request.Scheme = "https";
-        http.Request.Host = new HostString("attacker.example");
 
         var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
             http,
@@ -143,26 +143,23 @@ public sealed class WorkflowDeliveryEndpointsTests
             DeliveryId,
             "lark",
             service,
-            Options.Create(new WorkflowDeliveryOptions
-            {
-                ConsoleBaseUrl = "https://aevatar.example/console",
-            }),
-            new TestHostEnvironment(),
             CancellationToken.None);
 
         result.Should().BeOfType<Ok<WorkflowDeliveryConnectLinkResponse>>();
-        service.ConnectLinkCallback.Should().Be(
-            new Uri("https://aevatar.example/console/delivery?deliveryId=delivery-beta"));
-        service.ConnectLinkCallback!.Fragment.Should().BeEmpty();
+        service.ConnectLinkBearer.Should().Be("delivery-runtime-token");
     }
 
-    [Fact]
-    public async Task CreateConnectLink_WhenDistributedBaseUrlIsMissing_ShouldFailClosed()
+    [Theory]
+    [InlineData("CONNECTIONS_LOCKED")]
+    [InlineData("CONNECTION_ALREADY_PENDING")]
+    public async Task CreateConnectLink_WhenConnectionMutationConflicts_ShouldReturn409(string code)
     {
-        var service = new RecordingWorkflowDeliveryService();
+        var service = new RecordingWorkflowDeliveryService
+        {
+            ConnectLinkException = new WorkflowDeliveryException(code, "connection mutation conflict"),
+        };
         var http = CreateContext(CustomerScopeId, CustomerUserId);
-        http.Request.Scheme = "https";
-        http.Request.Host = new HostString("attacker.example");
+        http.Response.Body = new MemoryStream();
 
         var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
             http,
@@ -170,60 +167,226 @@ public sealed class WorkflowDeliveryEndpointsTests
             DeliveryId,
             "lark",
             service,
-            Options.Create(new WorkflowDeliveryOptions()),
-            new TestHostEnvironment { EnvironmentName = "Distributed" },
             CancellationToken.None);
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.RootElement.GetProperty("code").GetString().Should().Be(code);
+    }
+
+    [Fact]
+    public async Task CreateConnectLink_WhenCommittedProjectionIsNotObserved_ShouldReturnRetryable503()
+    {
+        var service = new RecordingWorkflowDeliveryService
+        {
+            ConnectLinkException = new WorkflowDeliveryException(
+                "CONNECTION_OBSERVATION_TIMEOUT",
+                "connection projection was not observed"),
+        };
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            "lark",
+            service,
+            CancellationToken.None);
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.RootElement.GetProperty("code").GetString().Should().Be("CONNECTION_OBSERVATION_TIMEOUT");
+        body.RootElement.GetProperty("retryable").GetBoolean().Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("attach")]
+    public async Task ExistingConnectionEndpoints_WhenRouteScopeDiffers_ShouldForbidBeforeBearerOrBodyValidation(
+        string operation)
+    {
+        var service = new RecordingWorkflowDeliveryService();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Request.Headers.Remove("Authorization");
+
+        var result = operation switch
+        {
+            "list" => await WorkflowDeliveryEndpoints.ListExistingConnectionsAsync(
+                http,
+                "scope-route-other",
+                DeliveryId,
+                "lark",
+                service,
+                CancellationToken.None),
+            "attach" => await WorkflowDeliveryEndpoints.AttachExistingConnectionAsync(
+                http,
+                "scope-route-other",
+                DeliveryId,
+                "lark",
+                request: null,
+                service,
+                CancellationToken.None),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
 
         result.Should().BeAssignableTo<IStatusCodeHttpResult>()
-            .Which.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+            .Which.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.InvocationCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("attach")]
+    public async Task ExistingConnectionEndpoints_WithoutBearer_ShouldRejectBeforeCallingService(
+        string operation)
+    {
+        var service = new RecordingWorkflowDeliveryService();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Request.Headers.Remove("Authorization");
+
+        var result = operation switch
+        {
+            "list" => await WorkflowDeliveryEndpoints.ListExistingConnectionsAsync(
+                http,
+                CustomerScopeId,
+                DeliveryId,
+                "lark",
+                service,
+                CancellationToken.None),
+            "attach" => await WorkflowDeliveryEndpoints.AttachExistingConnectionAsync(
+                http,
+                CustomerScopeId,
+                DeliveryId,
+                "lark",
+                request: null,
+                service,
+                CancellationToken.None),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
+
+        result.Should().BeOfType<UnauthorizedHttpResult>();
         service.InvocationCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task CreateConnectLink_InDevelopment_ShouldAllowLoopbackRequestFallback()
+    public async Task AttachExistingConnection_WithBearerButNoBody_ShouldReturn422()
     {
         var service = new RecordingWorkflowDeliveryService();
         var http = CreateContext(CustomerScopeId, CustomerUserId);
-        http.Request.Scheme = "http";
-        http.Request.Host = new HostString("127.0.0.1", 5100);
-        http.Request.PathBase = "/gateway";
+        http.Response.Body = new MemoryStream();
 
-        var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
+        var result = await WorkflowDeliveryEndpoints.AttachExistingConnectionAsync(
             http,
             CustomerScopeId,
             DeliveryId,
             "lark",
+            request: null,
             service,
-            Options.Create(new WorkflowDeliveryOptions()),
-            new TestHostEnvironment { EnvironmentName = Environments.Development },
             CancellationToken.None);
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
 
-        result.Should().BeOfType<Ok<WorkflowDeliveryConnectLinkResponse>>();
-        service.ConnectLinkCallback.Should().Be(
-            new Uri("http://127.0.0.1:5100/gateway/delivery?deliveryId=delivery-beta"));
+        http.Response.StatusCode.Should().Be(StatusCodes.Status422UnprocessableEntity);
+        body.RootElement.GetProperty("code").GetString().Should().Be("INVALID_DELIVERY_REQUEST");
+        service.InvocationCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task CreateConnectLink_InDevelopment_ShouldRejectNonLoopbackRequestFallback()
+    public async Task ExistingConnectionEndpoints_ShouldForwardExactConnectionIdentityAndBearer()
     {
         var service = new RecordingWorkflowDeliveryService();
         var http = CreateContext(CustomerScopeId, CustomerUserId);
-        http.Request.Scheme = "https";
-        http.Request.Host = new HostString("attacker.example");
 
-        var result = await WorkflowDeliveryEndpoints.CreateConnectLinkAsync(
+        var listResult = await WorkflowDeliveryEndpoints.ListExistingConnectionsAsync(
             http,
             CustomerScopeId,
             DeliveryId,
             "lark",
             service,
-            Options.Create(new WorkflowDeliveryOptions()),
-            new TestHostEnvironment { EnvironmentName = Environments.Development },
+            CancellationToken.None);
+        var attachResult = await WorkflowDeliveryEndpoints.AttachExistingConnectionAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            "lark",
+            new WorkflowDeliveryAttachConnectionRequest("user-service-existing"),
+            service,
             CancellationToken.None);
 
-        result.Should().BeAssignableTo<IStatusCodeHttpResult>()
-            .Which.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
-        service.InvocationCount.Should().Be(0);
+        listResult.Should().BeOfType<Ok<WorkflowDeliveryExistingConnectionListResponse>>()
+            .Which.Value.Should().BeSameAs(service.ExistingConnectionsResponse);
+        attachResult.Should().BeOfType<Ok<WorkflowDeliveryAttachedConnectionResponse>>()
+            .Which.Value.Should().Be(new WorkflowDeliveryAttachedConnectionResponse(
+                "lark",
+                "completed",
+                "user-service-existing"));
+        service.ExistingConnectionsCalls.Should().Be(1);
+        service.AttachExistingConnectionCalls.Should().Be(1);
+        service.ExistingConnectionsBearer.Should().Be("delivery-runtime-token");
+        service.AttachedConnectionBearer.Should().Be("delivery-runtime-token");
+        service.AttachedDeliveryId.Should().Be(DeliveryId);
+        service.AttachedScopeId.Should().Be(CustomerScopeId);
+        service.AttachedSlotKey.Should().Be("lark");
+        service.AttachedRequest.Should().Be(new WorkflowDeliveryAttachConnectionRequest(
+            "user-service-existing"));
+    }
+
+    [Theory]
+    [InlineData(
+        NyxIdUserServiceInventoryFailureKind.AuthenticationRejected,
+        StatusCodes.Status401Unauthorized,
+        "NYXID_CONNECTION_INVENTORY_AUTHENTICATION_REJECTED")]
+    [InlineData(
+        NyxIdUserServiceInventoryFailureKind.Forbidden,
+        StatusCodes.Status403Forbidden,
+        "NYXID_CONNECTION_INVENTORY_FORBIDDEN")]
+    [InlineData(
+        NyxIdUserServiceInventoryFailureKind.RateLimited,
+        StatusCodes.Status429TooManyRequests,
+        "NYXID_CONNECTION_INVENTORY_RATE_LIMITED")]
+    [InlineData(
+        NyxIdUserServiceInventoryFailureKind.ResponseInvalid,
+        StatusCodes.Status502BadGateway,
+        "NYXID_CONNECTION_INVENTORY_RESPONSE_INVALID")]
+    [InlineData(
+        NyxIdUserServiceInventoryFailureKind.Unavailable,
+        StatusCodes.Status503ServiceUnavailable,
+        "NYXID_CONNECTION_INVENTORY_UNAVAILABLE")]
+    public async Task ListExistingConnections_WhenInventoryFails_ShouldMapTypedHttpError(
+        NyxIdUserServiceInventoryFailureKind failureKind,
+        int expectedStatus,
+        string expectedCode)
+    {
+        var service = new RecordingWorkflowDeliveryService
+        {
+            ExistingConnectionsException = new NyxIdUserServiceInventoryException(
+                failureKind,
+                "NyxID inventory failed safely."),
+        };
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await WorkflowDeliveryEndpoints.ListExistingConnectionsAsync(
+            http,
+            CustomerScopeId,
+            DeliveryId,
+            "lark",
+            service,
+            CancellationToken.None);
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(expectedStatus);
+        body.RootElement.GetProperty("code").GetString().Should().Be(expectedCode);
+        body.RootElement.GetProperty("message").GetString().Should()
+            .Be("NyxID inventory failed safely.");
     }
 
     [Fact]
@@ -305,6 +468,28 @@ public sealed class WorkflowDeliveryEndpointsTests
         service.PublishedCaller.AuthenticatedOwner!.VerifiedBindingId.Should().Be("binding-kappa");
         service.PublishedCaller.AuthenticatedOwner.SubjectPlatform.Should().Be("nyxid");
         service.PublishedCaller.AuthenticatedOwner.SubjectTenant.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BindingRequired_ShouldDirectApiClientsBackToDeliveryLoginFinalization()
+    {
+        WorkflowDeliveryHttpErrorMapper.TryMap(
+                new StudioMemberAutomationAuthorizationBindingRequiredException(),
+                out var result)
+            .Should().BeTrue();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Response.Body = new MemoryStream();
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.RootElement.GetProperty("code").GetString().Should()
+            .Be("DELIVERY_AUTHORIZATION_BINDING_REQUIRED");
+        var message = body.RootElement.GetProperty("message").GetString();
+        message.Should().Contain("Delivery Center");
+        message.Should().NotContain("Aevatar console");
     }
 
     private static WorkflowDeliveryPublishRequest CreatePublishRequest() =>
@@ -395,14 +580,32 @@ public sealed class WorkflowDeliveryEndpointsTests
                 "refresh_accepted",
                 $"/api/scopes/{CustomerScopeId}/delivery-requests/{DeliveryId}/connections/lark");
 
+        public WorkflowDeliveryExistingConnectionListResponse ExistingConnectionsResponse { get; init; } =
+            new(
+                "lark",
+                [new WorkflowDeliveryExistingConnectionView(
+                    "user-service-existing",
+                    "api-lark-bot",
+                    "Existing Lark")]);
+
         public int InvocationCount { get; private set; }
         public int PublishCalls { get; private set; }
         public int GetConnectionCalls { get; private set; }
         public int RefreshConnectionCalls { get; private set; }
+        public int ExistingConnectionsCalls { get; private set; }
+        public int AttachExistingConnectionCalls { get; private set; }
         public string? PublishedDeliveryId { get; private set; }
         public string? PublishedScopeId { get; private set; }
         public WorkflowDeliveryCallerContext? PublishedCaller { get; private set; }
-        public Uri? ConnectLinkCallback { get; private set; }
+        public string? ConnectLinkBearer { get; private set; }
+        public string? ExistingConnectionsBearer { get; private set; }
+        public string? AttachedConnectionBearer { get; private set; }
+        public string? AttachedDeliveryId { get; private set; }
+        public string? AttachedScopeId { get; private set; }
+        public string? AttachedSlotKey { get; private set; }
+        public WorkflowDeliveryAttachConnectionRequest? AttachedRequest { get; private set; }
+        public WorkflowDeliveryException? ConnectLinkException { get; init; }
+        public NyxIdUserServiceInventoryException? ExistingConnectionsException { get; init; }
 
         public Task<WorkflowDeliveryPackageListResponse> ListPackagesAsync(
             string principalId,
@@ -457,11 +660,12 @@ public sealed class WorkflowDeliveryEndpointsTests
             string scopeId,
             string slotKey,
             string bearerToken,
-            Uri callbackUrl,
             CancellationToken ct = default)
         {
             InvocationCount++;
-            ConnectLinkCallback = callbackUrl;
+            ConnectLinkBearer = bearerToken;
+            if (ConnectLinkException != null)
+                return Task.FromException<WorkflowDeliveryConnectLinkResponse>(ConnectLinkException);
             return Task.FromResult(new WorkflowDeliveryConnectLinkResponse(
                 slotKey,
                 "pending",
@@ -478,6 +682,45 @@ public sealed class WorkflowDeliveryEndpointsTests
             InvocationCount++;
             GetConnectionCalls++;
             return Task.FromResult(ConnectStatusResponse);
+        }
+
+        public Task<WorkflowDeliveryExistingConnectionListResponse> ListExistingConnectionsAsync(
+            string deliveryId,
+            string scopeId,
+            string slotKey,
+            string bearerToken,
+            CancellationToken ct = default)
+        {
+            InvocationCount++;
+            ExistingConnectionsCalls++;
+            ExistingConnectionsBearer = bearerToken;
+            if (ExistingConnectionsException is not null)
+            {
+                return Task.FromException<WorkflowDeliveryExistingConnectionListResponse>(
+                    ExistingConnectionsException);
+            }
+            return Task.FromResult(ExistingConnectionsResponse);
+        }
+
+        public Task<WorkflowDeliveryAttachedConnectionResponse> AttachExistingConnectionAsync(
+            string deliveryId,
+            string scopeId,
+            string slotKey,
+            WorkflowDeliveryAttachConnectionRequest request,
+            string bearerToken,
+            CancellationToken ct = default)
+        {
+            InvocationCount++;
+            AttachExistingConnectionCalls++;
+            AttachedDeliveryId = deliveryId;
+            AttachedScopeId = scopeId;
+            AttachedSlotKey = slotKey;
+            AttachedRequest = request;
+            AttachedConnectionBearer = bearerToken;
+            return Task.FromResult(new WorkflowDeliveryAttachedConnectionResponse(
+                slotKey,
+                "completed",
+                request.UserServiceId));
         }
 
         public Task<WorkflowDeliveryConnectionRefreshAcceptedResponse> RefreshConnectStatusAsync(

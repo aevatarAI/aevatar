@@ -270,17 +270,16 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
             .WithMessage("*ConsoleWebBaseUrl*");
     }
 
-    // The production ConfigMap carries the console URLs. Adding that section is what makes
+    // The production ConfigMap carries the product-console URL. Adding that section is what makes
     // `Aevatar:Delivery` exist, which flips the allowlist from "absent, use shipped" to
     // "present, fail closed" — so the deployed config must opt in explicitly or every
     // package disappears.
     [Fact]
-    public void AddStudioHostingCore_WhenDeliverySectionCarriesOnlyConsoleUrls_ShouldExposeNoPackages()
+    public void AddStudioHostingCore_WhenDeliverySectionCarriesOnlyConsoleWebUrl_ShouldExposeNoPackages()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleBaseUrl"] = "https://api.example.com",
                 [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "https://console.example.com",
             })
             .Build();
@@ -291,13 +290,12 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddStudioHostingCore_WhenConsoleUrlsAreCombinedWithTheShippedOptIn_ShouldKeepBoth()
+    public void AddStudioHostingCore_WhenConsoleWebUrlIsCombinedWithTheShippedOptIn_ShouldKeepBoth()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
-                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleBaseUrl"] = "https://api.example.com",
                 [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "https://console.example.com",
             })
             .Build();
@@ -305,8 +303,25 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         var options = ResolveDeliveryOptions(configuration);
 
         options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
-        options.ConsoleBaseUrl.Should().Be("https://api.example.com");
         options.ConsoleWebBaseUrl.Should().Be("https://console.example.com");
+    }
+
+    [Fact]
+    public void MainnetDistributedDeliveryConfiguration_ShouldKeepTheShippedAllowlistWithConsoleWebUrl()
+    {
+        using var stream = File.OpenRead(Path.Combine(
+            Aevatar.Configuration.AevatarPaths.RepoRoot,
+            "src",
+            "Aevatar.Mainnet.Host.Api",
+            "appsettings.Distributed.json"));
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(stream)
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.AllowedWorkflowNames.Should().Equal(WorkflowDeliveryOptions.ShippedWorkflowNames);
+        options.ConsoleWebBaseUrl.Should().Be("https://aevatar-console.aevatar.ai");
     }
 
     private static IConfiguration DeliveryConfiguration(string key, string value) =>

@@ -31,8 +31,10 @@ public sealed class VoiceRealtimeOAuthStaticAssetTests
 
         html.Should().Contain("pending.resources");
         html.Should().Contain("token.oauth_resources = requestedResources");
-        html.Should().Contain("VOICE_TOKEN_KEY : TOKEN_KEY",
+        html.Should().Contain("localStorage.setItem(VOICE_TOKEN_KEY, JSON.stringify(token))",
             "feature authorization must not overwrite the baseline console token");
+        html.Should().Contain("localStorage.setItem(TOKEN_KEY, JSON.stringify(token))",
+            "ordinary finalized login must still update the baseline console token");
         html.Should().Contain("resourcesCover(tokenResponseResources(token), requestedResources)");
     }
 

@@ -24,7 +24,8 @@ public sealed record ServiceDeploymentSnapshot(
     string PrimaryActorId,
     string Status,
     DateTimeOffset? ActivatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string ArtifactHash = "");
 
 public sealed record ServiceDeploymentActivationFailureSnapshot(
     string RevisionId,

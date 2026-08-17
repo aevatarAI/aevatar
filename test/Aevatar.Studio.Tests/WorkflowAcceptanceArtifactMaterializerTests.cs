@@ -14,8 +14,10 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class WorkflowAcceptanceArtifactMaterializerTests
 {
+    private const string ContinuationClaimantId = "worker-alpha";
     private const string RunId = "run-alpha";
     private const string ScheduleId = "schedule-alpha";
+    private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-08-16T04:00:00Z");
 
     [Fact]
     public async Task MaterializeAsync_WhenCompletedRunHasNoArtifact_ShouldCreateDeterministicArtifact()
@@ -25,7 +27,7 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
         var output = AcceptanceOutput(delivery);
         context.Runs.Items = [Run(delivery, ServiceRunStatus.Completed, output)];
 
-        var result = await context.Materializer.MaterializeAsync(delivery);
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Pending);
         result.Code.Should().Be("acceptance_artifact_creation_accepted");
@@ -64,7 +66,7 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
         context.Artifacts.Current = Artifact(delivery, run, output);
         context.Artifacts.Content = Encoding.UTF8.GetBytes(output);
 
-        var result = await context.Materializer.MaterializeAsync(delivery);
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Pending);
         result.Code.Should().Be("acceptance_artifact_attachment_accepted");
@@ -108,7 +110,7 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
             },
         ];
 
-        var result = await context.Materializer.MaterializeAsync(delivery);
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Satisfied);
         result.Code.Should().Be("acceptance_artifact_attached");
@@ -124,7 +126,7 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
         var delivery = Delivery();
         context.Runs.Items = [Run(delivery, ServiceRunStatus.Accepted, string.Empty)];
 
-        var result = await context.Materializer.MaterializeAsync(delivery);
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Satisfied);
         result.Code.Should().Be("acceptance_run_not_completed");
@@ -146,7 +148,7 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
             },
         ];
 
-        var result = await context.Materializer.MaterializeAsync(delivery);
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Pending);
         result.Code.Should().Be("acceptance_run_pending");
@@ -175,7 +177,7 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
         var delivery = Delivery();
         context.Runs.Items = [Run(delivery, ServiceRunStatus.Completed, output)];
 
-        var result = await context.Materializer.MaterializeAsync(delivery);
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.TerminalFailure);
         result.Code.Should().Be(expectedCode);
@@ -194,7 +196,7 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
         context.Runs.Items = [run];
         context.Artifacts.Current = Artifact(delivery, run, output) with { Kind = "binary" };
 
-        var result = await context.Materializer.MaterializeAsync(delivery);
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.TerminalFailure);
         result.Code.Should().Be("acceptance_artifact_identity_conflict");
@@ -215,7 +217,7 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
             },
         ];
 
-        var result = await context.Materializer.MaterializeAsync(delivery);
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Pending);
         result.Code.Should().Be("acceptance_run_pending");
@@ -235,11 +237,49 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
         context.Artifacts.Content = Encoding.UTF8.GetBytes(output);
         context.Service.AttachmentFailure = new InvalidOperationException("Run CAS changed.");
 
-        var result = await context.Materializer.MaterializeAsync(delivery);
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Pending);
         result.Code.Should().Be("acceptance_run_projection_changed");
         context.Service.Attachments.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_WhenContinuationClaimBelongsToAnotherWorker_ShouldHaveNoSideEffects()
+    {
+        var context = new TestContext();
+        var delivery = Delivery();
+        context.Runs.Items = [Run(delivery, ServiceRunStatus.Completed, AcceptanceOutput(delivery))];
+
+        var result = await context.Materializer.MaterializeAsync(delivery, "worker-beta");
+
+        result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Pending);
+        result.Code.Should().Be("continuation_claim_pending");
+        context.Runs.Queries.Should().BeEmpty();
+        context.Artifacts.DedupQueries.Should().BeEmpty();
+        context.Service.Creates.Should().BeEmpty();
+        context.Service.Attachments.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_WhenDeliveryWasRevokedAfterOwnedClaim_ShouldFinishClaimedContinuation()
+    {
+        var context = new TestContext();
+        var delivery = Delivery() with
+        {
+            LifecycleStatus = WorkflowDeliveryLifecycleStatus.Revoked,
+            RevokedBy = "admin-alpha",
+            RevokedAtUtc = Now,
+        };
+        context.Runs.Items = [Run(delivery, ServiceRunStatus.Completed, AcceptanceOutput(delivery))];
+
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
+
+        result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Pending);
+        result.Code.Should().Be("acceptance_artifact_creation_accepted");
+        context.Runs.Queries.Should().ContainSingle();
+        context.Service.Creates.Should().ContainSingle();
+        context.Service.Attachments.Should().BeEmpty();
     }
 
     private static WorkflowDeliverySnapshot Delivery() => ScheduledDelivery();
@@ -380,8 +420,17 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
 
         public TestContext()
         {
-            Materializer = new WorkflowAcceptanceArtifactMaterializer(Runs, Artifacts, Service);
+            Materializer = new WorkflowAcceptanceArtifactMaterializer(
+                Runs,
+                Artifacts,
+                Service,
+                new FixedTimeProvider(Now));
         }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     private sealed class RecordingRunQueryPort : IServiceRunQueryPort

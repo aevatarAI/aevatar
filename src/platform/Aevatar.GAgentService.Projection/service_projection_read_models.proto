@@ -116,6 +116,7 @@ message ServiceDeploymentReadModel {
   string status = 4;
   google.protobuf.Timestamp activated_at_utc_value = 5;
   google.protobuf.Timestamp updated_at_utc_value = 6;
+  string artifact_hash = 7;
 }
 
 message ServiceDeploymentActivationFailureReadModel {

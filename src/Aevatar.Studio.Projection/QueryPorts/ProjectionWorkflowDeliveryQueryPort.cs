@@ -115,7 +115,7 @@ public sealed class ProjectionWorkflowDeliveryQueryPort : IWorkflowDeliveryQuery
         if (targetScopeId != null)
             filters.Add(Equal("target_scope_id", targetScopeId));
         if (installationStatus != null)
-            filters.Add(Equal("installation.status", MapInstallationStatusStorageValue(installationStatus.Value)));
+            filters.Add(Equal("installation.status.keyword", MapInstallationStatusStorageValue(installationStatus.Value)));
         var pageSize = query.PageSize is > 0 and <= MaxPageSize
             ? query.PageSize.Value
             : MaxPageSize;
@@ -304,8 +304,24 @@ public sealed class ProjectionWorkflowDeliveryQueryPort : IWorkflowDeliveryQuery
             MapReadinessEvidence(value.ReadinessEvidence),
             value.Attempt,
             RequiredDateTime(value.CreatedAtUtc, "installation.created_at_utc"),
-            RequiredDateTime(value.UpdatedAtUtc, "installation.updated_at_utc"));
+            RequiredDateTime(value.UpdatedAtUtc, "installation.updated_at_utc"))
+        {
+            ContinuationClaim = MapContinuationClaim(value.ContinuationClaim),
+        };
     }
+
+    private static WorkflowInstallationContinuationClaimSnapshot? MapContinuationClaim(
+        WorkflowInstallationContinuationClaim? value) =>
+        value == null
+            ? null
+            : new WorkflowInstallationContinuationClaimSnapshot(
+                NormalizeRequired(value.ClaimId, "projected continuation claim_id"),
+                NormalizeRequired(value.ClaimantId, "projected continuation claimant_id"),
+                MapInstallationStatus(value.ExpectedStatus),
+                value.Attempt,
+                NormalizeRequired(value.OperationId, "projected continuation operation_id"),
+                RequiredDateTime(value.ClaimedAtUtc, "continuation.claimed_at_utc"),
+                RequiredDateTime(value.ExpiresAtUtc, "continuation.expires_at_utc"));
 
     private static ApplicationInstallationReadinessEvidence? MapReadinessEvidence(
         Aevatar.GAgents.WorkflowDelivery.WorkflowInstallationReadinessEvidence? value)

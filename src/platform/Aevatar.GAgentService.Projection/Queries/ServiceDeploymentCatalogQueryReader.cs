@@ -41,7 +41,8 @@ public sealed class ServiceDeploymentCatalogQueryReader : IServiceDeploymentCata
                     x.PrimaryActorId,
                     x.Status,
                     x.ActivatedAt,
-                    x.UpdatedAt))
+                    x.UpdatedAt,
+                    x.ArtifactHash))
                 .ToList(),
             readModel.ActivationFailures
                 .OrderByDescending(x => x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch)

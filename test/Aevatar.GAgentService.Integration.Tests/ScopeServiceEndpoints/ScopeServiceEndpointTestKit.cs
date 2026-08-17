@@ -691,15 +691,7 @@ public abstract class ScopeServiceEndpointTestKit
     {
         public RetireServiceRevisionCommand? RetireRevisionCommand { get; private set; }
 
-        public SetDefaultServingRevisionCommand? SetDefaultServingCommand { get; private set; }
-
         public ActivateServiceRevisionCommand? ActivateRevisionCommand { get; private set; }
-
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
-        {
-            SetDefaultServingCommand = command;
-            return Task.FromResult(new ServiceCommandAcceptedReceipt("service-actor", "cmd-default-serving", "corr-default-serving"));
-        }
 
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {

@@ -22,6 +22,7 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
     private const string InstallationId = "installation-alpha";
     private const string ScheduleId = "schedule-alpha";
     private const string WorkflowName = "workflow-alpha";
+    private const string ContinuationClaimantId = "worker-alpha";
     private const string AcceptanceOutput =
         "{\"workflow\":\"workflow-alpha\",\"mode\":\"preview\",\"side_effects\":false}";
 
@@ -30,12 +31,78 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
     private static string Digest => AcceptanceOutputValidation().ContentHash!;
 
     [Fact]
+    public async Task ReconcileAsync_WithoutActorOwnedContinuationClaim_ShouldNotReadOrMutateDownstreamState()
+    {
+        var context = new TestContext();
+        var delivery = Delivery();
+        delivery = delivery with
+        {
+            Installation = delivery.Installation! with { ContinuationClaim = null },
+        };
+
+        var result = await context.Reconciler.ReconcileAsync(delivery, ContinuationClaimantId);
+
+        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
+        result.Code.Should().Be("continuation_claim_pending");
+        context.Commands.Ready.Should().BeEmpty();
+        context.Member.EndpointContractQueries.Should().BeEmpty();
+        context.Runs.Queries.Should().BeEmpty();
+        context.Artifacts.Gets.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_WhenClaimBelongsToAnotherWorker_ShouldNotReadOrMutateDownstreamState()
+    {
+        var context = new TestContext();
+
+        var result = await context.Reconciler.ReconcileAsync(Delivery(), "worker-beta");
+
+        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
+        result.Code.Should().Be("continuation_claim_pending");
+        context.Member.EndpointContractQueries.Should().BeEmpty();
+        context.Automations.GetQueries.Should().BeEmpty();
+        context.Automations.ListQueries.Should().BeEmpty();
+        context.Runs.Queries.Should().BeEmpty();
+        context.Artifacts.Gets.Should().BeEmpty();
+        context.Commands.ProvisioningAccepted.Should().BeEmpty();
+        context.Commands.Ready.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_WhenOwnedClaimPrecededRevocationAndClockRollback_ShouldFinishWithinLease()
+    {
+        var context = new TestContext();
+        context.Runs.Items = [SuccessfulRun()];
+        var delivery = AcceptanceDelivery();
+        delivery = delivery with
+        {
+            LifecycleStatus = WorkflowDeliveryLifecycleStatus.Revoked,
+            RevokedBy = "admin-alpha",
+            RevokedAtUtc = DateTimeOffset.Parse("2026-08-16T01:10:00Z"),
+            Installation = delivery.Installation! with
+            {
+                ContinuationClaim = delivery.Installation.ContinuationClaim! with
+                {
+                    ClaimedAtUtc = DateTimeOffset.Parse("2026-08-16T01:11:00Z"),
+                },
+            },
+        };
+
+        var result = await context.Reconciler.ReconcileAsync(
+            delivery,
+            ContinuationClaimantId);
+
+        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Ready);
+        context.Commands.Ready.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ReconcileAsync_WhenPublishedServiceIdentityDiffers_ShouldReturnTerminalFailure()
     {
         var context = new TestContext();
         context.Member.Contract = EndpointContract(publishedServiceId: "svc-other");
 
-        var result = await context.Reconciler.ReconcileAsync(Delivery());
+        var result = await context.Reconciler.ReconcileAsync(Delivery(), ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
         result.Code.Should().Be("published_service_identity_mismatch");
@@ -49,7 +116,7 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         var context = new TestContext();
         context.Member.Contract = EndpointContract(revisionId: "rev-other");
 
-        var result = await context.Reconciler.ReconcileAsync(Delivery());
+        var result = await context.Reconciler.ReconcileAsync(Delivery(), ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("bound_revision_pending");
@@ -64,7 +131,8 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         context.Automations.GetResult = Automation(targetRevisionId: "rev-other");
 
         var result = await context.Reconciler.ReconcileAsync(
-            Delivery(WorkflowDeliveryTriggerKind.OneShot, scheduleId: ScheduleId));
+            Delivery(WorkflowDeliveryTriggerKind.OneShot, scheduleId: ScheduleId),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
         result.Code.Should().Be("schedule_target_mismatch");
@@ -78,7 +146,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         var context = new TestContext();
         context.Runs.Items = [Run(ServiceRunStatus.Accepted)];
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("acceptance_artifact_pending");
@@ -96,7 +166,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         var context = new TestContext();
         context.Runs.Items = [Run(status)];
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
         result.Code.Should().Be(expectedCode);
@@ -124,7 +196,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             },
         ];
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("acceptance_artifact_pending");
@@ -138,7 +212,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         context.Runs.Items = [SuccessfulRun()];
         context.Artifacts.Current = null;
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("acceptance_artifact_projection_pending");
@@ -156,7 +232,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             LifecycleStatus = ContentArtifactLifecycleStatusNames.Tombstoned,
         };
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
         result.Code.Should().Be("acceptance_artifact_tombstoned");
@@ -170,7 +248,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         context.Runs.Items = [SuccessfulRun()];
         context.Artifacts.Current = ArtifactCurrent() with { Revisions = [] };
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("acceptance_artifact_revision_pending");
@@ -191,7 +271,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             Revisions = [ArtifactRevision(contentHash, mediaType)],
         };
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
         result.Code.Should().Be("acceptance_artifact_integrity_mismatch");
@@ -211,7 +293,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             Revisions = [ArtifactRevision() with { Availability = availability }],
         };
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
         result.Code.Should().Be("acceptance_artifact_revision_unavailable");
@@ -224,7 +308,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         var context = new TestContext();
         context.Runs.Items = [SuccessfulRun()];
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Ready);
         result.Code.Should().Be("readiness_recording_accepted");
@@ -232,6 +318,8 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         var ready = context.Commands.Ready.Single();
         ready.Attempt.Should().Be(1);
         ready.OperationId.Should().Be(InstallationId);
+        ready.ContinuationClaimId.Should().Be("claim-readiness-a1");
+        ready.ContinuationClaimantId.Should().Be("worker-alpha");
         var evidence = ready.Evidence;
         evidence.PublishedService.Should().Be(new WorkflowPublishedServiceReadinessEvidence(
             ServiceId,
@@ -276,7 +364,8 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         context.Runs.Items = [SuccessfulRun(scheduleId: ScheduleId)];
 
         var result = await context.Reconciler.ReconcileAsync(
-            Delivery(WorkflowDeliveryTriggerKind.OneShot));
+            Delivery(WorkflowDeliveryTriggerKind.OneShot),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("schedule_identity_enrichment_accepted");
@@ -285,6 +374,38 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         enrichment.ScheduleId.Should().Be(ScheduleId);
         enrichment.Attempt.Should().Be(1);
         enrichment.OperationId.Should().Be(InstallationId);
+        enrichment.ContinuationClaimId.Should().Be("claim-readiness-a1");
+        enrichment.ContinuationClaimantId.Should().Be("worker-alpha");
+        context.Commands.Ready.Should().BeEmpty();
+        context.Runs.Queries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_WhenMatchingScheduleProvisioningFailed_ShouldReturnTypedTerminalFailure()
+    {
+        var context = new TestContext();
+        context.Automations.ListResult = [];
+        context.Member.Detail = MemberDetail(new StudioMemberWorkflowScheduleProvisioningStatusResponse(
+            "schedule-provisioning-alpha",
+            StudioWorkflowScheduleProvisioningStatusNames.Failed,
+            RevisionId,
+            ScheduleId: null,
+            OperationId: null,
+            AttemptCount: 1,
+            StateVersion: 23,
+            FailureCode: "NyxIdOperationAuthorityContractUnavailable",
+            FailureMessage: "nyxid_operation_authority_contract_unavailable",
+            UpdatedAt: DateTimeOffset.Parse("2026-08-16T01:07:00Z")));
+
+        var result = await context.Reconciler.ReconcileAsync(
+            Delivery(WorkflowDeliveryTriggerKind.OneShot),
+            ContinuationClaimantId);
+
+        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
+        result.Code.Should().Be("NyxIdOperationAuthorityContractUnavailable");
+        result.Message.Should().Be("nyxid_operation_authority_contract_unavailable");
+        context.Member.DetailQueries.Should().ContainSingle().Which.Should().Be((ScopeId, MemberId));
+        context.Commands.ProvisioningAccepted.Should().BeEmpty();
         context.Commands.Ready.Should().BeEmpty();
         context.Runs.Queries.Should().BeEmpty();
     }
@@ -297,7 +418,8 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         context.Runs.Items = [SuccessfulRun(scheduleId: "schedule-other")];
 
         var result = await context.Reconciler.ReconcileAsync(
-            Delivery(WorkflowDeliveryTriggerKind.OneShot, scheduleId: ScheduleId));
+            Delivery(WorkflowDeliveryTriggerKind.OneShot, scheduleId: ScheduleId),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("acceptance_run_pending");
@@ -312,7 +434,8 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         context.Runs.Items = [SuccessfulRun(scheduleId: ScheduleId)];
 
         var result = await context.Reconciler.ReconcileAsync(
-            Delivery(WorkflowDeliveryTriggerKind.OneShot, scheduleId: ScheduleId));
+            Delivery(WorkflowDeliveryTriggerKind.OneShot, scheduleId: ScheduleId),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Ready);
         context.Commands.Ready.Should().ContainSingle();
@@ -338,7 +461,8 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         ];
 
         var result = await context.Reconciler.ReconcileAsync(
-            Delivery(WorkflowDeliveryTriggerKind.OneShot, scheduleId: ScheduleId));
+            Delivery(WorkflowDeliveryTriggerKind.OneShot, scheduleId: ScheduleId),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("acceptance_run_pending");
@@ -361,7 +485,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             ],
         };
 
-        var result = await context.Reconciler.ReconcileAsync(AcceptanceDelivery());
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
         result.Code.Should().Be("acceptance_artifact_provenance_mismatch");
@@ -377,7 +503,7 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             SuccessfulRun(scheduleId: string.Empty) with { ScheduleOperationId = string.Empty },
         ];
 
-        var result = await context.Reconciler.ReconcileAsync(Delivery());
+        var result = await context.Reconciler.ReconcileAsync(Delivery(), ContinuationClaimantId);
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("acceptance_run_pending");
@@ -445,7 +571,17 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             ReadinessEvidence: null,
             Attempt: 1,
             now,
-            now);
+            now)
+        {
+            ContinuationClaim = new WorkflowInstallationContinuationClaimSnapshot(
+                "claim-readiness-a1",
+                ContinuationClaimantId,
+                WorkflowInstallationStatus.ProvisioningAccepted,
+                1,
+                InstallationId,
+                now.AddMinutes(9),
+                now.AddMinutes(12)),
+        };
         return new WorkflowDeliverySnapshot(
             "delivery-alpha",
             new WorkflowDeliveryPackageSnapshot(
@@ -516,6 +652,26 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         {
             PublishedServiceStateVersion = 11,
             BoundRevisionStateVersion = 12,
+        };
+
+    private static StudioMemberDetailResponse MemberDetail(
+        StudioMemberWorkflowScheduleProvisioningStatusResponse? scheduleProvisioning = null) =>
+        new(
+            new StudioMemberSummaryResponse(
+                MemberId,
+                ScopeId,
+                "Workflow Alpha",
+                "Description",
+                "workflow",
+                "bind_ready",
+                ServiceId,
+                RevisionId,
+                DateTimeOffset.Parse("2026-08-16T01:00:00Z"),
+                DateTimeOffset.Parse("2026-08-16T01:07:00Z")),
+            ImplementationRef: null,
+            LastBinding: null)
+        {
+            ScheduleProvisioning = scheduleProvisioning,
         };
 
     private static StudioMemberAutomationView Automation(string targetRevisionId = RevisionId) =>
@@ -667,12 +823,19 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
     private sealed class StubMemberService : IStudioMemberService
     {
         public StudioMemberEndpointContractResponse? Contract { get; set; }
+        public StudioMemberDetailResponse Detail { get; set; } = MemberDetail();
+        public List<(string ScopeId, string MemberId, string EndpointId)> EndpointContractQueries { get; } = [];
+        public List<(string ScopeId, string MemberId)> DetailQueries { get; } = [];
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
             string scopeId,
             string memberId,
             string endpointId,
-            CancellationToken ct = default) => Task.FromResult(Contract);
+            CancellationToken ct = default)
+        {
+            EndpointContractQueries.Add((scopeId, memberId, endpointId));
+            return Task.FromResult(Contract);
+        }
 
         public Task<StudioMemberSummaryResponse> CreateAsync(
             string scopeId,
@@ -687,7 +850,11 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         public Task<StudioMemberDetailResponse> GetAsync(
             string scopeId,
             string memberId,
-            CancellationToken ct = default) => throw new NotSupportedException();
+            CancellationToken ct = default)
+        {
+            DetailQueries.Add((scopeId, memberId));
+            return Task.FromResult(Detail);
+        }
 
         public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId,
@@ -734,6 +901,8 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
     {
         public StudioMemberAutomationView? GetResult { get; set; }
         public IReadOnlyList<StudioMemberAutomationView> ListResult { get; set; } = [];
+        public List<(string ScopeId, string TeamId, string? MemberId)> ListQueries { get; } = [];
+        public List<(string ScopeId, string TeamId, string MemberId, string ScheduleId)> GetQueries { get; } = [];
 
         public Task<StudioMemberAutomationListResponse> ListAsync(
             string scopeId,
@@ -742,15 +911,22 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             int take = 50,
             string? cursor = null,
             bool includeTotalCount = false,
-            CancellationToken ct = default) =>
-            Task.FromResult(new StudioMemberAutomationListResponse(ListResult, null, null));
+            CancellationToken ct = default)
+        {
+            ListQueries.Add((scopeId, teamId, memberId));
+            return Task.FromResult(new StudioMemberAutomationListResponse(ListResult, null, null));
+        }
 
         public Task<StudioMemberAutomationView?> GetAsync(
             string scopeId,
             string teamId,
             string memberId,
             string scheduleId,
-            CancellationToken ct = default) => Task.FromResult(GetResult);
+            CancellationToken ct = default)
+        {
+            GetQueries.Add((scopeId, teamId, memberId, scheduleId));
+            return Task.FromResult(GetResult);
+        }
     }
 
     private sealed class StubServiceRunQueryPort : IServiceRunQueryPort
@@ -861,12 +1037,20 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             UpdateWorkflowDeliveryConnectionMutation mutation,
             CancellationToken ct = default) => throw new NotSupportedException();
 
+        public Task<WorkflowDeliveryCommandReceipt> AttachConnectionAsync(
+            AttachWorkflowDeliveryConnectionMutation mutation,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
         public Task<WorkflowDeliveryCommandReceipt> StartInstallationAsync(
             StartWorkflowInstallationMutation mutation,
             CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task<WorkflowDeliveryCommandReceipt> RetryInstallationAsync(
             RetryWorkflowInstallationMutation mutation,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<WorkflowDeliveryCommandReceipt> ClaimInstallationContinuationAsync(
+            ClaimWorkflowInstallationContinuationMutation mutation,
             CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task<WorkflowDeliveryCommandReceipt> RecordInstallationFailedAsync(

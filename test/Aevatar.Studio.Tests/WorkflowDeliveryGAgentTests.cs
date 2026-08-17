@@ -102,6 +102,162 @@ public sealed class WorkflowDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task StartInstallation_WhenConnectionChangedAfterProjectionRead_ShouldRejectStaleReference()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        await agent.HandleBeginConnectionAsync(BeginConnectionCommand("link-a"));
+        await agent.HandleUpdateConnectionAsync(UpdateConnectionCommand(
+            "link-a",
+            WorkflowDeliveryConnectionStatus.Completed,
+            "user-service-a"));
+        await agent.HandleBeginConnectionAsync(BeginConnectionCommand("link-b"));
+        var start = StartInstallationCommand();
+        start.ConnectionReferences.Add("lark", "user-service-a");
+
+        var action = () => agent.HandleStartInstallationAsync(start);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection references do not match completed delivery connections*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(4);
+        agent.State.Installation.Should().BeNull();
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].LinkId.Should().Be("link-b");
+        agent.State.Connections[0].Status.Should().Be(WorkflowDeliveryConnectionStatus.Pending);
+    }
+
+    [Fact]
+    public async Task AttachConnection_ShouldCommitCompletedConnectionWithoutFabricatingLinkIdentity()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+
+        await agent.HandleAttachConnectionAsync(AttachConnectionCommand("user-service-a"));
+
+        agent.EventSourcing!.CurrentVersion.Should().Be(2);
+        agent.State.Connections.Should().ContainSingle();
+        var connection = agent.State.Connections[0];
+        connection.SlotKey.Should().Be("lark");
+        connection.ServiceSlug.Should().Be("api-lark");
+        connection.Status.Should().Be(WorkflowDeliveryConnectionStatus.Completed);
+        connection.UserServiceId.Should().Be("user-service-a");
+        connection.LinkId.Should().BeEmpty();
+        connection.UpdatedAtUtc.Should().Be(AttachConnectionCommand("user-service-a").AttachedAtUtc);
+    }
+
+    [Fact]
+    public async Task AttachConnection_WhenConnectLinkIsPending_ShouldRejectWithoutChangingConnection()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        await agent.HandleBeginConnectionAsync(BeginConnectionCommand("link-a"));
+
+        var action = () => agent.HandleAttachConnectionAsync(AttachConnectionCommand("user-service-a"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection link is already pending*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(2);
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].LinkId.Should().Be("link-a");
+        agent.State.Connections[0].Status.Should().Be(WorkflowDeliveryConnectionStatus.Pending);
+    }
+
+    [Fact]
+    public async Task AttachConnection_AfterInstallation_ShouldAllowExactReplayAndRejectReplacement()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        var attached = AttachConnectionCommand("user-service-a");
+        await agent.HandleAttachConnectionAsync(attached);
+        var start = StartInstallationCommand();
+        start.ConnectionReferences.Add("lark", "user-service-a");
+        await agent.HandleStartInstallationAsync(start);
+
+        var exactReplay = attached.Clone();
+        exactReplay.ExpectedStateVersion = 0;
+        await agent.HandleAttachConnectionAsync(exactReplay);
+        var replace = () => agent.HandleAttachConnectionAsync(AttachConnectionCommand("user-service-b"));
+
+        await replace.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connections cannot be changed after installation has started*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(3);
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].UserServiceId.Should().Be("user-service-a");
+        agent.State.Installation.ConnectionReferences.Should().ContainSingle()
+            .Which.Should().Be(new KeyValuePair<string, string>("lark", "user-service-a"));
+    }
+
+    [Fact]
+    public async Task AttachConnection_WhenExpectedStateVersionIsStale_ShouldRejectReplacement()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        await agent.HandleAttachConnectionAsync(AttachConnectionCommand("user-service-a"));
+
+        var replace = () => agent.HandleAttachConnectionAsync(
+            AttachConnectionCommand("user-service-b", expectedStateVersion: 1));
+
+        await replace.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(
+                "workflow delivery attach expected_state_version 1 does not match committed state version 2.");
+        agent.EventSourcing!.CurrentVersion.Should().Be(2);
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].UserServiceId.Should().Be("user-service-a");
+    }
+
+    [Fact]
+    public async Task AttachConnection_WhenExpectedStateVersionIsNotPositive_ShouldRejectMutation()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+
+        var attach = () => agent.HandleAttachConnectionAsync(
+            AttachConnectionCommand("user-service-a", expectedStateVersion: 0));
+
+        await attach.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("workflow delivery attach expected_state_version must be positive.");
+        agent.EventSourcing!.CurrentVersion.Should().Be(1);
+        agent.State.Connections.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Connections_AfterInstallation_ShouldAllowExactReplayAndRejectMutation()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommandWithConnectionSlot());
+        var begin = BeginConnectionCommand("link-a");
+        var completed = UpdateConnectionCommand(
+            "link-a",
+            WorkflowDeliveryConnectionStatus.Completed,
+            "user-service-a");
+        await agent.HandleBeginConnectionAsync(begin);
+        await agent.HandleUpdateConnectionAsync(completed);
+        var start = StartInstallationCommand();
+        start.ConnectionReferences.Add("lark", "user-service-a");
+        await agent.HandleStartInstallationAsync(start);
+
+        await agent.HandleBeginConnectionAsync(begin.Clone());
+        await agent.HandleUpdateConnectionAsync(completed.Clone());
+        var replaceLink = () => agent.HandleBeginConnectionAsync(BeginConnectionCommand("link-b"));
+        var replaceReference = () => agent.HandleUpdateConnectionAsync(UpdateConnectionCommand(
+            "link-a",
+            WorkflowDeliveryConnectionStatus.Completed,
+            "user-service-b"));
+
+        await replaceLink.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connections cannot be changed after installation has started*");
+        await replaceReference.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connections cannot be changed after installation has started*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(4);
+        agent.State.Connections.Should().ContainSingle();
+        agent.State.Connections[0].LinkId.Should().Be("link-a");
+        agent.State.Connections[0].Status.Should().Be(WorkflowDeliveryConnectionStatus.Completed);
+        agent.State.Connections[0].UserServiceId.Should().Be("user-service-a");
+        agent.State.Installation.ConnectionReferences.Should().ContainSingle()
+            .Which.Should().Be(new KeyValuePair<string, string>("lark", "user-service-a"));
+    }
+
+    [Fact]
     public async Task ScheduledInstallation_WhenOwnerIsNyxIdNative_ShouldAllowEmptySubjectTenant()
     {
         var agent = await CreateAgentAsync("delivery-alpha");
@@ -179,11 +335,169 @@ public sealed class WorkflowDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task ContinuationClaim_ShouldRemainWithFirstClaimantUntilItsActorOwnedLeaseExpires()
+    {
+        var clock = new MutableTimeProvider(CreatedAt.AddMinutes(2));
+        var agent = await CreateAgentAsync("delivery-alpha", clock);
+        await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        var first = ContinuationClaimCommand(WorkflowInstallationStatus.Accepted);
+
+        await agent.HandleClaimInstallationContinuationAsync(first);
+        var competing = first.Clone();
+        competing.ClaimId = "claim-competing";
+        competing.ClaimantId = "worker-beta";
+        await agent.HandleClaimInstallationContinuationAsync(competing);
+
+        agent.EventSourcing!.CurrentVersion.Should().Be(3);
+        agent.State.Installation.ContinuationClaim.ClaimantId.Should().Be("worker-alpha");
+        agent.State.Installation.ContinuationClaim.ClaimedAtUtc.ToDateTimeOffset()
+            .Should().Be(clock.GetUtcNow());
+        agent.State.Installation.ContinuationClaim.ExpiresAtUtc.ToDateTimeOffset()
+            .Should().Be(clock.GetUtcNow().AddMinutes(5));
+
+        clock.SetUtcNow(clock.GetUtcNow().AddMinutes(5));
+        await agent.HandleClaimInstallationContinuationAsync(competing);
+
+        agent.EventSourcing.CurrentVersion.Should().Be(4);
+        agent.State.Installation.ContinuationClaim.ClaimId.Should().Be("claim-competing");
+        agent.State.Installation.ContinuationClaim.ClaimantId.Should().Be("worker-beta");
+        agent.State.Installation.ContinuationClaim.ClaimedAtUtc.ToDateTimeOffset()
+            .Should().Be(clock.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task ContinuationClaim_WhenDeliveryWasRevoked_ShouldFailClosedAndNearExpiryShouldCapLease()
+    {
+        var revoked = await CreateAgentAsync("delivery-alpha");
+        await revoked.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await revoked.HandleStartInstallationAsync(StartInstallationCommand());
+        await revoked.HandleRevokeAsync(new RevokeWorkflowDeliveryCommand
+        {
+            DeliveryId = "delivery-alpha",
+            RevokedBy = "admin-alpha",
+            RevokedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(2)),
+        });
+
+        var claimRevoked = () => revoked.HandleClaimInstallationContinuationAsync(
+            ContinuationClaimCommand(WorkflowInstallationStatus.Accepted));
+        await claimRevoked.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not active*");
+        revoked.State.Installation.ContinuationClaim.Should().BeNull();
+
+        var nearExpiry = CreatedAt.AddHours(4).AddMinutes(-2);
+        var expiring = await CreateAgentAsync(
+            "delivery-alpha",
+            new MutableTimeProvider(nearExpiry));
+        await expiring.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await expiring.HandleStartInstallationAsync(StartInstallationCommand());
+        var outlivingClaim = ContinuationClaimCommand(WorkflowInstallationStatus.Accepted);
+
+        await expiring.HandleClaimInstallationContinuationAsync(outlivingClaim);
+
+        expiring.State.Installation.ContinuationClaim.ClaimedAtUtc.ToDateTimeOffset()
+            .Should().Be(nearExpiry);
+        expiring.State.Installation.ContinuationClaim.ExpiresAtUtc
+            .Should().Be(expiring.State.ExpiresAtUtc);
+    }
+
+    [Fact]
+    public async Task ContinuationClaim_AfterActorClockRollback_ShouldRemainExclusiveAndAcceptOwnedOutcome()
+    {
+        var clock = new MutableTimeProvider(CreatedAt.AddMinutes(3));
+        var agent = await CreateAgentAsync("delivery-alpha", clock);
+        await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        await agent.HandleClaimInstallationContinuationAsync(
+            ContinuationClaimCommand(WorkflowInstallationStatus.Accepted));
+        clock.SetUtcNow(CreatedAt.AddMinutes(2));
+        var replacement = ContinuationClaimCommand(
+            WorkflowInstallationStatus.Accepted,
+            claimantId: "worker-beta");
+        replacement.ClaimId = "claim-replacement";
+
+        await agent.HandleClaimInstallationContinuationAsync(replacement);
+
+        agent.EventSourcing!.CurrentVersion.Should().Be(3);
+        agent.State.Installation.ContinuationClaim.ClaimId.Should().Be("claim-accepted-a1");
+        agent.State.Installation.ContinuationClaim.ClaimedAtUtc.ToDateTimeOffset()
+            .Should().Be(CreatedAt.AddMinutes(3));
+
+        await agent.HandleProvisioningAcceptedAsync(ProvisioningAcceptedCommand());
+
+        agent.EventSourcing.CurrentVersion.Should().Be(4);
+        agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.ProvisioningAccepted);
+    }
+
+    [Fact]
+    public async Task ProvisioningOutcome_AfterActorOwnedLeaseExpiry_ShouldRejectBackdatedOutcome()
+    {
+        var clock = new MutableTimeProvider(CreatedAt.AddMinutes(2));
+        var agent = await CreateAgentAsync("delivery-alpha", clock);
+        await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        await agent.HandleClaimInstallationContinuationAsync(
+            ContinuationClaimCommand(
+                WorkflowInstallationStatus.Accepted,
+                requestedDuration: TimeSpan.FromMinutes(2)));
+        clock.SetUtcNow(CreatedAt.AddMinutes(4));
+        var outcome = ProvisioningAcceptedCommand();
+        outcome.AcceptedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(3));
+
+        var record = () => agent.HandleProvisioningAcceptedAsync(outcome);
+
+        await record.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not active*");
+        agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Accepted);
+    }
+
+    [Fact]
+    public async Task Revoke_AfterContinuationClaim_ShouldNotRetroactivelyInvalidateTheClaimedOperation()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.Accepted);
+        await agent.HandleRevokeAsync(new RevokeWorkflowDeliveryCommand
+        {
+            DeliveryId = "delivery-alpha",
+            RevokedBy = "admin-alpha",
+            RevokedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(2).AddSeconds(30)),
+        });
+
+        await agent.HandleProvisioningAcceptedAsync(ProvisioningAcceptedCommand());
+
+        agent.EventSourcing!.CurrentVersion.Should().Be(5);
+        agent.State.LifecycleStatus.Should().Be(WorkflowDeliveryLifecycleStatus.Revoked);
+        agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.ProvisioningAccepted);
+        agent.State.Installation.ContinuationClaim.ClaimId.Should().Be("claim-accepted-a1");
+    }
+
+    [Fact]
+    public async Task ProvisioningOutcome_WithoutMatchingContinuationClaim_ShouldNotAdvanceInstallation()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.Accepted);
+        var wrongOwner = ProvisioningAcceptedCommand();
+        wrongOwner.ContinuationClaimantId = "worker-beta";
+
+        var record = () => agent.HandleProvisioningAcceptedAsync(wrongOwner);
+
+        await record.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*does not own*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(3);
+        agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Accepted);
+    }
+
+    [Fact]
     public async Task ProvisioningOutcome_ShouldFenceStaleAttemptsAndPersistTerminalFailureForActiveAttempt()
     {
         var agent = await CreateAgentAsync("delivery-alpha");
         await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
         await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.Accepted);
         await agent.HandleInstallationFailedAsync(FailedCommand(1, "installation-alpha:provision:a1"));
         await agent.HandleRetryInstallationAsync(new RetryWorkflowInstallationCommand
         {
@@ -193,9 +507,19 @@ public sealed class WorkflowDeliveryGAgentTests
             OperationId = "installation-alpha:provision:a2",
             RequestedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(4)),
         });
+        await ClaimContinuationAsync(
+            agent,
+            WorkflowInstallationStatus.Accepted,
+            2,
+            "installation-alpha:provision:a2");
         await agent.HandleProvisioningAcceptedAsync(ProvisioningAcceptedCommand(
             attempt: 2,
             operationId: "installation-alpha:provision:a2"));
+        await ClaimContinuationAsync(
+            agent,
+            WorkflowInstallationStatus.ProvisioningAccepted,
+            2,
+            "installation-alpha:provision:a2");
 
         await agent.HandleInstallationFailedAsync(FailedCommand(1, "installation-alpha:provision:a1"));
         await agent.HandleInstallationFailedAsync(FailedCommand(
@@ -203,7 +527,7 @@ public sealed class WorkflowDeliveryGAgentTests
             "installation-alpha:provision:a2",
             WorkflowInstallationStatus.ProvisioningAccepted));
 
-        agent.EventSourcing!.CurrentVersion.Should().Be(6);
+        agent.EventSourcing!.CurrentVersion.Should().Be(9);
         agent.State.Installation.Attempt.Should().Be(2);
         agent.State.Installation.OperationId.Should().Be("installation-alpha:provision:a2");
         agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
@@ -215,7 +539,7 @@ public sealed class WorkflowDeliveryGAgentTests
                 WorkflowInstallationStatus.ProvisioningAccepted));
         await wrongOperation.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*operation identity*");
-        agent.EventSourcing.CurrentVersion.Should().Be(6);
+        agent.EventSourcing.CurrentVersion.Should().Be(9);
     }
 
     [Theory]
@@ -252,6 +576,11 @@ public sealed class WorkflowDeliveryGAgentTests
             OperationId = "installation-alpha:provision:a2",
             RequestedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(4)),
         });
+        await ClaimContinuationAsync(
+            agent,
+            WorkflowInstallationStatus.Accepted,
+            2,
+            "installation-alpha:provision:a2");
 
         var retried = agent.State.Installation;
         retried.Status.Should().Be(WorkflowInstallationStatus.Accepted);
@@ -288,12 +617,13 @@ public sealed class WorkflowDeliveryGAgentTests
         var agent = await CreateAgentAsync("delivery-alpha");
         await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
         await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.Accepted);
         await agent.HandleInstallationFailedAsync(FailedCommand(1, "installation-alpha:provision:a1"));
         agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
 
         await agent.HandleProvisioningAcceptedAsync(ProvisioningAcceptedCommand());
 
-        agent.EventSourcing!.CurrentVersion.Should().Be(4);
+        agent.EventSourcing!.CurrentVersion.Should().Be(5);
         agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.ProvisioningAccepted);
         agent.State.Installation.FailureOriginStatus.Should().Be(WorkflowInstallationStatus.Unspecified);
         agent.State.Installation.ErrorCode.Should().BeEmpty();
@@ -364,7 +694,7 @@ public sealed class WorkflowDeliveryGAgentTests
                 "installation-alpha:provision:a1",
                 WorkflowInstallationStatus.ProvisioningAccepted));
 
-        agent.EventSourcing!.CurrentVersion.Should().Be(4);
+        agent.EventSourcing!.CurrentVersion.Should().Be(6);
         agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Ready);
         agent.State.Installation.ReadinessEvidence.Should().NotBeNull();
     }
@@ -373,7 +703,9 @@ public sealed class WorkflowDeliveryGAgentTests
     public async Task ProvisioningAccepted_ShouldMonotonicallyEnrichMissingOperationIdentities()
     {
         var agent = await CreateProvisioningAcceptedAgentAsync(includeBindingRun: false);
-        var original = ProvisioningAcceptedCommand(includeBindingRun: false);
+        var original = ProvisioningAcceptedCommand(
+            includeBindingRun: false,
+            claimStatus: WorkflowInstallationStatus.ProvisioningAccepted);
         var enriched = original.Clone();
         enriched.BindingRunId = "binding-run-alpha";
         enriched.ScheduleId = "schedule-alpha";
@@ -384,7 +716,7 @@ public sealed class WorkflowDeliveryGAgentTests
         await agent.HandleProvisioningAcceptedAsync(original);
         await agent.HandleProvisioningAcceptedAsync(enriched.Clone());
 
-        agent.EventSourcing!.CurrentVersion.Should().Be(4);
+        agent.EventSourcing!.CurrentVersion.Should().Be(6);
         agent.State.Installation.BindingRunId.Should().Be("binding-run-alpha");
         agent.State.Installation.ScheduleId.Should().Be("schedule-alpha");
         agent.State.Installation.ScheduleProvisioningId.Should().Be("schedule-provisioning-alpha");
@@ -394,7 +726,7 @@ public sealed class WorkflowDeliveryGAgentTests
         var conflictingOutcome = () => agent.HandleProvisioningAcceptedAsync(conflict);
         await conflictingOutcome.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*different provisioning identities*");
-        agent.EventSourcing.CurrentVersion.Should().Be(4);
+        agent.EventSourcing.CurrentVersion.Should().Be(6);
     }
 
     [Fact]
@@ -425,7 +757,7 @@ public sealed class WorkflowDeliveryGAgentTests
         await agent.HandleInstallationReadyAsync(command);
         await agent.HandleInstallationReadyAsync(command.Clone());
 
-        agent.EventSourcing!.CurrentVersion.Should().Be(4);
+        agent.EventSourcing!.CurrentVersion.Should().Be(6);
         agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Ready);
         agent.State.Installation.Stage.Should().Be("ready");
         agent.State.Installation.ReadinessEvidence.Should().Be(command.Evidence);
@@ -441,7 +773,7 @@ public sealed class WorkflowDeliveryGAgentTests
 
         await conflict.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*different readiness evidence*");
-        agent.EventSourcing.CurrentVersion.Should().Be(4);
+        agent.EventSourcing.CurrentVersion.Should().Be(6);
         agent.State.Installation.ReadinessEvidence.Artifacts[0].ContentDigest
             .Should().Be("sha256-artifact-alpha");
     }
@@ -452,6 +784,7 @@ public sealed class WorkflowDeliveryGAgentTests
         var agent = await CreateAgentAsync("delivery-alpha");
         await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
         await agent.HandleStartInstallationAsync(StartInstallationCommand());
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.Accepted);
         await agent.HandleInstallationFailedAsync(FailedCommand(1, "installation-alpha:provision:a1"));
         await agent.HandleRetryInstallationAsync(new RetryWorkflowInstallationCommand
         {
@@ -461,15 +794,25 @@ public sealed class WorkflowDeliveryGAgentTests
             OperationId = "installation-alpha:provision:a2",
             RequestedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(4)),
         });
+        await ClaimContinuationAsync(
+            agent,
+            WorkflowInstallationStatus.Accepted,
+            2,
+            "installation-alpha:provision:a2");
         await agent.HandleProvisioningAcceptedAsync(ProvisioningAcceptedCommand(
             attempt: 2,
             operationId: "installation-alpha:provision:a2"));
+        await ClaimContinuationAsync(
+            agent,
+            WorkflowInstallationStatus.ProvisioningAccepted,
+            2,
+            "installation-alpha:provision:a2");
 
         await agent.HandleInstallationReadyAsync(ReadyCommand(
             attempt: 1,
             operationId: "installation-alpha:provision:a1"));
 
-        agent.EventSourcing!.CurrentVersion.Should().Be(5);
+        agent.EventSourcing!.CurrentVersion.Should().Be(8);
         agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.ProvisioningAccepted);
 
         var mismatchedOperation = () => agent.HandleInstallationReadyAsync(ReadyCommand(
@@ -477,12 +820,12 @@ public sealed class WorkflowDeliveryGAgentTests
             operationId: "installation-alpha:provision:other"));
         await mismatchedOperation.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*operation identity*");
-        agent.EventSourcing.CurrentVersion.Should().Be(5);
+        agent.EventSourcing.CurrentVersion.Should().Be(8);
 
         await agent.HandleInstallationReadyAsync(ReadyCommand(
             attempt: 2,
             operationId: "installation-alpha:provision:a2"));
-        agent.EventSourcing.CurrentVersion.Should().Be(6);
+        agent.EventSourcing.CurrentVersion.Should().Be(9);
         agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Ready);
     }
 
@@ -526,7 +869,7 @@ public sealed class WorkflowDeliveryGAgentTests
             var ready = () => agent.HandleInstallationReadyAsync(invalid);
 
             await ready.Should().ThrowAsync<InvalidOperationException>();
-            agent.EventSourcing!.CurrentVersion.Should().Be(3);
+            agent.EventSourcing!.CurrentVersion.Should().Be(5);
             agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.ProvisioningAccepted);
             agent.State.Installation.ReadinessEvidence.Should().BeNull();
         }
@@ -574,7 +917,7 @@ public sealed class WorkflowDeliveryGAgentTests
 
         await agent.HandleInstallationReadyAsync(ReadyCommand(triggerIntent, includeSchedule: true));
 
-        agent.EventSourcing!.CurrentVersion.Should().Be(4);
+        agent.EventSourcing!.CurrentVersion.Should().Be(6);
         agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Ready);
         agent.State.Installation.ReadinessEvidence.Trigger.ReadinessCase
             .Should().Be(WorkflowTriggerReadinessEvidence.ReadinessOneofCase.Schedule);
@@ -689,6 +1032,64 @@ public sealed class WorkflowDeliveryGAgentTests
         };
     }
 
+    private static CreateWorkflowDeliveryCommand CreateCommandWithConnectionSlot()
+    {
+        var command = CreateCommand("delivery-alpha");
+        command.Package.ConnectionSlots.Add(new WorkflowDeliveryConnectionSlotDefinition
+        {
+            Key = "lark",
+            Label = "Lark",
+            ServiceSlug = "api-lark",
+            Required = true,
+        });
+        command.Package.PackageHash = WorkflowDeliveryConventions.ComputePackageHash(command.Package);
+        command.Package.Version = command.Package.PackageHash[..16];
+        command.Package.PackageVersionId = WorkflowDeliveryConventions.BuildPackageVersionId(
+            command.Package.WorkflowName,
+            command.Package.PackageHash);
+        return command;
+    }
+
+    private static BeginWorkflowDeliveryConnectionCommand BeginConnectionCommand(string linkId) =>
+        new()
+        {
+            DeliveryId = "delivery-alpha",
+            TargetScopeId = "scope-alpha",
+            SlotKey = "lark",
+            ServiceSlug = "api-lark",
+            LinkId = linkId,
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(1)),
+        };
+
+    private static UpdateWorkflowDeliveryConnectionCommand UpdateConnectionCommand(
+        string linkId,
+        WorkflowDeliveryConnectionStatus status,
+        string userServiceId) =>
+        new()
+        {
+            DeliveryId = "delivery-alpha",
+            TargetScopeId = "scope-alpha",
+            SlotKey = "lark",
+            LinkId = linkId,
+            Status = status,
+            UserServiceId = userServiceId,
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(1)),
+        };
+
+    private static AttachWorkflowDeliveryConnectionCommand AttachConnectionCommand(
+        string userServiceId,
+        long expectedStateVersion = 1) =>
+        new()
+        {
+            DeliveryId = "delivery-alpha",
+            TargetScopeId = "scope-alpha",
+            SlotKey = "lark",
+            ServiceSlug = "api-lark",
+            UserServiceId = userServiceId,
+            AttachedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(1)),
+            ExpectedStateVersion = expectedStateVersion,
+        };
+
     private static StartWorkflowInstallationCommand StartInstallationCommand(
         WorkflowDeliveryTriggerIntent? triggerIntent = null) =>
         new()
@@ -733,7 +1134,8 @@ public sealed class WorkflowDeliveryGAgentTests
         bool includeSchedule = false,
         bool includeBindingRun = true,
         int attempt = 1,
-        string operationId = "installation-alpha:provision:a1") =>
+        string operationId = "installation-alpha:provision:a1",
+        WorkflowInstallationStatus claimStatus = WorkflowInstallationStatus.Accepted) =>
         new()
         {
             DeliveryId = "delivery-alpha",
@@ -748,7 +1150,9 @@ public sealed class WorkflowDeliveryGAgentTests
             ScheduleProvisioningStatus = includeSchedule ? "accepted" : string.Empty,
             Attempt = attempt,
             OperationId = operationId,
-            AcceptedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(3)),
+            AcceptedAtUtc = Timestamp.FromDateTimeOffset(OutcomeAt(attempt, 3)),
+            ContinuationClaimId = ClaimId(claimStatus, attempt),
+            ContinuationClaimantId = "worker-alpha",
         };
 
     private static RecordWorkflowInstallationFailedCommand FailedCommand(
@@ -765,7 +1169,11 @@ public sealed class WorkflowDeliveryGAgentTests
             ExpectedStatus = expectedStatus,
             Attempt = attempt,
             OperationId = operationId,
-            FailedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(3)),
+            FailedAtUtc = Timestamp.FromDateTimeOffset(OutcomeAt(
+                attempt,
+                expectedStatus == WorkflowInstallationStatus.Accepted ? 3 : 4)),
+            ContinuationClaimId = ClaimId(expectedStatus, attempt),
+            ContinuationClaimantId = "worker-alpha",
         };
 
     private static RecordWorkflowInstallationReadyCommand ReadyCommand(
@@ -834,9 +1242,44 @@ public sealed class WorkflowDeliveryGAgentTests
             Evidence = evidence,
             Attempt = attempt,
             OperationId = operationId,
-            ReadyAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(4)),
+            ReadyAtUtc = Timestamp.FromDateTimeOffset(OutcomeAt(attempt, 4)),
+            ContinuationClaimId = ClaimId(WorkflowInstallationStatus.ProvisioningAccepted, attempt),
+            ContinuationClaimantId = "worker-alpha",
         };
     }
+
+    private static ClaimWorkflowInstallationContinuationCommand ContinuationClaimCommand(
+        WorkflowInstallationStatus status,
+        int attempt = 1,
+        string operationId = "installation-alpha:provision:a1",
+        string claimantId = "worker-alpha",
+        TimeSpan? requestedDuration = null) =>
+        new()
+        {
+            DeliveryId = "delivery-alpha",
+            InstallationId = "installation-alpha",
+            ExpectedStatus = status,
+            Attempt = attempt,
+            OperationId = operationId,
+            ClaimId = ClaimId(status, attempt),
+            ClaimantId = claimantId,
+            RequestedDuration = Duration.FromTimeSpan(
+                requestedDuration ?? TimeSpan.FromMinutes(5)),
+        };
+
+    private static string ClaimId(WorkflowInstallationStatus status, int attempt) =>
+        $"claim-{(status == WorkflowInstallationStatus.Accepted ? "accepted" : "readiness")}-a{attempt}";
+
+    private static DateTimeOffset OutcomeAt(int attempt, int firstAttemptMinute) =>
+        CreatedAt.AddMinutes(firstAttemptMinute + ((attempt - 1) * 3));
+
+    private static Task ClaimContinuationAsync(
+        WorkflowDeliveryGAgent agent,
+        WorkflowInstallationStatus status,
+        int attempt = 1,
+        string operationId = "installation-alpha:provision:a1") =>
+        agent.HandleClaimInstallationContinuationAsync(
+            ContinuationClaimCommand(status, attempt, operationId));
 
     private static async Task<WorkflowDeliveryGAgent> CreateProvisioningAcceptedAgentAsync(
         WorkflowDeliveryTriggerIntent? triggerIntent = null,
@@ -846,13 +1289,18 @@ public sealed class WorkflowDeliveryGAgentTests
         var agent = await CreateAgentAsync("delivery-alpha");
         await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
         await agent.HandleStartInstallationAsync(StartInstallationCommand(triggerIntent));
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.Accepted);
         await agent.HandleProvisioningAcceptedAsync(ProvisioningAcceptedCommand(includeSchedule, includeBindingRun));
+        await ClaimContinuationAsync(agent, WorkflowInstallationStatus.ProvisioningAccepted);
         return agent;
     }
 
-    private static async Task<WorkflowDeliveryGAgent> CreateAgentAsync(string deliveryId)
+    private static async Task<WorkflowDeliveryGAgent> CreateAgentAsync(
+        string deliveryId,
+        TimeProvider? timeProvider = null)
     {
-        var agent = new WorkflowDeliveryGAgent
+        var agent = new WorkflowDeliveryGAgent(
+            timeProvider ?? new MutableTimeProvider(CreatedAt.AddMinutes(2)))
         {
             EventSourcingBehaviorFactory =
                 new DefaultEventSourcingBehaviorFactory<WorkflowDeliveryState>(
@@ -864,5 +1312,14 @@ public sealed class WorkflowDeliveryGAgentTests
         SetIdMethod.Invoke(agent, [WorkflowDeliveryConventions.BuildActorId(deliveryId)]);
         await agent.ActivateAsync();
         return agent;
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void SetUtcNow(DateTimeOffset value) => _utcNow = value;
     }
 }

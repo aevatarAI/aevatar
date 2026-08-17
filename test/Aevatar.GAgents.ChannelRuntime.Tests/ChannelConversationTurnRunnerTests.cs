@@ -273,6 +273,40 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Theory]
+    [InlineData(null)]
+    [InlineData("owner-other")]
+    public async Task RunInboundAsync_ShouldDenyWorkflowRunWithoutQuerying_WhenSenderDoesNotOwnRegistrationScope(
+        string? ownerScopeId)
+    {
+        var workflowQueryPort = Substitute.For<IScopeWorkflowQueryPort>();
+        var services = BuildAgentBuilderToolServices(workflowQueryPort, ownerScopeId);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/workflow run wf-private",
+                "msg-workflow-owner-denied",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxRegistrationScopeId = "scope-1",
+                    NyxUserAccessToken = "bot-owner-relay-token",
+                }),
+            RelayRuntimeContext(
+                "msg-workflow-owner-denied",
+                nyxUserAccessToken: "bot-owner-relay-token"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.WorkflowDraftRunRequest.Should().BeNull();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        workflowQueryPort.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Theory]
     [InlineData("aevatar_start_workflow daily-greeting")]
     [InlineData("跑一下 daily-greeting 的 workflow")]
     [InlineData("run daily-greeting workflow")]
@@ -3143,6 +3177,80 @@ public sealed class ChannelConversationTurnRunnerTests
         adapter.Replies[0].ReplyText.Should().Contain("/oauth/authorize");
     }
 
+    [Fact]
+    public async Task RunInboundAsync_ShouldGateWorkflowListToInitWithoutQueryingWorkflows_WhenSenderUnbound()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var workflowQueryPort = Substitute.For<IScopeWorkflowQueryPort>();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton(workflowQueryPort)
+            .AddSingleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>()
+            .AddSingleton<ChannelSlashCommandRegistry>()
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/workflow list",
+                "msg-unbound-workflow-list",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        result.Outbound.Text.Should().Contain("/oauth/authorize");
+        result.Outbound.Text.Should().NotContain("/workflow run");
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("/oauth/authorize");
+        adapter.Replies[0].ReplyText.Should().NotContain("/workflow run");
+        workflowQueryPort.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldDenyWorkflowListWithoutQuerying_WhenBoundSenderOwnsAnotherScope()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(
+            new ExternalSubjectRef
+            {
+                Platform = "lark",
+                Tenant = "scope-1",
+                ExternalUserId = "ou_user_1",
+            },
+            new BindingId { Value = "bnd-user-1" });
+        var workflowQueryPort = Substitute.For<IScopeWorkflowQueryPort>();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<IOwnerScopeResolver>(new StubOwnerScopeResolver("owner-other"))
+            .AddSingleton<IChannelWorkflowAuthorizedScopeResolver, ChannelWorkflowAuthorizedScopeResolver>()
+            .AddSingleton(workflowQueryPort)
+            .AddSingleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>()
+            .AddSingleton<ChannelSlashCommandRegistry>()
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/workflow list",
+                "msg-cross-owner-workflow-list",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().Contain("无权查看");
+        adapter.Replies[0].ReplyText.Should().NotContain("/workflow run");
+        workflowQueryPort.ReceivedCalls().Should().BeEmpty();
+    }
+
     // /clear is a conversation-state command handled by the runner without identity
     // requirements: the typed outcome flag tells the conversation actor (sole owner of
     // retained history) to commit the cleared event. Works for unbound senders too —
@@ -5147,7 +5255,9 @@ public sealed class ChannelConversationTurnRunnerTests
         }
     }
 
-    private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)
+    private static IServiceProvider BuildAgentBuilderToolServices(
+        IScopeWorkflowQueryPort? workflowQueryPort = null,
+        string? workflowOwnerScopeId = "scope-1")
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -5172,12 +5282,15 @@ public sealed class ChannelConversationTurnRunnerTests
             .AddSingleton<IScheduledAgentCredentialLifecycle>(
                 sp => sp.GetRequiredService<ScheduledAgentCredentialLifecycle>())
             .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory())
+            .AddSingleton<IOwnerScopeResolver>(new StubOwnerScopeResolver(workflowOwnerScopeId))
+            .AddSingleton<IChannelWorkflowAuthorizedScopeResolver, ChannelWorkflowAuthorizedScopeResolver>()
             .AddSingleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>()
             .AddSingleton<ChannelSlashCommandRegistry>()
             .AddSingleton<ChannelWorkflowDraftRunIntentParser>()
             .AddSingleton(sp => new ChannelWorkflowDraftRunAdmission(
                 sp.GetRequiredService<ChannelWorkflowDraftRunIntentParser>(),
-                sp.GetService<IScopeWorkflowQueryPort>()));
+                sp.GetService<IScopeWorkflowQueryPort>(),
+                sp.GetRequiredService<IChannelWorkflowAuthorizedScopeResolver>()));
         if (workflowQueryPort is not null)
             services.AddSingleton(workflowQueryPort);
 
@@ -5315,7 +5428,10 @@ public sealed class ChannelConversationTurnRunnerTests
             "rev-active",
             "deployment-1",
             "active",
-            DateTimeOffset.Parse("2026-05-25T00:00:00Z"));
+            DateTimeOffset.Parse("2026-05-25T00:00:00Z"))
+        {
+            PublishedServiceId = $"svc-{workflowId}",
+        };
 
     private sealed class StubScopeWorkflowQueryPort(ScopeWorkflowSummary? workflow) : IScopeWorkflowQueryPort
     {

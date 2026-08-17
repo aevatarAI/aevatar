@@ -33,6 +33,9 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
         snapshot.LifecycleStatus.Should().Be(DeliveryApplication.WorkflowDeliveryLifecycleStatus.Active);
         snapshot.Installation!.Status.Should().Be(DeliveryApplication.WorkflowInstallationStatus.Ready);
         snapshot.Installation.OperationId.Should().Be("installation-alpha:provision:a1");
+        snapshot.Installation.ContinuationClaim.Should().NotBeNull();
+        snapshot.Installation.ContinuationClaim!.ClaimId.Should().Be("claim-readiness-a1");
+        snapshot.Installation.ContinuationClaim.ClaimantId.Should().Be("worker-alpha");
         snapshot.Installation.CapabilityAdmissionPlan.Should().NotBeNull();
         snapshot.Installation.AcceptanceRunId.Should().Be("acceptance-run-alpha");
         snapshot.Installation.ArtifactEvidence.Should().Equal("artifact-alpha");
@@ -143,7 +146,7 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
     [InlineData(
         DeliveryApplication.WorkflowInstallationStatus.Ready,
         "WORKFLOW_INSTALLATION_STATUS_READY")]
-    public async Task ListAsync_ShouldUseProtobufJsonEnumNameForInstallationStatusFilter(
+    public async Task ListAsync_ShouldUseExactProtobufJsonEnumFieldForInstallationStatusFilter(
         DeliveryApplication.WorkflowInstallationStatus status,
         string expectedStorageValue)
     {
@@ -154,7 +157,7 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
             InstallationStatus: status));
 
         reader.Queries.Should().ContainSingle().Which.Filters.Should().Contain(filter =>
-            filter.FieldPath == "installation.status" &&
+            filter.FieldPath == "installation.status.keyword" &&
             Equals(filter.Value.RawValue, expectedStorageValue));
     }
 
@@ -213,6 +216,16 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
                 CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan(),
                 CreatedAtUtc = At(1),
                 UpdatedAtUtc = At(1),
+                ContinuationClaim = new WorkflowInstallationContinuationClaim
+                {
+                    ClaimId = "claim-readiness-a1",
+                    ClaimantId = "worker-alpha",
+                    ExpectedStatus = WorkflowInstallationStatus.ProvisioningAccepted,
+                    Attempt = 1,
+                    OperationId = "installation-alpha:provision:a1",
+                    ClaimedAtUtc = At(1),
+                    ExpiresAtUtc = At(2),
+                },
             },
         };
 

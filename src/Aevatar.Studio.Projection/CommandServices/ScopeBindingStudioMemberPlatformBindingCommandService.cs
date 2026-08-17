@@ -33,6 +33,10 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
         "STUDIO_MEMBER_PLATFORM_BINDING_RUNTIME_ACTIVATION_FAILED";
     private const string ServingTargetDeliveryFailedFailureCode =
         "STUDIO_MEMBER_PLATFORM_BINDING_SERVING_TARGET_DELIVERY_FAILED";
+    private const string DefaultServingRevisionDeliveryFailedFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_DEFAULT_SERVING_REVISION_DELIVERY_FAILED";
+    private const string DefaultServingRevisionSupersededFailureCode =
+        "STUDIO_MEMBER_PLATFORM_BINDING_DEFAULT_SERVING_REVISION_SUPERSEDED";
     private const string ActivationDependencyUnavailableFailureCode =
         "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_DEPENDENCY_UNAVAILABLE";
     private const string RecoverySnapshotInvalidFailureCode =
@@ -805,6 +809,12 @@ internal sealed class ScopeBindingStudioMemberPlatformBindingCommandService : IS
             ServiceDeploymentActivationFailureCode.ServingTargetDeliveryFailed =>
                 (ServingTargetDeliveryFailedFailureCode,
                     "platform service activation could not deliver serving targets."),
+            ServiceDeploymentActivationFailureCode.DefaultServingRevisionDeliveryFailed =>
+                (DefaultServingRevisionDeliveryFailedFailureCode,
+                    "platform service activation could not commit the default serving revision."),
+            ServiceDeploymentActivationFailureCode.DefaultServingRevisionSuperseded =>
+                (DefaultServingRevisionSupersededFailureCode,
+                    "platform service activation was superseded by a newer serving generation."),
             ServiceDeploymentActivationFailureCode.ActivationDependencyUnavailable =>
                 (ActivationDependencyUnavailableFailureCode,
                     "platform service activation dependency was unavailable."),

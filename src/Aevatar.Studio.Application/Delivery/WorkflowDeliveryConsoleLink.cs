@@ -1,10 +1,8 @@
-using Aevatar.Studio.Application.Studio.Services;
-
 namespace Aevatar.Studio.Application.Delivery;
 
 /// <summary>
 /// Builds the product-console link a delivery customer opens after an installation
-/// exists. The delivery read model owns only the console-relative member workflow path;
+/// exists. The delivery read model owns only the console-relative member invoke path;
 /// the console-web origin is host configuration, because this API is served from a
 /// different host than <c>apps/aevatar-console-web</c>. Resolving the relative path
 /// against the API origin produces a link that does not exist, so an unconfigured or
@@ -43,12 +41,12 @@ public static class WorkflowDeliveryConsoleLink
     }
 
     /// <summary>
-    /// Returns the absolute console URL for one provisioned member workflow, or
+    /// Returns the absolute console URL for invoking one provisioned member, or
     /// <see langword="null"/> when either the console origin or the member identity is
-    /// unavailable. The path comes from the same builder the provisioning response uses,
-    /// so both surfaces stay on one console route.
+    /// unavailable. The route targets the published member invoke workbench rather than
+    /// the draft workflow editor.
     /// </summary>
-    public static string? BuildMemberWorkflowUrl(
+    public static string? BuildMemberInvokeUrl(
         Uri? consoleWebBaseUri,
         string? scopeId,
         string? teamId,
@@ -63,7 +61,9 @@ public static class WorkflowDeliveryConsoleLink
         }
 
         var basePath = consoleWebBaseUri.GetLeftPart(UriPartial.Path).TrimEnd('/');
-        var relativePath = StudioWorkflowProvisioningService.BuildStudioUrl(scopeId, teamId, memberId);
+        var relativePath =
+            $"/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}" +
+            $"/members/{Uri.EscapeDataString(memberId)}/invoke";
         return basePath + relativePath;
     }
 }

@@ -572,15 +572,11 @@ public static class ScopeServiceEndpoints
                 });
             }
 
-            await commandPort.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
-            {
-                Identity = identity.Clone(),
-                RevisionId = normalizedRevisionId,
-            }, ct);
             await commandPort.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
             {
                 Identity = identity.Clone(),
                 RevisionId = normalizedRevisionId,
+                ExpectedArtifactHash = revision.ArtifactHash,
             }, ct);
 
             return Results.Ok(new ScopeBindingActivationHttpResponse(

@@ -73,14 +73,20 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             throw new InvalidOperationException("revision_id is required.");
 
         var activationAttemptId = NormalizeActivationAttemptId(command.ActivationAttemptId);
+        var expectedArtifactHash = NormalizeExpectedArtifactHash(command.ExpectedArtifactHash);
         var isContinuation = command.ActivationDeadlineAt != null;
-        if (ShouldIgnoreFencedActivation(command.RevisionId, activationAttemptId, isContinuation))
+        if (ShouldIgnoreFencedActivation(
+                command.RevisionId,
+                activationAttemptId,
+                expectedArtifactHash,
+                isContinuation))
             return;
 
         var pending = await EnsurePendingActivationAsync(
             command.Identity,
             command.RevisionId,
-            activationAttemptId);
+            activationAttemptId,
+            expectedArtifactHash);
         await ScheduleActivationRetryAsync(
             command.Identity,
             pending,
@@ -96,6 +102,17 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 activationAttemptId,
                 failureCode,
                 GetTerminalFailureReason(failureCode));
+            return;
+        }
+
+        if (GetActivationPhase(pending) ==
+            ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending)
+        {
+            await DispatchDefaultServingRevisionAsync(
+                command.Identity,
+                command.RevisionId,
+                activationAttemptId,
+                pending);
             return;
         }
 
@@ -127,12 +144,13 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             return;
         }
 
-        // Refactor (iter100/cluster-100): Old activation read prepared artifacts from a process-local store. / New activation consumes the projected revision readmodel catalog.
-        // The bind chain dispatches prepare->publish->activate fire-and-forget, so the revision-catalog
-        // projection can lag behind the just-committed prepare event when this handler runs. Treat an
-        // unmaterialized prepared artifact as transient and re-arm a bounded self-continuation
-        // (delay/timeout 事件化 + self continuation 事件化) instead of failing the activation terminally.
-        if (!revisionCatalog.TryGetPreparedArtifact(command.RevisionId, out var artifact))
+        // The authoring chain dispatches prepare->publish->activate asynchronously, so activation waits
+        // for the published revision projection and its artifact fence. Projection lag or a torn/stale
+        // artifact snapshot re-arms the bounded self-continuation; preparation failure remains terminal.
+        if (!revisionCatalog.TryGetPublishedPreparedArtifact(
+                command.RevisionId,
+                pending.ExpectedArtifactHash,
+                out var artifact))
         {
             if (revisionCatalog.IsRevisionPreparationFailed(command.RevisionId))
             {
@@ -142,6 +160,17 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                     activationAttemptId,
                     ServiceDeploymentActivationFailureCode.RevisionPreparationFailed,
                     $"Prepared artifact for '{ServiceKeys.Build(command.Identity)}' revision '{command.RevisionId}' failed preparation.");
+                return;
+            }
+
+            if (revisionCatalog.IsRevisionPublished(command.RevisionId))
+            {
+                await FailActivationAsync(
+                    command.Identity,
+                    command.RevisionId,
+                    activationAttemptId,
+                    ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
+                    "Published prepared artifact failed integrity or artifact-fence validation.");
                 return;
             }
 
@@ -270,8 +299,10 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal) &&
             x.Status == ServiceDeploymentStatus.Active &&
             !string.IsNullOrWhiteSpace(x.PrimaryActorId));
-        if (existingActive != null)
+        if (existingActive != null &&
+            !string.IsNullOrWhiteSpace(existingActive.ArtifactHash))
         {
+            EnsureActiveDeploymentMatchesArtifact(existingActive, artifact);
             pending = await EnsureServingTargetDispatchPendingAsync(
                 identity,
                 revisionId,
@@ -339,6 +370,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             PrimaryActorId = activation.PrimaryActorId,
             Status = ServiceDeploymentStatus.Active,
             ActivatedAt = now.Clone(),
+            ArtifactHash = NormalizeExpectedArtifactHash(artifact.ArtifactHash),
         };
         var dispatchPending = BuildServingTargetDispatchPendingEvent(
             identity,
@@ -360,11 +392,39 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     private async Task<ServiceDeploymentPendingActivationRecord> EnsurePendingActivationAsync(
         ServiceIdentity identity,
         string revisionId,
-        string activationAttemptId)
+        string activationAttemptId,
+        string expectedArtifactHash)
     {
         if (State.PendingActivations.TryGetValue(revisionId, out var existing) &&
             ActivationAttemptsMatch(existing.ActivationAttemptId, activationAttemptId))
         {
+            var existingArtifactHash = NormalizeExpectedArtifactHash(existing.ExpectedArtifactHash);
+            if (string.IsNullOrEmpty(existingArtifactHash) &&
+                !string.IsNullOrEmpty(expectedArtifactHash))
+            {
+                if (GetActivationPhase(existing) !=
+                    ServiceDeploymentActivationPhase.ActivationPending)
+                {
+                    throw new InvalidOperationException(
+                        $"Activation attempt '{activationAttemptId}' for revision '{revisionId}' cannot add an expected artifact hash after artifact validation has completed.");
+                }
+
+                var upgraded = existing.Clone();
+                upgraded.ExpectedArtifactHash = expectedArtifactHash;
+                await PersistDomainEventAsync(BuildDeferredEvent(
+                    identity,
+                    upgraded,
+                    existing.LastRetryFailureCode,
+                    UtcNow));
+                return State.PendingActivations[revisionId];
+            }
+
+            if (!string.Equals(existingArtifactHash, expectedArtifactHash, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Activation attempt '{activationAttemptId}' for revision '{revisionId}' is already bound to a different expected artifact hash.");
+            }
+
             return existing;
         }
 
@@ -378,6 +438,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ActivationAttemptId = activationAttemptId,
             StartedAt = Timestamp.FromDateTime(nowUtc),
             Phase = ServiceDeploymentActivationPhase.ActivationPending,
+            ExpectedArtifactHash = expectedArtifactHash,
         });
         return State.PendingActivations[revisionId];
     }
@@ -505,6 +566,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             DeadlineAt = pending.DeadlineAt?.Clone(),
             ActivationStartedAt = pending.StartedAt?.Clone(),
             PreparedAt = Timestamp.FromDateTime(preparedAtUtc),
+            ExpectedArtifactHash = pending.ExpectedArtifactHash,
         };
 
     private async Task DispatchServingTargetsAsync(
@@ -605,7 +667,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         if (!TryGetMatchingPending(ack.RevisionId, ack.ActivationAttemptId, out var pending) ||
             GetActivationPhase(pending) is not (
                 ServiceDeploymentActivationPhase.ServingTargetDispatchPending or
-                ServiceDeploymentActivationPhase.ServingTargetDispatchAccepted) ||
+                ServiceDeploymentActivationPhase.ServingTargetDispatchAccepted or
+                ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending) ||
             !string.Equals(pending.DeploymentId, ack.DeploymentId, StringComparison.Ordinal) ||
             !string.Equals(pending.ServingTargetOperationId, ack.OperationId, StringComparison.Ordinal))
         {
@@ -623,15 +686,190 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             return;
         }
 
-        await PersistDomainEventAsync(new ServiceDeploymentServingTargetsAppliedEvent
+        pending = State.PendingActivations[ack.RevisionId];
+        if (GetActivationPhase(pending) ==
+            ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending)
+        {
+            if (pending.ServingGeneration != ack.ServingGeneration)
+                return;
+
+            await DispatchDefaultServingRevisionAsync(
+                ack.Identity!,
+                ack.RevisionId,
+                ack.ActivationAttemptId,
+                pending);
+            return;
+        }
+
+        if (ack.ServingGeneration <= 0)
+            return;
+
+        await PersistDomainEventAsync(new ServiceDeploymentDefaultServingRevisionDispatchPendingEvent
         {
             Identity = ack.Identity?.Clone(),
             RevisionId = ack.RevisionId,
             DeploymentId = ack.DeploymentId,
             ActivationAttemptId = ack.ActivationAttemptId,
             OperationId = ack.OperationId,
+            CommandId = BuildDefaultServingEnvelopeId(ack.OperationId),
             ServingGeneration = ack.ServingGeneration,
-            AppliedAt = ack.AppliedAt?.Clone() ?? Timestamp.FromDateTime(UtcNow),
+            ServingTargetsAppliedAt = ack.AppliedAt?.Clone() ?? Timestamp.FromDateTime(UtcNow),
+            PreparedAt = Timestamp.FromDateTime(UtcNow),
+        });
+
+        await DispatchDefaultServingRevisionAsync(
+            ack.Identity!,
+            ack.RevisionId,
+            ack.ActivationAttemptId,
+            State.PendingActivations[ack.RevisionId]);
+    }
+
+    [EventHandler]
+    public async Task HandleDefaultServingRevisionCommittedAsync(
+        DefaultServingRevisionCommittedAck ack)
+    {
+        ArgumentNullException.ThrowIfNull(ack);
+        EnsureDeploymentIdentity(ack.Identity, allowInitialize: false);
+        if (ActiveInboundEnvelope != null &&
+            !string.Equals(
+                ActiveInboundEnvelope.Route?.PublisherActorId,
+                ServiceActorIds.Definition(ack.Identity!),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!TryGetMatchingPending(ack.RevisionId, ack.ActivationAttemptId, out var pending) ||
+            GetActivationPhase(pending) !=
+            ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending ||
+            !string.Equals(pending.DeploymentId, ack.DeploymentId, StringComparison.Ordinal) ||
+            !string.Equals(pending.DefaultServingOperationId, ack.OperationId, StringComparison.Ordinal) ||
+            !string.Equals(pending.DefaultServingCommandId, ack.CommandId, StringComparison.Ordinal) ||
+            pending.ServingGeneration != ack.ServingGeneration ||
+            ack.CommittedAt == null)
+        {
+            return;
+        }
+
+        if (!await EnsureMatchingPendingWithinDeadlineAsync(
+                ack.Identity!,
+                ack.RevisionId,
+                ack.ActivationAttemptId))
+        {
+            return;
+        }
+
+        if (ack.Disposition == DefaultServingRevisionCommitDisposition.Superseded)
+        {
+            if (ack.SupersededByGeneration <= ack.ServingGeneration)
+                return;
+
+            await FailActivationAsync(
+                ack.Identity!,
+                ack.RevisionId,
+                ack.ActivationAttemptId,
+                ServiceDeploymentActivationFailureCode.DefaultServingRevisionSuperseded,
+                GetTerminalFailureReason(
+                    ServiceDeploymentActivationFailureCode.DefaultServingRevisionSuperseded));
+            return;
+        }
+
+        if (ack.Disposition != DefaultServingRevisionCommitDisposition.Applied ||
+            ack.SupersededByGeneration != 0)
+            return;
+
+        await PersistDomainEventAsync(new ServiceDeploymentServingTargetsAppliedEvent
+        {
+            Identity = ack.Identity?.Clone(),
+            RevisionId = ack.RevisionId,
+            DeploymentId = ack.DeploymentId,
+            ActivationAttemptId = ack.ActivationAttemptId,
+            OperationId = pending.ServingTargetOperationId,
+            ServingGeneration = pending.ServingGeneration,
+            AppliedAt = pending.ServingTargetsAppliedAt?.Clone() ?? Timestamp.FromDateTime(UtcNow),
+            DefaultServingCommittedAt = ack.CommittedAt.Clone(),
+        });
+    }
+
+    private async Task DispatchDefaultServingRevisionAsync(
+        ServiceIdentity identity,
+        string revisionId,
+        string activationAttemptId,
+        ServiceDeploymentPendingActivationRecord pending)
+    {
+        if (string.IsNullOrWhiteSpace(pending.DeploymentId) ||
+            string.IsNullOrWhiteSpace(pending.DefaultServingOperationId) ||
+            string.IsNullOrWhiteSpace(pending.DefaultServingCommandId) ||
+            pending.ServingGeneration <= 0)
+        {
+            await DeferOrFailRetryableActivationAsync(
+                identity,
+                revisionId,
+                activationAttemptId,
+                ServiceDeploymentActivationFailureCode.DefaultServingRevisionDeliveryFailed);
+            return;
+        }
+
+        try
+        {
+            var definitionActorId = ServiceActorIds.Definition(identity);
+            var admission = await AwaitExternalWithinDeadlineAsync(
+                pending,
+                "default-serving-revision-dispatch",
+                ct => _dispatchPort.DispatchAsync(
+                    definitionActorId,
+                    CreateEnvelope(
+                        definitionActorId,
+                        pending.DefaultServingCommandId,
+                        new SetDefaultServingRevisionCommand
+                        {
+                            Identity = identity.Clone(),
+                            RevisionId = revisionId,
+                            OperationId = pending.DefaultServingOperationId,
+                            CommandId = pending.DefaultServingCommandId,
+                            ReplyActorId = Id,
+                            ActivationAttemptId = activationAttemptId,
+                            DeploymentId = pending.DeploymentId,
+                            ServingGeneration = pending.ServingGeneration,
+                        }),
+                    ct));
+            if (!admission.Accepted)
+            {
+                await DeferOrFailRetryableActivationAsync(
+                    identity,
+                    revisionId,
+                    activationAttemptId,
+                    ServiceDeploymentActivationFailureCode.DefaultServingRevisionDeliveryFailed);
+                return;
+            }
+        }
+        catch (Exception exception)
+        {
+            await DeferOrFailRetryableActivationAsync(
+                identity,
+                revisionId,
+                activationAttemptId,
+                ServiceDeploymentActivationFailureCode.DefaultServingRevisionDeliveryFailed,
+                exception);
+            return;
+        }
+
+        if (!await EnsureMatchingPendingWithinDeadlineAsync(identity, revisionId, activationAttemptId))
+            return;
+
+        pending = State.PendingActivations[revisionId];
+        if (pending.DefaultServingDispatchAcceptedAt != null)
+            return;
+
+        await PersistDomainEventAsync(new ServiceDeploymentDefaultServingRevisionDispatchAcceptedEvent
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionId,
+            DeploymentId = pending.DeploymentId,
+            ActivationAttemptId = activationAttemptId,
+            OperationId = pending.DefaultServingOperationId,
+            CommandId = pending.DefaultServingCommandId,
+            AcceptedAt = Timestamp.FromDateTime(UtcNow),
         });
     }
 
@@ -658,6 +896,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             RevisionId = pending.RevisionId,
             ActivationDeadlineAt = pending.DeadlineAt?.Clone() ?? Timestamp.FromDateTime(deadlineUtc),
             ActivationAttemptId = pending.ActivationAttemptId,
+            ExpectedArtifactHash = pending.ExpectedArtifactHash,
         };
 
         Logger.LogInformation(
@@ -710,6 +949,12 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ServingTargetOperationId = pending.ServingTargetOperationId,
             ServingTargetCommandId = pending.ServingTargetCommandId,
             ServingTargetDispatchAcceptedAt = pending.ServingTargetDispatchAcceptedAt?.Clone(),
+            ExpectedArtifactHash = pending.ExpectedArtifactHash,
+            DefaultServingOperationId = pending.DefaultServingOperationId,
+            DefaultServingCommandId = pending.DefaultServingCommandId,
+            DefaultServingDispatchAcceptedAt = pending.DefaultServingDispatchAcceptedAt?.Clone(),
+            ServingGeneration = pending.ServingGeneration,
+            ServingTargetsAppliedAt = pending.ServingTargetsAppliedAt?.Clone(),
         };
 
     private bool IsActivationDeadlineReached(ServiceDeploymentPendingActivationRecord pending) =>
@@ -728,6 +973,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ServiceDeploymentActivationPhase.ServingTargetDispatchPending or
                 ServiceDeploymentActivationPhase.ServingTargetDispatchAccepted =>
                 ServiceDeploymentActivationFailureCode.ServingTargetDeliveryFailed,
+            ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending =>
+                ServiceDeploymentActivationFailureCode.DefaultServingRevisionDeliveryFailed,
             _ => ServiceDeploymentActivationFailureCode.ActivationDependencyUnavailable,
         };
     }
@@ -761,6 +1008,10 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 "Service runtime activation did not complete before the activation deadline.",
             ServiceDeploymentActivationFailureCode.ServingTargetDeliveryFailed =>
                 "Service serving target delivery did not complete before the activation deadline.",
+            ServiceDeploymentActivationFailureCode.DefaultServingRevisionDeliveryFailed =>
+                "Default serving revision did not commit before the activation deadline.",
+            ServiceDeploymentActivationFailureCode.DefaultServingRevisionSuperseded =>
+                "Default serving revision was superseded by a newer serving generation.",
             ServiceDeploymentActivationFailureCode.ActivationDependencyUnavailable =>
                 "A required service activation dependency remained unavailable until the activation deadline.",
             _ => "Service activation failed.",
@@ -852,6 +1103,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             .On<ServiceDeploymentRuntimeActivationInvocationStartedEvent>(ApplyRuntimeActivationInvocationStarted)
             .On<ServiceDeploymentServingTargetsDispatchPendingEvent>(ApplyServingTargetsDispatchPending)
             .On<ServiceDeploymentServingTargetsDispatchAcceptedEvent>(ApplyServingTargetsDispatchAccepted)
+            .On<ServiceDeploymentDefaultServingRevisionDispatchPendingEvent>(ApplyDefaultServingRevisionDispatchPending)
+            .On<ServiceDeploymentDefaultServingRevisionDispatchAcceptedEvent>(ApplyDefaultServingRevisionDispatchAccepted)
             .On<ServiceDeploymentServingTargetsAppliedEvent>(ApplyServingTargetsApplied)
             .OrCurrent();
 
@@ -867,6 +1120,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             Status = evt.Status,
             ActivatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
             UpdatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+            ArtifactHash = NormalizeExpectedArtifactHash(evt.ArtifactHash),
         };
         // Preserve the legacy reducer contract: an activated event always closes the
         // activation pending record. New code atomically follows it with an explicit
@@ -948,15 +1202,35 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ServingTargetDispatchAcceptedAt = FirstOptionalTimestamp(
                 evt.ServingTargetDispatchAcceptedAt,
                 existing?.ServingTargetDispatchAcceptedAt),
+            ExpectedArtifactHash = FirstNonBlank(
+                evt.ExpectedArtifactHash,
+                existing?.ExpectedArtifactHash),
+            DefaultServingOperationId = FirstNonBlank(
+                evt.DefaultServingOperationId,
+                existing?.DefaultServingOperationId),
+            DefaultServingCommandId = FirstNonBlank(
+                evt.DefaultServingCommandId,
+                existing?.DefaultServingCommandId),
+            DefaultServingDispatchAcceptedAt = FirstOptionalTimestamp(
+                evt.DefaultServingDispatchAcceptedAt,
+                existing?.DefaultServingDispatchAcceptedAt),
+            ServingGeneration = evt.ServingGeneration != 0
+                ? evt.ServingGeneration
+                : existing?.ServingGeneration ?? 0,
+            ServingTargetsAppliedAt = FirstOptionalTimestamp(
+                evt.ServingTargetsAppliedAt,
+                existing?.ServingTargetsAppliedAt),
         };
 
     private static Timestamp FirstTimestamp(
         Timestamp? first,
         Timestamp? second = null,
-        Timestamp? third = null) =>
+        Timestamp? third = null,
+        Timestamp? fourth = null) =>
         first?.Clone()
         ?? second?.Clone()
         ?? third?.Clone()
+        ?? fourth?.Clone()
         ?? Timestamp.FromDateTime(DateTime.UnixEpoch);
 
     private static Timestamp? FirstOptionalTimestamp(Timestamp? first, Timestamp? second = null) =>
@@ -1027,6 +1301,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             LastRetryFailureCode = ServiceDeploymentActivationFailureCode.Unspecified,
             ServingTargetOperationId = evt.OperationId ?? string.Empty,
             ServingTargetCommandId = evt.CommandId ?? string.Empty,
+            ExpectedArtifactHash = evt.ExpectedArtifactHash ?? string.Empty,
         };
         next.ActivationFailures.Remove(evt.RevisionId);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
@@ -1061,6 +1336,74 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         return next;
     }
 
+    private static ServiceDeploymentState ApplyDefaultServingRevisionDispatchPending(
+        ServiceDeploymentState state,
+        ServiceDeploymentDefaultServingRevisionDispatchPendingEvent evt)
+    {
+        var next = state.Clone();
+        next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
+        if (next.PendingActivations.TryGetValue(evt.RevisionId, out var pending) &&
+            ActivationAttemptsMatch(pending.ActivationAttemptId, evt.ActivationAttemptId) &&
+            string.Equals(pending.DeploymentId, evt.DeploymentId, StringComparison.Ordinal) &&
+            string.Equals(pending.ServingTargetOperationId, evt.OperationId, StringComparison.Ordinal))
+        {
+            var defaultServingPending = pending.Clone();
+            defaultServingPending.Phase =
+                ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending;
+            defaultServingPending.DefaultServingOperationId = evt.OperationId ?? string.Empty;
+            defaultServingPending.DefaultServingCommandId = evt.CommandId ?? string.Empty;
+            defaultServingPending.DefaultServingDispatchAcceptedAt = null;
+            defaultServingPending.ServingGeneration = evt.ServingGeneration;
+            defaultServingPending.ServingTargetsAppliedAt = evt.ServingTargetsAppliedAt?.Clone();
+            defaultServingPending.DeferredAt = FirstTimestamp(
+                evt.PreparedAt,
+                pending.DeferredAt,
+                pending.StartedAt);
+            defaultServingPending.LastRetryFailureCode =
+                ServiceDeploymentActivationFailureCode.Unspecified;
+            next.PendingActivations[evt.RevisionId] = defaultServingPending;
+        }
+
+        next.ActivationFailures.Remove(evt.RevisionId);
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(
+            evt.Identity,
+            evt.DeploymentId,
+            "default-serving-dispatch-pending");
+        return next;
+    }
+
+    private static ServiceDeploymentState ApplyDefaultServingRevisionDispatchAccepted(
+        ServiceDeploymentState state,
+        ServiceDeploymentDefaultServingRevisionDispatchAcceptedEvent evt)
+    {
+        var next = state.Clone();
+        next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
+        if (next.PendingActivations.TryGetValue(evt.RevisionId, out var pending) &&
+            ActivationAttemptsMatch(pending.ActivationAttemptId, evt.ActivationAttemptId) &&
+            GetActivationPhase(pending) ==
+            ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending &&
+            string.Equals(pending.DeploymentId, evt.DeploymentId, StringComparison.Ordinal) &&
+            string.Equals(pending.DefaultServingOperationId, evt.OperationId, StringComparison.Ordinal) &&
+            string.Equals(pending.DefaultServingCommandId, evt.CommandId, StringComparison.Ordinal))
+        {
+            var accepted = pending.Clone();
+            accepted.DefaultServingDispatchAcceptedAt = FirstTimestamp(
+                evt.AcceptedAt,
+                pending.DeferredAt,
+                pending.StartedAt);
+            accepted.LastRetryFailureCode = ServiceDeploymentActivationFailureCode.Unspecified;
+            next.PendingActivations[evt.RevisionId] = accepted;
+        }
+
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(
+            evt.Identity,
+            evt.DeploymentId,
+            "default-serving-dispatch-accepted");
+        return next;
+    }
+
     private static ServiceDeploymentState ApplyServingTargetsApplied(
         ServiceDeploymentState state,
         ServiceDeploymentServingTargetsAppliedEvent evt)
@@ -1083,7 +1426,13 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                         ActivationAttemptId = evt.ActivationAttemptId ?? string.Empty,
                         ServingTargetOperationId = evt.OperationId ?? string.Empty,
                         ServingGeneration = evt.ServingGeneration,
+                        DefaultServingOperationId = pending.DefaultServingOperationId,
+                        DefaultServingCommandId = pending.DefaultServingCommandId,
+                        DefaultServingCommittedAt = evt.DefaultServingCommittedAt?.Clone(),
+                        ExpectedArtifactHash = NormalizeExpectedArtifactHash(
+                            pending.ExpectedArtifactHash),
                         CompletedAt = FirstTimestamp(
+                            evt.DefaultServingCommittedAt,
                             evt.AppliedAt,
                             pending.ServingTargetDispatchAcceptedAt,
                             pending.DeferredAt),
@@ -1100,17 +1449,33 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     private bool ShouldIgnoreFencedActivation(
         string revisionId,
         string activationAttemptId,
+        string expectedArtifactHash,
         bool isContinuation)
     {
         if (isContinuation)
         {
             return !State.PendingActivations.TryGetValue(revisionId, out var pending) ||
-                   !ActivationAttemptsMatch(pending.ActivationAttemptId, activationAttemptId);
+                   !ActivationAttemptsMatch(pending.ActivationAttemptId, activationAttemptId) ||
+                   !string.Equals(
+                       pending.ExpectedArtifactHash,
+                       expectedArtifactHash,
+                       StringComparison.Ordinal);
         }
 
         if (!string.IsNullOrEmpty(activationAttemptId) &&
-            State.ActivationCompletions.ContainsKey(BuildCompletionKey(revisionId, activationAttemptId)))
+            State.ActivationCompletions.TryGetValue(
+                BuildCompletionKey(revisionId, activationAttemptId),
+                out var completion))
         {
+            if (!string.Equals(
+                    NormalizeExpectedArtifactHash(completion.ExpectedArtifactHash),
+                    expectedArtifactHash,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Activation attempt '{activationAttemptId}' for revision '{revisionId}' is already bound to a different expected artifact hash.");
+            }
+
             return true;
         }
 
@@ -1134,6 +1499,23 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     private static string NormalizeActivationAttemptId(string? activationAttemptId) =>
         activationAttemptId?.Trim() ?? string.Empty;
 
+    private static string NormalizeExpectedArtifactHash(string? expectedArtifactHash) =>
+        expectedArtifactHash?.Trim() ?? string.Empty;
+
+    private static void EnsureActiveDeploymentMatchesArtifact(
+        ServiceDeploymentRecord deployment,
+        PreparedServiceRevisionArtifact artifact)
+    {
+        var activeArtifactHash = NormalizeExpectedArtifactHash(deployment.ArtifactHash);
+        var requestedArtifactHash = NormalizeExpectedArtifactHash(artifact.ArtifactHash);
+        if (string.IsNullOrEmpty(requestedArtifactHash) ||
+            !string.Equals(activeArtifactHash, requestedArtifactHash, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Active deployment '{deployment.DeploymentId}' for revision '{deployment.RevisionId}' cannot be reused because its artifact hash does not match the published prepared artifact.");
+        }
+    }
+
     private static string BuildCompletionKey(string? revisionId, string? activationAttemptId) =>
         $"{revisionId?.Trim() ?? string.Empty}\n{NormalizeActivationAttemptId(activationAttemptId)}";
 
@@ -1151,6 +1533,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 Status = ServiceDeploymentStatus.Deactivated,
                 ActivatedAt = deployment.ActivatedAt?.Clone(),
                 UpdatedAt = evt.DeactivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+                ArtifactHash = deployment.ArtifactHash,
             };
         }
 
@@ -1186,6 +1569,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 Status = evt.Status,
                 ActivatedAt = deployment.ActivatedAt?.Clone(),
                 UpdatedAt = evt.OccurredAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
+                ArtifactHash = deployment.ArtifactHash,
             };
         }
 
@@ -1378,17 +1762,20 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         return admission.Accepted;
     }
 
-    private static EventEnvelope CreateEnvelope(string actorId, string envelopeId, IMessage payload)
+    private EventEnvelope CreateEnvelope(string actorId, string envelopeId, IMessage payload)
     {
         return new EventEnvelope
         {
             Id = envelopeId,
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect("gagent-service.deployment", actorId),
+            Route = EnvelopeRouteSemantics.CreateDirect(Id, actorId),
             Propagation = new EnvelopePropagation(),
         };
     }
+
+    private static string BuildDefaultServingEnvelopeId(string? servingOperationId) =>
+        $"service-deployment-default-serving:{servingOperationId?.Trim() ?? string.Empty}";
 
     private DateTime UtcNow => _timeProvider.GetUtcNow().UtcDateTime;
 

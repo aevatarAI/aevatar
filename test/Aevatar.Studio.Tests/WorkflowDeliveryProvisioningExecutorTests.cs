@@ -1,10 +1,12 @@
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Delivery;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -21,7 +23,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         var executor = NewExecutor(provisioning, commands, tokens);
         var delivery = Delivery(WorkflowInstallationStatus.Accepted, attempt: 2);
 
-        var result = await executor.ExecuteAsync(delivery);
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
 
         result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.ProvisioningAccepted);
         tokens.Authorities.Should().ContainSingle();
@@ -43,6 +45,8 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         commands.ProvisioningAccepted.Should().ContainSingle();
         commands.ProvisioningAccepted[0].Attempt.Should().Be(2);
         commands.ProvisioningAccepted[0].OperationId.Should().Be("installation-alpha:provision:a2");
+        commands.ProvisioningAccepted[0].ContinuationClaimId.Should().Be("claim-alpha");
+        commands.ProvisioningAccepted[0].ContinuationClaimantId.Should().Be("worker-alpha");
         commands.Failed.Should().BeEmpty();
     }
 
@@ -60,7 +64,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         var executor = NewExecutor(provisioning, commands, new RecordingAccessTokenProvider());
         var delivery = RetriedDelivery(triggerKind);
 
-        var result = await executor.ExecuteAsync(delivery);
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
 
         result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.ProvisioningAccepted);
         var request = provisioning.Requests.Should().ContainSingle().Which;
@@ -88,7 +92,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         var executor = NewExecutor(provisioning, commands, new RecordingAccessTokenProvider());
         var delivery = Delivery(WorkflowInstallationStatus.Accepted, attempt: 3);
 
-        var result = await executor.ExecuteAsync(delivery);
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
 
         result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.Failed);
         result.ErrorCode.Should().Be("PROVISIONING_FAILED");
@@ -98,8 +102,66 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         failed.Attempt.Should().Be(3);
         failed.OperationId.Should().Be("installation-alpha:provision:a3");
         failed.ExpectedStatus.Should().Be(WorkflowInstallationStatus.Accepted);
+        failed.ContinuationClaimId.Should().Be("claim-alpha");
+        failed.ContinuationClaimantId.Should().Be("worker-alpha");
         failed.ErrorMessage.Should().Be("Workflow provisioning failed.");
         failed.ErrorMessage.Should().NotContain("token-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCatalogProjectionIsPending_ShouldLeaveAcceptedInstallationForRetry()
+    {
+        var provisioning = new RecordingProvisioningService
+        {
+            Failure = new StudioMemberAutomationProjectionPendingException(31),
+        };
+        var commands = new RecordingCommandPort();
+        var executor = NewExecutor(provisioning, commands, new RecordingAccessTokenProvider());
+
+        var execute = () => executor.ExecuteAsync(
+            Delivery(WorkflowInstallationStatus.Accepted),
+            "worker-alpha");
+
+        var pending = await execute.Should()
+            .ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(31);
+        commands.ProvisioningAccepted.Should().BeEmpty();
+        commands.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenAdmissionFails_ShouldPersistSafeBlockerEvidence()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                    Code = "DURABLE_AUTHORIZATION_UNAVAILABLE",
+                    SafeMessage = "The durable authorization catalog is unavailable.",
+                },
+            },
+        };
+        var provisioning = new RecordingProvisioningService
+        {
+            Failure = new WorkflowExternalCapabilityAdmissionException(readiness),
+        };
+        var commands = new RecordingCommandPort();
+        var executor = NewExecutor(provisioning, commands, new RecordingAccessTokenProvider());
+
+        var result = await executor.ExecuteAsync(
+            Delivery(WorkflowInstallationStatus.Accepted),
+            "worker-alpha");
+
+        result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.Failed);
+        result.ErrorCode.Should().Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+        var failed = commands.Failed.Should().ContainSingle().Which;
+        failed.ErrorCode.Should().Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+        failed.ErrorMessage.Should().Be("The durable authorization catalog is unavailable.");
     }
 
     [Fact]
@@ -113,10 +175,76 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         var executor = NewExecutor(provisioning, commands, new RecordingAccessTokenProvider());
         var delivery = Delivery(WorkflowInstallationStatus.Accepted);
 
-        var execute = () => executor.ExecuteAsync(delivery);
+        var execute = () => executor.ExecuteAsync(delivery, "worker-alpha");
 
         await execute.Should().ThrowAsync<TimeoutException>()
             .WithMessage("*ACK was not observed*");
+        provisioning.Requests.Should().ContainSingle();
+        commands.ProvisioningAccepted.Should().ContainSingle();
+        commands.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithoutCommittedContinuationClaim_ShouldSkipBeforeMintingOrProvisioning()
+    {
+        var provisioning = new RecordingProvisioningService();
+        var commands = new RecordingCommandPort();
+        var tokens = new RecordingAccessTokenProvider();
+        var executor = NewExecutor(provisioning, commands, tokens);
+        var delivery = Delivery(
+            WorkflowInstallationStatus.Accepted,
+            includeContinuationClaim: false);
+
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
+
+        result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.Skipped);
+        tokens.Authorities.Should().BeEmpty();
+        provisioning.Requests.Should().BeEmpty();
+        commands.ProvisioningAccepted.Should().BeEmpty();
+        commands.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenClaimBelongsToAnotherWorker_ShouldSkipBeforeSideEffects()
+    {
+        var provisioning = new RecordingProvisioningService();
+        var commands = new RecordingCommandPort();
+        var tokens = new RecordingAccessTokenProvider();
+        var executor = NewExecutor(provisioning, commands, tokens);
+        var delivery = Delivery(
+            WorkflowInstallationStatus.Accepted,
+            claimantId: "worker-beta");
+
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
+
+        result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.Skipped);
+        tokens.Authorities.Should().BeEmpty();
+        provisioning.Requests.Should().BeEmpty();
+        commands.ProvisioningAccepted.Should().BeEmpty();
+        commands.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenOwnedClaimPrecededRevocation_ShouldFinishWithinActorLease()
+    {
+        var provisioning = new RecordingProvisioningService();
+        var commands = new RecordingCommandPort();
+        var tokens = new RecordingAccessTokenProvider();
+        var executor = NewExecutor(provisioning, commands, tokens);
+        var delivery = Delivery(
+            WorkflowInstallationStatus.Accepted,
+            claimAtUtc: DateTimeOffset.Parse("2026-08-16T04:01:00Z"),
+            claimExpiresAtUtc: DateTimeOffset.Parse("2026-08-16T04:04:00Z")) with
+        {
+            LifecycleStatus = WorkflowDeliveryLifecycleStatus.Revoked,
+            RevokedBy = "admin-alpha",
+            RevokedAtUtc = DateTimeOffset.Parse("2026-08-16T04:00:00Z"),
+        };
+
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
+
+        result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.ProvisioningAccepted);
+        tokens.Authorities.Should().ContainSingle();
         provisioning.Requests.Should().ContainSingle();
         commands.ProvisioningAccepted.Should().ContainSingle();
         commands.Failed.Should().BeEmpty();
@@ -138,7 +266,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             WorkflowInstallationStatus.Accepted,
             workflowName: workflowName);
 
-        var result = await executor.ExecuteAsync(delivery);
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
 
         result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.ProvisioningAccepted);
         var request = provisioning.Requests.Should().ContainSingle().Which;
@@ -176,7 +304,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             WorkflowInstallationStatus.Accepted,
             workflowName: WorkflowDeliveryAcceptancePolicies.OnboardingEmailApproval);
 
-        await executor.ExecuteAsync(delivery);
+        await executor.ExecuteAsync(delivery, "worker-alpha");
 
         var request = provisioning.Requests.Should().ContainSingle().Which;
         using var prompt = JsonDocument.Parse(request.Prompt);
@@ -213,7 +341,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             },
         };
 
-        var result = await executor.ExecuteAsync(delivery);
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
 
         result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.ProvisioningAccepted);
         var request = provisioning.Requests.Should().ContainSingle().Which;
@@ -239,7 +367,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             WorkflowInstallationStatus.Accepted,
             workflowName: workflowName);
 
-        var result = await executor.ExecuteAsync(delivery);
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
 
         result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.Failed);
         result.ErrorCode.Should().Be(expectedCode);
@@ -263,7 +391,11 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         WorkflowInstallationStatus status,
         int attempt = 1,
         string? pageSuffix = null,
-        string workflowName = WorkflowDeliveryAcceptancePolicies.BudgetVarianceMonitor)
+        string workflowName = WorkflowDeliveryAcceptancePolicies.BudgetVarianceMonitor,
+        bool includeContinuationClaim = true,
+        string claimantId = "worker-alpha",
+        DateTimeOffset? claimAtUtc = null,
+        DateTimeOffset? claimExpiresAtUtc = null)
     {
         var suffix = pageSuffix ?? "alpha";
         var now = DateTimeOffset.Parse("2026-08-16T03:00:00Z");
@@ -291,6 +423,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             string.Empty,
             "user-alpha",
             "binding-alpha");
+        var operationId = $"installation-{suffix}:provision:a{attempt}";
         var installation = new WorkflowInstallationSnapshot(
             $"installation-{suffix}",
             $"publish-{suffix}",
@@ -305,7 +438,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             [],
             plan,
             owner,
-            $"installation-{suffix}:provision:a{attempt}",
+            operationId,
             status,
             status == WorkflowInstallationStatus.Accepted ? "accepted" : "provisioning_accepted",
             null,
@@ -321,7 +454,19 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             null,
             attempt,
             now,
-            now);
+            now)
+        {
+            ContinuationClaim = includeContinuationClaim
+                ? new WorkflowInstallationContinuationClaimSnapshot(
+                    $"claim-{suffix}",
+                    claimantId,
+                    status,
+                    attempt,
+                    operationId,
+                    claimAtUtc ?? now.AddMinutes(59),
+                    claimExpiresAtUtc ?? now.AddMinutes(64))
+                : null,
+        };
         return new WorkflowDeliverySnapshot(
             $"delivery-{suffix}",
             new WorkflowDeliveryPackageSnapshot(
@@ -472,9 +617,13 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             throw new NotSupportedException();
         public Task<WorkflowDeliveryCommandReceipt> UpdateConnectionAsync(UpdateWorkflowDeliveryConnectionMutation mutation, CancellationToken ct = default) =>
             throw new NotSupportedException();
+        public Task<WorkflowDeliveryCommandReceipt> AttachConnectionAsync(AttachWorkflowDeliveryConnectionMutation mutation, CancellationToken ct = default) =>
+            throw new NotSupportedException();
         public Task<WorkflowDeliveryCommandReceipt> StartInstallationAsync(StartWorkflowInstallationMutation mutation, CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task<WorkflowDeliveryCommandReceipt> RetryInstallationAsync(RetryWorkflowInstallationMutation mutation, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task<WorkflowDeliveryCommandReceipt> ClaimInstallationContinuationAsync(ClaimWorkflowInstallationContinuationMutation mutation, CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task<WorkflowDeliveryCommandReceipt> RecordInstallationReadyAsync(RecordWorkflowInstallationReadyMutation mutation, CancellationToken ct = default) =>
             throw new NotSupportedException();

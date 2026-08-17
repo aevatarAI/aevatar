@@ -13,6 +13,14 @@ namespace Aevatar.GAgents.WorkflowDelivery;
 public sealed class WorkflowDeliveryGAgent
     : GAgentBase<WorkflowDeliveryState>, IProjectedActor
 {
+    private static readonly TimeSpan MaximumContinuationClaimDuration = TimeSpan.FromMinutes(5);
+    private readonly TimeProvider _timeProvider;
+
+    public WorkflowDeliveryGAgent(TimeProvider? timeProvider = null)
+    {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
     public static string ProjectionKind => "workflow-delivery";
 
     [EventHandler(EndpointName = "createWorkflowDelivery")]
@@ -91,9 +99,10 @@ public sealed class WorkflowDeliveryGAgent
         {
             if (string.Equals(existing.LinkId, command.LinkId, StringComparison.Ordinal))
                 return;
-            if (existing.Status == WorkflowDeliveryConnectionStatus.Pending)
-                throw new InvalidOperationException("a connection link is already pending for this slot.");
         }
+        EnsureConnectionsMutable();
+        if (existing?.Status == WorkflowDeliveryConnectionStatus.Pending)
+            throw new InvalidOperationException("a connection link is already pending for this slot.");
         await PersistDomainEventAsync(new WorkflowDeliveryConnectionBegunEvent
         {
             SlotKey = slot.Key,
@@ -122,6 +131,7 @@ public sealed class WorkflowDeliveryGAgent
         if (connection.Status == command.Status &&
             string.Equals(connection.UserServiceId, userServiceId, StringComparison.Ordinal))
             return;
+        EnsureConnectionsMutable();
         await PersistDomainEventAsync(new WorkflowDeliveryConnectionUpdatedEvent
         {
             SlotKey = connection.SlotKey,
@@ -130,6 +140,58 @@ public sealed class WorkflowDeliveryGAgent
             UserServiceId = userServiceId,
             UpdatedAtUtc = RequireTimestamp(command.UpdatedAtUtc, "updated_at_utc").Clone(),
         });
+    }
+
+    [EventHandler(EndpointName = "attachWorkflowDeliveryConnection")]
+    public async Task HandleAttachConnectionAsync(AttachWorkflowDeliveryConnectionCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureDelivery(command.DeliveryId);
+        EnsureTargetScope(command.TargetScopeId);
+        EnsureAvailable(command.AttachedAtUtc);
+        var slot = FindSlot(command.SlotKey, command.ServiceSlug);
+        var userServiceId = WorkflowDeliveryConventions.NormalizeRequired(
+            command.UserServiceId,
+            "user_service_id");
+        var existing = State.Connections.SingleOrDefault(connection =>
+            string.Equals(connection.SlotKey, slot.Key, StringComparison.Ordinal));
+        if (existing?.Status == WorkflowDeliveryConnectionStatus.Completed &&
+            string.Equals(existing.ServiceSlug, slot.ServiceSlug, StringComparison.Ordinal) &&
+            string.Equals(existing.UserServiceId, userServiceId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        EnsureConnectionsMutable();
+        if (existing?.Status == WorkflowDeliveryConnectionStatus.Pending)
+            throw new InvalidOperationException("a connection link is already pending for this slot.");
+        EnsureAttachExpectedStateVersion(command.ExpectedStateVersion);
+
+        await PersistDomainEventAsync(new WorkflowDeliveryConnectionAttachedEvent
+        {
+            SlotKey = slot.Key,
+            ServiceSlug = slot.ServiceSlug,
+            UserServiceId = userServiceId,
+            AttachedAtUtc = RequireTimestamp(command.AttachedAtUtc, "attached_at_utc").Clone(),
+        });
+    }
+
+    private void EnsureAttachExpectedStateVersion(long expectedStateVersion)
+    {
+        if (expectedStateVersion <= 0)
+        {
+            throw new InvalidOperationException(
+                "workflow delivery attach expected_state_version must be positive.");
+        }
+
+        var currentVersion = EventSourcing?.CurrentVersion
+            ?? throw new InvalidOperationException("workflow delivery event sourcing is unavailable.");
+        if (expectedStateVersion != currentVersion)
+        {
+            throw new InvalidOperationException(
+                $"workflow delivery attach expected_state_version {expectedStateVersion} " +
+                $"does not match committed state version {currentVersion}.");
+        }
     }
 
     [EventHandler(EndpointName = "startWorkflowInstallation")]
@@ -194,11 +256,46 @@ public sealed class WorkflowDeliveryGAgent
         });
     }
 
+    [EventHandler(EndpointName = "claimWorkflowInstallationContinuation")]
+    public async Task HandleClaimInstallationContinuationAsync(
+        ClaimWorkflowInstallationContinuationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureDelivery(command.DeliveryId);
+        var installation = RequireInstallation(command.InstallationId);
+        var actorNow = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var claim = NormalizeContinuationClaim(command, actorNow);
+        if (claim.Attempt < installation.Attempt)
+            return;
+        if (claim.Attempt > installation.Attempt)
+            throw new InvalidOperationException("continuation claim attempt is ahead of the active installation attempt.");
+        if (!string.Equals(installation.OperationId, claim.OperationId, StringComparison.Ordinal))
+            throw new InvalidOperationException("continuation claim operation identity does not match the active attempt.");
+        if (installation.Status != claim.ExpectedStatus)
+            return;
+        EnsureAvailable(actorNow);
+
+        var existing = installation.ContinuationClaim;
+        if (existing != null)
+        {
+            if (SameContinuationClaimIdentity(existing, claim))
+                return;
+            if (ContinuationClaimIsActiveFor(existing, installation, actorNow))
+                return;
+        }
+
+        await PersistDomainEventAsync(new WorkflowInstallationContinuationClaimedEvent
+        {
+            Claim = claim,
+        });
+    }
+
     [EventHandler(EndpointName = "recordWorkflowProvisioningAccepted")]
     public async Task HandleProvisioningAcceptedAsync(RecordWorkflowProvisioningAcceptedCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
         EnsureDelivery(command.DeliveryId);
+        var actorNow = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var installation = RequireInstallation(command.InstallationId);
         if (!AcceptsOutcome(installation, command.Attempt, command.OperationId))
             return;
@@ -215,17 +312,43 @@ public sealed class WorkflowDeliveryGAgent
                 throw new InvalidOperationException("installation already accepted different provisioning identities.");
             if (!AddsProvisioningFacts(installation, accepted))
                 return;
+            EnsureClaimedOutcome(
+                installation,
+                WorkflowInstallationStatus.ProvisioningAccepted,
+                accepted.Attempt,
+                accepted.OperationId,
+                accepted.ContinuationClaimId,
+                accepted.ContinuationClaimantId,
+                actorNow);
             await PersistDomainEventAsync(accepted);
             return;
         }
         if (installation.Status == WorkflowInstallationStatus.Failed)
         {
             if (installation.FailureOriginStatus == WorkflowInstallationStatus.Accepted)
+            {
+                EnsureClaimedOutcome(
+                    installation,
+                    WorkflowInstallationStatus.Accepted,
+                    accepted.Attempt,
+                    accepted.OperationId,
+                    accepted.ContinuationClaimId,
+                    accepted.ContinuationClaimantId,
+                    actorNow);
                 await PersistDomainEventAsync(accepted);
+            }
             return;
         }
         if (installation.Status != WorkflowInstallationStatus.Accepted)
             throw new InvalidOperationException("installation must be accepted before provisioning can be recorded.");
+        EnsureClaimedOutcome(
+            installation,
+            WorkflowInstallationStatus.Accepted,
+            accepted.Attempt,
+            accepted.OperationId,
+            accepted.ContinuationClaimId,
+            accepted.ContinuationClaimantId,
+            actorNow);
         await PersistDomainEventAsync(accepted);
     }
 
@@ -234,6 +357,7 @@ public sealed class WorkflowDeliveryGAgent
     {
         ArgumentNullException.ThrowIfNull(command);
         EnsureDelivery(command.DeliveryId);
+        var actorNow = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var installation = RequireInstallation(command.InstallationId);
         if (!AcceptsOutcome(installation, command.Attempt, command.OperationId))
             return;
@@ -251,12 +375,23 @@ public sealed class WorkflowDeliveryGAgent
             throw new InvalidOperationException("installation is already ready with different readiness evidence.");
         }
 
+        EnsureClaimedOutcome(
+            installation,
+            WorkflowInstallationStatus.ProvisioningAccepted,
+            command.Attempt,
+            command.OperationId,
+            command.ContinuationClaimId,
+            command.ContinuationClaimantId,
+            actorNow);
+
         await PersistDomainEventAsync(new WorkflowInstallationReadyEvent
         {
             Evidence = evidence,
             ReadyAtUtc = readyAt.Clone(),
             Attempt = command.Attempt,
             OperationId = command.OperationId.Trim(),
+            ContinuationClaimId = command.ContinuationClaimId.Trim(),
+            ContinuationClaimantId = command.ContinuationClaimantId.Trim(),
         });
     }
 
@@ -265,6 +400,7 @@ public sealed class WorkflowDeliveryGAgent
     {
         ArgumentNullException.ThrowIfNull(command);
         EnsureDelivery(command.DeliveryId);
+        var actorNow = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
         var installation = RequireInstallation(command.InstallationId);
         if (!AcceptsOutcome(installation, command.Attempt, command.OperationId))
             return;
@@ -291,14 +427,25 @@ public sealed class WorkflowDeliveryGAgent
                 return;
             throw new InvalidOperationException("installation failure expected status does not match the active stage.");
         }
+        var failedAt = RequireTimestamp(command.FailedAtUtc, "failed_at_utc");
+        EnsureClaimedOutcome(
+            installation,
+            expectedStatus,
+            command.Attempt,
+            command.OperationId,
+            command.ContinuationClaimId,
+            command.ContinuationClaimantId,
+            actorNow);
         await PersistDomainEventAsync(new WorkflowInstallationFailedEvent
         {
             ErrorCode = code,
             ErrorMessage = message,
-            FailedAtUtc = RequireTimestamp(command.FailedAtUtc, "failed_at_utc").Clone(),
+            FailedAtUtc = failedAt.Clone(),
             Attempt = command.Attempt,
             OperationId = command.OperationId.Trim(),
             FailedFromStatus = expectedStatus,
+            ContinuationClaimId = command.ContinuationClaimId.Trim(),
+            ContinuationClaimantId = command.ContinuationClaimantId.Trim(),
         });
     }
 
@@ -310,8 +457,10 @@ public sealed class WorkflowDeliveryGAgent
             .On<WorkflowDeliveryRevokedEvent>(ApplyRevoked)
             .On<WorkflowDeliveryConnectionBegunEvent>(ApplyConnectionBegun)
             .On<WorkflowDeliveryConnectionUpdatedEvent>(ApplyConnectionUpdated)
+            .On<WorkflowDeliveryConnectionAttachedEvent>(ApplyConnectionAttached)
             .On<WorkflowInstallationStartedEvent>(ApplyInstallationStarted)
             .On<WorkflowInstallationRetryRequestedEvent>(ApplyInstallationRetry)
+            .On<WorkflowInstallationContinuationClaimedEvent>(ApplyInstallationContinuationClaimed)
             .On<WorkflowProvisioningAcceptedEvent>(ApplyProvisioningAccepted)
             .On<WorkflowInstallationReadyEvent>(ApplyInstallationReady)
             .On<WorkflowInstallationFailedEvent>(ApplyInstallationFailed)
@@ -374,6 +523,25 @@ public sealed class WorkflowDeliveryGAgent
         return updated;
     }
 
+    internal static WorkflowDeliveryState ApplyConnectionAttached(
+        WorkflowDeliveryState state,
+        WorkflowDeliveryConnectionAttachedEvent evt)
+    {
+        var updated = state.Clone();
+        var previous = updated.Connections.SingleOrDefault(connection => connection.SlotKey == evt.SlotKey);
+        if (previous != null)
+            updated.Connections.Remove(previous);
+        updated.Connections.Add(new WorkflowDeliveryConnectionState
+        {
+            SlotKey = evt.SlotKey,
+            ServiceSlug = evt.ServiceSlug,
+            Status = WorkflowDeliveryConnectionStatus.Completed,
+            UserServiceId = evt.UserServiceId,
+            UpdatedAtUtc = evt.AttachedAtUtc.Clone(),
+        });
+        return updated;
+    }
+
     internal static WorkflowDeliveryState ApplyInstallationStarted(WorkflowDeliveryState state, WorkflowInstallationStartedEvent evt)
     {
         var updated = state.Clone();
@@ -394,7 +562,17 @@ public sealed class WorkflowDeliveryGAgent
         updated.Installation.ReadinessEvidence = null;
         updated.Installation.Attempt++;
         updated.Installation.OperationId = evt.OperationId;
+        updated.Installation.ContinuationClaim = null;
         updated.Installation.UpdatedAtUtc = evt.RequestedAtUtc.Clone();
+        return updated;
+    }
+
+    internal static WorkflowDeliveryState ApplyInstallationContinuationClaimed(
+        WorkflowDeliveryState state,
+        WorkflowInstallationContinuationClaimedEvent evt)
+    {
+        var updated = state.Clone();
+        updated.Installation.ContinuationClaim = evt.Claim.Clone();
         return updated;
     }
 
@@ -518,6 +696,94 @@ public sealed class WorkflowDeliveryGAgent
         return true;
     }
 
+    private void EnsureClaimedOutcome(
+        WorkflowInstallationState installation,
+        WorkflowInstallationStatus expectedStatus,
+        int attempt,
+        string operationId,
+        string claimId,
+        string claimantId,
+        Timestamp actorNow)
+    {
+        var normalizedClaimId = WorkflowDeliveryConventions.NormalizeRequired(
+            claimId,
+            "continuation_claim_id");
+        var normalizedClaimantId = WorkflowDeliveryConventions.NormalizeRequired(
+            claimantId,
+            "continuation_claimant_id");
+        var claim = installation.ContinuationClaim
+            ?? throw new InvalidOperationException("installation continuation has not been claimed.");
+        if (!string.Equals(claim.ClaimId, normalizedClaimId, StringComparison.Ordinal) ||
+            !string.Equals(claim.ClaimantId, normalizedClaimantId, StringComparison.Ordinal) ||
+            claim.ExpectedStatus != expectedStatus ||
+            claim.Attempt != attempt ||
+            !string.Equals(claim.OperationId, operationId?.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "installation continuation claim does not own the active operation stage.");
+        }
+        if (claim.ClaimedAtUtc == null || claim.ExpiresAtUtc == null ||
+            actorNow >= claim.ExpiresAtUtc)
+        {
+            throw new InvalidOperationException("installation continuation claim is not active.");
+        }
+    }
+
+    private WorkflowInstallationContinuationClaim NormalizeContinuationClaim(
+        ClaimWorkflowInstallationContinuationCommand command,
+        Timestamp actorNow)
+    {
+        if (command.ExpectedStatus is not (WorkflowInstallationStatus.Accepted or
+            WorkflowInstallationStatus.ProvisioningAccepted))
+        {
+            throw new InvalidOperationException(
+                "continuation claim expected status must identify an active installation stage.");
+        }
+        if (command.Attempt <= 0)
+            throw new InvalidOperationException("continuation claim attempt must be positive.");
+        if (command.RequestedDuration == null)
+            throw new InvalidOperationException("continuation claim duration is required.");
+        var duration = command.RequestedDuration.ToTimeSpan();
+        if (duration <= TimeSpan.Zero || duration > MaximumContinuationClaimDuration)
+        {
+            throw new InvalidOperationException(
+                "continuation claim duration must be positive and within the maximum duration.");
+        }
+        var expiresAt = Timestamp.FromDateTimeOffset(actorNow.ToDateTimeOffset().Add(duration));
+        if (State.ExpiresAtUtc != null && expiresAt > State.ExpiresAtUtc)
+            expiresAt = State.ExpiresAtUtc.Clone();
+        return new WorkflowInstallationContinuationClaim
+        {
+            ClaimId = WorkflowDeliveryConventions.NormalizeRequired(command.ClaimId, "claim_id"),
+            ClaimantId = WorkflowDeliveryConventions.NormalizeRequired(command.ClaimantId, "claimant_id"),
+            ExpectedStatus = command.ExpectedStatus,
+            Attempt = command.Attempt,
+            OperationId = WorkflowDeliveryConventions.NormalizeRequired(command.OperationId, "operation_id"),
+            ClaimedAtUtc = actorNow.Clone(),
+            ExpiresAtUtc = expiresAt,
+        };
+    }
+
+    private static bool SameContinuationClaimIdentity(
+        WorkflowInstallationContinuationClaim existing,
+        WorkflowInstallationContinuationClaim candidate) =>
+        string.Equals(existing.ClaimId, candidate.ClaimId, StringComparison.Ordinal) &&
+        string.Equals(existing.ClaimantId, candidate.ClaimantId, StringComparison.Ordinal) &&
+        existing.ExpectedStatus == candidate.ExpectedStatus &&
+        existing.Attempt == candidate.Attempt &&
+        string.Equals(existing.OperationId, candidate.OperationId, StringComparison.Ordinal);
+
+    private static bool ContinuationClaimIsActiveFor(
+        WorkflowInstallationContinuationClaim claim,
+        WorkflowInstallationState installation,
+        Timestamp at) =>
+        claim.ExpectedStatus == installation.Status &&
+        claim.Attempt == installation.Attempt &&
+        string.Equals(claim.OperationId, installation.OperationId, StringComparison.Ordinal) &&
+        claim.ClaimedAtUtc != null &&
+        claim.ExpiresAtUtc != null &&
+        at < claim.ExpiresAtUtc;
+
     private static WorkflowInstallationStatus ValidateFailureExpectedStatus(
         WorkflowInstallationStatus expectedStatus)
     {
@@ -603,6 +869,22 @@ public sealed class WorkflowDeliveryGAgent
             if (!command.ConnectionReferences.TryGetValue(required.Key, out var reference) || string.IsNullOrWhiteSpace(reference))
                 throw new InvalidOperationException($"required connection slot '{required.Key}' is unresolved.");
         }
+        var completedReferences = State.Connections
+            .Where(static connection =>
+                connection.Status == WorkflowDeliveryConnectionStatus.Completed &&
+                !string.IsNullOrWhiteSpace(connection.UserServiceId))
+            .ToDictionary(
+                static connection => connection.SlotKey,
+                static connection => connection.UserServiceId,
+                StringComparer.Ordinal);
+        if (completedReferences.Count != command.ConnectionReferences.Count ||
+            command.ConnectionReferences.Any(reference =>
+                !completedReferences.TryGetValue(reference.Key, out var completedReference) ||
+                !string.Equals(completedReference, reference.Value, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "workflow installation connection references do not match completed delivery connections.");
+        }
         foreach (var confirmation in command.Confirmations)
         {
             WorkflowDeliveryConventions.NormalizeRequired(confirmation.CallSiteId, "confirmation.call_site_id");
@@ -613,6 +895,15 @@ public sealed class WorkflowDeliveryGAgent
         if (command.Confirmations.Select(static value => value.CallSiteId.Trim())
             .Distinct(StringComparer.Ordinal).Count() != command.Confirmations.Count)
             throw new InvalidOperationException("workflow installation confirmation call-site identities must be unique.");
+    }
+
+    private void EnsureConnectionsMutable()
+    {
+        if (State.Installation != null && State.Installation.InstallationId.Length != 0)
+        {
+            throw new InvalidOperationException(
+                "workflow delivery connections cannot be changed after installation has started.");
+        }
     }
 
     private static void ValidateAuthorizationOwner(WorkflowDeliveryAuthorizationOwnerContext? context)
@@ -663,6 +954,8 @@ public sealed class WorkflowDeliveryGAgent
             AcceptedAtUtc = RequireTimestamp(command.AcceptedAtUtc, "accepted_at_utc").Clone(),
             Attempt = command.Attempt,
             OperationId = command.OperationId.Trim(),
+            ContinuationClaimId = command.ContinuationClaimId?.Trim() ?? string.Empty,
+            ContinuationClaimantId = command.ContinuationClaimantId?.Trim() ?? string.Empty,
         };
 
     private static bool SameProvisioning(

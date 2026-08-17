@@ -483,6 +483,14 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         "STUDIO_MEMBER_PLATFORM_BINDING_SERVING_TARGET_DELIVERY_FAILED",
         "platform service activation could not deliver serving targets.")]
     [InlineData(
+        ServiceDeploymentActivationFailureCode.DefaultServingRevisionDeliveryFailed,
+        "STUDIO_MEMBER_PLATFORM_BINDING_DEFAULT_SERVING_REVISION_DELIVERY_FAILED",
+        "platform service activation could not commit the default serving revision.")]
+    [InlineData(
+        ServiceDeploymentActivationFailureCode.DefaultServingRevisionSuperseded,
+        "STUDIO_MEMBER_PLATFORM_BINDING_DEFAULT_SERVING_REVISION_SUPERSEDED",
+        "platform service activation was superseded by a newer serving generation.")]
+    [InlineData(
         ServiceDeploymentActivationFailureCode.ActivationDependencyUnavailable,
         "STUDIO_MEMBER_PLATFORM_BINDING_ACTIVATION_DEPENDENCY_UNAVAILABLE",
         "platform service activation dependency was unavailable.")]
