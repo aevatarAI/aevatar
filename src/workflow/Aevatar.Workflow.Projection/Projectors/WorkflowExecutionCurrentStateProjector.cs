@@ -68,14 +68,14 @@ public sealed class WorkflowExecutionCurrentStateProjector
             ScheduleId = state.ScheduleId ?? string.Empty,
             ExpectedExecutionMode = state.ExpectedExecutionMode,
             Compiled = state.Compiled,
-            CompilationError = state.CompilationError ?? string.Empty,
+            CompilationError = WorkflowAuditTextSanitizer.SanitizeForStorage(state.CompilationError),
             Input = state.Input ?? string.Empty,
             FinalOutput = state.FinalOutput ?? string.Empty,
-            FinalError = state.FinalError ?? string.Empty,
+            FinalError = WorkflowAuditTextSanitizer.SanitizeForStorage(state.FinalError),
             SagaStatus = state.SagaStatus,
             DeadLetterFailedCompensationStepId = state.DeadLetterFailedCompensationStepId ?? string.Empty,
             DeadLetterRemainingUncompensated = state.DeadLetterRemainingUncompensated,
-            DeadLetterError = state.DeadLetterError ?? string.Empty,
+            DeadLetterError = WorkflowAuditTextSanitizer.SanitizeForStorage(state.DeadLetterError),
             ExecutionStateCount = state.ExecutionStates.Count,
             Success = ResolveSuccess(state.Status),
             StateVersion = stateEvent.Version,
@@ -210,7 +210,9 @@ public sealed class WorkflowExecutionCurrentStateProjector
         return new WorkflowRunActivityFailureReadModel
         {
             StepId = WorkflowAuditTextSanitizer.Sanitize(ResolveFailureStepId(state)),
-            Message = WorkflowAuditTextSanitizer.SanitizeForDisplay(message, 240),
+            Message = WorkflowAuditTextSanitizer.SanitizeForDisplay(
+                WorkflowAuditTextSanitizer.SanitizeForStorage(message),
+                240),
             Availability = "available",
         };
     }

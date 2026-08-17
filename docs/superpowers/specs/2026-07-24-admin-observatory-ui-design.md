@@ -226,10 +226,11 @@ logs, artifacts, and graph remain children of the selected container rather
 than parallel top-level records.
 
 Timeline and Trajectory are sibling tabs with different owners. Timeline is the
-default and keeps the original complete workflow-event presentation: timestamp,
-stage, message, actor/agent, step, event type, and event data remain available.
-Adding Trajectory must not filter, summarize, replace, or otherwise reduce that
-event view.
+default and keeps the original complete materialized workflow-event
+presentation: timestamp, stage, message, actor/agent, step, event type, and
+event data remain available. This does not imply that every runtime-specific
+step output is duplicated into Timeline. Adding Trajectory must not filter,
+summarize, replace, or otherwise reduce that event view.
 
 The Trajectory tab owns the chronological operation ledger. It emits a distinct
 selectable record for the captured run input, each model response, and each tool
@@ -313,6 +314,64 @@ Detail and graph endpoints follow the resolved observation intent:
 
 Admin authority alone is not a reason to use the admin detail endpoint.
 
+### Failure Evidence Contract
+
+Failure evidence belongs to the selected run's committed current-state and
+run-report projections. The browser does not reconstruct failures from prose,
+and the query service does not replay events or prime projections. For a failed
+run, the first detail viewport summarizes every available failure source while
+the Diagnostics, Steps, Trajectory, Timeline, and Logs tabs retain their native
+detail:
+
+- compilation and current-state terminal errors;
+- the activity projection's committed failure summary (not proof of the first failed attempt);
+- run-report final error and failed-step error/output;
+- failed model/tool operations and their captured result;
+- recovery eligibility blockers; and
+- unavailable or version-mismatched detail sections.
+
+Failed-step output is a dedicated typed run-report field because native workflow
+steps do not necessarily emit a role reply or tool-call Timeline record. It is
+sanitized before persistence and bounded to 64 KiB of UTF-8, preserving both the
+beginning and end so terminal stderr remains useful. A typed truncation flag is
+the only authority for telling the operator that middle content was omitted.
+Each per-file result `output`/`error` is independently sanitized and bounded to
+8 KiB of UTF-8; vote-agreement decision `output`/`reason` keeps the 64 KiB
+UTF-8 limit. Every bounded field has its own typed truncation flag; an upstream
+`true` flag remains `true` across projection materialization and report export.
+Failure outcome, recovery failure kind, retry disposition, per-file results,
+and vote-agreement decisions remain typed fields rather than Timeline metadata
+keys. A per-file result collection retains at most 32 entries using a
+deterministic head/tail subset (first 16 and last 16). Its typed
+`source_result_count` and `results_truncated` fields distinguish a complete
+collection from a bounded one. When an upstream producer reports truncation but
+does not know the original count, `source_result_count = 0` means unknown; the
+query and browser must not present it as an exact count.
+
+A retry request moves the complete previous failed attempt into the typed
+`latest_failed_attempt` sub-message before resetting every current-attempt
+completion, failure, branch, suspension, approval, and usage field. The
+snapshot retains the failed request's own type, target role, parameters,
+requested/completed timestamps, and evidence. A step whose current `outcome`
+is `waiting` reads failure details only from that snapshot, so a retry's request
+identity is never attributed to the previous failure. The snapshot is cleared
+when the current attempt completes; a subsequent retry snapshots that newer
+failure in turn.
+
+The detail contract exposes the run-report `reportVersion`. Failed, timed-out,
+and stopped runs whose report version is missing or older than `3.1` receive a
+separate `failure_evidence_schema_legacy` diagnostic. The warning says that
+dedicated failure fields may be unavailable and that background repair or
+reprojection is required; the query path does not replay or silently upgrade a
+legacy `3.0` report. This schema warning is independent of section state-version
+availability or mismatch diagnostics.
+
+All failure text and nested structured details are redacted before they cross
+the projection boundary. Credential-shaped field names, including compound
+names ending in singular `token`, `secret`, `password`, `credential`, or
+`api_key`, are treated as sensitive. The console may expose all safely captured
+diagnostic evidence; it must never offer a raw/unredacted fallback.
+
 ## Accessibility
 
 - Scope selection, filter menu, filter chips, run rows, tabs, rail collapse,
@@ -363,7 +422,19 @@ Static asset tests must fail before implementation and cover:
 - typed Model/Tool operation facts are consumed from the detail contract rather
   than reconstructed from Timeline or workflow-step prose;
 - Input and other missing operation timing or tools-catalog facts render as
-  unavailable and are never inferred from refresh or update timestamps.
+  unavailable and are never inferred from refresh or update timestamps;
+- failed native-step output is read from the typed step failure field, not
+  assumed to exist in Timeline;
+- failure output truncation is visible and follows the projection's typed flag;
+- waiting retries preserve and label the latest failed-attempt evidence without
+  being classified as current failed steps;
+- bounded per-file collections expose both source count and collection-level
+  truncation, including the explicit unknown-count case;
+- legacy report schema warnings and `reportVersion` remain present in the
+  copied issue payload;
+- compilation, activity-failure-summary, failed-operation, recovery-blocker, and section
+  version diagnostics remain present in the copied issue payload and Logs; and
+- credential-shaped nested failure fields are redacted before display.
 
 Visual verification covers `1440x900`, `1920x1080`, `1024x768`, and `390x844`.
 It checks normal and immersive modes, expanded filters, long run IDs, long log

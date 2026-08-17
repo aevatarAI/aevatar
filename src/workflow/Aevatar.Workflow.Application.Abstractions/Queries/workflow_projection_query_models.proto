@@ -98,6 +98,7 @@ message WorkflowActorSnapshot {
   string run_id = 32;
   WorkflowRunRecoveryCapability recovery_capability = 33;
   aevatar.workflow.WorkflowRunLineage lineage = 34;
+  string compilation_error = 35;
 }
 
 message WorkflowRunActivityInitiatorSnapshot {

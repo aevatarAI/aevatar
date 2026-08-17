@@ -103,6 +103,21 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         provider.Metadata.IndexName.Should().Be("workflow-execution-reports");
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        var rootProperties = provider.Metadata.Mappings["properties"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        var stepEntries = rootProperties["step_entries"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        var stepProperties = stepEntries["properties"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        var failureOutput = stepProperties["failure_output"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        failureOutput["index"].Should().Be(false);
+        foreach (var field in new[] { "file_item_results", "vote_agreement_decision", "latest_failed_attempt" })
+        {
+            var mapping = stepProperties[field]
+                .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+            mapping["enabled"].Should().Be(false);
+        }
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
     }

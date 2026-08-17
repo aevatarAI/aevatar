@@ -852,6 +852,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var report = new WorkflowRunReport
         {
             StateVersion = 6,
+            ReportVersion = "3.0",
             Input = "stale input",
             FinalOutput = "stale output",
             Steps = [new WorkflowRunStepTrace { StepId = "stale", Success = true }],
@@ -865,6 +866,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
 
         detail.Should().NotBeNull();
         detail!.Summary.StateVersion.Should().Be(7);
+        detail.ReportVersion.Should().Be("3.0");
         detail.Sections.Steps.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.VersionMismatch);
         detail.Sections.Steps.DetailStateVersion.Should().Be(7);
         detail.Sections.Steps.SourceStateVersion.Should().Be(6);
@@ -873,6 +875,10 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         detail.FinalOutput.Should().BeEmpty();
         detail.Steps.Should().BeEmpty();
         detail.Timeline.Should().BeEmpty();
+        detail.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == "section_version_mismatch" &&
+            diagnostic.Source == "read-model.steps" &&
+            diagnostic.Message.Contains("does not match", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -913,6 +919,96 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task GetRunForScopeAsync_ShouldLabelRetainedFailureAsLatestAttempt_WhenRetryIsWaiting()
+    {
+        var service = new WorkflowRunObservatoryQueryService(
+            new FakeCurrentStateQueryPort
+            {
+                SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Running),
+            },
+            new FakeArtifactQueryPort
+            {
+                Report = new WorkflowRunReport
+                {
+                    StateVersion = 7,
+                    ReportVersion = "3.1",
+                    Steps =
+                    [
+                        new WorkflowRunStepTrace
+                        {
+                            StepId = "send_email",
+                            StepType = "connector_retry",
+                            TargetRole = "retry-mailer",
+                            RequestedAt = DateTimeOffset.UnixEpoch.AddSeconds(10),
+                            CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(11),
+                            Success = false,
+                            Outcome = WorkflowRunStepOutcome.Waiting,
+                            Error = "stale mixed error must not escape",
+                            FailureOutput = "stale mixed output must not escape",
+                            RequestParameters = new Dictionary<string, string>
+                            {
+                                ["attempt_identity"] = "current-retry",
+                            },
+                            LatestFailedAttempt = new WorkflowRunFailedStepAttempt
+                            {
+                                StepType = "tool_call",
+                                TargetRole = "original-mailer",
+                                RequestedAt = DateTimeOffset.UnixEpoch.AddSeconds(2),
+                                CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(3),
+                                Success = false,
+                                Error = "SMTP connection refused",
+                                FailureOutput = "retryable transport error",
+                                RequestParameters = new Dictionary<string, string>
+                                {
+                                    ["attempt_identity"] = "failed-original",
+                                },
+                            },
+                        },
+                    ],
+                },
+            });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.ReportVersion.Should().Be("3.1");
+        var step = detail.Steps.Should().ContainSingle().Subject;
+        step.Outcome.Should().Be(WorkflowRunStepOutcome.Waiting);
+        step.StepType.Should().Be("connector_retry");
+        step.TargetRole.Should().Be("retry-mailer");
+        step.RequestedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(10));
+        step.CompletedAtUtc.Should().BeNull();
+        step.Success.Should().BeNull();
+        step.Error.Should().BeEmpty();
+        step.FailureOutput.Should().BeEmpty();
+        step.RequestParameters.Should().Contain("attempt_identity", "current-retry");
+        step.LatestFailedAttempt.Should().NotBeNull();
+        step.LatestFailedAttempt!.StepType.Should().Be("tool_call");
+        step.LatestFailedAttempt.TargetRole.Should().Be("original-mailer");
+        step.LatestFailedAttempt.RequestedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(2));
+        step.LatestFailedAttempt.CompletedAtUtc.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(3));
+        step.LatestFailedAttempt.DurationMs.Should().Be(1000);
+        step.LatestFailedAttempt.RequestParameters.Should().Contain("attempt_identity", "failed-original");
+        detail.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == "step_retry_waiting_after_failure" &&
+            diagnostic.Severity == "warning" &&
+            diagnostic.StepId == "send_email" &&
+            diagnostic.StepType == "tool_call" &&
+            diagnostic.TargetRole == "original-mailer" &&
+            diagnostic.TimestampUtc == DateTimeOffset.UnixEpoch.AddSeconds(3) &&
+            diagnostic.Source == "run-report.step.latest-failed-attempt" &&
+            diagnostic.Hint.Contains("latest failed attempt", StringComparison.Ordinal));
+        detail.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == "step_retry_waiting_failure_output" &&
+            diagnostic.Message == "retryable transport error");
+        detail.Diagnostics.Should().NotContain(diagnostic =>
+            diagnostic.StepId == "send_email" &&
+            (diagnostic.Code == "step_failed" || diagnostic.Code == "step_failure_output"));
+        detail.Diagnostics.Should().NotContain(diagnostic =>
+            diagnostic.Message.Contains("stale mixed", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ObservatoryStepDetail_ShouldSerializeOutcomeAsContractValue()
     {
         var json = JsonSerializer.Serialize(new ObservatoryStepDetail
@@ -938,7 +1034,8 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
 
         detail.Should().NotBeNull();
-        detail!.Sections.Steps.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Unavailable);
+        detail!.ReportVersion.Should().BeEmpty();
+        detail.Sections.Steps.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Unavailable);
         detail.Sections.Steps.DetailStateVersion.Should().Be(7);
         detail.Sections.Steps.SourceStateVersion.Should().Be(0);
         detail.Sections.Timeline.VersionStatus.Should().Be(ObservatoryRunDetailSectionVersionStatus.Unavailable);
@@ -951,7 +1048,13 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         detail.FinalOutput.Should().BeEmpty();
         detail.Steps.Should().BeEmpty();
         detail.Statistics.TotalSteps.Should().Be(0);
-        detail.Diagnostics.Should().BeEmpty();
+        detail.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == "section_unavailable" &&
+            diagnostic.Source == "read-model.steps" &&
+            diagnostic.Message == "Run report artifact has not materialized.");
+        detail.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == "section_unavailable" &&
+            diagnostic.Source == "read-model.timeline");
         detail.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
         detail.RecoveryCapability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibility.Eligible);
     }
@@ -963,15 +1066,25 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         snapshot.RecoveryCapability = RecoveryCapability();
         var service = new WorkflowRunObservatoryQueryService(
             new FakeCurrentStateQueryPort { SingleResult = snapshot },
-            new FakeArtifactQueryPort { Report = new WorkflowRunReport { StateVersion = 7, FinalError = "boom" } });
+            new FakeArtifactQueryPort
+            {
+                Report = new WorkflowRunReport { StateVersion = 7, ReportVersion = "3.0", FinalError = "boom" },
+            });
 
         var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
 
         detail.Should().NotBeNull();
         detail!.RecoveryCapability.WorkflowDefinitionRevisionId.Should().Be("rev-recovery");
+        detail.ReportVersion.Should().Be("3.0");
         detail.RecoveryCapability.WorkflowDefinitionVersion.Should().Be(12);
         detail.RecoveryCapability.RetryFailedStep.RecommendedActions.Should().ContainSingle()
             .Which.Should().Be(WorkflowRecoveryRecommendedAction.Retry);
+        detail.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "failure_evidence_schema_legacy" &&
+            diagnostic.Severity == "warning" &&
+            diagnostic.Source == "run-report.schema" &&
+            diagnostic.Message.Contains("'3.0'", StringComparison.Ordinal) &&
+            diagnostic.Hint.Contains("repair or reprojection", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1053,6 +1166,177 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task GetRunForScopeAsync_ShouldExposeCompleteStructuredFailureEvidence()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Failed, started: 1, updated: 9);
+        snapshot.CompilationError = "line 7: unknown step type";
+        snapshot.ActivityFirstFailure = new WorkflowRunActivityFailureSnapshot
+        {
+            StepId = "normalize_person",
+            Message = "normalization failed",
+            Availability = "available",
+        };
+        snapshot.RecoveryCapability = new WorkflowRunRecoveryCapability
+        {
+            RetryFailedStep = new WorkflowRecoveryActionCapability
+            {
+                Eligibility = WorkflowRecoveryEligibility.Ineligible,
+                UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.ConfigurationFailure,
+                UnavailableReason = "Fix the code before retrying.",
+                StartingStepId = "normalize_person",
+                RecommendedActions = { WorkflowRecoveryRecommendedAction.ChangeConfiguration },
+            },
+            RunAgain = new WorkflowRecoveryActionCapability
+            {
+                Eligibility = WorkflowRecoveryEligibility.Unavailable,
+                UnavailableReasonCode = WorkflowRecoveryUnavailableReasonCode.AuthorizationFailure,
+                UnavailableReason = "Execution access is no longer available.",
+                RecommendedActions = { WorkflowRecoveryRecommendedAction.FixAccess },
+            },
+        };
+        var fileItemResults = new WorkflowFileItemResultSet
+        {
+            SourceResultCount = 50,
+            ResultsTruncated = true,
+            Results =
+            {
+                new WorkflowFileItemResult
+                {
+                    Index = 1,
+                    Success = false,
+                    Output = "partial row",
+                    OutputTruncated = true,
+                    Error = "row parse failed",
+                    ErrorTruncated = true,
+                    FileRef = new WorkflowFileRef
+                    {
+                        FileId = "file-alpha",
+                        ArtifactId = "workflow-file://file-alpha",
+                        SourceKind = WorkflowFileSourceKind.ChatInput,
+                        FileName = "people.csv",
+                    },
+                },
+            },
+        };
+        var voteDecision = new VoteAgreementDecision
+        {
+            Kind = AgreementDecisionKind.Inconclusive,
+            BranchKey = "needs-review",
+            WinnerCandidateId = "candidate-alpha",
+            Output = "no agreement",
+            OutputTruncated = true,
+            Reason = "quorum not reached",
+            ReasonTruncated = true,
+        };
+        voteDecision.LabelCounts["approve"] = 1;
+        var failedTimeline = TimelineEvent(
+            "step.failed",
+            "stderr: SyntaxError on line 12",
+            stepId: "normalize_person");
+        failedTimeline.StepType = "tool_call";
+        failedTimeline.Data["error"] = "stderr: SyntaxError on line 12";
+        var report = new WorkflowRunReport
+        {
+            StateVersion = 7,
+            ReportVersion = "3.1",
+            FinalError = "code_execute failed",
+            Steps =
+            [
+                new WorkflowRunStepTrace
+                {
+                    StepId = "normalize_person",
+                    DisplayName = "Normalize person",
+                    StepType = "tool_call",
+                    TargetRole = "normalizer",
+                    RequestedAt = DateTimeOffset.UnixEpoch.AddSeconds(2),
+                    CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(3),
+                    Success = false,
+                    WorkerId = "worker-alpha",
+                    OutputPreview = "stderr: SyntaxError",
+                    Error = "code_execute failed",
+                    FailureOutput = "stderr: SyntaxError on line 12 near unexpected token",
+                    FailureOutputTruncated = true,
+                    FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+                    RecoveryFailureKind = WorkflowRecoveryFailureKind.ConfigurationFailure,
+                    RetryDisposition = WorkflowStepRetryDisposition.Forbidden,
+                    FileItemResults = fileItemResults,
+                    VoteAgreementDecision = voteDecision,
+                    RequestParameters = new Dictionary<string, string> { ["language"] = "python" },
+                    CompletionAnnotations = new Dictionary<string, string> { ["exit_code"] = "1" },
+                    AssignedVariable = "normalized_person",
+                    AssignedValue = "none",
+                    RequestedVariableName = "person",
+                },
+            ],
+            Operations =
+            [
+                FailedOperation("operation-alpha"),
+                FailedOperation("operation-beta"),
+            ],
+            Timeline = [failedTimeline],
+        };
+        var service = new WorkflowRunObservatoryQueryService(
+            new FakeCurrentStateQueryPort { SingleResult = snapshot },
+            new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.ReportVersion.Should().Be("3.1");
+        detail.CompilationError.Should().Be("line 7: unknown step type");
+        detail.FirstFailure.StepId.Should().Be("normalize_person");
+        detail.FirstFailure.Message.Should().Be("normalization failed");
+        var step = detail.Steps.Should().ContainSingle().Subject;
+        step.WorkerId.Should().Be("worker-alpha");
+        step.FailureOutput.Should().Contain("SyntaxError on line 12");
+        step.FailureOutputTruncated.Should().BeTrue();
+        step.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        step.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+        step.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+        step.CompletionAnnotations["exit_code"].Should().Be("1");
+        step.AssignedVariable.Should().Be("normalized_person");
+        step.AssignedValue.Should().Be("none");
+        step.RequestedVariableName.Should().Be("person");
+        step.FileItemResults!.Results.Should().ContainSingle(item =>
+            item.Index == 1 &&
+            item.FileRef!.FileId == "file-alpha" &&
+            item.FileRef.SourceKind == WorkflowFileSourceKind.ChatInput &&
+            item.OutputTruncated &&
+            item.Error == "row parse failed" &&
+            item.ErrorTruncated);
+        step.FileItemResults.SourceResultCount.Should().Be(50);
+        step.FileItemResults.ResultsTruncated.Should().BeTrue();
+        step.VoteAgreementDecision!.Kind.Should().Be(AgreementDecisionKind.Inconclusive);
+        step.VoteAgreementDecision.OutputTruncated.Should().BeTrue();
+        step.VoteAgreementDecision.ReasonTruncated.Should().BeTrue();
+        step.VoteAgreementDecision.LabelCounts["approve"].Should().Be(1);
+        detail.Timeline.Should().ContainSingle(item =>
+            item.Kind == "RunError" &&
+            item.Message == "stderr: SyntaxError on line 12" &&
+            item.Data["error"] == "stderr: SyntaxError on line 12");
+        detail.Diagnostics.Should().Contain(item => item.Code == "compilation_error");
+        detail.Diagnostics.Should().Contain(item => item.Code == "activity_first_failure");
+        detail.Diagnostics.Should().Contain(item =>
+            item.Code == "step_failure_output" && item.Message.Contains("unexpected token", StringComparison.Ordinal));
+        detail.Diagnostics.Count(item => item.Code == "operation_failed").Should().Be(2);
+        detail.Diagnostics.Should().Contain(item =>
+            item.Code == "recovery_retry_failed_step_blocked" && item.StepId == "normalize_person");
+        detail.Diagnostics.Should().Contain(item => item.Code == "recovery_run_again_blocked");
+        detail.Diagnostics.Should().NotContain(item => item.Code == "failure_evidence_schema_legacy");
+
+        var json = JsonSerializer.Serialize(step, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        json.Should().Contain("\"failureOutcome\":\"OutcomeUncertain\"");
+        json.Should().Contain("\"recoveryFailureKind\":\"ConfigurationFailure\"");
+        json.Should().Contain("\"retryDisposition\":\"Forbidden\"");
+        json.Should().Contain("\"fileItemResults\":{\"results\":[");
+        json.Should().Contain("\"sourceKind\":\"ChatInput\"");
+        json.Should().Contain("\"outputTruncated\":true");
+        json.Should().Contain("\"errorTruncated\":true");
+        json.Should().Contain("\"voteAgreementDecision\":{\"kind\":\"Inconclusive\"");
+        json.Should().Contain("\"reasonTruncated\":true");
+    }
+
+    [Fact]
     public async Task GetRunForScopeAsync_ShouldSurfaceCurrentStateDiagnostic_WhenReportNotYetMaterialized()
     {
         var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.TimedOut, started: 1, updated: 9);
@@ -1066,6 +1350,9 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         detail!.Diagnostics.Should().Contain(log =>
             log.Code == "current_state_last_error" &&
             log.Message == "timeout waiting for role");
+        detail.Diagnostics.Should().Contain(log =>
+            log.Code == "failure_evidence_schema_legacy" &&
+            log.Message.Contains("missing", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1396,6 +1683,19 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         item.Data["success"] = success ? "true" : "false";
         return item;
     }
+
+    private static WorkflowRunOperation FailedOperation(string operationId) =>
+        new()
+        {
+            SessionId = "session-alpha",
+            OperationId = operationId,
+            Kind = WorkflowRuntimeOperationKind.Tool,
+            StartedAt = DateTimeOffset.UnixEpoch.AddSeconds(2),
+            CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(3),
+            Success = false,
+            Error = "provider operation failed",
+            ToolName = "code_execute",
+        };
 
     private sealed class FakeCurrentStateQueryPort : IWorkflowExecutionCurrentStateQueryPort
     {

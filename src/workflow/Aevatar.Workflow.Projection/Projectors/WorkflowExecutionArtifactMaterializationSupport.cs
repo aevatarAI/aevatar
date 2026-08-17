@@ -12,6 +12,8 @@ namespace Aevatar.Workflow.Projection.Projectors;
 
 internal static class WorkflowExecutionArtifactMaterializationSupport
 {
+    private const string CurrentReportVersion = "3.1";
+
     private delegate void ObservedPayloadHandler(
         WorkflowRunInsightReportDocument readModel,
         Google.Protobuf.WellKnownTypes.Any payload,
@@ -141,7 +143,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             Id = context.RootActorId,
             RootActorId = context.RootActorId,
             CommandId = state.LastCommandId ?? string.Empty,
-            ReportVersion = "3.0",
+            ReportVersion = CurrentReportVersion,
             ProjectionScope = WorkflowExecutionProjectionScope.RunIsolated,
             // Refactor (iter33/cluster-035-workflow-report-runtime-topology-sideread):
             //   Old pattern: Workflow report 用 IActorRuntime.GetAsync(...).GetChildrenIdsAsync() 读 runtime children 当 topology 事实,违反 runtime-shape-not-fact + side-read
@@ -166,7 +168,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         readModel.WorkflowName = ResolveWorkflowName(state, readModel.WorkflowName);
         readModel.Input = SanitizeAuditText(state.Input);
         readModel.FinalOutput = SanitizeAuditText(state.FinalOutput);
-        readModel.FinalError = SanitizeAuditText(state.FinalError);
+        readModel.FinalError = WorkflowAuditTextSanitizer.SanitizeForStorage(state.FinalError);
         readModel.Success = ResolveSuccess(state.Status);
         readModel.CompletionStatus = ResolveCompletionStatus(state.Status, readModel.CompletionStatus);
         readModel.StateVersion = stateEvent.Version;
@@ -228,6 +230,9 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         DateTimeOffset observedAt)
     {
         var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        if (step.Outcome == WorkflowExecutionStepOutcomeReadModel.Failed)
+            step.LatestFailedAttempt = SnapshotFailedAttempt(step);
+        ResetCurrentAttempt(step);
         step.StepId = evt.StepId ?? string.Empty;
         step.DisplayName = ResolveStepDisplayName(evt.DisplayName, step.StepId);
         step.StepType = evt.StepType ?? string.Empty;
@@ -259,8 +264,33 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         step.CompletedAt = observedAt;
         step.Success = evt.Success;
         step.Outcome = ResolveStepOutcome(evt);
-        step.OutputPreview = SanitizeAuditTextForDisplay(evt.Output, 240);
-        step.Error = SanitizeAuditText(evt.Error);
+        step.LatestFailedAttempt = null;
+        var isFailure = step.Outcome == WorkflowExecutionStepOutcomeReadModel.Failed;
+        step.Error = isFailure
+            ? WorkflowAuditTextSanitizer.SanitizeForStorage(evt.Error)
+            : SanitizeAuditText(evt.Error);
+        var failureOutputTruncated = false;
+        step.FailureOutput = isFailure
+            ? SanitizeAuditTextForStorage(
+                evt.Output,
+                WorkflowAuditTextSanitizer.MaxDiagnosticEvidenceUtf8Bytes,
+                out failureOutputTruncated)
+            : string.Empty;
+        step.FailureOutputTruncated = isFailure && failureOutputTruncated;
+        step.OutputPreview = isFailure
+            ? SanitizeAuditTextForDisplay(step.FailureOutput, 240)
+            : SanitizeAuditTextForDisplay(evt.Output, 240);
+        step.FailureOutcome = isFailure
+            ? evt.FailureOutcome
+            : WorkflowStepFailureOutcome.Unspecified;
+        step.RecoveryFailureKind = isFailure
+            ? evt.RecoveryFailureKind
+            : WorkflowRecoveryFailureKind.Unspecified;
+        step.RetryDisposition = isFailure
+            ? evt.RetryDisposition
+            : WorkflowStepRetryDisposition.Unspecified;
+        step.FileItemResults = SanitizeFileItemResults(evt.FileItemResults);
+        step.VoteAgreementDecision = SanitizeVoteAgreementDecision(evt.VoteAgreementDecision);
         step.WorkerId = evt.WorkerId ?? string.Empty;
         step.NextStepId = evt.NextStepId ?? string.Empty;
         step.BranchKey = evt.BranchKey ?? string.Empty;
@@ -271,13 +301,15 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         AddTimeline(
             readModel.Timeline,
             observedAt,
-            evt.Success ? "step.completed" : "step.failed",
-            $"{evt.StepId} ({(evt.Success ? "success" : "failed")})",
+            isFailure ? "step.failed" : "step.completed",
+            isFailure
+                ? ResolveFailureTimelineMessage(step.Error, $"{evt.StepId} (failed)")
+                : $"{evt.StepId} ({(evt.Success ? "success" : "completed")})",
             evt.WorkerId,
             evt.StepId,
             step.StepType,
             eventType,
-            evt.Annotations);
+            BuildStepCompletionTimelineData(evt, isFailure, step.Error));
     }
 
     private static void ApplyWorkflowSuspended(
@@ -637,6 +669,28 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         return data;
     }
 
+    private static Dictionary<string, string> BuildStepCompletionTimelineData(
+        StepCompletedEvent evt,
+        bool isFailure,
+        string sanitizedError)
+    {
+        var data = evt.Annotations.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+        if (isFailure && !string.IsNullOrWhiteSpace(sanitizedError))
+            data["error"] = sanitizedError;
+        return data;
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildFailureTimelineData(string sanitizedError) =>
+        string.IsNullOrWhiteSpace(sanitizedError)
+            ? null
+            : new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["error"] = sanitizedError,
+            };
+
+    private static string ResolveFailureTimelineMessage(string sanitizedError, string fallback) =>
+        string.IsNullOrWhiteSpace(sanitizedError) ? fallback : sanitizedError;
+
     private static void ApplyWorkflowCompleted(
         WorkflowRunInsightReportDocument readModel,
         string eventType,
@@ -648,18 +702,22 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             : WorkflowExecutionCompletionStatus.Failed;
         readModel.Success = evt.Success;
         readModel.FinalOutput = SanitizeAuditText(evt.Output);
-        readModel.FinalError = SanitizeAuditText(evt.Error);
+        readModel.FinalError = evt.Success
+            ? SanitizeAuditText(evt.Error)
+            : WorkflowAuditTextSanitizer.SanitizeForStorage(evt.Error);
         readModel.EndedAt = observedAt;
         AddTimeline(
             readModel.Timeline,
             observedAt,
             evt.Success ? "workflow.completed" : "workflow.failed",
-            evt.Success ? "completed" : "failed",
+            evt.Success
+                ? "completed"
+                : ResolveFailureTimelineMessage(readModel.FinalError, "failed"),
             readModel.RootActorId,
             null,
             null,
             eventType,
-            null);
+            evt.Success ? null : BuildFailureTimelineData(readModel.FinalError));
     }
 
     private static void ApplyWorkflowStopped(
@@ -808,6 +866,14 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             WorkerId = source.WorkerId,
             OutputPreview = source.OutputPreview,
             Error = source.Error,
+            FailureOutput = source.FailureOutput,
+            FailureOutputTruncated = source.FailureOutputTruncated,
+            FailureOutcome = source.FailureOutcome,
+            RecoveryFailureKind = source.RecoveryFailureKind,
+            RetryDisposition = source.RetryDisposition,
+            FileItemResults = source.FileItemResults?.Clone(),
+            VoteAgreementDecision = source.VoteAgreementDecision?.Clone(),
+            LatestFailedAttempt = source.LatestFailedAttempt?.Clone(),
             RequestParameters = source.RequestParameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             CompletionAnnotations = source.CompletionAnnotations.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             NextStepId = source.NextStepId,
@@ -823,6 +889,72 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
             Usage = CloneUsage(source.Usage),
             Outcome = source.Outcome,
         };
+    }
+
+    private static WorkflowExecutionFailedStepAttemptReadModel SnapshotFailedAttempt(
+        WorkflowExecutionStepTrace source)
+    {
+        return new WorkflowExecutionFailedStepAttemptReadModel
+        {
+            DisplayName = source.DisplayName,
+            StepType = source.StepType,
+            TargetRole = source.TargetRole,
+            RequestedAt = source.RequestedAt,
+            CompletedAt = source.CompletedAt,
+            Success = source.Success,
+            WorkerId = source.WorkerId,
+            OutputPreview = source.OutputPreview,
+            Error = source.Error,
+            RequestParameters = source.RequestParameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            CompletionAnnotations = source.CompletionAnnotations.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            NextStepId = source.NextStepId,
+            BranchKey = source.BranchKey,
+            AssignedVariable = source.AssignedVariable,
+            AssignedValue = source.AssignedValue,
+            Usage = CloneUsage(source.Usage),
+            FailureOutput = source.FailureOutput,
+            FailureOutputTruncated = source.FailureOutputTruncated,
+            FailureOutcome = source.FailureOutcome,
+            RecoveryFailureKind = source.RecoveryFailureKind,
+            RetryDisposition = source.RetryDisposition,
+            FileItemResults = source.FileItemResults?.Clone(),
+            VoteAgreementDecision = source.VoteAgreementDecision?.Clone(),
+            SuspensionType = source.SuspensionType,
+            SuspensionPrompt = source.SuspensionPrompt,
+            SuspensionTimeoutSeconds = source.SuspensionTimeoutSeconds,
+            RequestedVariableName = source.RequestedVariableName,
+            SuspensionContent = source.SuspensionContent,
+            ToolApprovalValue = source.ToolApprovalValue?.Clone(),
+        };
+    }
+
+    private static void ResetCurrentAttempt(WorkflowExecutionStepTrace step)
+    {
+        step.CompletedAt = null;
+        step.Success = null;
+        step.WorkerId = string.Empty;
+        step.OutputPreview = string.Empty;
+        step.Error = string.Empty;
+        step.FailureOutput = string.Empty;
+        step.FailureOutputTruncated = false;
+        step.FailureOutcome = WorkflowStepFailureOutcome.Unspecified;
+        step.RecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
+        step.RetryDisposition = WorkflowStepRetryDisposition.Unspecified;
+        step.FileItemResults = null;
+        step.VoteAgreementDecision = null;
+        step.CompletionAnnotations.Clear();
+        step.NextStepId = string.Empty;
+        step.BranchKey = string.Empty;
+        step.AssignedVariable = string.Empty;
+        step.AssignedValue = string.Empty;
+        step.SuspensionType = string.Empty;
+        step.SuspensionPrompt = string.Empty;
+        step.SuspensionContent = string.Empty;
+        step.SuspensionTimeoutSeconds = null;
+        step.RequestedVariableName = string.Empty;
+        step.ToolApprovalValue = null;
+        step.Usage = new WorkflowUsageMetricsReadModel();
+        step.Outcome = WorkflowExecutionStepOutcomeReadModel.Unspecified;
     }
 
     private static string ResolveStepDisplayName(string? displayName, string stepId)
@@ -972,6 +1104,115 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static string SanitizeAuditTextForDisplay(string? value, int maxLen) =>
         WorkflowAuditTextSanitizer.SanitizeForDisplay(value, maxLen);
+
+    private static string SanitizeAuditTextForStorage(
+        string? value,
+        int maxUtf8Bytes,
+        out bool truncated) =>
+        WorkflowAuditTextSanitizer.SanitizeForStorage(value, maxUtf8Bytes, out truncated);
+
+    private static WorkflowFileItemResultSet? SanitizeFileItemResults(WorkflowFileItemResultSet? source)
+    {
+        if (source == null)
+            return null;
+
+        var sourceResultCount = Math.Max(0, source.SourceResultCount);
+        if (!source.ResultsTruncated || sourceResultCount > 0)
+            sourceResultCount = Math.Max(sourceResultCount, source.Results.Count);
+        var resultsTruncated = source.ResultsTruncated || sourceResultCount > source.Results.Count;
+        var retainedResults = SelectFileItemResultHeadTail(source.Results);
+        resultsTruncated |= retainedResults.Count < source.Results.Count;
+
+        var sanitized = new WorkflowFileItemResultSet
+        {
+            SourceResultCount = sourceResultCount,
+            ResultsTruncated = resultsTruncated,
+        };
+        sanitized.Results.Add(retainedResults.Select(SanitizeFileItemResult));
+        return sanitized;
+    }
+
+    private static IReadOnlyList<WorkflowFileItemResult> SelectFileItemResultHeadTail(
+        IList<WorkflowFileItemResult> source)
+    {
+        var maxResults = WorkflowFileItemResultProjectionContract.MaxRetainedResults;
+        if (source.Count <= maxResults)
+            return source.ToList();
+
+        var headCount = maxResults / 2;
+        var tailCount = maxResults - headCount;
+        return source.Take(headCount).Concat(source.Skip(source.Count - tailCount)).ToList();
+    }
+
+    private static WorkflowFileItemResult SanitizeFileItemResult(WorkflowFileItemResult item)
+    {
+        var output = SanitizeAuditTextForStorage(
+            item.Output,
+            WorkflowFileItemResultProjectionContract.MaxEvidenceUtf8Bytes,
+            out var outputTruncated);
+        var error = SanitizeAuditTextForStorage(
+            item.Error,
+            WorkflowFileItemResultProjectionContract.MaxEvidenceUtf8Bytes,
+            out var errorTruncated);
+        return new WorkflowFileItemResult
+        {
+            Index = item.Index,
+            FileRef = SanitizeFileRef(item.FileRef),
+            Success = item.Success,
+            Output = output,
+            Error = error,
+            OutputTruncated = item.OutputTruncated || outputTruncated,
+            ErrorTruncated = item.ErrorTruncated || errorTruncated,
+        };
+    }
+
+    private static WorkflowFileRef? SanitizeFileRef(WorkflowFileRef? source) =>
+        source == null
+            ? null
+            : new WorkflowFileRef
+            {
+                FileId = SanitizeAuditText(source.FileId),
+                ArtifactId = SanitizeAuditText(source.ArtifactId),
+                SourceKind = source.SourceKind,
+                SourceMessageId = SanitizeAuditText(source.SourceMessageId),
+                SourceResourceKey = SanitizeAuditText(source.SourceResourceKey),
+                FileName = SanitizeAuditText(source.FileName),
+                MediaType = SanitizeAuditText(source.MediaType),
+                SizeBytes = source.SizeBytes,
+                Sha256 = SanitizeAuditText(source.Sha256),
+                CreatedAtUnixMs = source.CreatedAtUnixMs,
+                ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+                OwnerRunId = SanitizeAuditText(source.OwnerRunId),
+                OwnerScopeId = SanitizeAuditText(source.OwnerScopeId),
+            };
+
+    private static VoteAgreementDecision? SanitizeVoteAgreementDecision(VoteAgreementDecision? source)
+    {
+        if (source == null)
+            return null;
+
+        var output = SanitizeAuditTextForStorage(
+            source.Output,
+            WorkflowAuditTextSanitizer.MaxDiagnosticEvidenceUtf8Bytes,
+            out var outputTruncated);
+        var reason = SanitizeAuditTextForStorage(
+            source.Reason,
+            WorkflowAuditTextSanitizer.MaxDiagnosticEvidenceUtf8Bytes,
+            out var reasonTruncated);
+        var sanitized = new VoteAgreementDecision
+        {
+            Kind = source.Kind,
+            BranchKey = SanitizeAuditText(source.BranchKey),
+            WinnerCandidateId = SanitizeAuditText(source.WinnerCandidateId),
+            Output = output,
+            Reason = reason,
+            OutputTruncated = source.OutputTruncated || outputTruncated,
+            ReasonTruncated = source.ReasonTruncated || reasonTruncated,
+        };
+        foreach (var (label, count) in source.LabelCounts)
+            sanitized.LabelCounts[SanitizeAuditText(label)] = count;
+        return sanitized;
+    }
 
     private static Dictionary<string, string> SanitizeAuditMap(IEnumerable<KeyValuePair<string, string>>? data) =>
         WorkflowAuditTextSanitizer.SanitizeMap(data);

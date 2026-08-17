@@ -25,6 +25,7 @@ public sealed class WorkflowExecutionReadModelMapper
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
+            CompilationError = source.CompilationError,
             SagaStatus = source.SagaStatus,
             DeadLetterFailedCompensationStepId = source.DeadLetterFailedCompensationStepId,
             DeadLetterRemainingUncompensated = source.DeadLetterRemainingUncompensated,
@@ -426,6 +427,14 @@ public sealed class WorkflowExecutionReadModelMapper
             WorkerId = source.WorkerId,
             OutputPreview = source.OutputPreview,
             Error = source.Error,
+            FailureOutput = source.FailureOutput,
+            FailureOutputTruncated = source.FailureOutputTruncated,
+            FailureOutcome = source.FailureOutcome,
+            RecoveryFailureKind = source.RecoveryFailureKind,
+            RetryDisposition = source.RetryDisposition,
+            FileItemResults = source.FileItemResults?.Clone(),
+            VoteAgreementDecision = source.VoteAgreementDecision?.Clone(),
+            LatestFailedAttempt = MapFailedStepAttempt(source.LatestFailedAttempt),
             RequestParameters = source.RequestParametersMap.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             CompletionAnnotations = source.CompletionAnnotationsMap.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             NextStepId = source.NextStepId,
@@ -449,6 +458,59 @@ public sealed class WorkflowExecutionReadModelMapper
             Usage = MapUsage(source.Usage),
             Outcome = MapStepOutcome(source.Outcome),
         };
+
+    private static WorkflowRunFailedStepAttempt? MapFailedStepAttempt(
+        WorkflowExecutionFailedStepAttemptReadModel? source) =>
+        source == null
+            ? null
+            : new WorkflowRunFailedStepAttempt
+            {
+                DisplayName = source.DisplayName,
+                StepType = source.StepType,
+                TargetRole = source.TargetRole,
+                RequestedAt = source.RequestedAtUtcValue?.ToDateTimeOffset(),
+                CompletedAt = source.CompletedAtUtcValue?.ToDateTimeOffset(),
+                Success = source.SuccessWrapper,
+                WorkerId = source.WorkerId,
+                OutputPreview = source.OutputPreview,
+                Error = source.Error,
+                RequestParameters = source.RequestParametersMap.ToDictionary(
+                    x => x.Key,
+                    x => x.Value,
+                    StringComparer.Ordinal),
+                CompletionAnnotations = source.CompletionAnnotationsMap.ToDictionary(
+                    x => x.Key,
+                    x => x.Value,
+                    StringComparer.Ordinal),
+                NextStepId = source.NextStepId,
+                BranchKey = source.BranchKey,
+                AssignedVariable = source.AssignedVariable,
+                AssignedValue = source.AssignedValue,
+                Usage = MapUsage(source.Usage),
+                FailureOutput = source.FailureOutput,
+                FailureOutputTruncated = source.FailureOutputTruncated,
+                FailureOutcome = source.FailureOutcome,
+                RecoveryFailureKind = source.RecoveryFailureKind,
+                RetryDisposition = source.RetryDisposition,
+                FileItemResults = source.FileItemResults?.Clone(),
+                VoteAgreementDecision = source.VoteAgreementDecision?.Clone(),
+                SuspensionType = source.SuspensionType,
+                SuspensionPrompt = source.SuspensionPrompt,
+                SuspensionContent = source.SuspensionContent,
+                SuspensionTimeoutSeconds = source.SuspensionTimeoutSecondsValue == 0
+                    ? null
+                    : source.SuspensionTimeoutSecondsValue,
+                RequestedVariableName = source.RequestedVariableName,
+                ToolApproval = source.ToolApprovalValue == null
+                    ? null
+                    : new WorkflowRunToolApproval
+                    {
+                        ExecutionId = source.ToolApprovalValue.ExecutionId,
+                        ToolName = source.ToolApprovalValue.ToolName,
+                        ToolCallId = source.ToolApprovalValue.ToolCallId,
+                        ApprovalRequestId = source.ToolApprovalValue.ApprovalRequestId,
+                    },
+            };
 
     private static WorkflowRunStepOutcome MapStepOutcome(WorkflowExecutionStepOutcomeReadModel outcome) =>
         outcome switch

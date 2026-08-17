@@ -297,6 +297,55 @@ public sealed partial class WorkflowExecutionStepTrace
         : null;
 }
 
+public sealed partial class WorkflowExecutionFailedStepAttemptReadModel
+{
+    public DateTimeOffset? RequestedAt
+    {
+        get => RequestedAtUtcValue == null ? null : RequestedAtUtcValue.ToDateTimeOffset();
+        set => RequestedAtUtcValue = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
+    }
+
+    public DateTimeOffset? CompletedAt
+    {
+        get => CompletedAtUtcValue == null ? null : CompletedAtUtcValue.ToDateTimeOffset();
+        set => CompletedAtUtcValue = value.HasValue ? Timestamp.FromDateTimeOffset(value.Value.ToUniversalTime()) : null;
+    }
+
+    public bool? Success
+    {
+        get => SuccessWrapper;
+        set => SuccessWrapper = value;
+    }
+
+    public IDictionary<string, string> RequestParameters
+    {
+        get => RequestParametersMap;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(RequestParametersMap, value);
+    }
+
+    public IDictionary<string, string> CompletionAnnotations
+    {
+        get => CompletionAnnotationsMap;
+        set => WorkflowExecutionReadModelCollections.ReplaceMap(CompletionAnnotationsMap, value);
+    }
+
+    public WorkflowUsageMetricsReadModel Usage
+    {
+        get => UsageValue ??= new WorkflowUsageMetricsReadModel();
+        set => UsageValue = value ?? new WorkflowUsageMetricsReadModel();
+    }
+
+    public int? SuspensionTimeoutSeconds
+    {
+        get => SuspensionTimeoutSecondsValue == 0 ? null : SuspensionTimeoutSecondsValue;
+        set => SuspensionTimeoutSecondsValue = value ?? 0;
+    }
+
+    public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
+        ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
+        : null;
+}
+
 public sealed partial class WorkflowExecutionRoleReply
 {
     public DateTimeOffset Timestamp

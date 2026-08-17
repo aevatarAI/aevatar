@@ -244,6 +244,51 @@ message WorkflowExecutionStepTrace {
   WorkflowToolApprovalReadModel tool_approval_value = 22;
   string display_name = 23;
   WorkflowExecutionStepOutcomeReadModel outcome = 24;
+  // Sanitized diagnostic output from the current failed completion. The projection keeps a bounded
+  // head/tail representation and records whether any source text was omitted.
+  string failure_output = 25;
+  bool failure_output_truncated = 26;
+  aevatar.workflow.WorkflowStepFailureOutcome failure_outcome = 27;
+  aevatar.workflow.WorkflowRecoveryFailureKind recovery_failure_kind = 28;
+  aevatar.workflow.WorkflowStepRetryDisposition retry_disposition = 29;
+  aevatar.workflow.WorkflowFileItemResultSet file_item_results = 30;
+  aevatar.workflow.VoteAgreementDecision vote_agreement_decision = 31;
+  // When a new request replaces a failed current attempt, the complete failed attempt is moved here
+  // before the current-attempt fields are reset. This keeps request identity and failure evidence
+  // from different attempts from being combined.
+  WorkflowExecutionFailedStepAttemptReadModel latest_failed_attempt = 32;
+}
+
+message WorkflowExecutionFailedStepAttemptReadModel {
+  string display_name = 1;
+  string step_type = 2;
+  string target_role = 3;
+  google.protobuf.Timestamp requested_at_utc_value = 4;
+  google.protobuf.Timestamp completed_at_utc_value = 5;
+  google.protobuf.BoolValue success_wrapper = 6;
+  string worker_id = 7;
+  string output_preview = 8;
+  string error = 9;
+  map<string, string> request_parameters_map = 10;
+  map<string, string> completion_annotations_map = 11;
+  string next_step_id = 12;
+  string branch_key = 13;
+  string assigned_variable = 14;
+  string assigned_value = 15;
+  WorkflowUsageMetricsReadModel usage_value = 16;
+  string failure_output = 17;
+  bool failure_output_truncated = 18;
+  aevatar.workflow.WorkflowStepFailureOutcome failure_outcome = 19;
+  aevatar.workflow.WorkflowRecoveryFailureKind recovery_failure_kind = 20;
+  aevatar.workflow.WorkflowStepRetryDisposition retry_disposition = 21;
+  aevatar.workflow.WorkflowFileItemResultSet file_item_results = 22;
+  aevatar.workflow.VoteAgreementDecision vote_agreement_decision = 23;
+  string suspension_type = 24;
+  string suspension_prompt = 25;
+  int32 suspension_timeout_seconds_value = 26;
+  string requested_variable_name = 27;
+  string suspension_content = 28;
+  WorkflowToolApprovalReadModel tool_approval_value = 29;
 }
 
 message WorkflowToolApprovalReadModel {

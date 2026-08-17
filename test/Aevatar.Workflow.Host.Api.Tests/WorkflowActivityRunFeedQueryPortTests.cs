@@ -24,6 +24,7 @@ public sealed class WorkflowActivityRunFeedQueryPortTests
             WorkflowName = "workflow alpha",
             ScopeId = "scope-alpha",
             Status = "completed",
+            CompilationError = "workflow definition failed to compile",
             CompletedAtUtcValue = Timestamp.FromDateTimeOffset(completedAt),
             DurationMs = 62_000,
             InputSummary = "safe input summary",
@@ -61,6 +62,7 @@ public sealed class WorkflowActivityRunFeedQueryPortTests
         snapshot.CompletedAtUtc?.ToDateTimeOffset().Should().Be(completedAt);
         snapshot.DurationMs.Should().Be(62_000);
         snapshot.InputSummary.Should().Be("safe input summary");
+        snapshot.CompilationError.Should().Be("workflow definition failed to compile");
         snapshot.ActivityInitiator.ExternalUserId.Should().Be("m-alpha");
         // Binding ids can be exchanged for short-lived NyxID credentials and
         // must never escape through activity/read-model projections, including

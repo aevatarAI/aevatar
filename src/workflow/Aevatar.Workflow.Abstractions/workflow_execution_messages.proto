@@ -697,6 +697,10 @@ message VoteAgreementDecision {
   string output = 4;
   string reason = 5;
   map<string, int32> label_counts = 6;
+  // True when this message retains only a bounded head/tail representation of output.
+  bool output_truncated = 7;
+  // True when this message retains only a bounded head/tail representation of reason.
+  bool reason_truncated = 8;
 }
 
 enum TransformOperationKind {
@@ -803,9 +807,18 @@ message WorkflowFileItemResult {
   bool success = 3;
   string output = 4;
   string error = 5;
+  // True when this message retains only a bounded head/tail representation of output.
+  bool output_truncated = 6;
+  // True when this message retains only a bounded head/tail representation of error.
+  bool error_truncated = 7;
 }
 message WorkflowFileItemResultSet {
   repeated WorkflowFileItemResult results = 1;
+  // Number of results produced before any projection or transport-level bounding.
+  // Zero means unknown when results_truncated is true.
+  int32 source_result_count = 2;
+  // True when results contains only a bounded subset of the source results.
+  bool results_truncated = 3;
 }
 
 enum WorkflowStepCompletionOutcome {

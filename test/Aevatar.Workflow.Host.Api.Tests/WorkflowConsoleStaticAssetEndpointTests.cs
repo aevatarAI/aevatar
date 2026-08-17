@@ -795,6 +795,271 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task WorkflowObservatory_FailureEvidence_ShouldReachEveryViewAndEscapeNestedText()
+    {
+        var html = await GetObservatoryHtmlAsync();
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name, nextName) {
+              const start = html.indexOf('function ' + name + '(');
+              const end = html.indexOf('\nfunction ' + nextName + '(', start);
+              assert.notEqual(start, -1, name + ' must exist in the served observatory asset');
+              assert.notEqual(end, -1, nextName + ' must follow ' + name);
+              return html.slice(start, end);
+            }
+            function createNode(tag, attrs = {}, content) {
+              return {
+                tag, attrs:{...attrs}, children:[], style:{},
+                innerHTML:content == null ? '' : String(content),
+                appendChild(child){ this.children.push(child); return child; },
+                setAttribute(key,value){ this.attrs[key]=String(value); },
+                insertAdjacentHTML(_position,value){ this.innerHTML += String(value); },
+                addEventListener(){}, querySelector(){ return null; },
+              };
+            }
+            function treeText(node) {
+              return [node && node.innerHTML, ...((node && node.children) || []).map(treeText)].filter(Boolean).join('\n');
+            }
+            const escapeHtml = value => String(value == null ? '' : value).replace(/[&<>\"]/g, character => ({
+              '&':'&amp;', '<':'&lt;', '>':'&gt;', '\"':'&quot;',
+            })[character]);
+            const cache = {runs:[{runId:'run-alpha',firstFailure:{
+              stepId:'normalize',message:'activity <iframe>failure</iframe>',availability:'available'
+            }}]};
+            const context = {
+              cache, el:createNode, esc:escapeHtml,
+              document:{createDocumentFragment:()=>createNode('fragment')},
+              KIND:{StepFinished:{label:'步骤完成'}}, kindIcon:()=> '[event]',
+              STEPTYPE_LABEL:{tool:'工具'}, REPLY_KINDS:new Set(['Message','TextMessage']),
+              state:{expanded:new Set()}, clockUTC:value=>String(value).slice(11,19),
+              renderReplyBubble:()=>createNode('reply'), renderToolCall:()=>createNode('tool'),
+              renderDataDetails:()=>null,
+            };
+            vm.createContext(context);
+            const evidenceStart = html.indexOf('function evidenceHasValue(');
+            const evidenceEnd = html.indexOf('\nfunction renderDiagnosticStrip(', evidenceStart);
+            assert.notEqual(evidenceStart, -1);
+            assert.notEqual(evidenceEnd, -1);
+            vm.runInContext(`
+              ${functionSource('dataLookup', 'parseT')}
+              ${html.slice(evidenceStart, evidenceEnd)}
+              ${functionSource('renderSteps', 'failureLogLines')}
+              ${functionSource('failureLogLines', 'renderLogs')}
+              ${functionSource('renderTimeline', 'renderToolCall')}
+            `, context);
+
+            const detail = {
+              summary:{runId:'run-alpha',scopeId:'scope-alpha',workflowName:'workflow-alpha',status:'failed',stateVersion:9},
+              reportVersion:'3.1',
+              compilationError:'compile <script>bad()</script>',
+              finalError:'final <img src=x onerror=bad()>',
+              sections:{
+                overview:{versionStatus:'aligned',detailStateVersion:9,sourceStateVersion:9,reason:''},
+                steps:{versionStatus:'VersionMismatch',detailStateVersion:9,sourceStateVersion:8,reason:'stale <b>steps</b>'},
+                timeline:{versionStatus:'unavailable',detailStateVersion:9,sourceStateVersion:0,reason:'missing <svg>timeline</svg>'},
+              },
+              recoveryCapability:{
+                workflowDefinitionRevisionId:'rev-alpha',
+                retryFailedStep:{eligibility:'unavailable',unavailableReason:'fix <a>access</a>',recommendedActions:['fix_access']},
+              },
+              diagnostics:[{severity:'error',code:'STEP_FAILED',message:'diagnostic failure'}],
+              operations:[{
+                kind:'tool',operationId:'op-alpha',sessionId:'session-alpha',toolCallId:'call-alpha',
+                toolName:'code_execute',success:false,error:'operation <object>failed</object>',
+                argumentsJson:'{\"source\":\"<code>bad</code>\"}',resultJson:'{\"stderr\":\"<stderr>tail</stderr>\"}',
+                output:'operation <output>detail</output>',reasoningContent:'reasoning <why>detail</why>'
+              }],
+              steps:[{
+                stepId:'normalize',displayName:'Normalize person',stepType:'tool_call',targetRole:'worker-alpha',
+                workerId:'worker-alpha',success:false,outcome:'failed',error:'step <video>failed</video>',
+                requestedAtUtc:'2026-08-14T01:00:00Z',completedAtUtc:'2026-08-14T01:00:01Z',durationMs:1000,
+                failureOutput:'stderr head\n<script>syntax failure</script>\nstderr tail',failureOutputTruncated:true,
+                failureOutcome:{kind:'execution_failed',detail:'nested <img>failure</img>'},
+                recoveryFailureKind:'configuration',retryDisposition:'not_retryable',
+                requestParameters:{source:'<input>unsafe</input>'},
+                completionAnnotations:{reason:'<b>annotation</b>'},
+                assignedVariable:'person',assignedValue:'<name>Ada</name>',requestedVariableName:'employee',
+                nextStepId:'notify',branchKey:'error',
+                fileItemResults:{sourceResultCount:45,resultsTruncated:true,results:[{
+                  index:0,path:'report.txt',output:'partial',outputTruncated:true,
+                  error:'<file>bad</file>',errorTruncated:true
+                }]},
+                voteAgreementDecision:{
+                  agreed:false,output:'candidate output',outputTruncated:true,
+                  reason:'<vote>split</vote>',reasonTruncated:true
+                },
+                outputPreview:'legacy preview'
+              },{
+                stepId:'notify',displayName:'Retry notification',stepType:'email_retry',targetRole:'retry-mailer',
+                outcome:'waiting',requestedAtUtc:'2026-08-14T01:00:04Z',
+                requestParameters:{retryAttempt:'2'},
+                latestFailedAttempt:{
+                  displayName:'Notify employee',stepType:'tool_call',targetRole:'mailer',
+                  workerId:'worker-beta',success:false,error:'SMTP unavailable',
+                  failureOutput:'latest failed attempt stderr',failureOutputTruncated:false,
+                  retryDisposition:'retryable',requestedAtUtc:'2026-08-14T01:00:02Z',
+                  completedAtUtc:'2026-08-14T01:00:03Z',durationMs:1000,
+                  requestParameters:{recipientMode:'manager'},completionAnnotations:{provider:'smtp'},
+                  fileItemResults:{sourceResultCount:0,resultsTruncated:true,results:[{
+                    index:7,success:false,error:'retained unknown-count result'
+                  }]}
+                }
+              }],
+              timeline:[{
+                kind:'StepFinished',stage:'step.completed',timestampUtc:'2026-08-14T01:00:01Z',
+                stepId:'normalize',stepType:'tool',message:'failed',data:{error:'timeline <details>failure</details>'}
+              },{
+                kind:'RunStopped',stage:'workflow.stopped',timestampUtc:'2026-08-14T01:00:02Z',
+                stepId:'normalize',stepType:'tool',message:'stopped <reason>detail</reason>',data:{}
+              }]
+            };
+
+            const evidence = context.collectFailureEvidence(detail);
+            assert.equal(context.evidenceHasValue(false), true, 'false is a real observed value');
+            assert.equal(context.evidenceHasValue(0), true, 'zero is a real observed value');
+            assert.equal(evidence.sectionIssues.length, 2);
+            assert.equal(evidence.failedSteps.length, 1);
+            assert.equal(evidence.retryWaitingSteps.length, 1);
+            assert.equal(context.isFailedStep(detail.steps[1]), false, 'waiting retry is not a current failed step');
+            assert.equal(context.isRetryWaitingStep(detail.steps[1]), true);
+            const retryTimingFields = Object.fromEntries(context.stepTimingEvidenceFields(detail.steps[1]));
+            assert.equal(retryTimingFields.currentRetryRequestedAtUtc, '2026-08-14T01:00:04Z');
+            assert.equal(retryTimingFields.latestFailedRequestedAtUtc, '2026-08-14T01:00:02Z');
+            assert.equal(retryTimingFields.latestFailedCompletedAtUtc, '2026-08-14T01:00:03Z');
+            assert.equal(retryTimingFields.latestFailedDurationMs, 1000);
+            assert.equal('requestedAtUtc' in retryTimingFields, false);
+            assert.equal('completedAtUtc' in retryTimingFields, false);
+            assert.equal('durationMs' in retryTimingFields, false, 'cross-attempt duration must not be presented');
+            assert.equal(evidence.failedOperations.length, 1);
+            assert.equal(evidence.timelineErrors.length, 2);
+            assert.equal(evidence.firstFailure.stepId, 'normalize');
+
+            const payload = JSON.parse(context.issuePayload(detail));
+            assert.equal(payload.reportVersion, '3.1');
+            assert.equal(payload.compilationError, detail.compilationError);
+            assert.equal(payload.activityFirstFailure.message, 'activity <iframe>failure</iframe>');
+            assert.equal(payload.sections.steps.reason, 'stale <b>steps</b>');
+            assert.equal(payload.recoveryCapability.retryFailedStep.unavailableReason, 'fix <a>access</a>');
+            assert.equal(payload.failedOperations[0].error, 'operation <object>failed</object>');
+            assert.equal(payload.failedOperations[0].resultJson, '{"stderr":"<stderr>tail</stderr>"}');
+            assert.equal(payload.failedSteps[0].workerId, 'worker-alpha');
+            assert.equal(payload.failedSteps[0].completionAnnotations.reason, '<b>annotation</b>');
+            assert.equal(payload.failedSteps[0].failureOutputTruncated, true);
+            assert.equal(payload.failedSteps[0].fileItemResults.results[0].error, '<file>bad</file>');
+            assert.equal(payload.failedSteps[0].fileItemResults.sourceResultCount, 45);
+            assert.equal(payload.failedSteps[0].fileItemResults.sourceResultCountKnown, true);
+            assert.equal(payload.failedSteps[0].fileItemResults.retainedResultCount, 1);
+            assert.equal(payload.failedSteps[0].fileItemResults.resultsTruncated, true);
+            assert.equal(payload.failedSteps[0].fileItemResults.results[0].outputTruncated, true);
+            assert.equal(payload.failedSteps[0].fileItemResults.results[0].errorTruncated, true);
+            assert.equal(payload.failedSteps[0].voteAgreementDecision.outputTruncated, true);
+            assert.equal(payload.failedSteps[0].voteAgreementDecision.reasonTruncated, true);
+            assert.equal(payload.retryWaitingLatestFailedAttempts.length, 1);
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].stepId, 'notify');
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].currentRetry.requestedAtUtc, '2026-08-14T01:00:04Z');
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].currentRetry.stepType, 'email_retry');
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].currentRetry.requestParameters.retryAttempt, '2');
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].latestFailedAttempt.requestedAtUtc, '2026-08-14T01:00:02Z');
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].latestFailedAttempt.completedAtUtc, '2026-08-14T01:00:03Z');
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].latestFailedAttempt.durationMs, 1000);
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].latestFailedAttempt.stepType, 'tool_call');
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].latestFailedAttempt.requestParameters.recipientMode, 'manager');
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].latestFailedAttempt.fileItemResults.sourceResultCountKnown, false);
+            assert.equal(payload.retryWaitingLatestFailedAttempts[0].latestFailedAttempt.fileItemResults.retainedResultCount, 1);
+            assert.equal(payload.timelineErrors[0].error, 'timeline <details>failure</details>');
+
+            const logs = context.failureLogLines(detail).join('\n');
+            for (const expected of [
+              'COMPILATION ERROR', 'ACTIVITY FIRST FAILURE', 'SECTION steps', 'FAILED OPERATION',
+              'worker-alpha', 'completionAnnotations', 'STEP FAILURE OUTPUT [normalize]',
+              'STEP FAILURE OUTPUT TRUNCATED [normalize]', 'STEP NESTED EVIDENCE TRUNCATED [normalize]',
+              'fileItemResults.results (collection)', 'fileItemResults.results[0].output', 'voteAgreementDecision.reason',
+              'RETRY WAITING CURRENT ATTEMPT', 'RETRY WAITING LATEST FAILED ATTEMPT', 'latest failed attempt stderr',
+              'email_retry', 'recipientMode', '源结果总数未知，当前保留 1 条',
+              'TIMELINE ERROR', 'RECOVERY CAPABILITY'
+            ]) assert.ok(logs.includes(expected), 'logs must retain ' + expected);
+
+            const panelText = treeText(context.renderFailureEvidence(detail));
+            for (const expected of [
+              '已捕获失败证据', '&lt;script&gt;syntax failure&lt;/script&gt;',
+              '&lt;b&gt;annotation&lt;/b&gt;', 'fileItemResultsSummary',
+              '&lt;vote&gt;split&lt;/vote&gt;', '&lt;stderr&gt;tail&lt;/stderr&gt;',
+              '&lt;code&gt;bad&lt;/code&gt;', '&lt;output&gt;detail&lt;/output&gt;',
+              '&lt;why&gt;detail&lt;/why&gt;', '保留首尾片段'
+            ]) assert.ok(panelText.includes(expected), 'failure panel must retain escaped ' + expected);
+            assert.ok(panelText.includes('等待重试 · 最近一次失败尝试'));
+            assert.ok(panelText.includes('嵌套失败证据已在投影端按大小上限截断'));
+            assert.ok(panelText.includes('fileItemResults.results[0].error'));
+            assert.ok(panelText.includes('voteAgreementDecision.output'));
+            assert.ok(panelText.includes('当前保留 1/45 条首尾样本'));
+            assert.ok(panelText.includes('源结果总数未知，当前保留 1 条首尾样本'));
+            assert.ok(!panelText.includes('<script>syntax failure</script>'));
+
+            const oversized = label => label + '_HEAD\n' + 'x'.repeat(9000) + label + '_MIDDLE_MUST_NOT_RENDER' + 'y'.repeat(9000) + '\n' + label + '_TAIL';
+            const oversizedOperation = {
+              ...detail.operations[0],
+              output:oversized('OUTPUT'), resultJson:oversized('RESULT'),
+              reasoningContent:oversized('REASONING'), argumentsJson:oversized('ARGUMENTS')
+            };
+            const summarySnapshot = context.boundedOperationEvidenceSnapshot(oversizedOperation, 360);
+            const detailSnapshot = context.boundedOperationEvidenceSnapshot(oversizedOperation, 8192);
+            for (const field of ['output','resultJson','reasoningContent','argumentsJson']) {
+              assert.ok(summarySnapshot[field].length <= 360, 'summary must bound ' + field);
+              assert.ok(detailSnapshot[field].length <= 8192, 'detail must bound ' + field);
+              assert.ok(summarySnapshot[field].includes(field === 'resultJson' ? 'RESULT_HEAD' : field === 'reasoningContent' ? 'REASONING_HEAD' : field === 'argumentsJson' ? 'ARGUMENTS_HEAD' : 'OUTPUT_HEAD'));
+              assert.ok(!summarySnapshot[field].includes('_MIDDLE_MUST_NOT_RENDER'));
+              assert.ok(!detailSnapshot[field].includes('_MIDDLE_MUST_NOT_RENDER'));
+            }
+            assert.deepEqual(
+              [...summarySnapshot.uiEvidenceBounds.truncatedFields].sort(),
+              ['argumentsJson','output','reasoningContent','resultJson']);
+
+            const oversizedDetail = {...detail, operations:[oversizedOperation]};
+            const oversizedPanelText = treeText(context.renderFailureEvidence(oversizedDetail));
+            assert.ok(oversizedPanelText.includes('首屏摘要每字段最多显示 360 字符'));
+            assert.ok(oversizedPanelText.includes('OUTPUT_HEAD'));
+            assert.ok(oversizedPanelText.includes('OUTPUT_TAIL'));
+            assert.ok(!oversizedPanelText.includes('_MIDDLE_MUST_NOT_RENDER'));
+
+            const oversizedLogs = context.failureLogLines(oversizedDetail).join('\n');
+            assert.ok(oversizedLogs.includes('RESULT_HEAD'));
+            assert.ok(oversizedLogs.includes('RESULT_TAIL'));
+            assert.ok(!oversizedLogs.includes('_MIDDLE_MUST_NOT_RENDER'));
+            const oversizedPayload = JSON.parse(context.issuePayload(oversizedDetail));
+            assert.ok(oversizedPayload.failedOperations[0].argumentsJson.length <= 8192);
+            assert.ok(!oversizedPayload.failedOperations[0].argumentsJson.includes('_MIDDLE_MUST_NOT_RENDER'));
+
+            const stepsText = treeText(context.renderSteps(detail));
+            for (const expected of [
+              'workerId', 'completionAnnotations', 'assignedVariable', 'assignedValue',
+              'requestedVariableName', 'failureOutcome', 'fileItemResults', 'voteAgreementDecision',
+              '&lt;script&gt;syntax failure&lt;/script&gt;', '&lt;file&gt;bad&lt;/file&gt;', '不代表完整步骤输出',
+              '嵌套失败证据已在投影端按大小上限截断',
+              '当前步骤正在等待重试', '不代表当前步骤已终止失败',
+              'currentRetryRequestedAtUtc', 'latestFailedRequestedAtUtc', 'latestFailedCompletedAtUtc',
+              'email_retry', 'recipientMode', '源结果总数未知'
+            ]) assert.ok(stepsText.includes(expected), 'Steps must retain ' + expected);
+
+            const timelineText = treeText(context.renderTimeline(detail));
+            assert.ok(timelineText.includes('&lt;details&gt;failure&lt;/details&gt;'));
+            assert.ok(!timelineText.includes('timeline <details>failure</details>'));
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        html.Should().Contain("function collectFailureEvidence(detail)");
+        html.Should().Contain("function renderFailureEvidence(detail)");
+        html.Should().Contain("function failureLogLines(detail)");
+        html.Should().Contain("const operation=boundedOperationEvidenceSnapshot(sourceOperation,OPERATION_EVIDENCE_DETAIL_MAX_CHARS);");
+        html.Should().Contain("const tool=boundedOperationEvidenceSnapshot(event.toolCall||{},OPERATION_EVIDENCE_DETAIL_MAX_CHARS);");
+        html.Should().NotContain("完整 role/tool 输出见 Timeline");
+    }
+
+    [Fact]
     public async Task WorkflowObservatory_RequestTraceFeed_ShouldNormalizeCoverageAndScopeTheActivityRequest()
     {
         var html = await GetObservatoryHtmlAsync();
@@ -967,10 +1232,15 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               REPLY_KINDS: new Set(['Message', 'TextMessage']),
               DATA_MODEL_KEYS: ['model', 'model_id', 'modelId'],
             };
+            const evidenceStart = html.indexOf('function evidenceHasValue(');
+            const evidenceEnd = html.indexOf('\nfunction activityFirstFailure(', evidenceStart);
+            assert.notEqual(evidenceStart, -1, 'operation evidence helpers must exist');
+            assert.notEqual(evidenceEnd, -1, 'activityFirstFailure must follow operation evidence helpers');
             vm.createContext(context);
             vm.runInContext(`
               ${functionSource('dataLookup', 'parseT')}
               ${functionSource('parseT', 'clockUTC')}
+              ${html.slice(evidenceStart, evidenceEnd)}
               ${functionSource('operationTimestamp', 'openOperationRecord')}
             `, context);
 
@@ -1028,6 +1298,37 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
                 'a committed point must not be presented as an invented duration interval');
             }
 
+            const oversizedLegacyContent = 'LEGACY_HEAD\n' + 'x'.repeat(9000) +
+              'LEGACY_MIDDLE_MUST_NOT_RENDER' + 'y'.repeat(9000) + '\nLEGACY_TAIL';
+            const oversizedLegacyRecords = context.buildOperationRecords({
+              summary: {runId: 'run-legacy-large', startedAtUtc: '2026-08-14T01:00:00.000Z'},
+              timeline: [{
+                kind: 'Message', stage: 'role.reply', agentId: 'assistant',
+                timestampUtc: '2026-08-14T01:00:00.100Z', content: oversizedLegacyContent,
+                data: {sessionId: 'session-large', model: 'deepseek-chat'},
+              }],
+            });
+            const oversizedLegacyModel = oversizedLegacyRecords.find(record => record.type === 'model');
+            assert.ok(oversizedLegacyModel.content.length <= 8192);
+            assert.ok(oversizedLegacyModel.preview.length <= 360);
+            assert.ok(oversizedLegacyModel.content.includes('LEGACY_HEAD'));
+            assert.ok(oversizedLegacyModel.content.includes('LEGACY_TAIL'));
+            assert.ok(!oversizedLegacyModel.content.includes('LEGACY_MIDDLE_MUST_NOT_RENDER'));
+            assert.equal(oversizedLegacyModel.event.content, oversizedLegacyModel.content,
+              'renderReplyBubble must receive the bounded event content');
+            assert.deepEqual(
+              JSON.parse(JSON.stringify(oversizedLegacyModel.evidenceBounds.truncatedFields)),
+              ['content']);
+            const whitespaceLegacyModel = context.buildOperationRecords({
+              summary: {runId: 'run-legacy-whitespace'},
+              timeline: [{
+                kind: 'Message', stage: 'role.reply', agentId: 'assistant',
+                timestampUtc: '2026-08-14T01:00:00.100Z', content: ' '.repeat(9000), data: {},
+              }],
+            }).find(record => record.type === 'model');
+            assert.equal(whitespaceLegacyModel.toolCallOnly, true,
+              'the omission marker must not turn an oversized blank reply into text content');
+
             const typedRecords = context.buildOperationRecords({
               summary: {runId: 'run-typed', startedAtUtc: '2026-08-14T01:00:00.000Z'},
               inputSummary: 'Inspect deployment status',
@@ -1057,6 +1358,8 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         var result = await RunNodeAsync(script, html);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
+        html.Should().Contain("const boundedContent=boundedOperationEvidenceValue(rawContent,OPERATION_EVIDENCE_DETAIL_MAX_CHARS);");
+        html.Should().Contain("content,reasoning:\"\",event:{...event,content},data,evidenceBounds");
     }
 
     [Fact]
