@@ -205,7 +205,7 @@ public sealed class Neo4jProjectionGraphStoreTelemetryTests
         await using var store = new Neo4jProjectionGraphStore(
             new Neo4jProjectionGraphStoreOptions
             {
-                AutoCreateConstraints = false,
+                AutoCreateSchema = false,
             },
             logger);
         var graph = new ProjectionOwnedGraph

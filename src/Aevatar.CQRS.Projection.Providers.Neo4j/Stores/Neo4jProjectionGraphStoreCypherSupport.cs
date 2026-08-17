@@ -69,7 +69,8 @@ internal static class Neo4jProjectionGraphStoreCypherSupport
                "WHERE coalesce(old.projectionManaged, false) = true " +
                "AND old.projectionOwnerId = $ownerId " +
                "DELETE old " +
-               "WITH $nodes AS nodes, $edges AS edges, $targetNodeIds AS targetNodeIds, $scope AS scope, $ownerId AS ownerId " +
+               "WITH count(old) AS deletedEdgeCount " +
+               "WITH $scope AS scope, $ownerId AS ownerId, $nodes AS nodes, $edges AS edges, $targetNodeIds AS targetNodeIds " +
                "FOREACH (node IN nodes | " +
                $"MERGE (n:{nodeLabel} {{scope: scope, nodeId: node.nodeId}}) " +
                "SET n.nodeType = node.nodeType, " +
@@ -173,5 +174,37 @@ internal static class Neo4jProjectionGraphStoreCypherSupport
     {
         return $"CREATE CONSTRAINT {constraintName} IF NOT EXISTS " +
                $"FOR (n:{nodeLabel}) REQUIRE (n.scope, n.nodeId) IS UNIQUE";
+    }
+
+    internal static string BuildCreateNodeOwnerIndexCypher(string nodeLabel, string indexName)
+    {
+        return $"CREATE RANGE INDEX {indexName} IF NOT EXISTS " +
+               $"FOR (n:{nodeLabel}) ON (n.scope, n.projectionOwnerId)";
+    }
+
+    internal static string BuildCreateRelationshipOwnerIndexCypher(string edgeType, string indexName)
+    {
+        return $"CREATE RANGE INDEX {indexName} IF NOT EXISTS " +
+               $"FOR ()-[r:{edgeType}]-() ON (r.scope, r.projectionOwnerId)";
+    }
+
+    internal static string BuildAwaitIndexCypher()
+    {
+        return "CALL db.awaitIndex($indexName, $timeoutSeconds)";
+    }
+
+    internal static string BuildShowIndexesCypher()
+    {
+        return "SHOW INDEXES " +
+               "YIELD name, type, entityType, labelsOrTypes, properties, state, failureMessage " +
+               "RETURN name, type, entityType, labelsOrTypes, properties, state, failureMessage";
+    }
+
+    internal static string BuildShowIndexByNameCypher()
+    {
+        return "SHOW INDEXES " +
+               "YIELD name, type, entityType, labelsOrTypes, properties, state, failureMessage " +
+               "WHERE name = $indexName " +
+               "RETURN name, type, entityType, labelsOrTypes, properties, state, failureMessage";
     }
 }

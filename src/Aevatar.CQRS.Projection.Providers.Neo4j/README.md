@@ -16,6 +16,17 @@ Neo4j Graph Provider。
 
 - `Projection:Graph:Providers:Neo4j:*`
 - 至少配置 `Uri`
+- `AutoCreateSchema` 默认为 `true`。首次访问会创建 `(scope, nodeId)` 唯一约束、
+  `(scope, projectionOwnerId)` 节点与关系 RANGE 索引，并等待两个 owner 索引 ONLINE
+  后再执行读写。
+- `AutoCreateSchema=false` 时 provider 不创建或等待任何 schema；部署方必须在接收流量前
+  手动预建上述唯一约束和两个 owner RANGE 索引，并确认索引为 ONLINE。
+
+owner graph replacement 在删除旧关系后通过单行聚合屏障继续执行，确保节点、关系写入和
+陈旧节点清理的执行次数不随旧关系数量增长。owner 索引使用以下稳定名称：
+
+- `projection_graph_node_scope_owner_id_<node-label>`
+- `projection_graph_relationship_scope_owner_id_<relationship-type>`
 
 ## Observability
 

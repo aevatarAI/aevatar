@@ -15,7 +15,7 @@ public sealed partial class Neo4jProjectionGraphStore
     private readonly string _database;
     private readonly string _nodeLabel;
     private readonly string _edgeType;
-    private readonly bool _autoCreateConstraints;
+    private readonly bool _autoCreateSchema;
     private readonly int _maxTraversalDepth;
     private readonly ILogger<Neo4jProjectionGraphStore> _logger;
     private readonly SemaphoreSlim _schemaLock = new(1, 1);
@@ -37,7 +37,7 @@ public sealed partial class Neo4jProjectionGraphStore
         _edgeType = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
             options.EdgeType,
             "PROJECTION_REL");
-        _autoCreateConstraints = options.AutoCreateConstraints;
+        _autoCreateSchema = options.AutoCreateSchema;
         _maxTraversalDepth = Math.Clamp(options.MaxTraversalDepth, 1, 8);
         _logger = logger ?? NullLogger<Neo4jProjectionGraphStore>.Instance;
 
