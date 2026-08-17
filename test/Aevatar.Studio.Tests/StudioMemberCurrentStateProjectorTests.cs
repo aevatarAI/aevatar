@@ -39,6 +39,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
             ImplementationKind = StudioMemberImplementationKind.Workflow,
             PublishedServiceId = "member-m-1",
             LifecycleStage = StudioMemberLifecycleStage.BindReady,
+            AuthorizationRevision = 7,
             CreatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow.AddDays(-1)),
             UpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             ImplementationRef = new StudioMemberImplementationRef
@@ -98,6 +99,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.Id.Should().Be(RootActorId);
         written.ActorId.Should().Be(RootActorId);
         written.StateVersion.Should().Be(5);
+        written.AuthorizationRevision.Should().Be(7);
         written.LastEventId.Should().Be("evt-9");
 
         // Denormalized roster fields are written so the query port doesn't

@@ -1064,6 +1064,11 @@ message StudioMemberCurrentStateDocument {
   string schedule_provisioning_failure_code = 76;
   string schedule_provisioning_failure_message = 77;
   google.protobuf.Timestamp schedule_provisioning_updated_at = 78;
+
+  // Actor-owned version of authorization-relevant member facts. This is
+  // intentionally distinct from state_version, which also advances for
+  // provisioning attempts and other non-authority bookkeeping.
+  int64 authorization_revision = 80;
 }
 
 // ─── StudioMemberBindingRun Current State ReadModel ───

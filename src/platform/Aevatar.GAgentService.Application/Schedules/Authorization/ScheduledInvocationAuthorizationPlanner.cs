@@ -458,7 +458,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             {
                 SourceKind = AuthorizationSourceKind.StudioMember,
                 SourceId = target.MemberId,
-                StateVersion = member.StateVersion,
+                StateVersion = member.AuthorizationRevision,
             },
             new()
             {

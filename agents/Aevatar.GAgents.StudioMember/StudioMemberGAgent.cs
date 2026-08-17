@@ -789,7 +789,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     protected override StudioMemberState TransitionState(
         StudioMemberState current, IMessage evt)
     {
-        return StateTransitionMatcher
+        var next = StateTransitionMatcher
             .Match(current, evt)
             .On<StudioMemberCreatedEvent>(ApplyCreated)
             .On<StudioMemberRenamedEvent>(ApplyRenamed)
@@ -810,6 +810,19 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             .On<StudioMemberReassignedEvent>(ApplyReassigned)
             .On<StudioMemberDeletedEvent>(ApplyDeleted)
             .OrCurrent();
+
+        // Legacy actor states predate authorization_revision. A real state
+        // transition upgrades their raw zero to the baseline epoch without
+        // changing the effective authorization stamp used by readers.
+        if (!ReferenceEquals(next, current))
+        {
+            if (next.AuthorizationRevision < 0)
+                throw new InvalidOperationException("member authorization_revision is invalid.");
+            if (next.AuthorizationRevision == 0)
+                next.AuthorizationRevision = 1;
+        }
+
+        return next;
     }
 
     private static StudioMemberState ApplyCreated(
@@ -837,6 +850,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             CreatedAtUtc = evt.CreatedAtUtc,
             UpdatedAtUtc = evt.CreatedAtUtc,
             LastBinding = null,
+            AuthorizationRevision = 1,
         };
     }
 
@@ -924,6 +938,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         // invariant holds even on hand-rolled / replayed events.
         next.ImplementationRef = evt.ImplementationRef?.Clone();
         next.UpdatedAtUtc = evt.UpdatedAtUtc;
+        next.AuthorizationRevision = AdvanceAuthorizationRevision(state.AuthorizationRevision);
 
         // Lifecycle:
         //   Created       + resolved impl ref → BuildReady
@@ -999,6 +1014,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         };
         next.LifecycleStage = StudioMemberLifecycleStage.BindReady;
         next.UpdatedAtUtc = evt.CompletedAtUtc;
+        next.AuthorizationRevision = AdvanceAuthorizationRevision(state.AuthorizationRevision);
         return next;
     }
 
@@ -1051,6 +1067,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         };
         next.LifecycleStage = StudioMemberLifecycleStage.BindReady;
         next.UpdatedAtUtc = recordedAt;
+        next.AuthorizationRevision = AdvanceAuthorizationRevision(state.AuthorizationRevision);
         return next;
     }
 
@@ -1605,6 +1622,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             next.ClearTeamId();
         }
         next.UpdatedAtUtc = evt.ReassignedAtUtc;
+        next.AuthorizationRevision = AdvanceAuthorizationRevision(state.AuthorizationRevision);
         return next;
     }
 
@@ -1616,7 +1634,15 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         next.DeletedAtUtc = evt.DeletedAtUtc;
         next.UpdatedAtUtc = evt.DeletedAtUtc;
         next.ClearTeamId();
+        next.AuthorizationRevision = AdvanceAuthorizationRevision(state.AuthorizationRevision);
         return next;
+    }
+
+    private static long AdvanceAuthorizationRevision(long currentRevision)
+    {
+        if (currentRevision < 0)
+            throw new InvalidOperationException("member authorization_revision is invalid.");
+        return currentRevision == 0 ? 2 : checked(currentRevision + 1);
     }
 
     private static string NormalizeActorIdSegment(string? value, string fieldName)

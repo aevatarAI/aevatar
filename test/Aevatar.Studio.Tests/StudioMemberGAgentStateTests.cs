@@ -22,6 +22,20 @@ public sealed class StudioMemberGAgentStateTests
 {
     private readonly StudioMemberStateApplier _agent = new();
 
+    [Fact]
+    public void TransitionState_ShouldInitializeAuthorizationRevision_WhenMemberIsCreated()
+    {
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-alpha",
+            ScopeId = "scope-alpha",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        created.AuthorizationRevision.Should().Be(1);
+    }
+
     // Refactor (iter1345/cluster-519-draft-member-authority):
     //   Old pattern: tests covered only direct create semantics, leaving the
     //   draft projection ensure command contract implicit.
@@ -53,6 +67,153 @@ public sealed class StudioMemberGAgentStateTests
         created.PublishedServiceId.Should().Be(StudioMemberConventions.BuildPublishedServiceId("workflow-1"));
         created.CreatedAtUtc.Should().Be(requestedAt);
         eventSourcing.ConfirmCallCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(7, 7)]
+    public void TransitionState_ShouldKeepEffectiveAuthorizationRevisionStable_ForProvisioningBookkeeping(
+        long initialRevision,
+        long expectedRevision)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var legacy = new StudioMemberState
+        {
+            MemberId = "m-legacy",
+            ScopeId = "scope-1",
+            AuthorizationRevision = initialRevision,
+            WorkflowScheduleProvisioning = new StudioMemberWorkflowScheduleProvisioningState
+            {
+                Intent = new StudioMemberWorkflowScheduleProvisioningIntent
+                {
+                    ProvisioningId = "provisioning-1",
+                },
+                Status = StudioMemberWorkflowScheduleProvisioningStatus.PendingBinding,
+            },
+        };
+
+        var started = _agent.Apply(legacy, new StudioMemberWorkflowScheduleProvisioningAttemptStarted
+        {
+            ProvisioningId = "provisioning-1",
+            Attempt = 1,
+            StartedAtUtc = Timestamp.FromDateTimeOffset(now),
+        });
+        var deferred = _agent.Apply(started, new StudioMemberWorkflowScheduleProvisioningRetryDeferred
+        {
+            ProvisioningId = "provisioning-1",
+            Attempt = 1,
+            FailureCode = "authorization_plan_changed",
+            Detail = "retryable",
+            DeferredAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+        });
+
+        started.AuthorizationRevision.Should().Be(expectedRevision);
+        deferred.AuthorizationRevision.Should().Be(expectedRevision);
+    }
+
+    [Theory]
+    [InlineData(0, 2)]
+    [InlineData(7, 8)]
+    public void TransitionState_ShouldAdvanceAuthorizationRevision_ForAuthorityChanges(
+        long initialRevision,
+        long expectedRevision)
+    {
+        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var legacy = new StudioMemberState
+        {
+            MemberId = "m-legacy",
+            ScopeId = "scope-1",
+            PublishedServiceId = "svc-alpha",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            AuthorizationRevision = initialRevision,
+        };
+        var bindingState = legacy.Clone();
+        bindingState.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = "bind-alpha",
+            CurrentStatus = StudioMemberBindingRunStatus.Admitted,
+        };
+
+        var changes = new (StudioMemberState State, IMessage Event)[]
+        {
+            (legacy.Clone(), new StudioMemberImplementationUpdatedEvent
+            {
+                ImplementationRef = new StudioMemberImplementationRef
+                {
+                    Workflow = new StudioMemberWorkflowRef
+                    {
+                        WorkflowId = "wf-alpha",
+                        WorkflowRevision = "draft-rev-alpha",
+                    },
+                },
+                UpdatedAtUtc = now,
+            }),
+            (bindingState, new StudioMemberBindingCompletedEvent
+            {
+                BindingRunId = "bind-alpha",
+                PublishedServiceId = "svc-alpha",
+                RevisionId = "revision-alpha",
+                ImplementationKind = StudioMemberImplementationKind.Workflow,
+                CompletedAtUtc = now,
+            }),
+            (legacy.Clone(), new StudioMemberPublishedBindingRecordedEvent
+            {
+                PublishedServiceId = "svc-alpha",
+                RevisionId = "revision-alpha",
+                ImplementationKind = StudioMemberImplementationKind.Workflow,
+                ImplementationRef = new StudioMemberImplementationRef
+                {
+                    Workflow = new StudioMemberWorkflowRef
+                    {
+                        WorkflowId = "wf-alpha",
+                        WorkflowRevision = "revision-alpha",
+                    },
+                },
+                RecordedAtUtc = now,
+            }),
+            (legacy.Clone(), new StudioMemberReassignedEvent
+            {
+                MemberId = "m-legacy",
+                ScopeId = "scope-1",
+                ToTeamId = "team-alpha",
+                ReassignedAtUtc = now,
+            }),
+            (legacy.Clone(), new StudioMemberDeletedEvent
+            {
+                MemberId = "m-legacy",
+                ScopeId = "scope-1",
+                PublishedServiceId = "svc-alpha",
+                DeletedAtUtc = now,
+            }),
+        };
+
+        foreach (var change in changes)
+        {
+            _agent.Apply(change.State, change.Event).AuthorizationRevision.Should().Be(
+                expectedRevision,
+                $"{change.Event.Descriptor.Name} changes scheduled authorization authority");
+        }
+    }
+
+    [Fact]
+    public void TransitionState_ShouldRejectNegativeAuthorizationRevision()
+    {
+        var corrupted = new StudioMemberState
+        {
+            MemberId = "m-corrupted",
+            ScopeId = "scope-1",
+            AuthorizationRevision = -1,
+        };
+
+        var action = () => _agent.Apply(corrupted, new StudioMemberRenamedEvent
+        {
+            DisplayName = "renamed",
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        action.Should().Throw<TargetInvocationException>()
+            .Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Contain("authorization_revision is invalid");
     }
 
     [Fact]

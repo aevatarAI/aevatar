@@ -4,6 +4,7 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.GAgentService.Infrastructure.Credentials;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
@@ -357,6 +358,12 @@ public sealed class NyxIdApprovalPolicyScheduledOperationAuthorizationPortTests
             .ImplementationType
             .Should()
             .Be<NyxIdApprovalPolicyScheduledOperationAuthorizationPort>();
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkflowCallerAccessTokenProvider>()
+            .Should().BeOfType<NyxIdWorkflowCallerAccessTokenProvider>();
+        provider.GetRequiredService<INyxIdScheduledOperationAuthorizationPort>()
+            .Should().BeOfType<NyxIdApprovalPolicyScheduledOperationAuthorizationPort>();
     }
 
     private static NyxIdApprovalPolicyScheduledOperationAuthorizationPort CreatePort(

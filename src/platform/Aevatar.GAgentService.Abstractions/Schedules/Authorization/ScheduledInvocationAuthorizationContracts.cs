@@ -478,7 +478,7 @@ public sealed record NyxIdAuthorizationCatalogRefreshResult(
 }
 
 public sealed record ScheduledInvocationMemberEvidence(
-    long StateVersion,
+    long AuthorizationRevision,
     string DraftWorkflowId,
     string WorkflowRevisionId,
     string PublishedServiceId);

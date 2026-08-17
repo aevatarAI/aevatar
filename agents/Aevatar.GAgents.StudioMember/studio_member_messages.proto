@@ -311,6 +311,10 @@ message StudioMemberState {
   // Actor-owned continuation for the deterministic schedule created by the
   // one-call workflow provisioning flow. It contains no raw credentials.
   StudioMemberWorkflowScheduleProvisioningState workflow_schedule_provisioning = 70;
+  // Actor-owned revision of the member facts that participate in scheduled
+  // invocation authorization. Provisioning attempts and other bookkeeping do
+  // not advance it; implementation, binding, team, and delete changes do.
+  int64 authorization_revision = 80;
 }
 
 // ─── Events ───
