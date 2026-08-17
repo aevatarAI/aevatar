@@ -5,6 +5,7 @@ using Aevatar.Foundation.Runtime.Observability;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
@@ -86,6 +87,41 @@ public sealed class ProjectionMaterializerRegistrationTests
     }
 
     [Fact]
+    public async Task ObservedProjectionMaterializer_ShouldLogCompleted_WithAuthoritativeStateVersion()
+    {
+        var inner = new TestCurrentStateMaterializer();
+        var logger = new RecordingLogger<ObservedProjectionMaterializer<TestContext, TestCurrentStateMaterializer>>();
+        var materializer = new ObservedProjectionMaterializer<TestContext, TestCurrentStateMaterializer>(inner, logger);
+
+        await materializer.ProjectAsync(
+            new TestContext { ProjectionKind = "projection-alpha" },
+            CreateCommittedEnvelopeWithoutEventData("outer-1", "state-event-1", 42));
+
+        inner.ProjectCount.Should().Be(1);
+        var entry = logger.Entries.Should().ContainSingle().Which;
+        entry.Level.Should().Be(LogLevel.Information);
+        entry.Properties["ProjectionKind"].Should().Be("projection-alpha");
+        entry.Properties["MaterializerKind"].Should().Be(nameof(TestCurrentStateMaterializer));
+        entry.Properties["StateVersion"].Should().Be(42L);
+        entry.Properties["Result"].Should().Be(ProjectionProcessingMetrics.ResultCompleted);
+        entry.Properties["ElapsedMs"].Should().BeOfType<double>().Which.Should().BeGreaterThanOrEqualTo(0);
+    }
+
+    [Fact]
+    public async Task ObservedProjectionMaterializer_ShouldLogNullStateVersion_ForNonCommittedEnvelope()
+    {
+        var inner = new TestCurrentStateMaterializer();
+        var logger = new RecordingLogger<ObservedProjectionMaterializer<TestContext, TestCurrentStateMaterializer>>();
+        var materializer = new ObservedProjectionMaterializer<TestContext, TestCurrentStateMaterializer>(inner, logger);
+
+        await materializer.ProjectAsync(
+            new TestContext { ProjectionKind = "projection-alpha" },
+            new EventEnvelope { Id = "raw-event-1" });
+
+        logger.Entries.Should().ContainSingle().Which.Properties["StateVersion"].Should().BeNull();
+    }
+
+    [Fact]
     public async Task ObservedProjectionMaterializer_ShouldMarkActivityError_WhenInnerThrows()
     {
         var stopped = new ConcurrentQueue<Activity>();
@@ -97,8 +133,10 @@ public sealed class ProjectionMaterializerRegistrationTests
             ActivityStopped = stopped.Enqueue,
         };
         ActivitySource.AddActivityListener(listener);
+        var logger = new RecordingLogger<ObservedProjectionMaterializer<TestContext, ThrowingMaterializer>>();
         var materializer = new ObservedProjectionMaterializer<TestContext, ThrowingMaterializer>(
-            new ThrowingMaterializer());
+            new ThrowingMaterializer(),
+            logger);
 
         Func<Task> act = async () => await materializer.ProjectAsync(
             new TestContext(),
@@ -114,6 +152,84 @@ public sealed class ProjectionMaterializerRegistrationTests
             .Status
             .Should()
             .Be(ActivityStatusCode.Error);
+        var entry = logger.Entries.Should().ContainSingle().Which;
+        entry.Level.Should().Be(LogLevel.Error);
+        entry.Properties["Result"].Should().Be(ProjectionProcessingMetrics.ResultFailed);
+        entry.Properties["ErrorType"].Should().Be(nameof(InvalidOperationException));
+        entry.Exception.Should().BeNull("materializer exceptions can contain provider or payload details");
+    }
+
+    [Fact]
+    public async Task ObservedProjectionMaterializer_ShouldLogCancelled_WhenRequestedTokenIsCancelled()
+    {
+        var inner = new TestCurrentStateMaterializer();
+        var logger = new RecordingLogger<ObservedProjectionMaterializer<TestContext, TestCurrentStateMaterializer>>();
+        var materializer = new ObservedProjectionMaterializer<TestContext, TestCurrentStateMaterializer>(inner, logger);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Func<Task> act = async () => await materializer.ProjectAsync(
+            new TestContext { ProjectionKind = "projection-cancelled" },
+            new EventEnvelope { Id = "cancelled-1" },
+            cancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        inner.ProjectCount.Should().Be(0);
+        var entry = logger.Entries.Should().ContainSingle().Which;
+        entry.Level.Should().Be(LogLevel.Information);
+        entry.Properties["Result"].Should().Be(ProjectionProcessingMetrics.ResultCancelled);
+        entry.Properties.Should().NotContainKey("ErrorType");
+    }
+
+    [Fact]
+    public async Task ObservedProjectionMaterializer_ShouldLogFailed_WhenCancellationWasNotRequested()
+    {
+        var logger = new RecordingLogger<ObservedProjectionMaterializer<TestContext, UnrelatedCancellationMaterializer>>();
+        var materializer = new ObservedProjectionMaterializer<TestContext, UnrelatedCancellationMaterializer>(
+            new UnrelatedCancellationMaterializer(),
+            logger);
+
+        Func<Task> act = async () => await materializer.ProjectAsync(
+            new TestContext { ProjectionKind = "projection-failed" },
+            new EventEnvelope { Id = "foreign-cancellation-1" });
+
+        await act.Should().ThrowAsync<OperationCanceledException>()
+            .WithMessage("foreign cancellation");
+        var entry = logger.Entries.Should().ContainSingle().Which;
+        entry.Level.Should().Be(LogLevel.Error);
+        entry.Properties["Result"].Should().Be(ProjectionProcessingMetrics.ResultFailed);
+        entry.Properties["ErrorType"].Should().Be(nameof(OperationCanceledException));
+    }
+
+    [Fact]
+    public async Task ObservedProjectionMaterializer_ShouldIgnoreLoggerFailure_AfterSuccessfulMaterialization()
+    {
+        var inner = new TestCurrentStateMaterializer();
+        var materializer = new ObservedProjectionMaterializer<TestContext, TestCurrentStateMaterializer>(
+            inner,
+            new ThrowingLogger<ObservedProjectionMaterializer<TestContext, TestCurrentStateMaterializer>>());
+
+        Func<Task> act = async () => await materializer.ProjectAsync(
+            new TestContext(),
+            new EventEnvelope { Id = "success-with-logger-failure" });
+
+        await act.Should().NotThrowAsync();
+        inner.ProjectCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ObservedProjectionMaterializer_ShouldPreserveInnerFailure_WhenLoggerFails()
+    {
+        var materializer = new ObservedProjectionMaterializer<TestContext, ThrowingMaterializer>(
+            new ThrowingMaterializer(),
+            new ThrowingLogger<ObservedProjectionMaterializer<TestContext, ThrowingMaterializer>>());
+
+        Func<Task> act = async () => await materializer.ProjectAsync(
+            new TestContext(),
+            new EventEnvelope { Id = "failure-with-logger-failure" });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("projection boom");
     }
 
     [Fact]
@@ -237,6 +353,61 @@ public sealed class ProjectionMaterializerRegistrationTests
         }
     }
 
+    private sealed class UnrelatedCancellationMaterializer : IProjectionMaterializer<TestContext>
+    {
+        public ValueTask ProjectAsync(TestContext context, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = context;
+            _ = envelope;
+            _ = ct;
+            throw new OperationCanceledException("foreign cancellation");
+        }
+    }
+
+    private sealed record RecordedLogEntry(
+        LogLevel Level,
+        IReadOnlyDictionary<string, object?> Properties,
+        Exception? Exception);
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<RecordedLogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _ = eventId;
+            _ = formatter;
+            var properties = state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values.ToDictionary(value => value.Key, value => value.Value, StringComparer.Ordinal)
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+            Entries.Add(new RecordedLogEntry(logLevel, properties, exception));
+        }
+    }
+
+    private sealed class ThrowingLogger<T> : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("logger boom");
+    }
+
     private static EventEnvelope CreateCommittedEnvelope(string envelopeId, string eventId, long version)
     {
         return new EventEnvelope
@@ -253,4 +424,21 @@ public sealed class ProjectionMaterializerRegistrationTests
             }),
         };
     }
+
+    private static EventEnvelope CreateCommittedEnvelopeWithoutEventData(
+        string envelopeId,
+        string eventId,
+        long version) =>
+        new()
+        {
+            Id = envelopeId,
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = eventId,
+                    Version = version,
+                },
+            }),
+        };
 }

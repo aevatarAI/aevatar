@@ -114,7 +114,10 @@ public sealed class MainnetHostCompositionTests
         builder.Services.Should().Contain(descriptor => descriptor.ServiceType == typeof(MeterProvider));
         builder.Services.Should().Contain(descriptor => descriptor.ServiceType == typeof(TracerProvider));
         AevatarHostObservabilityExtensions.CoreMeterNames.Should().Contain("Aevatar.CQRS.Projection");
+        AevatarHostObservabilityExtensions.CoreMeterNames.Should()
+            .Contain("Aevatar.CQRS.Projection.Providers.Neo4j");
         AevatarHostObservabilityExtensions.CoreMeterNames.Should().Contain("Aevatar.Kafka.Transport");
+        AevatarHostObservabilityExtensions.DefaultProjectionLatencyBucketsMs.Should().Contain(60000d);
     }
 
     [Fact]

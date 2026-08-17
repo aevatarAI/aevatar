@@ -67,7 +67,7 @@ public sealed class ScriptNativeGraphProjector
             sourceEventId,
             updatedAt,
             payload.NativeGraph);
-        await _graphWriter.UpsertAsync(graphReadModel, ct);
+        await _graphWriter.UpsertAsync(graphReadModel, context.ProjectionKind, ct);
     }
 
 }

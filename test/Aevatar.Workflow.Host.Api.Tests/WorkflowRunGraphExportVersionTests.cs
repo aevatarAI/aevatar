@@ -7,6 +7,7 @@ using Aevatar.Workflow.Projection.Configuration;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -121,7 +122,8 @@ public sealed class WorkflowRunGraphExportVersionTests
         var graphStore = new InMemoryProjectionGraphStore();
         var graphWriter = new ProjectionGraphWriter<WorkflowRunInsightReportDocument>(
             graphStore,
-            new WorkflowRunInsightReportGraphMaterializer());
+            new WorkflowRunInsightReportGraphMaterializer(),
+            NullLogger<ProjectionGraphWriter<WorkflowRunInsightReportDocument>>.Instance);
         await graphWriter.UpsertAsync(new WorkflowRunInsightReportDocument
         {
             Id = "actor-1",
@@ -133,7 +135,7 @@ public sealed class WorkflowRunGraphExportVersionTests
             {
                 new WorkflowExecutionTopologyEdge("actor-1", "shared-actor"),
             },
-        });
+        }, WorkflowProjectionKinds.ExecutionMaterialization);
         await graphWriter.UpsertAsync(new WorkflowRunInsightReportDocument
         {
             Id = "actor-2",
@@ -145,7 +147,7 @@ public sealed class WorkflowRunGraphExportVersionTests
             {
                 new WorkflowExecutionTopologyEdge("actor-2", "shared-actor"),
             },
-        });
+        }, WorkflowProjectionKinds.ExecutionMaterialization);
         var port = new WorkflowExecutionArtifactQueryPort(
             new SingleDocumentReader<WorkflowRunInsightReportDocument>(new WorkflowRunInsightReportDocument
             {

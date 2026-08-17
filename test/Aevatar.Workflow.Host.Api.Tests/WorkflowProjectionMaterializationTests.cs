@@ -773,6 +773,7 @@ public sealed class WorkflowProjectionMaterializationTests
 
         reportStore.UpsertCount.Should().Be(5);
         graphWriter.UpsertCount.Should().Be(5);
+        graphWriter.LastProjectionKind.Should().Be(context.ProjectionKind);
         reportStore.Stored["actor-1"].Timeline.Select(x => x.Stage).Should().Contain(["step.request", "step.completed"]);
         graphWriter.Stored["actor-1"].Steps.Should().ContainSingle();
         graphWriter.Stored["actor-1"].Steps[0].TargetRole.Should().Be("assistant");
@@ -1134,12 +1135,18 @@ public sealed class WorkflowProjectionMaterializationTests
 
         public Dictionary<string, TReadModel> Stored { get; } = new(StringComparer.Ordinal);
 
+        public string? LastProjectionKind { get; private set; }
+
         public int UpsertCount { get; private set; }
 
-        public Task UpsertAsync(TReadModel readModel, CancellationToken ct = default)
+        public Task UpsertAsync(
+            TReadModel readModel,
+            string projectionKind,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Stored[_keySelector(readModel)] = readModel;
+            LastProjectionKind = projectionKind;
             UpsertCount++;
             return Task.CompletedTask;
         }

@@ -59,6 +59,6 @@ public sealed class WorkflowRunInsightReportArtifactProjector
         WorkflowExecutionArtifactMaterializationSupport.ApplyReportBase(readModel, context, state, stateEvent, observedAt);
         WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(readModel, stateEvent, observedAt);
         await _reportWriter.UpsertAsync(readModel, ct);
-        await _graphWriter.UpsertAsync(readModel, ct);
+        await _graphWriter.UpsertAsync(readModel, context.ProjectionKind, ct);
     }
 }

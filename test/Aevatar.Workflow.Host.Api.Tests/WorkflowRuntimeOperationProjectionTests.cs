@@ -545,6 +545,7 @@ public sealed class WorkflowRuntimeOperationProjectionTests
     {
         public Task UpsertAsync(
             WorkflowRunInsightReportDocument readModel,
+            string projectionKind,
             CancellationToken ct = default) =>
             Task.CompletedTask;
     }

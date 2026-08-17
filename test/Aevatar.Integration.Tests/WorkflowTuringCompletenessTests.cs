@@ -618,6 +618,7 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
 
         Task IProjectionGraphWriter<WorkflowRunInsightReportDocument>.UpsertAsync(
             WorkflowRunInsightReportDocument readModel,
+            string projectionKind,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
