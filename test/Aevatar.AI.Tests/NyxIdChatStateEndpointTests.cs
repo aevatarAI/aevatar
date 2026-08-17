@@ -203,7 +203,7 @@ public sealed class NyxIdChatStateEndpointTests
             Kind = NyxIdChatStepKind.Condition,
             Status = NyxIdChatStepStatus.Done,
             Required = true,
-            Description = "Check the candidate score.",
+            Description = "Check the observed value.",
             Source = new NyxIdChatStepSource
             {
                 Condition = new NyxIdChatConditionStepSource

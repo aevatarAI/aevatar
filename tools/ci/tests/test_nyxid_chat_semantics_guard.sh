@@ -31,6 +31,7 @@ tool_provider_file="${FIXTURE_ROOT}/src/Aevatar.AI.ToolProviders.Web/RouteCandid
 shared_tool_provider_file="${FIXTURE_ROOT}/src/Aevatar.AI.ToolProviders.Web/ExternalDirectoryAgentToolSource.cs"
 frontend_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/pages/chat/chatRouteCandidate.ts"
 frontend_test_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/pages/chat/chatRouteCandidate.test.ts"
+frontend_doc_file="${FIXTURE_ROOT}/apps/aevatar-console-web/docs/prototypes/business-identity.html"
 locale_file="${FIXTURE_ROOT}/apps/aevatar-console-web/src/locales/projectMessages.en-US.ts"
 workflow_delivery_package_file="${FIXTURE_ROOT}/workflow-delivery-packages/workflow-alpha.yaml"
 demo_file="${FIXTURE_ROOT}/demos/lark-interaction-probe/structured-review-shadow.yaml"
@@ -48,6 +49,7 @@ mkdir -p \
   "$(dirname -- "${query_adapter_file}")" \
   "$(dirname -- "${tool_provider_file}")" \
   "$(dirname -- "${frontend_file}")" \
+  "$(dirname -- "${frontend_doc_file}")" \
   "$(dirname -- "${locale_file}")" \
   "$(dirname -- "${workflow_delivery_package_file}")" \
   "$(dirname -- "${demo_file}")" \
@@ -57,7 +59,10 @@ mkdir -p \
   "$(dirname -- "${studio_design_cache_file}")"
 
 write_baseline() {
-  rm -f "${workflow_delivery_package_file}" "${studio_design_cache_file}"
+  rm -f \
+    "${frontend_doc_file}" \
+    "${workflow_delivery_package_file}" \
+    "${studio_design_cache_file}"
   printf '%s\n' \
     'public static class NyxIdChatTaskLifecycle' \
     '{' \
@@ -151,7 +156,22 @@ write_baseline() {
     'description: Domain-neutral interaction fixture.' \
     > "${demo_file}"
   printf '%s\n' \
-    'public sealed class GenericTemplateTests { }' \
+    'public sealed class GenericTemplateTests' \
+    '{' \
+    '    public const string Prompt = "Review this invoice.";' \
+    '    public const string FileName = "invoice.pdf";' \
+    '    public const string ImageFileName = "synthetic-invoice.png";' \
+    '    public const string HyphenatedFileName = "invoice-review.pdf";' \
+    '    public const string UnderscoredFileName = "invoice_approval.pdf";' \
+    '    public const string SchemaName = "invoice_summary";' \
+    '    public const string ProviderOperation = "list_invoices";' \
+    '    public const string ProviderReviewOperation = "invoice_review";' \
+    '    public const string ProviderApprovalOperation = "invoice_approval";' \
+    '    public const string ProviderSubmitOperation = "submit_invoice";' \
+    '    public const string ProviderSideEffect = "invoice.submit";' \
+    '    public const string ExternalFixturePath = "P1-invoice-approval/probe.json";' \
+    '    public const string ExternalCategory = "Expense Approval / Finance";' \
+    '}' \
     > "${backend_test_file}"
   printf '%s\n' \
     '# Generic conditional-write canary' \
@@ -193,9 +213,90 @@ require_failure() {
   fi
 }
 
+require_business_fixture_failure() {
+  local target="$1"
+  shift
+  printf '%s\n' "$@" > "${target}"
+  run_guard
+  require_failure "business-specific NyxIdChat semantics"
+  write_baseline
+}
+
 write_baseline
 run_guard
 require_success
+
+require_business_fixture_failure \
+  "${frontend_test_file}" \
+  'public sealed class CandidateFixture { public const string Prompt = "Check the candidate score"; }'
+
+require_business_fixture_failure \
+  "${frontend_test_file}" \
+  'public sealed class ThresholdFixture { public const string Prompt = "Choose the screening threshold"; }'
+
+require_business_fixture_failure \
+  "${backend_test_file}" \
+  'public sealed class SkillFixture { public const string Name = "invoice-ocr-policy-review"; }'
+
+require_business_fixture_failure \
+  "${system_prompt_file}" \
+  'public sealed class ToolFixture { public const string Name = "submit_invoice"; }'
+
+require_business_fixture_failure \
+  "${system_prompt_file}" \
+  'public sealed class SideEffectFixture { public const string Kind = "invoice.submit"; }'
+
+require_business_fixture_failure \
+  "${system_prompt_file}" \
+  'Use the fixed /invoice-approval route for every request.'
+
+require_business_fixture_failure \
+  "${system_prompt_file}" \
+  'Always call the invoice_review operation before replying.'
+
+require_business_fixture_failure \
+  "${backend_test_file}" \
+  'public sealed class WorkflowFixture { public const string Name = "synthetic_invoice_review"; }'
+
+require_business_fixture_failure \
+  "${backend_test_file}" \
+  'public sealed class HyphenatedWorkflowFixture { public const string Name = "synthetic-invoice-review"; }'
+
+require_business_fixture_failure \
+  "${backend_test_file}" \
+  'public sealed class ExtractFixture { public const string Name = "invoice_file_extract"; }'
+
+require_business_fixture_failure \
+  "${backend_test_file}" \
+  'public sealed class MatchFixture { public const string Name = "invoice_match"; }'
+
+require_business_fixture_failure \
+  "${backend_test_file}" \
+  'public sealed class WorkflowNameFixture { public const string Name = "invoice_pdf_workflow"; }'
+
+require_business_fixture_failure \
+  "${backend_test_file}" \
+  'public sealed class WorkflowIdFixture { public const string Id = "invoice-pdf-extraction-workflow"; }'
+
+require_business_fixture_failure \
+  "${backend_test_file}" \
+  'public sealed class RunFixture { public const string Id = "run-finance-alpha"; }'
+
+require_business_fixture_failure \
+  "${frontend_doc_file}" \
+  '<div class="run-name">Invoice Classifier</div>'
+
+require_business_fixture_failure \
+  "${frontend_doc_file}" \
+  '<div class="run-team">Finance Ops</div>'
+
+require_business_fixture_failure \
+  "${frontend_doc_file}" \
+  '<div class="run-name">Invoice PDF Workflow</div>'
+
+require_business_fixture_failure \
+  "${frontend_doc_file}" \
+  '<div class="history-title">Invoice PDF intake flow</div>'
 
 printf '%s\n' \
   'syntax = "proto3";' \

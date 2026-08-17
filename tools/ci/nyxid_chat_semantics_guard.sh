@@ -163,6 +163,27 @@ add_files(
     {".ts", ".tsx"},
 )
 
+# Ambiguous external names are forbidden only where Aevatar owns the product
+# semantics. Provider adapters and generic transport tests must remain able to
+# carry arbitrary operation names and user-authored content unchanged.
+platform_owned_business_identity_files = set(owned_business_semantics_files)
+add_files(
+    platform_owned_business_identity_files,
+    root / "test",
+    {".cs", ".json", ".md", ".proto", ".yaml", ".yml"},
+    name_contains="nyxidchat",
+)
+mainnet_config_root = root / "src" / "Aevatar.Mainnet.Host.Api"
+if mainnet_config_root.exists():
+    platform_owned_business_identity_files.update(
+        mainnet_config_root.glob("appsettings*.json")
+    )
+mainnet_composition_test = (
+    root / "test" / "Aevatar.Capabilities.Tests" / "MainnetHostCompositionTests.cs"
+)
+if mainnet_composition_test.exists():
+    platform_owned_business_identity_files.add(mainnet_composition_test)
+
 # Broad shared directories are checked only for unmistakable types, tool names,
 # and fixed routes from the removed implementation. Common terms such as
 # roleTitle or costCenter are checked only on NyxID Chat-owned surfaces.
@@ -172,14 +193,14 @@ for production_root, suffixes in (
     (root / "src", {".cs", ".proto"}),
     (root / "apps" / "aevatar-console-web" / "src", {".ts", ".tsx"}),
     (root / "test", {".cs", ".json", ".md", ".proto", ".yaml", ".yml"}),
-    (root / "docs", {".md"}),
+    (root / "docs", {".html", ".md"}),
+    (root / "apps" / "aevatar-console-web" / "docs", {".html", ".md"}),
     (root / "workflows", {".json", ".md", ".yaml", ".yml"}),
     (root / "demos", {".cs", ".json", ".md", ".proto", ".ts", ".tsx", ".yaml", ".yml"}),
     (root / "delivery-workflows", {".yaml", ".yml"}),
     (root / "workflow-delivery-packages", {".yaml", ".yml"}),
 ):
     add_files(specific_business_semantics_files, production_root, suffixes)
-mainnet_config_root = root / "src" / "Aevatar.Mainnet.Host.Api"
 if mainnet_config_root.exists():
     specific_business_semantics_files.update(mainnet_config_root.glob("appsettings*.json"))
 locale_root = root / "apps" / "aevatar-console-web" / "src" / "locales"
@@ -281,6 +302,36 @@ specific_business_semantics_patterns = (
         r"(?:hr|new[-_]hire)[-_]onboarding)(?![A-Za-z0-9])",
         re.IGNORECASE,
     ),
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:"
+        r"invoice[-_]ocr[-_]policy[-_]review|"
+        r"synthetic[-_]invoice[-_]review|"
+        r"invoice[-_](?:match|file[-_]extract|"
+        r"pdf[-_](?:extraction[-_])?workflow))"
+        r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:"
+        r"invoice[ -]+(?:classifier|pdf[ -]+(?:workflow|intake[ -]+flow))|"
+        r"finance[ -]+ops|run[-_]finance[-_][A-Za-z0-9][A-Za-z0-9_-]*)"
+        r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+)
+
+platform_owned_business_identity_patterns = (
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:candidate[-_ ]+score|screening[-_ ]+threshold)"
+        r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9])(?:invoice[-_](?:approval|review)|"
+        r"submit[-_]invoice|invoice\.submit)"
+        r"(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
 )
 
 owned_business_field_patterns = (
@@ -322,6 +373,8 @@ for path in sorted(specific_business_semantics_files):
     scan_business_patterns(path, text, specific_business_semantics_patterns)
     if path in owned_business_semantics_files:
         scan_business_patterns(path, text, owned_business_field_patterns)
+    if path in platform_owned_business_identity_files:
+        scan_business_patterns(path, text, platform_owned_business_identity_patterns)
 
 # Actor-owned facts must not migrate into service fields. The declaration must
 # be a mutable collection field and its name must carry operation/action/

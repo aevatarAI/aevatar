@@ -251,7 +251,7 @@ describe('ChatActorControls', () => {
     const projection = projectionFixture();
     projection.pendingInput = {
       requestId: 'input-threshold',
-      prompt: 'Choose the screening threshold',
+      prompt: 'Choose the numeric threshold',
       options: [],
       allowFreeText: true,
       multiSelect: false,

@@ -32,17 +32,17 @@ public sealed class AgentRunLarkCardDeliveryTests
         agent.State.GenerationStep.ToolReceipts.Add(new Aevatar.AI.Abstractions.AgentToolReceipt
         {
             CallId = "call-submit",
-            ToolName = "submit_invoice",
+            ToolName = "submit_record",
             Status = Aevatar.AI.Abstractions.AgentToolReceiptStatus.Error,
             Effect = Aevatar.AI.Abstractions.AgentToolReceiptEffect.Mutating,
-            ErrorMessage = "The invoice was not submitted.",
+            ErrorMessage = "The record was not submitted.",
         });
 
         await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("Submission confirmed")));
         await DispatchPendingSelfEventsAsync(agent, publisher);
 
         var visible = runner.CreateCalls.Should().ContainSingle().Subject.AccumulatedText;
-        visible.Should().Contain("[tool receipt] Failed: submit_invoice");
+        visible.Should().Contain("[tool receipt] Failed: submit_record");
         visible.Should().NotContain("Submission confirmed");
         agent.State.LarkCardDelivery.LastFlushedText.Should().Be(visible);
     }
