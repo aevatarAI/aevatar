@@ -160,6 +160,25 @@ function taskPlan(
   };
 }
 
+function numericCondition(observedValue: number, outcome: 'true' | 'false') {
+  return {
+    condition: {
+      condition: {
+        conditionId: `condition-${outcome}`,
+        sourceInputRequestId: 'input-threshold',
+        suggestedThreshold: 70,
+        effectiveThreshold: 75,
+        thresholdOrigin: 'user_override',
+        observedValue,
+        comparison: 'gte',
+        outcome,
+        evaluatedAt: '2026-08-11T13:01:00Z',
+        guardedToolName: 'external_record_create',
+      },
+    },
+  };
+}
+
 function sseResponse(frames: readonly unknown[]): Response {
   const encoder = new TextEncoder();
   return {
@@ -1631,10 +1650,10 @@ describe('ChatPage canonical NyxID Assistant', () => {
         }),
         taskStep('step-condition', {
           order: 2,
-          kind: 'web',
+          kind: 'condition',
           status: 'done',
           description: 'Observed value 72 is below 75',
-          source: { web: {} },
+          source: numericCondition(72, 'false'),
           externalEffect: 'not_applied',
           availableActions: undefined,
           operation: null,
@@ -1643,20 +1662,29 @@ describe('ChatPage canonical NyxID Assistant', () => {
           order: 3,
           status: 'skipped',
           description: 'Write matching record',
+          source: { tool: { toolName: 'external_record_create' } },
           mayChangeExternalState: true,
           externalEffect: 'not_applied',
           availableActions: undefined,
           operation: null,
+          guard: {
+            conditionStepId: 'step-condition',
+            requiredOutcome: 'true',
+          },
         }),
         taskStep('step-verify', {
           order: 4,
           kind: 'postcondition',
           status: 'skipped',
           description: 'Read matching record back',
-          source: { postcondition: { check: 'bitable.row.exists' } },
+          source: { postcondition: { check: 'external_record.exists' } },
           externalEffect: 'not_applied',
           availableActions: undefined,
           operation: null,
+          guard: {
+            conditionStepId: 'step-condition',
+            requiredOutcome: 'true',
+          },
         }),
       ],
       {
@@ -1688,8 +1716,18 @@ describe('ChatPage canonical NyxID Assistant', () => {
     const write = within(taskRow('Write matching record'));
     expect(write.getByText('skipped')).toBeInTheDocument();
     expect(write.getByText('not_applied')).toBeInTheDocument();
+    const conditionFacts = screen.getByRole('region', {
+      name: 'Committed condition facts',
+    });
+    expect(conditionFacts).toHaveTextContent('72 >= 75');
+    expect(conditionFacts).toHaveTextContent('false');
+    expect(conditionFacts).toHaveTextContent('user_override');
+    expect(conditionFacts).toHaveTextContent('external_record_create');
     expect(
-      screen.queryByText('Verified against bitable.row.exists'),
+      write.getByText('Guard step-condition requires true'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Verified against external_record.exists'),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('region', { name: 'NyxID approval observation' }),
@@ -1713,10 +1751,10 @@ describe('ChatPage canonical NyxID Assistant', () => {
         }),
         taskStep('step-condition-true', {
           order: 2,
-          kind: 'web',
+          kind: 'condition',
           status: 'done',
           description: 'Condition at least 75 executed',
-          source: { web: {} },
+          source: numericCondition(80, 'true'),
           externalEffect: 'not_applied',
           availableActions: undefined,
           operation: null,
@@ -1725,30 +1763,29 @@ describe('ChatPage canonical NyxID Assistant', () => {
           order: 3,
           status: 'done',
           description: 'Write matching record',
+          source: { tool: { toolName: 'external_record_create' } },
           mayChangeExternalState: true,
           externalEffect: 'confirmed',
           availableActions: undefined,
           operation: null,
-        }),
-        taskStep('step-condition-false', {
-          order: 4,
-          kind: 'web',
-          status: 'skipped',
-          description: 'Condition below 75 skipped',
-          source: { web: {} },
-          externalEffect: 'not_applied',
-          availableActions: undefined,
-          operation: null,
+          guard: {
+            conditionStepId: 'step-condition-true',
+            requiredOutcome: 'true',
+          },
         }),
         taskStep('step-verify', {
-          order: 5,
+          order: 4,
           kind: 'postcondition',
           status: 'done',
           description: 'Read matching record back',
-          source: { postcondition: { check: 'bitable.row.exists' } },
+          source: { postcondition: { check: 'external_record.exists' } },
           externalEffect: 'confirmed',
           availableActions: undefined,
           operation: null,
+          guard: {
+            conditionStepId: 'step-condition-true',
+            requiredOutcome: 'true',
+          },
         }),
       ],
       {
@@ -1767,7 +1804,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
             addedStepIds: [
               'step-condition-true',
               'step-write',
-              'step-condition-false',
               'step-verify',
             ],
             cancelledStepIds: [],
@@ -1798,10 +1834,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
             },
           };
         }
-        if (
-          step.stepId === 'step-condition-false' ||
-          step.stepId === 'step-verify'
-        ) {
+        if (step.stepId === 'step-verify') {
           return {
             ...step,
             status: 'planned',
@@ -2037,11 +2070,15 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(
       within(taskRow('Condition at least 75 executed')).getByText('done'),
     ).toBeInTheDocument();
+    const conditionFacts = screen.getByRole('region', {
+      name: 'Committed condition facts',
+    });
+    expect(conditionFacts).toHaveTextContent('80 >= 75');
+    expect(conditionFacts).toHaveTextContent('true');
+    expect(conditionFacts).toHaveTextContent('user_override');
+    expect(conditionFacts).toHaveTextContent('external_record_create');
     expect(
-      within(taskRow('Condition below 75 skipped')).getByText('skipped'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('Verified against bitable.row.exists'),
+      screen.getByText('Verified against external_record.exists'),
     ).toBeInTheDocument();
     expect(screen.getAllByText('Task result')).toHaveLength(1);
     const terminalApprovalObservation = within(
