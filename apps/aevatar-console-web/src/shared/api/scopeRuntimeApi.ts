@@ -1417,6 +1417,7 @@ export const scopeRuntimeApi = {
     return requestJson(
       `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/endpoints/${encodeURIComponent(endpointId)}/contract`,
       decodeScopeServiceEndpointContract,
+      { cache: "no-store" },
     );
   },
 

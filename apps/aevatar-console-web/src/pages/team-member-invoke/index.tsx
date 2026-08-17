@@ -166,20 +166,46 @@ const TeamMemberInvokePage: React.FC = () => {
   );
   const memberBindingCompleted =
     memberLifecycleStage === "bind_ready" && Boolean(completedBindingRevisionId);
-  const boundPublishedServiceId = memberBindingCompleted
+  const bindingPublishedServiceId = memberBindingCompleted
     ? trimOptional(lastBinding?.publishedServiceId) ||
       trimOptional(memberSummary?.publishedServiceId)
     : "";
+  const memberLabel =
+    trimOptional(memberSummary?.displayName) ||
+    t("pages.teammemberinvoke.member", "Member");
+  const endpointContractQuery = useQuery({
+    queryKey: [
+      "team-member-invoke",
+      "endpoint-contract",
+      route.scopeId,
+      route.memberId,
+      "chat",
+    ],
+    enabled: Boolean(route.scopeId && route.memberId && memberBindingCompleted),
+    queryFn: () =>
+      scopeRuntimeApi.getMemberEndpointContract(route.scopeId, route.memberId, "chat"),
+  });
+  const endpointContract = endpointContractQuery.data ?? null;
+  const endpointPublishedServiceId = trimOptional(endpointContract?.publishedServiceId);
+  const resolvedPublishedServiceId =
+    endpointPublishedServiceId || bindingPublishedServiceId;
+  const endpointContractIdentityMismatch = Boolean(
+    endpointContract &&
+      (trimOptional(endpointContract.scopeId) !== route.scopeId ||
+        trimOptional(endpointContract.memberId) !== route.memberId ||
+        !resolvedPublishedServiceId ||
+        (bindingPublishedServiceId &&
+          endpointPublishedServiceId &&
+          endpointPublishedServiceId !== bindingPublishedServiceId) ||
+        trimOptional(endpointContract.endpointId) !== "chat"),
+  );
   const canOpenPublishedRuns = Boolean(
     route.scopeId &&
       route.teamId &&
       route.memberId &&
       memberBindingCompleted &&
-      boundPublishedServiceId,
+      resolvedPublishedServiceId,
   );
-  const memberLabel =
-    trimOptional(memberSummary?.displayName) ||
-    t("pages.teammemberinvoke.member", "Member");
   const publishedRunsPlaceholderReason = canOpenPublishedRuns
     ? t(
         "pages.teammemberinvoke.publishedRuns.open",
@@ -189,31 +215,12 @@ const TeamMemberInvokePage: React.FC = () => {
         "pages.teammemberinvoke.publishedRuns.publishFirst",
         "Publish this member to start recording published runs.",
       );
-  const endpointContractQuery = useQuery({
-    queryKey: [
-      "team-member-invoke",
-      "endpoint-contract",
-      route.scopeId,
-      route.memberId,
-      "chat",
-    ],
-    enabled: Boolean(
-      route.scopeId && route.memberId && memberBindingCompleted && boundPublishedServiceId,
-    ),
-    queryFn: () =>
-      scopeRuntimeApi.getMemberEndpointContract(route.scopeId, route.memberId, "chat"),
-  });
-  const endpointContract = endpointContractQuery.data ?? null;
-  const endpointPublishedServiceId = trimOptional(endpointContract?.publishedServiceId);
-  const endpointContractIdentityMismatch = Boolean(
-    endpointContract &&
-      (trimOptional(endpointContract.scopeId) !== route.scopeId ||
-        trimOptional(endpointContract.memberId) !== route.memberId ||
-        endpointPublishedServiceId !== boundPublishedServiceId ||
-        trimOptional(endpointContract.endpointId) !== "chat"),
-  );
   const invokeServices = React.useMemo<ScopeConsoleServiceOption[]>(() => {
-    if (!endpointContract || endpointContractIdentityMismatch) {
+    if (
+      !endpointContract ||
+      endpointContractIdentityMismatch ||
+      !resolvedPublishedServiceId
+    ) {
       return [];
     }
 
@@ -233,24 +240,25 @@ const TeamMemberInvokePage: React.FC = () => {
         ],
         kind: "service",
         namespace: scopeServiceNamespace,
-        serviceId: boundPublishedServiceId,
+        serviceId: resolvedPublishedServiceId,
       },
     ];
   }, [
-    boundPublishedServiceId,
     endpointContract,
     endpointContractIdentityMismatch,
     memberLabel,
+    resolvedPublishedServiceId,
   ]);
   const serviceRevisionQuery = useQuery({
     queryKey: [
       "team-member-invoke",
       "service-revisions",
       route.scopeId,
-      boundPublishedServiceId,
+      resolvedPublishedServiceId,
     ],
-    enabled: Boolean(route.scopeId && boundPublishedServiceId),
-    queryFn: () => scopeRuntimeApi.getServiceRevisions(route.scopeId, boundPublishedServiceId),
+    enabled: Boolean(route.scopeId && resolvedPublishedServiceId),
+    queryFn: () =>
+      scopeRuntimeApi.getServiceRevisions(route.scopeId, resolvedPublishedServiceId),
   });
   const memberRevision =
     getScopeServiceCurrentRevision(serviceRevisionQuery.data) ??
@@ -460,7 +468,7 @@ const TeamMemberInvokePage: React.FC = () => {
           <StudioMemberInvokePanel
             authoritativeEndpointContract={endpointContract}
             enableFileAttachments
-            initialServiceId={boundPublishedServiceId}
+            initialServiceId={resolvedPublishedServiceId}
             memberId={route.memberId}
             memberRevision={memberRevision}
             presentation="member-run"

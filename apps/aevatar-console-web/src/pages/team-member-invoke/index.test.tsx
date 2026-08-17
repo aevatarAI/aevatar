@@ -295,6 +295,59 @@ describe("TeamMemberInvokePage", () => {
     expect(params.get("serviceId")).toBeNull();
   });
 
+  it("uses the member endpoint contract as an explicit published service identity source", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/invoke",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValueOnce(
+      createWorkflowMember(
+        {
+          memberId: "m-alpha",
+          publishedServiceId: "",
+          teamId: "t-alpha",
+        },
+        {
+          implementationRef: {
+            implementationKind: "workflow",
+            workflowId: "wf-alpha",
+          },
+        },
+      ),
+    );
+    (studioApi.getMemberBinding as jest.Mock).mockResolvedValueOnce(
+      createBinding({ publishedServiceId: "" }),
+    );
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockResolvedValueOnce(
+      createEndpointContract({ memberId: "m-alpha", publishedServiceId: "svc-alpha" }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(await screen.findByTestId("member-invoke-panel")).toHaveTextContent(
+      "member:m-alpha",
+    );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "service:svc-alpha",
+    );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "services:svc-alpha",
+    );
+    expect(screen.queryByText("Published service is not visible yet.")).toBeNull();
+    expect(scopeRuntimeApi.getMemberEndpointContract).toHaveBeenCalledWith(
+      "scope-1",
+      "m-alpha",
+      "chat",
+    );
+    expect(scopeRuntimeApi.getServiceRevisions).toHaveBeenCalledWith(
+      "scope-1",
+      "svc-alpha",
+    );
+  });
+
   it("does not read removed legacy Team member invoke links", async () => {
     window.history.replaceState(
       {},

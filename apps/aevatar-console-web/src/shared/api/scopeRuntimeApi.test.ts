@@ -362,6 +362,7 @@ describe("scopeRuntimeApi", () => {
     expect(new Headers(init?.headers).get("Authorization")).toBe(
       "Bearer access-token",
     );
+    expect(init?.cache).toBe("no-store");
   });
 
   it("keeps endpoint contract identities in separate fields", async () => {
