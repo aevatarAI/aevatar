@@ -683,6 +683,98 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task DeliveryShell_TeamSelection_ShouldOnlyAllowActiveWritableTeams()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/delivery");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function teamId(team) {');
+            const end = html.indexOf('function connectionSlots()', start);
+            assert.notEqual(start, -1, 'Team selection behavior must exist');
+            assert.notEqual(end, -1, 'connection rendering must follow Team selection behavior');
+
+            function element(tag, attrs, ...children) {
+              return {
+                tag,
+                attrs: attrs || {},
+                children: children.flat(Infinity).filter(value => value !== null && value !== undefined && value !== false)
+              };
+            }
+            function allText(node) {
+              if (typeof node === 'string') return node;
+              if (!node || typeof node !== 'object') return '';
+              return String(node.attrs && node.attrs.text || '') + node.children.map(allText).join('');
+            }
+
+            const teams = [
+              {teamId:'t-active',displayName:'Active Team',lifecycleStage:'active'},
+              {teamId:'t-readonly',displayName:'Read-only Team',lifecycleStage:'active',canPublish:false},
+              {teamId:'t-archived',displayName:'Archived Team',lifecycleStage:'archived',canPublish:true},
+              {teamId:'t-unknown',displayName:'Unknown Team',lifecycleStage:'created',canPublish:true},
+              {teamId:'t-missing',displayName:'Missing Stage Team',canPublish:true}
+            ];
+            const context = {
+              state: {customer: {teams, teamsError:null, selectedTeamId:'t-archived'}},
+              array(value){ return Array.isArray(value) ? value : []; },
+              object(value){ return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; },
+              first(value, names, fallback){
+                for (const name of names) {
+                  if (value && value[name] !== undefined && value[name] !== null) return value[name];
+                }
+                return fallback;
+              },
+              text(value, fallback){
+                return typeof value === 'string' && value.trim() ? value.trim() : (fallback || '');
+              },
+              h: element,
+              badge(status, label){ return element('span', {status, text:label}); },
+              errorDescription(){ throw new Error('unexpected error state'); },
+              notice(){ throw new Error('unexpected notice state'); },
+              emptyBlock(){ throw new Error('unexpected empty state'); },
+              invalidateValidation(){},
+              renderCustomerDetail(){}
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            assert.equal(context.teamCanPublish(teams[0]), true, 'active Team remains publishable');
+            assert.equal(context.teamCanPublish(teams[1]), false, 'read-only active Team is blocked');
+            assert.equal(context.teamCanPublish(teams[2]), false, 'archived Team is blocked');
+            assert.equal(context.teamCanPublish(teams[3]), false, 'unknown non-active Team fails closed');
+            assert.equal(context.teamCanPublish(teams[4]), false, 'missing lifecycle stage fails closed');
+            assert.equal(context.selectedTeamCanPublish(), false, 'persisted archived selection cannot validate or publish');
+
+            const rendered = context.renderTeamSection();
+            const buttons = rendered.children;
+            assert.equal(buttons.length, teams.length);
+            assert.equal(buttons[0].attrs.disabled, false);
+            assert.equal(buttons[0].attrs['aria-pressed'], 'false');
+            assert.equal(buttons[1].attrs.disabled, true);
+            assert.match(allText(buttons[1]), /没有发布权限.*只读/);
+            assert.equal(buttons[2].attrs.disabled, true);
+            assert.equal(buttons[2].attrs['aria-pressed'], 'false', 'archived Team must not render as selected');
+            assert.match(allText(buttons[2]), /已归档.*已归档/);
+            assert.equal(buttons[3].attrs.disabled, true);
+            assert.match(allText(buttons[3]), /当前状态不可发布.*不可发布/);
+            assert.equal(buttons[4].attrs.disabled, true);
+
+            context.state.customer.selectedTeamId = 't-active';
+            assert.equal(context.selectedTeamCanPublish(), true);
+            const activeSelection = context.renderTeamSection();
+            assert.equal(activeSelection.children[0].attrs.disabled, false);
+            assert.equal(activeSelection.children[0].attrs['aria-pressed'], 'true');
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
     public async Task DeliveryShell_CreatedTeam_ShouldRequireTheAuthoritativeScopeIdentity()
     {
         await using var app = await CreateAppAsync();

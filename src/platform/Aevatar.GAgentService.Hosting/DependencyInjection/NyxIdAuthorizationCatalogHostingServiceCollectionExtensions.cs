@@ -31,6 +31,9 @@ public static class NyxIdAuthorizationCatalogHostingServiceCollectionExtensions
             builder.Register<NyxIdAuthorizationCatalogGAgent>());
         services.AddScheduledInvocationAuthorization();
         services.AddNyxIdApiAccess(configuration);
+        services.Replace(ServiceDescriptor.Singleton<
+            INyxIdScheduledOperationAuthorizationPort,
+            NyxIdApprovalPolicyScheduledOperationAuthorizationPort>());
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
             NyxIdExternalWorkflowCapabilitySource>());

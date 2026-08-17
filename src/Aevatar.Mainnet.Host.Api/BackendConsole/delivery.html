@@ -2194,8 +2194,39 @@
       return text(first(team, ["teamId", "id"], ""));
     }
 
+    function teamLifecycleStage(team) {
+      return text(first(team, ["lifecycleStage"], "")).toLowerCase();
+    }
+
+    function teamPublishability(team) {
+      const lifecycleStage = teamLifecycleStage(team);
+      if (lifecycleStage === "archived") {
+        return { canPublish: false, detail: "Team 已归档，不能发布。", status: "blocked", label: "已归档" };
+      }
+      if (lifecycleStage !== "active") {
+        return { canPublish: false, detail: "Team 当前状态不可发布。", status: "blocked", label: "不可发布" };
+      }
+      if (first(team, ["canPublish", "canWrite"], true) === false) {
+        return { canPublish: false, detail: "没有发布权限", status: "blocked", label: "只读" };
+      }
+      return {
+        canPublish: true,
+        detail: text(first(team, ["permission", "role"], ""), "可发布"),
+        status: "valid",
+        label: "可发布"
+      };
+    }
+
     function teamCanPublish(team) {
-      return first(team, ["canPublish", "canWrite"], true) !== false;
+      return teamPublishability(team).canPublish;
+    }
+
+    function selectedTeamCanPublish() {
+      if (!state.customer || !state.customer.selectedTeamId) return false;
+      const selectedTeam = array(state.customer.teams).find(function (team) {
+        return teamId(team) === state.customer.selectedTeamId;
+      });
+      return Boolean(selectedTeam && teamCanPublish(selectedTeam));
     }
 
     function renderTeamSection() {
@@ -2237,8 +2268,9 @@
       }
       return h("div", { className: "team-list" }, state.customer.teams.map(function (team) {
         const id = teamId(team);
-        const selected = id && id === state.customer.selectedTeamId;
-        const canPublish = teamCanPublish(team);
+        const publishability = teamPublishability(team);
+        const canPublish = publishability.canPublish;
+        const selected = canPublish && id && id === state.customer.selectedTeamId;
         return h("button", {
           className: "team-option" + (selected ? " selected" : ""),
           type: "button",
@@ -2253,9 +2285,9 @@
           h("span", { className: "radio", "aria-hidden": "true" }),
           h("span", null,
             h("strong", { text: text(first(team, ["displayName", "name"], ""), id || "未命名 Team") }),
-            h("p", { text: canPublish ? text(first(team, ["permission", "role"], ""), "可发布") : "没有发布权限" })
+            h("p", { text: publishability.detail })
           ),
-          badge(canPublish ? "valid" : "blocked", canPublish ? "可发布" : "只读")
+          badge(publishability.status, publishability.label)
         );
       }));
     }
@@ -2720,6 +2752,7 @@
     }
 
     function validationIsPublishable() {
+      if (!selectedTeamCanPublish()) return false;
       const validation = object(state.customer.validation);
       if (!state.customer.validation || validation.valid !== true) return false;
       if (Number(validation._httpStatus) === 202) return false;
@@ -2845,8 +2878,8 @@
 
     async function validateCustomerConfig() {
       if (!state.customer || state.customer.busy) return;
-      if (!state.customer.selectedTeamId) {
-        state.customer.clientError = "请先选择一个具备发布权限的 Team。";
+      if (!selectedTeamCanPublish()) {
+        state.customer.clientError = "请先选择一个 active 且具备发布权限的 Team。";
         renderCustomerDetail();
         return;
       }
@@ -3486,7 +3519,7 @@
       );
 
       const validateDisabled = Boolean(state.customer.busy) ||
-        !state.customer.selectedTeamId ||
+        !selectedTeamCanPublish() ||
         Boolean(state.customer.teamsError);
       const publishDisabled = Boolean(state.customer.busy) || !validationIsPublishable();
       const actionBar = h("div", { className: "action-bar" },

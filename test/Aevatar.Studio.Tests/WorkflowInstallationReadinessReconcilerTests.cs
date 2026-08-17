@@ -381,6 +381,36 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
     }
 
     [Fact]
+    public async Task ReconcileAsync_WhenMatchingScheduleProvisioningFailed_ShouldReturnTypedTerminalFailure()
+    {
+        var context = new TestContext();
+        context.Automations.ListResult = [];
+        context.Member.Detail = MemberDetail(new StudioMemberWorkflowScheduleProvisioningStatusResponse(
+            "schedule-provisioning-alpha",
+            StudioWorkflowScheduleProvisioningStatusNames.Failed,
+            RevisionId,
+            ScheduleId: null,
+            OperationId: null,
+            AttemptCount: 1,
+            StateVersion: 23,
+            FailureCode: "NyxIdOperationAuthorityContractUnavailable",
+            FailureMessage: "nyxid_operation_authority_contract_unavailable",
+            UpdatedAt: DateTimeOffset.Parse("2026-08-16T01:07:00Z")));
+
+        var result = await context.Reconciler.ReconcileAsync(
+            Delivery(WorkflowDeliveryTriggerKind.OneShot),
+            ContinuationClaimantId);
+
+        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
+        result.Code.Should().Be("NyxIdOperationAuthorityContractUnavailable");
+        result.Message.Should().Be("nyxid_operation_authority_contract_unavailable");
+        context.Member.DetailQueries.Should().ContainSingle().Which.Should().Be((ScopeId, MemberId));
+        context.Commands.ProvisioningAccepted.Should().BeEmpty();
+        context.Commands.Ready.Should().BeEmpty();
+        context.Runs.Queries.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ReconcileAsync_WhenScheduledRunUsesDifferentSchedule_ShouldNotRecordReady()
     {
         var context = new TestContext();
@@ -624,6 +654,26 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             BoundRevisionStateVersion = 12,
         };
 
+    private static StudioMemberDetailResponse MemberDetail(
+        StudioMemberWorkflowScheduleProvisioningStatusResponse? scheduleProvisioning = null) =>
+        new(
+            new StudioMemberSummaryResponse(
+                MemberId,
+                ScopeId,
+                "Workflow Alpha",
+                "Description",
+                "workflow",
+                "bind_ready",
+                ServiceId,
+                RevisionId,
+                DateTimeOffset.Parse("2026-08-16T01:00:00Z"),
+                DateTimeOffset.Parse("2026-08-16T01:07:00Z")),
+            ImplementationRef: null,
+            LastBinding: null)
+        {
+            ScheduleProvisioning = scheduleProvisioning,
+        };
+
     private static StudioMemberAutomationView Automation(string targetRevisionId = RevisionId) =>
         new(
             ScopeId,
@@ -773,7 +823,9 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
     private sealed class StubMemberService : IStudioMemberService
     {
         public StudioMemberEndpointContractResponse? Contract { get; set; }
+        public StudioMemberDetailResponse Detail { get; set; } = MemberDetail();
         public List<(string ScopeId, string MemberId, string EndpointId)> EndpointContractQueries { get; } = [];
+        public List<(string ScopeId, string MemberId)> DetailQueries { get; } = [];
 
         public Task<StudioMemberEndpointContractResponse?> GetEndpointContractAsync(
             string scopeId,
@@ -798,7 +850,11 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         public Task<StudioMemberDetailResponse> GetAsync(
             string scopeId,
             string memberId,
-            CancellationToken ct = default) => throw new NotSupportedException();
+            CancellationToken ct = default)
+        {
+            DetailQueries.Add((scopeId, memberId));
+            return Task.FromResult(Detail);
+        }
 
         public Task<StudioMemberBindingAcceptedResponse> BindAsync(
             string scopeId,

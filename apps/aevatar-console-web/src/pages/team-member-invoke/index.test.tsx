@@ -18,14 +18,20 @@ jest.mock("@/shared/studio/api", () => ({
 
 jest.mock("@/shared/api/scopeRuntimeApi", () => ({
   scopeRuntimeApi: {
+    getMemberEndpointContract: jest.fn(),
     getServiceRevisions: jest.fn(),
-    listServices: jest.fn(),
   },
 }));
 
 jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
   __esModule: true,
   default: (props: {
+    authoritativeEndpointContract?: {
+      endpointId: string;
+      memberId?: string;
+      publishedServiceId?: string;
+      scopeId: string;
+    } | null;
     enableFileAttachments?: boolean;
     initialServiceId?: string;
     memberId?: string;
@@ -48,6 +54,11 @@ jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
       React.createElement("span", { key: "label" }, `label:${props.selectedMemberLabel}`),
       React.createElement("span", { key: "presentation" }, `presentation:${props.presentation}`),
       React.createElement("span", { key: "variant" }, `variant:${props.targetSummaryVariant}`),
+      React.createElement(
+        "span",
+        { key: "contract" },
+        `contract:${props.authoritativeEndpointContract?.scopeId}/${props.authoritativeEndpointContract?.memberId}/${props.authoritativeEndpointContract?.publishedServiceId}/${props.authoritativeEndpointContract?.endpointId}`,
+      ),
       React.createElement(
         "span",
         { key: "services" },
@@ -96,31 +107,31 @@ function createBinding(overrides?: Record<string, unknown>) {
   };
 }
 
-function createService(overrides?: Record<string, unknown>) {
+function createEndpointContract(overrides?: Record<string, unknown>) {
   return {
-    activeServingRevisionId: "rev-alpha",
-    appId: "default",
-    defaultServingRevisionId: "rev-alpha",
-    deploymentId: "dep-alpha",
     deploymentStatus: "Active",
-    displayName: "Alpha Workflow",
-    endpoints: [
-      {
-        description: "Chat with the workflow.",
-        displayName: "Chat",
-        endpointId: "chat",
-        kind: "chat",
-        requestTypeUrl: "",
-        responseTypeUrl: "",
-      },
-    ],
-    namespace: "default",
-    policyIds: [],
-    primaryActorId: "actor-alpha",
-    serviceId: "svc-alpha",
-    serviceKey: "scope-1:svc-alpha",
-    tenantId: "default",
-    updatedAt: "2026-06-01T00:10:00Z",
+    endpointId: "chat",
+    fetchExample: null,
+    invokePath: "/api/scopes/scope-1/members/member-alpha/invoke/chat:stream",
+    memberId: "member-alpha",
+    method: "POST",
+    publishedServiceId: "svc-alpha",
+    requestContentType: "application/json",
+    requestTypeUrl: "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+    responseContentType: "text/event-stream",
+    responseTypeUrl: "type.googleapis.com/aevatar.ai.ChatResponseEvent",
+    revisionId: "rev-alpha",
+    sampleRequestJson: null,
+    scopeId: "scope-1",
+    serviceId: "",
+    smokeTestSupported: true,
+    streamFrameFormat: "workflow-run-event",
+    supportsAguiFrames: false,
+    supportsSse: true,
+    supportsWebSocket: false,
+    curlExample: null,
+    defaultSmokeInputMode: "prompt",
+    defaultSmokePrompt: "Hello",
     ...(overrides ?? {}),
   };
 }
@@ -180,7 +191,9 @@ describe("TeamMemberInvokePage", () => {
     );
     (studioApi.getMember as jest.Mock).mockResolvedValue(createWorkflowMember());
     (studioApi.getMemberBinding as jest.Mock).mockResolvedValue(createBinding());
-    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([createService()]);
+    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockResolvedValue(
+      createEndpointContract(),
+    );
     (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockResolvedValue(
       createRevisionCatalog(),
     );
@@ -212,6 +225,9 @@ describe("TeamMemberInvokePage", () => {
       "services:svc-alpha",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
+      "contract:scope-1/member-alpha/svc-alpha/chat",
+    );
+    expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
       "presentation:member-run",
     );
     expect(screen.getByTestId("member-invoke-panel")).toHaveTextContent(
@@ -230,9 +246,11 @@ describe("TeamMemberInvokePage", () => {
       "/scopes/scope-1/teams/team-1/members/member-alpha/runs",
     );
     expect(window.location.search).toBe("");
-    expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
-      appId: "default",
-    });
+    expect(scopeRuntimeApi.getMemberEndpointContract).toHaveBeenCalledWith(
+      "scope-1",
+      "member-alpha",
+      "chat",
+    );
   });
 
   it("carries the member read-model draft workflow id into Workflow Studio", async () => {
@@ -256,6 +274,9 @@ describe("TeamMemberInvokePage", () => {
         },
       ),
     );
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockResolvedValueOnce(createEndpointContract({ memberId: "m-alpha" }));
 
     renderWithQueryClient(React.createElement(TeamMemberInvokePage));
 
@@ -312,18 +333,17 @@ describe("TeamMemberInvokePage", () => {
           }),
         ),
     );
-    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
-      createService(),
-      createService({
-        activeServingRevisionId: "rev-beta",
-        defaultServingRevisionId: "rev-beta",
-        deploymentId: "dep-beta",
-        displayName: "Beta Workflow",
-        primaryActorId: "actor-beta",
-        serviceId: "svc-beta",
-        serviceKey: "scope-1:svc-beta",
-      }),
-    ]);
+    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockImplementation(
+      (_scopeId: string, memberId: string) =>
+        Promise.resolve(
+          createEndpointContract({
+            invokePath: `/api/scopes/scope-1/members/${memberId}/invoke/chat:stream`,
+            memberId,
+            publishedServiceId:
+              memberId === "member-beta" ? "svc-beta" : "svc-alpha",
+          }),
+        ),
+    );
 
     renderWithQueryClient(React.createElement(TeamMemberInvokePage));
 
@@ -415,10 +435,6 @@ describe("TeamMemberInvokePage", () => {
       currentBindingRun: null,
       lastBinding: null,
     });
-    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
-      createService(),
-    ]);
-
     renderWithQueryClient(React.createElement(TeamMemberInvokePage));
 
     expect(
@@ -426,5 +442,21 @@ describe("TeamMemberInvokePage", () => {
     ).toBeTruthy();
     expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
     expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+    expect(scopeRuntimeApi.getMemberEndpointContract).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the member endpoint contract resolves to another published service", async () => {
+    (
+      scopeRuntimeApi.getMemberEndpointContract as jest.Mock
+    ).mockResolvedValueOnce(
+      createEndpointContract({ publishedServiceId: "svc-other" }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(
+      await screen.findByText("No callable endpoint is available."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("member-invoke-panel")).toBeNull();
   });
 });

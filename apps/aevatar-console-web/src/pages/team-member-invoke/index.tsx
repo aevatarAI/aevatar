@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button, Space, Spin } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import { t } from "@/shared/i18n/messages";
 import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
 import {
   getLocationSnapshot,
@@ -15,8 +16,8 @@ import {
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
 import {
-  buildScopeConsoleServiceOptions,
-  scopeServiceAppId,
+  type ScopeConsoleServiceOption,
+  scopeServiceNamespace,
 } from "@/shared/runs/scopeConsole";
 import { studioApi } from "@/shared/studio/api";
 import {
@@ -33,7 +34,6 @@ import {
 } from "@/shared/ui/aevatarPageShells";
 import { describeError } from "@/shared/ui/errorText";
 import StudioMemberInvokePanel from "../studio/components/StudioMemberInvokePanel";
-import { t } from "@/shared/i18n/messages";
 
 type TeamMemberInvokeRouteState = {
   readonly memberId: string;
@@ -120,14 +120,6 @@ const TeamMemberInvokePage: React.FC = () => {
     enabled: Boolean(route.scopeId && route.memberId),
     queryFn: () => studioApi.getMemberBinding(route.scopeId, route.memberId),
   });
-  const servicesQuery = useQuery({
-    queryKey: ["team-member-invoke", "services", route.scopeId],
-    enabled: Boolean(route.scopeId),
-    queryFn: () =>
-      scopeRuntimeApi.listServices(route.scopeId, {
-        appId: scopeServiceAppId,
-      }),
-  });
   const memberBreadcrumbLabel =
     trimOptional(memberQuery.data?.summary.displayName) ||
     trimOptional(route.memberId) ||
@@ -185,6 +177,9 @@ const TeamMemberInvokePage: React.FC = () => {
       memberBindingCompleted &&
       boundPublishedServiceId,
   );
+  const memberLabel =
+    trimOptional(memberSummary?.displayName) ||
+    t("pages.teammemberinvoke.member", "Member");
   const publishedRunsPlaceholderReason = canOpenPublishedRuns
     ? t(
         "pages.teammemberinvoke.publishedRuns.open",
@@ -194,24 +189,59 @@ const TeamMemberInvokePage: React.FC = () => {
         "pages.teammemberinvoke.publishedRuns.publishFirst",
         "Publish this member to start recording published runs.",
       );
-  const selectedService = React.useMemo(
-    () =>
-      boundPublishedServiceId
-        ? (servicesQuery.data ?? []).find(
-            (service) => trimOptional(service.serviceId) === boundPublishedServiceId,
-          ) ?? null
-        : null,
-    [boundPublishedServiceId, servicesQuery.data],
+  const endpointContractQuery = useQuery({
+    queryKey: [
+      "team-member-invoke",
+      "endpoint-contract",
+      route.scopeId,
+      route.memberId,
+      "chat",
+    ],
+    enabled: Boolean(
+      route.scopeId && route.memberId && memberBindingCompleted && boundPublishedServiceId,
+    ),
+    queryFn: () =>
+      scopeRuntimeApi.getMemberEndpointContract(route.scopeId, route.memberId, "chat"),
+  });
+  const endpointContract = endpointContractQuery.data ?? null;
+  const endpointPublishedServiceId = trimOptional(endpointContract?.publishedServiceId);
+  const endpointContractIdentityMismatch = Boolean(
+    endpointContract &&
+      (trimOptional(endpointContract.scopeId) !== route.scopeId ||
+        trimOptional(endpointContract.memberId) !== route.memberId ||
+        endpointPublishedServiceId !== boundPublishedServiceId ||
+        trimOptional(endpointContract.endpointId) !== "chat"),
   );
-  const invokeServices = React.useMemo(
-    () =>
-      selectedService
-        ? buildScopeConsoleServiceOptions([selectedService], selectedService.serviceId, {
-            sortBy: "serviceId",
-          }).filter((service) => service.serviceId === selectedService.serviceId)
-        : [],
-    [selectedService],
-  );
+  const invokeServices = React.useMemo<ScopeConsoleServiceOption[]>(() => {
+    if (!endpointContract || endpointContractIdentityMismatch) {
+      return [];
+    }
+
+    return [
+      {
+        deploymentStatus: endpointContract.deploymentStatus,
+        displayName: memberLabel,
+        endpoints: [
+          {
+            description: "",
+            displayName: "Chat",
+            endpointId: endpointContract.endpointId,
+            kind: "chat",
+            requestTypeUrl: endpointContract.requestTypeUrl,
+            responseTypeUrl: endpointContract.responseTypeUrl,
+          },
+        ],
+        kind: "service",
+        namespace: scopeServiceNamespace,
+        serviceId: boundPublishedServiceId,
+      },
+    ];
+  }, [
+    boundPublishedServiceId,
+    endpointContract,
+    endpointContractIdentityMismatch,
+    memberLabel,
+  ]);
   const serviceRevisionQuery = useQuery({
     queryKey: [
       "team-member-invoke",
@@ -252,13 +282,12 @@ const TeamMemberInvokePage: React.FC = () => {
           workflowName: "",
         }
       : null);
-  const memberLabel =
-    trimOptional(memberSummary?.displayName) ||
-    t("pages.teammemberinvoke.member", "Member");
   const isLoading =
-    memberQuery.isLoading || bindingQuery.isLoading || servicesQuery.isLoading;
+    memberQuery.isLoading ||
+    bindingQuery.isLoading ||
+    (memberBindingCompleted && endpointContractQuery.isLoading);
   const loadError =
-    memberQuery.error || bindingQuery.error || servicesQuery.error || null;
+    memberQuery.error || bindingQuery.error || endpointContractQuery.error || null;
   const blockedState = React.useMemo(() => {
     if (!route.scopeId || !route.teamId || !route.memberId) {
       return {
@@ -301,7 +330,27 @@ const TeamMemberInvokePage: React.FC = () => {
       };
     }
 
-    if (memberSummary && memberBindingCompleted && !selectedService && !servicesQuery.isLoading) {
+    if (
+      memberSummary &&
+      memberBindingCompleted &&
+      endpointContractIdentityMismatch
+    ) {
+      return {
+        description: t(
+          "pages.teammemberinvoke.endpoint.missing.description",
+          "The published service has no callable endpoints available to this page.",
+        ),
+        message: t("pages.teammemberinvoke.endpoint.missing", "No callable endpoint is available."),
+        type: "error" as const,
+      };
+    }
+
+    if (
+      memberSummary &&
+      memberBindingCompleted &&
+      !endpointContract &&
+      !endpointContractQuery.isLoading
+    ) {
       return {
         description: t(
           "pages.teammemberinvoke.service.pending.description",
@@ -312,7 +361,7 @@ const TeamMemberInvokePage: React.FC = () => {
       };
     }
 
-    if (selectedService && invokeServices.length === 0) {
+    if (endpointContract && invokeServices.length === 0) {
       return {
         description: t(
           "pages.teammemberinvoke.endpoint.missing.description",
@@ -330,11 +379,12 @@ const TeamMemberInvokePage: React.FC = () => {
     memberBindingCompleted,
     memberKind,
     memberSummary,
+    endpointContract,
+    endpointContractIdentityMismatch,
+    endpointContractQuery.isLoading,
     route.memberId,
     route.scopeId,
     route.teamId,
-    selectedService,
-    servicesQuery.isLoading,
   ]);
 
   return (
@@ -408,6 +458,7 @@ const TeamMemberInvokePage: React.FC = () => {
           </AevatarPanel>
         ) : (
           <StudioMemberInvokePanel
+            authoritativeEndpointContract={endpointContract}
             enableFileAttachments
             initialServiceId={boundPublishedServiceId}
             memberId={route.memberId}

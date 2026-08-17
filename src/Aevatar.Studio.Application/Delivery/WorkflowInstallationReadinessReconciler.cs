@@ -355,6 +355,10 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
             .ToArray();
         if (operationMatches.Length == 0)
         {
+            var provisioningFailure = await ResolveScheduleProvisioningFailureAsync(installation, ct);
+            if (provisioningFailure != null)
+                return ScheduleResolution.FromResult(provisioningFailure);
+
             return ScheduleResolution.FromResult(Pending(
                 "schedule_projection_pending",
                 "The provisioned schedule operation is not visible yet."));
@@ -384,6 +388,41 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
         var exact = exactMatches[0];
         var exactValidation = ValidateSchedule(installation, exact, exact.ScheduleId);
         return exactValidation ?? new ScheduleResolution(exact, null);
+    }
+
+    private async Task<WorkflowInstallationReadinessReconciliationResult?>
+        ResolveScheduleProvisioningFailureAsync(
+            WorkflowInstallationSnapshot installation,
+            CancellationToken ct)
+    {
+        var expectedProvisioningId = NormalizeOptional(installation.ScheduleProvisioningId);
+        if (expectedProvisioningId == null)
+            return null;
+
+        StudioMemberDetailResponse member;
+        try
+        {
+            member = await _memberService.GetAsync(
+                installation.ScopeId,
+                installation.MemberId!,
+                ct);
+        }
+        catch (StudioMemberNotFoundException)
+        {
+            return null;
+        }
+
+        var provisioning = member.ScheduleProvisioning;
+        if (provisioning == null ||
+            !Same(provisioning.ProvisioningId, expectedProvisioningId) ||
+            !Same(provisioning.Status, StudioWorkflowScheduleProvisioningStatusNames.Failed))
+        {
+            return null;
+        }
+
+        return Terminal(
+            NormalizeOptional(provisioning.FailureCode) ?? "schedule_provisioning_failed",
+            NormalizeOptional(provisioning.FailureMessage) ?? "Workflow schedule provisioning failed.");
     }
 
     private async Task<IReadOnlyList<StudioMemberAutomationView>> ListMemberAutomationsAsync(
