@@ -221,17 +221,50 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
             .WithMessage("*Packagess*");
     }
 
-    [Theory]
-    [InlineData("AllowedWorkflowNames:0", "workflow-alpha")]
-    [InlineData("UseShippedWorkflowAllowlist", "true")]
-    public void AddStudioHostingCore_WhenLegacyDeliveryCatalogConfigurationIsPresent_ShouldFailHostStartup(
-        string key,
-        string value)
+    [Fact]
+    public void AddStudioHostingCore_WhenLegacyDeliveryConfigurationIsPresent_ShouldIgnoreRetiredSemantics()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [$"{WorkflowDeliveryOptions.SectionName}:{key}"] = value,
+                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:0"] = "workflow-alpha",
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleBaseUrl"] = "https://api.example.com",
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "https://console.example.com",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.Packages.Should().BeEmpty();
+        options.ConsoleWebBaseUrl.Should().Be("https://console.example.com");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenLegacyAndTypedPackagesCoexist_ShouldUseOnlyTypedPackages()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames:0"] = "legacy-workflow",
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:WorkflowName"] = "workflow-alpha",
+            })
+            .Build();
+
+        var options = ResolveDeliveryOptions(configuration);
+
+        options.Packages.Should().ContainSingle().Which.WorkflowName.Should().Be("workflow-alpha");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenLegacyAndUnknownNestedConfigurationCoexist_ShouldStillFailHostStartup()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:Packages:0:WorkflowNme"] = "workflow-alpha",
             })
             .Build();
         var services = new ServiceCollection();
@@ -240,8 +273,35 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
 
         var action = () => provider.GetRequiredService<IStartupValidator>().Validate();
 
+        var exception = action.Should().Throw<InvalidOperationException>().Which;
+        exception.ToString().Should().Contain("WorkflowNme");
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenConsoleBaseUrlIsPresent_ShouldNotTranslateItToConsoleWebBaseUrl()
+    {
+        var options = ResolveDeliveryOptions(DeliveryConfiguration(
+            "ConsoleBaseUrl",
+            "https://api.example.com"));
+
+        options.ConsoleWebBaseUrl.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_WhenLegacyConfigurationAndInvalidConsoleWebBaseUrlCoexist_ShouldFailHostStartup()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist"] = "true",
+                [$"{WorkflowDeliveryOptions.SectionName}:ConsoleWebBaseUrl"] = "http://console.example.com",
+            })
+            .Build();
+
+        var action = () => ResolveDeliveryOptions(configuration);
+
         action.Should().Throw<OptionsValidationException>()
-            .WithMessage("*no longer supported*Packages*");
+            .WithMessage("*ConsoleWebBaseUrl*");
     }
 
     [Theory]

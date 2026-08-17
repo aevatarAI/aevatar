@@ -41,25 +41,10 @@ internal static class StudioHostingServiceCollectionExtensions
         services.TryAddSingleton(configuration);
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
         var deliverySection = configuration.GetSection(WorkflowDeliveryOptions.SectionName);
-        var deliveryKeys = deliverySection.GetChildren()
-            .Select(static section => section.Key)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var legacyDeliveryConfigurationPresent =
-            deliveryKeys.Contains("AllowedWorkflowNames") ||
-            deliveryKeys.Contains("UseShippedWorkflowAllowlist");
-        var deliveryOptions = services.AddOptions<WorkflowDeliveryOptions>();
-        if (!legacyDeliveryConfigurationPresent)
-        {
-            deliveryOptions.Bind(
+        services.AddOptions<WorkflowDeliveryOptions>()
+            .Bind(
                 deliverySection,
-                binder => binder.ErrorOnUnknownConfiguration = true);
-        }
-        deliveryOptions
-            .Validate(
-                _ => !legacyDeliveryConfigurationPresent,
-                $"{WorkflowDeliveryOptions.SectionName}:AllowedWorkflowNames and " +
-                $"{WorkflowDeliveryOptions.SectionName}:UseShippedWorkflowAllowlist are no longer supported. " +
-                $"Configure typed package definitions under {WorkflowDeliveryOptions.SectionName}:Packages.")
+                binder => binder.ErrorOnUnknownConfiguration = true)
             // A present-but-invalid console origin would silently remove every customer link.
             .Validate(
                 options => string.IsNullOrWhiteSpace(options.ConsoleWebBaseUrl) ||

@@ -5,9 +5,10 @@
 # into the image, so the values committed in this repository never reach production.
 # Without Aevatar:Delivery:ConsoleWebBaseUrl, delivery responses carry no product-console link.
 #
-# Only the product-console key is written and the obsolete connect-callback key is removed;
-# every other setting is preserved byte-for-byte by
-# round-tripping the document through a JSON parser. Prints a diff and requires an
+# Only the product-console key is written and the obsolete connect-callback key is removed.
+# Retired catalog keys are reported but preserved so this helper remains usable during a
+# rolling deployment; every other setting is preserved semantically while the document is
+# round-tripped through a JSON parser. Prints a diff and requires an
 # explicit APPLY=1 to write.
 set -euo pipefail
 
@@ -37,10 +38,11 @@ legacy_keys = sorted(
 )
 if legacy_keys:
     joined = ", ".join(legacy_keys)
-    raise SystemExit(
-        "error: legacy Aevatar:Delivery settings remain: " + joined + ". "
-        "Remove them, configure typed Aevatar:Delivery:Packages, and mount each matching "
-        "{workflowName}.yaml under Aevatar:Delivery:PackageDirectory before rollout."
+    print(
+        "warning: retired Aevatar:Delivery settings remain for rolling compatibility: " +
+        joined + ". New hosts ignore them; remove them after the rollout because they do not "
+        "configure typed packages.",
+        file=sys.stderr,
     )
 delivery.pop("ConsoleBaseUrl", None)
 delivery["ConsoleWebBaseUrl"] = os.environ["CONSOLE_WEB_BASE_URL"]

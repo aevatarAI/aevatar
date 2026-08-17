@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace Aevatar.Studio.Application.Delivery;
 
 public sealed class WorkflowDeliveryOptions
@@ -5,6 +7,20 @@ public sealed class WorkflowDeliveryOptions
     public const string SectionName = "Aevatar:Delivery";
 
     public IList<WorkflowDeliveryPackageOptions> Packages { get; set; } = [];
+
+    // These retired keys are binding-only compatibility sinks for rolling deployments.
+    // The package catalog never reads them; Packages remains the only publication authority.
+    [Obsolete("Binding-only rollout compatibility; Packages is authoritative.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public IList<string> AllowedWorkflowNames { get; set; } = [];
+
+    [Obsolete("Binding-only rollout compatibility; Packages is authoritative.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public bool UseShippedWorkflowAllowlist { get; set; }
+
+    [Obsolete("Binding-only rollout compatibility; ConsoleWebBaseUrl is authoritative.")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public string ConsoleBaseUrl { get; set; } = string.Empty;
 
     public string PackageDirectory { get; set; } = "workflow-delivery-packages";
 
