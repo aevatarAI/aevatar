@@ -118,6 +118,37 @@ public sealed class NyxIdActionPostconditionPortTests
     }
 
     [Fact]
+    public async Task VerifyAsync_ValidDigestWithGatewayLLMTarget_ShouldVerify()
+    {
+        var snapshot = ReadySnapshot();
+        var gatewayTarget = new NyxIdAuthorizationLLMTargetEvidence
+        {
+            RouteKind = LLMRouteKind.Gateway,
+            RouteValue = "gateway",
+            ModelCatalog = new LLMModelCatalog
+            {
+                Certainty = LLMModelCatalogCertainty.Enumerated,
+                DefaultModelId = "gpt-5.5",
+                ModelIds = { "gpt-5.5" },
+            },
+        };
+        snapshot = snapshot with
+        {
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                snapshot.Owner,
+                snapshot.Services,
+                gatewayTarget),
+            GatewayLLMTarget = gatewayTarget,
+        };
+        var port = CreatePort(new StubCatalogQueryPort(snapshot));
+
+        var result = await port.VerifyAsync(CatalogInput());
+
+        result.Verified.Should().BeTrue();
+        result.FailureCode.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task VerifyAsync_MismatchedResourceId_ShouldRemainUnverified()
     {
         var input = CatalogInput();

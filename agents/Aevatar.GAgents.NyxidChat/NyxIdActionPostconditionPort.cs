@@ -513,7 +513,8 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
                 snapshot.ContentDigest,
                 NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
                     snapshot.Owner,
-                    snapshot.Services),
+                    snapshot.Services,
+                    snapshot.GatewayLLMTarget),
                 StringComparison.Ordinal))
         {
             return Unverified(
