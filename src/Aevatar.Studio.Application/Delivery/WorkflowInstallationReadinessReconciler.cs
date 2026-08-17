@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 
 namespace Aevatar.Studio.Application.Delivery;
 
@@ -44,6 +45,7 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
     private readonly IStudioMemberService _memberService;
     private readonly IStudioMemberAutomationQueryPort _automations;
     private readonly IServiceRunQueryPort _serviceRuns;
+    private readonly IWorkflowExecutionCurrentStateQueryPort _workflowCurrentStates;
     private readonly IContentArtifactQueryPort _contentArtifacts;
     private readonly IWorkflowDeliveryCommandPort _commands;
     private readonly TimeProvider _timeProvider;
@@ -52,6 +54,7 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
         IStudioMemberService memberService,
         IStudioMemberAutomationQueryPort automations,
         IServiceRunQueryPort serviceRuns,
+        IWorkflowExecutionCurrentStateQueryPort workflowCurrentStates,
         IContentArtifactQueryPort contentArtifacts,
         IWorkflowDeliveryCommandPort commands,
         TimeProvider timeProvider)
@@ -59,6 +62,8 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _automations = automations ?? throw new ArgumentNullException(nameof(automations));
         _serviceRuns = serviceRuns ?? throw new ArgumentNullException(nameof(serviceRuns));
+        _workflowCurrentStates = workflowCurrentStates ??
+                                 throw new ArgumentNullException(nameof(workflowCurrentStates));
         _contentArtifacts = contentArtifacts ?? throw new ArgumentNullException(nameof(contentArtifacts));
         _commands = commands ?? throw new ArgumentNullException(nameof(commands));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
@@ -154,9 +159,9 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
                 contract.BoundRevisionStateVersion),
             triggerResult.Evidence!,
             new WorkflowAcceptanceRunReadinessEvidence(
-                run.RunId,
+                run.RegistryRun.RunId,
                 WorkflowAcceptanceRunStatus.TerminalSuccess,
-                run.StateVersion),
+                run.CommittedStateVersion),
             runResult.Artifacts!);
 
         var receipt = await _commands.RecordInstallationReadyAsync(
@@ -547,10 +552,20 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
                 "No run for the exact service, revision, schedule, and installation attempt is visible yet."));
         }
 
-        WorkflowInstallationReadinessReconciliationResult? artifactPending = null;
-        foreach (var completed in exactRuns.Where(static run => run.Status == ServiceRunStatus.Completed))
+        var outcomes = new List<WorkflowDeliveryRunOutcome>(exactRuns.Length);
+        foreach (var run in exactRuns)
         {
-            if (completed.StateVersion <= 0)
+            outcomes.Add(await WorkflowDeliveryRunOutcomeResolver.ResolveAsync(
+                run,
+                _workflowCurrentStates,
+                ct));
+        }
+
+        WorkflowInstallationReadinessReconciliationResult? artifactPending = null;
+        foreach (var completed in outcomes.Where(static outcome =>
+                     outcome.Status == WorkflowDeliveryRunOutcomeStatus.Completed))
+        {
+            if (completed.CommittedStateVersion <= 0)
                 continue;
             var artifactResolution = await ResolveVerifiedArtifactsAsync(
                 delivery,
@@ -567,35 +582,37 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
             artifactPending ??= artifactResolution.Result;
         }
 
-        if (exactRuns.Any(static run => run.Status is ServiceRunStatus.Accepted or
-                ServiceRunStatus.Unspecified) ||
-            exactRuns.Any(static run => run.Status == ServiceRunStatus.Completed))
+        if (outcomes.Any(static outcome => outcome.Status is
+                WorkflowDeliveryRunOutcomeStatus.Pending or
+                WorkflowDeliveryRunOutcomeStatus.Completed))
         {
             return AcceptanceRunResolution.FromResult(artifactPending ?? Pending(
                 "acceptance_artifact_pending",
                 "The acceptance run has not exposed committed terminal-success artifact evidence yet."));
         }
 
-        var terminal = exactRuns[0];
+        var terminal = outcomes[0];
         var code = terminal.Status switch
         {
-            ServiceRunStatus.Failed => "acceptance_run_failed",
-            ServiceRunStatus.Stopped => "acceptance_run_stopped",
-            ServiceRunStatus.OutcomeUncertain => "acceptance_run_outcome_uncertain",
+            WorkflowDeliveryRunOutcomeStatus.Failed => "acceptance_run_failed",
+            WorkflowDeliveryRunOutcomeStatus.Stopped => "acceptance_run_stopped",
+            WorkflowDeliveryRunOutcomeStatus.TimedOut => "acceptance_run_timed_out",
+            WorkflowDeliveryRunOutcomeStatus.OutcomeUncertain => "acceptance_run_outcome_uncertain",
             _ => "acceptance_run_terminal_failure",
         };
         return AcceptanceRunResolution.FromResult(Terminal(
             code,
-            NormalizeOptional(terminal.LastError) ??
-            $"Acceptance run '{terminal.RunId}' ended with status '{terminal.Status}'."));
+            NormalizeOptional(terminal.Error) ??
+            $"Acceptance run '{terminal.RegistryRun.RunId}' ended with status '{terminal.Status}'."));
     }
 
     private async Task<ArtifactResolution> ResolveVerifiedArtifactsAsync(
         WorkflowDeliverySnapshot delivery,
         WorkflowInstallationSnapshot installation,
-        ServiceRunSnapshot run,
+        WorkflowDeliveryRunOutcome outcome,
         CancellationToken ct)
     {
+        var run = outcome.RegistryRun;
         WorkflowAcceptanceArtifactIdentity expected;
         ContentArtifactPrincipalContract owner;
         try
@@ -612,7 +629,7 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
 
         var output = WorkflowAcceptanceArtifactContract.ValidateOutput(
             delivery.Package.WorkflowName,
-            run.LastOutput);
+            outcome.Output);
         if (!output.IsValid)
             return ArtifactResolution.FromResult(Terminal(output.ErrorCode!, output.ErrorMessage!));
 
@@ -888,7 +905,7 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
     }
 
     private sealed record AcceptanceRunResolution(
-        ServiceRunSnapshot? Run,
+        WorkflowDeliveryRunOutcome? Run,
         IReadOnlyList<WorkflowInstallationArtifactEvidence>? Artifacts,
         WorkflowInstallationReadinessReconciliationResult? Result)
     {

@@ -105,6 +105,8 @@ accepted -> provisioning_accepted -> ready
 4. an acceptance run reached terminal success;
 5. at least one expected typed artifact was verified.
 
+Acceptance evidence joins two committed read models without changing their ownership. The ServiceRun current-state registry proves the exact `scopeId + publishedServiceId + revisionId + scheduleId + operationId` attribution and supplies the stable Run/target actor identities. For workflow implementations, execution terminal status, success, output, and evidence version come from the target Workflow Run actor's current-state read model; the registry's `Accepted` status only records dispatch admission and is not a workflow terminal fact. Static and scripting implementations continue to use their ServiceRun terminal state. Artifact creation uses the authoritative terminal output, while attachment uses the ServiceRun registry version for its own compare-and-set command.
+
 The actor validates evidence against the installation's persisted identities, attempt, operation identity, continuation claim, and trigger intent before committing Ready. Provisioning, Ready, and failure outcomes carry the active `attempt + operationId + claimId + claimantId` fence: stale outcomes from an earlier retry are ignored, while an outcome for the active attempt with a different operation or claim identity is rejected. Reconciliation is a background/actor-owned responsibility, never a GET-side effect. If any authoritative fact is still pending, the installation remains `provisioning_accepted`; neither the API nor `/delivery` fabricates completion.
 
 ## Product Surface

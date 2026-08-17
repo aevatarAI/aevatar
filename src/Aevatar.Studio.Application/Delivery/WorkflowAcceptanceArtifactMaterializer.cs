@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 
 namespace Aevatar.Studio.Application.Delivery;
 
@@ -36,17 +37,21 @@ public sealed class WorkflowAcceptanceArtifactMaterializer : IWorkflowAcceptance
     private const int ServiceRunTake = 200;
 
     private readonly IServiceRunQueryPort _serviceRuns;
+    private readonly IWorkflowExecutionCurrentStateQueryPort _workflowCurrentStates;
     private readonly IContentArtifactQueryPort _contentArtifacts;
     private readonly IContentArtifactService _artifactService;
     private readonly TimeProvider _timeProvider;
 
     public WorkflowAcceptanceArtifactMaterializer(
         IServiceRunQueryPort serviceRuns,
+        IWorkflowExecutionCurrentStateQueryPort workflowCurrentStates,
         IContentArtifactQueryPort contentArtifacts,
         IContentArtifactService artifactService,
         TimeProvider timeProvider)
     {
         _serviceRuns = serviceRuns ?? throw new ArgumentNullException(nameof(serviceRuns));
+        _workflowCurrentStates = workflowCurrentStates ??
+                                 throw new ArgumentNullException(nameof(workflowCurrentStates));
         _contentArtifacts = contentArtifacts ?? throw new ArgumentNullException(nameof(contentArtifacts));
         _artifactService = artifactService ?? throw new ArgumentNullException(nameof(artifactService));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
@@ -111,9 +116,21 @@ public sealed class WorkflowAcceptanceArtifactMaterializer : IWorkflowAcceptance
         if (exactRuns.Length == 0)
             return Pending("acceptance_run_pending", "No run for the current installation attempt is visible yet.");
 
-        var run = exactRuns.FirstOrDefault(static item => item.Status == ServiceRunStatus.Completed);
-        if (run == null)
+        WorkflowDeliveryRunOutcome? outcome = null;
+        foreach (var candidate in exactRuns)
+        {
+            var resolved = await WorkflowDeliveryRunOutcomeResolver.ResolveAsync(
+                candidate,
+                _workflowCurrentStates,
+                ct);
+            if (resolved.Status != WorkflowDeliveryRunOutcomeStatus.Completed)
+                continue;
+            outcome = resolved;
+            break;
+        }
+        if (outcome == null)
             return Satisfied("acceptance_run_not_completed", "The current installation attempt has no completed run to materialize.");
+        var run = outcome.RegistryRun;
 
         WorkflowAcceptanceArtifactIdentity identity;
         ContentArtifactPrincipalContract owner;
@@ -143,7 +160,7 @@ public sealed class WorkflowAcceptanceArtifactMaterializer : IWorkflowAcceptance
 
         var output = WorkflowAcceptanceArtifactContract.ValidateOutput(
             delivery.Package.WorkflowName,
-            run.LastOutput);
+            outcome.Output);
         if (!output.IsValid)
             return Terminal(output.ErrorCode!, output.ErrorMessage!);
 

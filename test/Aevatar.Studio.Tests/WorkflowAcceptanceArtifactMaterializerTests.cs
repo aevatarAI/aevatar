@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;
@@ -53,6 +54,56 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
             delivery.Installation.PublishedServiceId,
             RunId));
         context.Service.Attachments.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_WhenWorkflowCurrentStateCompletedWhileRegistryIsAccepted_ShouldCreateArtifact()
+    {
+        var context = new TestContext();
+        var delivery = Delivery();
+        var output = AcceptanceOutput(delivery);
+        var run = Run(delivery, ServiceRunStatus.Accepted, string.Empty);
+        context.Runs.Items = [run];
+        context.WorkflowStates.Snapshots[run.TargetActorId] =
+            WorkflowCurrentStateQueryPortStub.FromServiceRun(
+                run,
+                WorkflowRunCompletionStatus.Completed,
+                lastSuccess: true,
+                lastOutput: output,
+                stateVersion: 53);
+
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
+
+        result.Status.Should().Be(WorkflowAcceptanceArtifactMaterializationStatus.Pending);
+        result.Code.Should().Be("acceptance_artifact_creation_accepted");
+        context.Service.Creates.Should().ContainSingle().Which.Request.FirstRevision.InlineContent
+            .Should().Equal(Encoding.UTF8.GetBytes(output));
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_WhenWorkflowStateVersionDiffers_ShouldAttachWithRegistryRunCas()
+    {
+        var context = new TestContext();
+        var delivery = Delivery();
+        var output = AcceptanceOutput(delivery);
+        var run = Run(delivery, ServiceRunStatus.Accepted, string.Empty);
+        context.Runs.Items = [run];
+        context.WorkflowStates.Snapshots[run.TargetActorId] =
+            WorkflowCurrentStateQueryPortStub.FromServiceRun(
+                run,
+                WorkflowRunCompletionStatus.Completed,
+                lastSuccess: true,
+                lastOutput: output,
+                stateVersion: 53);
+        context.Artifacts.Current = Artifact(delivery, run, output);
+        context.Artifacts.Content = Encoding.UTF8.GetBytes(output);
+
+        var result = await context.Materializer.MaterializeAsync(delivery, ContinuationClaimantId);
+
+        result.Code.Should().Be("acceptance_artifact_attachment_accepted");
+        context.Service.Attachments.Should().ContainSingle().Which.Request.ExpectedRunStateVersion
+            .Should().Be(run.StateVersion);
+        run.StateVersion.Should().NotBe(53);
     }
 
     [Fact]
@@ -414,14 +465,20 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
     private sealed class TestContext
     {
         public RecordingRunQueryPort Runs { get; } = new();
+        public WorkflowCurrentStateQueryPortStub WorkflowStates { get; } = new();
         public RecordingArtifactQueryPort Artifacts { get; } = new();
         public RecordingArtifactService Service { get; } = new();
         public WorkflowAcceptanceArtifactMaterializer Materializer { get; }
 
         public TestContext()
         {
+            WorkflowStates.Fallback = actorId => Runs.Items
+                .FirstOrDefault(run => string.Equals(run.TargetActorId, actorId, StringComparison.Ordinal)) is { } run
+                    ? WorkflowCurrentStateQueryPortStub.FromServiceRun(run)
+                    : null;
             Materializer = new WorkflowAcceptanceArtifactMaterializer(
                 Runs,
+                WorkflowStates,
                 Artifacts,
                 Service,
                 new FixedTimeProvider(Now));

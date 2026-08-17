@@ -8,6 +8,7 @@ using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;
@@ -152,6 +153,88 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
 
         result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
         result.Code.Should().Be("acceptance_artifact_pending");
+        context.Commands.Ready.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_WhenWorkflowCurrentStateCompletedWhileRegistryIsAccepted_ShouldBecomeReady()
+    {
+        var context = new TestContext();
+        var run = SuccessfulRun() with
+        {
+            Status = ServiceRunStatus.Accepted,
+            LastOutput = string.Empty,
+        };
+        context.Runs.Items = [run];
+        context.WorkflowStates.Snapshots[run.TargetActorId] =
+            WorkflowCurrentStateQueryPortStub.FromServiceRun(
+                run,
+                WorkflowRunCompletionStatus.Completed,
+                lastSuccess: true,
+                lastOutput: AcceptanceOutput,
+                stateVersion: 53);
+
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
+
+        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Ready);
+        result.Evidence!.AcceptanceRun.AcceptanceRunId.Should().Be(run.RunId);
+        result.Evidence.AcceptanceRun.CommittedStateVersion.Should().Be(53);
+        context.Commands.Ready.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(WorkflowRunCompletionStatus.Failed, "acceptance_run_failed")]
+    [InlineData(WorkflowRunCompletionStatus.Stopped, "acceptance_run_stopped")]
+    [InlineData(WorkflowRunCompletionStatus.TimedOut, "acceptance_run_timed_out")]
+    public async Task ReconcileAsync_WhenWorkflowCurrentStateIsTerminalFailureWhileRegistryIsAccepted_ShouldFail(
+        WorkflowRunCompletionStatus completionStatus,
+        string expectedCode)
+    {
+        var context = new TestContext();
+        var run = Run(ServiceRunStatus.Accepted);
+        context.Runs.Items = [run];
+        context.WorkflowStates.Snapshots[run.TargetActorId] =
+            WorkflowCurrentStateQueryPortStub.FromServiceRun(
+                run,
+                completionStatus,
+                lastSuccess: false,
+                lastError: "workflow terminal failure",
+                stateVersion: 53);
+
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
+
+        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
+        result.Code.Should().Be(expectedCode);
+        result.Message.Should().Be("workflow terminal failure");
+        context.Commands.Ready.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_WhenWorkflowCurrentStateIdentityDiffers_ShouldFailClosed()
+    {
+        var context = new TestContext();
+        var run = Run(ServiceRunStatus.Accepted);
+        context.Runs.Items = [run];
+        var snapshot = WorkflowCurrentStateQueryPortStub.FromServiceRun(
+            run,
+            WorkflowRunCompletionStatus.Completed,
+            lastSuccess: true,
+            lastOutput: AcceptanceOutput,
+            stateVersion: 53);
+        snapshot.RunId = "run-other";
+        context.WorkflowStates.Snapshots[run.TargetActorId] = snapshot;
+
+        var result = await context.Reconciler.ReconcileAsync(
+            AcceptanceDelivery(),
+            ContinuationClaimantId);
+
+        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.TerminalFailure);
+        result.Code.Should().Be("acceptance_run_outcome_uncertain");
+        result.Message.Should().Contain("identity does not match");
         context.Commands.Ready.Should().BeEmpty();
     }
 
@@ -800,6 +883,7 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
         public StubMemberService Member { get; } = new();
         public StubAutomationQueryPort Automations { get; } = new();
         public StubServiceRunQueryPort Runs { get; } = new();
+        public WorkflowCurrentStateQueryPortStub WorkflowStates { get; } = new();
         public StubContentArtifactQueryPort Artifacts { get; } = new();
         public RecordingCommandPort Commands { get; } = new();
 
@@ -810,10 +894,15 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
             Member.Contract = EndpointContract();
             Automations.GetResult = Automation();
             Artifacts.Current = ArtifactCurrent();
+            WorkflowStates.Fallback = actorId => Runs.Items
+                .FirstOrDefault(run => string.Equals(run.TargetActorId, actorId, StringComparison.Ordinal)) is { } run
+                    ? WorkflowCurrentStateQueryPortStub.FromServiceRun(run)
+                    : null;
             Reconciler = new WorkflowInstallationReadinessReconciler(
                 Member,
                 Automations,
                 Runs,
+                WorkflowStates,
                 Artifacts,
                 Commands,
                 new FixedTimeProvider(DateTimeOffset.Parse("2026-08-16T01:10:00Z")));
