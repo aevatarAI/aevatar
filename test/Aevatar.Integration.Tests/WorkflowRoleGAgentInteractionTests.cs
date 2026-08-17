@@ -826,6 +826,87 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRoleGAgent_WhenToolCallIsParsedFromText_ShouldPersistScrubbedArguments()
+        {
+            var eventStore = new InMemoryEventStore();
+            var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new TextParsedSecretToolWorkflowIntentLlmProvider(),
+                "workflow-role-agent-text-tool",
+                [new SuccessfulWorkflowTool("lookup")]);
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-text-tool",
+                StepId = "step-text-tool",
+                SessionId = "session-text-tool",
+                Prompt = "look up the record",
+            });
+
+            var progress = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .ToArray();
+            var started = progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ToolStarted).Which;
+            var completed = progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ToolCompleted).Which;
+
+            completed.ToolCompleted.OperationId.Should().Be(started.ToolStarted.OperationId);
+            completed.ToolCompleted.Result.Success.Should().BeTrue();
+            completed.ToolCompleted.SafeArgumentsJson.Should()
+                .Be("""{"query":"aevatar","token":"***REDACTED***"}""");
+            completed.ToolCompleted.SafeArgumentsJson.Should().NotContain("raw-secret");
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenToolExecutionTimesOut_ShouldPersistCancelledToolTerminal()
+        {
+            const int timeoutMs = 1_000;
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var tool = new BlockingWorkflowTool("lookup");
+            var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new SingleToolCallWorkflowIntentLlmProvider(
+                    tool.Name,
+                    """{"query":"aevatar"}"""),
+                "workflow-role-agent-cancelled-tool",
+                [tool],
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+
+            var execution = agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-cancelled-tool",
+                StepId = "step-cancelled-tool",
+                SessionId = "session-cancelled-tool",
+                Prompt = "look up the record",
+                TimeoutMs = timeoutMs,
+            });
+            await tool.Started;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await execution;
+            await tool.CancellationObserved;
+
+            var progress = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .ToArray();
+            var started = progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ToolStarted).Which;
+            var completed = progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ToolCompleted).Which;
+
+            completed.ToolCompleted.OperationId.Should().Be(started.ToolStarted.OperationId);
+            completed.ToolCompleted.Result.CallId.Should().Be(started.ToolStarted.CallId);
+            completed.ToolCompleted.Result.Success.Should().BeFalse();
+            completed.ToolCompleted.Result.Error.Should().Be("Tool execution was cancelled.");
+            completed.ToolCompleted.SafeArgumentsJson.Should().Be("""{"query":"aevatar"}""");
+        }
+
+        [Fact]
         public async Task WorkflowRoleGAgent_WhenCheckpointRecoveryContinues_ShouldRetainRequestLocalToolCatalog()
         {
             var eventStore = new FailCompletionCheckpointEventStore();
@@ -1983,8 +2064,17 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 .ToArray();
             continuationProgress.Select(progress => progress.PayloadCase).Should().Equal(
                 RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted,
-                RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta);
-            continuationProgress.Select(progress => progress.Sequence).Should().Equal(1, 2);
+                RoleChatSessionProgressedEvent.PayloadOneofCase.ModelStarted,
+                RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta,
+                RoleChatSessionProgressedEvent.PayloadOneofCase.ModelCompleted);
+            continuationProgress.Select(progress => progress.Sequence).Should().Equal(1, 2, 3, 4);
+            var modelStarted = continuationProgress[1].ModelStarted;
+            var modelCompleted = continuationProgress[3].ModelCompleted;
+            modelStarted.Round.Should().Be(0);
+            modelCompleted.Round.Should().Be(0);
+            modelCompleted.OperationId.Should().Be(modelStarted.OperationId);
+            modelCompleted.Content.Should().Be("approved completion");
+            modelCompleted.Success.Should().BeTrue();
         }
 
         [Fact]
@@ -2669,6 +2759,40 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             }
         }
 
+        private sealed class BlockingWorkflowTool(string name) : IAgentTool
+        {
+            private readonly TaskCompletionSource _started =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _cancellationObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public string Name => name;
+            public string Description => "Blocks until its execution is cancelled.";
+            public string ParametersSchema => "{}";
+            public bool IsReadOnly => true;
+            public Task Started => _started.Task;
+            public Task CancellationObserved => _cancellationObserved.Task;
+
+            public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+            {
+                _ = argumentsJson;
+                _started.TrySetResult();
+                try
+                {
+                    await _neverCompletes.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _cancellationObserved.TrySetResult();
+                    throw;
+                }
+
+                return "{}";
+            }
+        }
+
         private sealed class ApprovalResumeDeadlineProbe
         {
             private readonly TaskCompletionSource _started =
@@ -3345,6 +3469,64 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
 
                 await Task.CompletedTask;
                 yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+            }
+        }
+
+        private sealed class TextParsedSecretToolWorkflowIntentLlmProvider
+            : WorkflowIntentLlmProviderBase
+        {
+            private int _calls;
+
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                if (Interlocked.Increment(ref _calls) == 1)
+                {
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaContent = """
+                            <function_calls>
+                            <invoke name="lookup">
+                            <parameter name="query">aevatar</parameter>
+                            <parameter name="token">raw-secret</parameter>
+                            </invoke>
+                            </function_calls>
+                            """,
+                    };
+                    yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                    yield break;
+                }
+
+                yield return new LLMStreamChunk { DeltaContent = "done" };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                await Task.CompletedTask;
+            }
+        }
+
+        private sealed class SingleToolCallWorkflowIntentLlmProvider(
+            string toolName,
+            string argumentsJson) : WorkflowIntentLlmProviderBase
+        {
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call-cancelled-tool",
+                        Name = toolName,
+                        ArgumentsJson = argumentsJson,
+                    },
+                };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                await Task.CompletedTask;
             }
         }
 

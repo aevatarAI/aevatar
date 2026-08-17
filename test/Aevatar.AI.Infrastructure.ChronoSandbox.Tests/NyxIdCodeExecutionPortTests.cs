@@ -47,16 +47,19 @@ public sealed class NyxIdCodeExecutionPortTests
             "chrono-sandbox",
             CodeServiceId,
             CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog));
-        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().HaveCount(3);
         handler.Requests[0].Method.Should().Be(HttpMethod.Get.Method);
         handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
-        handler.Requests[1].Method.Should().Be(HttpMethod.Post.Method);
-        handler.Requests[1].PathAndQuery.Should().Be(
+        handler.Requests[1].Method.Should().Be(HttpMethod.Get.Method);
+        handler.Requests[1].PathAndQuery.Should().Be("/api/v1/keys");
+        handler.Requests[2].Method.Should().Be(HttpMethod.Post.Method);
+        handler.Requests[2].PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
         handler.Requests[0].Authorization.Should().Be($"Bearer {SourceReadableBearerToken}");
-        handler.Requests[1].Authorization.Should().Be($"Bearer {ExecutionBearerToken}");
+        handler.Requests[1].Authorization.Should().Be($"Bearer {SourceReadableBearerToken}");
+        handler.Requests[2].Authorization.Should().Be($"Bearer {ExecutionBearerToken}");
         handler.Requests.Should().OnlyContain(request => request.ApiKeys.Count == 0);
-        using var body = JsonDocument.Parse(handler.Requests[1].Body!);
+        using var body = JsonDocument.Parse(handler.Requests[2].Body!);
         body.RootElement.EnumerateObject().Select(static property => property.Name)
             .Should().Equal("language", "script");
         body.RootElement.GetProperty("language").GetString().Should().Be("python");
@@ -102,6 +105,183 @@ public sealed class NyxIdCodeExecutionPortTests
         handler.Requests[0].PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
         handler.Requests[0].Authorization.Should().Be("Bearer scheduled-agent-key");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenUserServicesSourceCredentialExpiresAfterExactAdmission_UsesAdmittedRoute()
+    {
+        var handler = new SequenceHandler(
+            JsonResponse("{\"error\":\"expired\"}", HttpStatusCode.Unauthorized),
+            JsonResponse(
+                """
+                {
+                  "success": true,
+                  "output": {
+                    "stdout": "admitted-ok",
+                    "stderr": "",
+                    "exit_code": 0
+                  }
+                }
+                """));
+        var port = CreatePort(handler);
+        var request = Request(CodeServiceId) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox",
+                CodeServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Failure.Should().BeNull();
+        outcome.Result!.Stdout.Should().Be("admitted-ok");
+        outcome.ResolvedRoute.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox",
+            CodeServiceId,
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
+        handler.Requests[0].Authorization.Should().Be($"Bearer {SourceReadableBearerToken}");
+        handler.Requests[1].PathAndQuery.Should().Be("/api/v1/keys");
+        handler.Requests[1].Authorization.Should().Be($"Bearer {SourceReadableBearerToken}");
+        handler.Requests[2].PathAndQuery.Should().Be(
+            "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
+        handler.Requests[2].Authorization.Should().Be($"Bearer {ExecutionBearerToken}");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenKeysSourceCredentialExpiresAfterExactAdmission_UsesAdmittedRoute()
+    {
+        var handler = new SequenceHandler(
+            JsonResponse(Inventory(Service(
+                CodeServiceId,
+                "chrono-sandbox",
+                false,
+                true,
+                "sandbox:execute"))),
+            JsonResponse(
+                """
+                {
+                  "success": true,
+                  "output": {
+                    "stdout": "admitted-ok",
+                    "stderr": "",
+                    "exit_code": 0
+                  }
+                }
+                """))
+        {
+            KeysResponse = JsonResponse(
+                "{\"error\":\"expired\"}",
+                HttpStatusCode.Unauthorized),
+        };
+        var port = CreatePort(handler);
+        var request = Request(CodeServiceId) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox",
+                CodeServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Failure.Should().BeNull();
+        outcome.Result!.Stdout.Should().Be("admitted-ok");
+        outcome.ResolvedRoute.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox",
+            CodeServiceId,
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
+        handler.Requests[1].PathAndQuery.Should().Be("/api/v1/keys");
+        handler.Requests[2].PathAndQuery.Should().Be(
+            "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
+        handler.Requests[2].Authorization.Should().Be($"Bearer {ExecutionBearerToken}");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSourceCredentialIsUnauthorizedWithoutExactAdmission_DoesNotFallback()
+    {
+        var handler = new SequenceHandler(JsonResponse(
+            "{\"error\":\"expired\"}",
+            HttpStatusCode.Unauthorized));
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        outcome.Result.Should().BeNull();
+        outcome.ResolvedRoute.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_route_access_denied",
+        });
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().NotContain(recorded =>
+            recorded.PathAndQuery.Contains("/api/v1/proxy/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenSourceCredentialIsForbiddenAfterExactAdmission_DoesNotFallback()
+    {
+        var handler = new SequenceHandler(JsonResponse(
+            "{\"error\":\"forbidden\"}",
+            HttpStatusCode.Forbidden));
+        var port = CreatePort(handler);
+        var request = Request(CodeServiceId) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox",
+                CodeServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Result.Should().BeNull();
+        outcome.ResolvedRoute.Should().BeNull();
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_route_access_denied",
+        });
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().NotContain(recorded =>
+            recorded.PathAndQuery.Contains("/api/v1/proxy/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLiveInventoryDeniesExactAdmission_DoesNotFallBackToProxy()
+    {
+        var handler = new SequenceHandler(JsonResponse(Inventory(Service(
+            CodeServiceId,
+            "chrono-sandbox",
+            false,
+            true,
+            "sandbox:execute",
+            credentialSourceType: "org",
+            allowed: false))));
+        var port = CreatePort(handler);
+        var request = Request(CodeServiceId) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox",
+                CodeServiceId,
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_route_access_denied",
+        });
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().NotContain(request =>
+            request.PathAndQuery.Contains("/api/v1/proxy/", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -194,8 +374,9 @@ public sealed class NyxIdCodeExecutionPortTests
             Code = "code_execution_route_policy_mismatch",
         });
         outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
-        handler.Requests.Should().ContainSingle();
+        handler.Requests.Should().HaveCount(2);
         handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
+        handler.Requests[1].PathAndQuery.Should().Be("/api/v1/keys");
     }
 
     [Theory]
@@ -240,8 +421,9 @@ public sealed class NyxIdCodeExecutionPortTests
 
         outcome.Failure.Should().BeNull();
         outcome.ResolvedRoute!.UserServiceId.Should().Be(CodeServiceId);
-        handler.Requests.Should().HaveCount(2);
-        handler.Requests[1].PathAndQuery.Should().Be(
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[1].PathAndQuery.Should().Be("/api/v1/keys");
+        handler.Requests[2].PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
     }
 
@@ -267,6 +449,43 @@ public sealed class NyxIdCodeExecutionPortTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenRouteIsConfiguredButExecutionAuthorityIsExpired_FailsBeforeProxy()
+    {
+        var handler = new SequenceHandler(JsonResponse(Inventory(Service(
+            CodeServiceId,
+            "chrono-sandbox",
+            false,
+            true,
+            "sandbox:execute"))))
+        {
+            KeysResponse = JsonResponse(
+                """
+                {
+                  "keys": [{
+                    "id": "us-code-alpha",
+                    "slug": "chrono-sandbox",
+                    "catalog_service_id": "catalog-chrono-sandbox",
+                    "catalog_service_slug": "chrono-sandbox",
+                    "is_active": true,
+                    "status": "expired",
+                    "connected": true,
+                    "credential_source": { "type": "personal" }
+                  }]
+                }
+                """),
+        };
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId));
+
+        AssertRouteFailure(
+            outcome,
+            handler,
+            CodeExecutionFailureKind.TargetNotConfigured,
+            "code_execution_route_not_ready");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenCanonicalOrganizationMemberServiceIsAllowed_UsesExactRoute()
     {
         var handler = new SequenceHandler(
@@ -287,7 +506,7 @@ public sealed class NyxIdCodeExecutionPortTests
 
         outcome.Failure.Should().BeNull();
         outcome.ResolvedRoute!.UserServiceId.Should().Be(CodeServiceId);
-        handler.Requests[1].PathAndQuery.Should().Be(
+        handler.Requests[2].PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox/execute?_nyxid_via=us-code-alpha");
     }
 
@@ -522,7 +741,7 @@ public sealed class NyxIdCodeExecutionPortTests
 
         outcome.Failure.Should().BeNull();
         outcome.ResolvedRoute!.UserServiceId.Should().Be(CodeServiceId);
-        handler.Requests[1].PathAndQuery.Should().EndWith("?_nyxid_via=us-code-alpha");
+        handler.Requests[2].PathAndQuery.Should().EndWith("?_nyxid_via=us-code-alpha");
     }
 
     [Fact]
@@ -1000,8 +1219,9 @@ public sealed class NyxIdCodeExecutionPortTests
             Code = code,
         });
         outcome.Failure!.DiagnosticId.Should().MatchRegex("^aevatar-[0-9a-f]{32}$");
-        handler.Requests.Should().ContainSingle();
+        handler.Requests.Should().HaveCount(2);
         handler.Requests[0].PathAndQuery.Should().Be("/api/v1/user-services");
+        handler.Requests[1].PathAndQuery.Should().Be("/api/v1/keys");
     }
 
     private sealed class TestNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
@@ -1013,8 +1233,11 @@ public sealed class NyxIdCodeExecutionPortTests
         params Func<CancellationToken, Task<HttpResponseMessage>>[] responses) : HttpMessageHandler
     {
         private int _responseIndex;
+        private string? _lastUserServicesResponse;
 
         public List<RecordedRequest> Requests { get; } = [];
+
+        public Func<CancellationToken, Task<HttpResponseMessage>>? KeysResponse { get; init; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -1031,9 +1254,70 @@ public sealed class NyxIdCodeExecutionPortTests
                     ? null
                     : await request.Content.ReadAsStringAsync(cancellationToken)));
 
+            if (request.RequestUri!.AbsolutePath == "/api/v1/keys")
+            {
+                return KeysResponse is null
+                    ? await JsonResponse(KeysInventoryFromUserServices(_lastUserServicesResponse))(
+                        cancellationToken)
+                    : await KeysResponse(cancellationToken);
+            }
+
             if (_responseIndex >= responses.Length)
                 throw new InvalidOperationException("An unexpected HTTP request was sent.");
-            return await responses[_responseIndex++](cancellationToken);
+            var response = await responses[_responseIndex++](cancellationToken);
+            if (request.RequestUri.AbsolutePath == "/api/v1/user-services")
+            {
+                _lastUserServicesResponse = response.Content is null
+                    ? null
+                    : await response.Content.ReadAsStringAsync(cancellationToken);
+            }
+
+            return response;
+        }
+
+        private static string KeysInventoryFromUserServices(string? response)
+        {
+            if (string.IsNullOrWhiteSpace(response))
+                return "{\"keys\":[]}";
+
+            try
+            {
+                using var document = JsonDocument.Parse(response);
+                if (!document.RootElement.TryGetProperty("services", out var services) ||
+                    services.ValueKind != JsonValueKind.Array)
+                {
+                    return "{\"keys\":[]}";
+                }
+
+                var keys = services.EnumerateArray()
+                    .Where(static service =>
+                        service.ValueKind == JsonValueKind.Object &&
+                        service.TryGetProperty("id", out _) &&
+                        service.TryGetProperty("slug", out _) &&
+                        service.TryGetProperty("is_active", out _) &&
+                        service.TryGetProperty("credential_source", out _))
+                    .Select(static service => new
+                    {
+                        id = service.GetProperty("id").GetString(),
+                        slug = service.GetProperty("slug").GetString(),
+                        catalog_service_id = service.TryGetProperty(
+                            "catalog_service_id",
+                            out var catalogServiceId)
+                            ? catalogServiceId.GetString()
+                            : null,
+                        catalog_service_slug = service.GetProperty("slug").GetString(),
+                        is_active = service.GetProperty("is_active").GetBoolean(),
+                        status = "active",
+                        connected = true,
+                        credential_source = service.GetProperty("credential_source").Clone(),
+                    })
+                    .ToArray();
+                return JsonSerializer.Serialize(new { keys });
+            }
+            catch (JsonException)
+            {
+                return "{\"keys\":[]}";
+            }
         }
     }
 

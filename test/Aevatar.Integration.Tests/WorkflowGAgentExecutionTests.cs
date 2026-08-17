@@ -46,6 +46,39 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowGAgent_ShouldAllowNonExplicitRevisionIdentityReplay()
+        {
+            const string workflowYaml = "name: direct\\nroles: []\\nsteps: []\\n";
+            var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                [],
+                [],
+                workflowId: "workflow-direct",
+                revisionId: "revision-direct");
+            var agent = CreateDefinitionAgent();
+
+            await BindInteractiveWorkflowDefinitionAsync(
+                agent,
+                workflowYaml,
+                "direct",
+                capabilityAdmissionPlan: plan,
+                workflowId: "workflow-direct",
+                revisionId: "revision-direct");
+            await BindInteractiveWorkflowDefinitionAsync(
+                agent,
+                workflowYaml,
+                "direct",
+                capabilityAdmissionPlan: plan,
+                workflowId: "workflow-direct",
+                revisionId: "revision-direct");
+
+            agent.State.WorkflowId.Should().Be("workflow-direct");
+            agent.State.RevisionId.Should().Be("revision-direct");
+        }
+
+        [Fact]
         public async Task WorkflowGAgent_WhenYamlInvalid_ShouldMarkInvalidAndDescribe()
         {
             var agent = CreateDefinitionAgent();
@@ -176,6 +209,130 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             start.Input.Should().Contain("team01");
             start.Input.Split("team01", StringSplitOptions.None).Should().HaveCount(3);
             agent.State.CurrentTurnId.Should().Be("turn-current");
+        }
+
+        [Fact]
+        public async Task WorkflowRunGAgent_TypedJsonInput_ShouldPreserveRawPromptWithConversationContext()
+        {
+            const string workflowYaml = """
+                name: typed_json_probe
+                roles: []
+                steps:
+                  - id: capture_run_input
+                    type: assign
+                    parameters:
+                      target: raw_request
+                      value: "$input"
+                    next: normalize_schedule_context
+                  - id: normalize_schedule_context
+                    type: transform
+                    op: template
+                    template: >-
+                      {{~ fire_at_utc = get(data, 'fire_at_utc', ''); timezone = get(data, 'timezone', ''); run_date = get(data, 'run_date', '') ~}}
+                      {{ json({ fire_at_utc: fire_at_utc, timezone: timezone, run_date: run_date }) }}
+                    next: done
+                  - id: done
+                    type: assign
+                    parameters:
+                      target: final
+                      value: "$input"
+                """;
+            var publisher = new RecordingEventPublisher();
+            var agent = CreateRunAgent();
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(
+                agent,
+                "definition-typed-json",
+                workflowYaml,
+                "typed_json_probe",
+                runId: "run-typed-json");
+
+            const string prompt = "{\"fire_at_utc\":\"2026-08-27T01:00:00Z\",\"timezone\":\"Asia/Singapore\",\"run_date\":\"2026-08-27\"}";
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = prompt,
+                SessionId = "session-typed-json",
+                ConversationContext = new WorkflowConversationContext
+                {
+                    ScopeId = "scope-typed-json",
+                    ConversationId = "conversation-typed-json",
+                    CurrentTurnId = "turn-typed-json",
+                    Messages =
+                    {
+                        new WorkflowConversationMessage
+                        {
+                            Sequence = 1,
+                            Role = WorkflowConversationRole.User,
+                            Content = "This context must not become the typed input.",
+                        },
+                    },
+                },
+            });
+
+            publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>()
+                .Should().ContainSingle().Which.Input.Should().Be(prompt);
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("run the month-end preview")]
+        public async Task WorkflowRunGAgent_TypedJsonInvalidInput_ShouldCommitZeroStepConfigurationFailure(
+            string prompt)
+        {
+            const string workflowYaml = """
+                name: typed_json_probe
+                roles: []
+                steps:
+                  - id: capture_run_input
+                    type: assign
+                    parameters:
+                      target: raw_request
+                      value: "$input"
+                    next: normalize_schedule_context
+                  - id: normalize_schedule_context
+                    type: transform
+                    op: template
+                    template: '{{ json({ value: get(data, "value", "") }) }}'
+                """;
+            var eventStore = new InMemoryEventStore();
+            var publisher = new RecordingEventPublisher();
+            var agent = CreateRunAgent(eventStore: eventStore);
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(
+                agent,
+                "definition-typed-json-invalid",
+                workflowYaml,
+                "typed_json_probe",
+                runId: "run-typed-json-invalid");
+
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = prompt,
+                SessionId = "session-typed-json-invalid",
+            });
+
+            publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().BeEmpty();
+            agent.State.Status.Should().Be("failed");
+            agent.State.TerminalRecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+            agent.State.ExecutionStates.Should().BeEmpty();
+            agent.State.StartedAtUtc.Should().BeNull();
+
+            var persisted = (await eventStore.GetEventsAsync(agent.Id)).ToList();
+            persisted.Should().NotContain(stateEvent =>
+                stateEvent.EventData.Is(WorkflowRunExecutionStartedEvent.Descriptor));
+            var completionIndex = persisted.FindIndex(stateEvent =>
+                stateEvent.EventData.Is(WorkflowCompletedEvent.Descriptor));
+            var timingIndex = persisted.FindIndex(stateEvent =>
+                stateEvent.EventData.Is(WorkflowRunTerminalTimingRecordedEvent.Descriptor));
+            completionIndex.Should().BeGreaterThanOrEqualTo(0);
+            timingIndex.Should().BeGreaterThan(completionIndex);
+            var completion = persisted[completionIndex].EventData.Unpack<WorkflowCompletedEvent>();
+            completion.Success.Should().BeFalse();
+            completion.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+            completion.Error.Should().Contain("serialized JSON");
+            completion.Error.Should().Contain("inputs.prompt");
+            if (!string.IsNullOrEmpty(prompt))
+                completion.Error.Should().NotContain(prompt);
         }
 
         [Fact]
@@ -401,7 +558,7 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
-        public async Task WorkflowRunGAgent_WhenRebindingDefinition_ShouldResetExecutionStateAndDestroyOldChildren()
+        public async Task WorkflowRunGAgent_WhenDifferentRunBindArrivesAfterTerminal_ShouldPreserveTerminalRun()
         {
             var publisher = new RecordingEventPublisher();
             var runtime = new RecordingActorRuntime();
@@ -425,8 +582,9 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 Success = true,
                 Output = "done-a",
             });
-            await SeedRuntimeContextAsync(agent);
-            runtime.ThrowOnGetAsyncActorId = agent.Id;
+            var terminalState = agent.State.Clone();
+            var eventCount = publisher.Published.Count;
+            var destroyedCount = runtime.Destroyed.Count;
 
             await BindInteractiveWorkflowRunDefinitionAsync(agent,
                 "definition-1",
@@ -434,19 +592,57 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 "wf_valid",
                 runId: "run-2");
 
-            agent.State.Status.Should().Be("bound");
-            agent.State.Input.Should().BeEmpty();
-            agent.State.FinalOutput.Should().BeEmpty();
-            agent.State.FinalError.Should().BeEmpty();
-            agent.State.ExecutionStates.Should().BeEmpty();
-            AssertRuntimeContextCleared(agent);
-            runtime.Unlinked.Should().Contain(oldChildActorId);
-            runtime.Destroyed.Should().Contain(oldChildActorId);
-
             await agent.HandleChatRequest(new WorkflowChatRequestEvent { Prompt = "second", SessionId = "s2" });
+            await agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+            {
+                WorkflowName = "wf_valid",
+                RunId = "run-1",
+                Success = true,
+                Output = "late-old-run",
+            });
+            await agent.HandleBindWorkflowRunDefinition(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = "definition-1",
+                WorkflowYaml = BuildValidWorkflowYaml("role_a", "RoleA"),
+                WorkflowName = "wf_valid",
+                RunId = "run-1",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            });
+            agent.State.Equals(terminalState).Should().BeTrue();
+            agent.State.RunId.Should().Be("run-1");
+            agent.State.Status.Should().Be("completed");
+            agent.State.FinalOutput.Should().Be("done-a");
+            publisher.Published.Should().HaveCount(eventCount);
+            runtime.Destroyed.Should().HaveCount(destroyedCount);
+            runtime.Destroyed.Should().Contain(oldChildActorId);
+            runtime.CreatedActors.Select(x => x.Id).Should().NotContain($"{agent.Id}:role_b");
+        }
 
-            runtime.Linked.Should().Contain(x => x.child.EndsWith(":role_b", StringComparison.Ordinal));
-            runtime.CreatedActors.Select(x => x.Id).Should().Contain($"{agent.Id}:role_b");
+        [Fact]
+        public async Task WorkflowRunGAgent_WhenDifferentRunBindArrivesBeforeTerminal_ShouldRejectActorReuse()
+        {
+            var eventStore = new InMemoryEventStore();
+            var agent = CreateRunAgent(eventStore: eventStore);
+            SetAgentId(agent, "workflow-run-single-owner");
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
+                "definition-1",
+                BuildValidWorkflowYaml("role_a", "RoleA"),
+                "wf_valid",
+                runId: "run-1");
+            var stateBeforeConflictingBind = agent.State.Clone();
+
+            var act = () => BindInteractiveWorkflowRunDefinitionAsync(agent,
+                "definition-1",
+                BuildValidWorkflowYaml("role_b", "RoleB"),
+                "wf_valid",
+                runId: "run-2");
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*already bound to a different run identity*");
+            agent.State.Equals(stateBeforeConflictingBind).Should().BeTrue();
+            var persisted = await eventStore.GetEventsAsync(agent.Id);
+            persisted.Count(x => x.EventData.Is(BindWorkflowRunDefinitionEvent.Descriptor))
+                .Should().Be(1);
         }
 
         [Fact]
@@ -626,12 +822,14 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
-        public async Task WorkflowRunGAgent_WhenReplacingDefinition_ShouldResetExecutionStateAndRebuildChildTopology()
+        public async Task WorkflowRunGAgent_WhenTerminalCommandsAreRedelivered_ShouldPreserveTerminalState()
         {
+            var eventStore = new InMemoryEventStore();
             var publisher = new RecordingEventPublisher();
             var runtime = new RecordingActorRuntime();
             var agent = CreateRunAgent(
-                runtime: runtime);
+                runtime: runtime,
+                eventStore: eventStore);
             SetAgentId(agent, "workflow-run-replace");
             agent.EventPublisher = publisher;
             await BindInteractiveWorkflowRunDefinitionAsync(agent,
@@ -649,7 +847,84 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 Success = true,
                 Output = "done-a",
             });
-            runtime.ThrowOnGetAsyncActorId = agent.Id;
+            var terminalState = agent.State.Clone();
+            var destroyedCount = runtime.Destroyed.Count;
+            var linkedCount = runtime.Linked.Count;
+            var unlinkedCount = runtime.Unlinked.Count;
+
+            await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
+            {
+                WorkflowYaml = BuildValidWorkflowYaml("role_b", "RoleB"),
+                Input = "second",
+            });
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = "redelivered",
+                SessionId = "s2",
+            });
+            await agent.HandleEnsureWorkflowRunDefinitionAsync(new EnsureWorkflowRunDefinitionEvent
+            {
+                Binding = new BindWorkflowRunDefinitionEvent
+                {
+                    DefinitionActorId = "definition-1",
+                    WorkflowYaml = BuildValidWorkflowYaml("role_b", "RoleB"),
+                    WorkflowName = "wf_valid",
+                    RunId = "run-replace",
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                },
+                ExecutionRequest = new WorkflowChatRequestEvent
+                {
+                    Prompt = "redelivered ensure",
+                    SessionId = "s3",
+                },
+            });
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
+                "definition-1",
+                BuildValidWorkflowYaml("role_b", "RoleB"),
+                "wf_valid",
+                runId: "run-replace");
+            await agent.HandleBindWorkflowRunDefinition(new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = "definition-1",
+                WorkflowYaml = BuildValidWorkflowYaml("role_b", "RoleB"),
+                WorkflowName = "wf_valid",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            });
+
+            agent.State.Equals(terminalState).Should().BeTrue();
+            agent.State.Status.Should().Be("completed");
+            agent.State.FinalOutput.Should().Be("done-a");
+            runtime.Destroyed.Should().HaveCount(destroyedCount);
+            runtime.Linked.Should().HaveCount(linkedCount);
+            runtime.Unlinked.Should().HaveCount(unlinkedCount);
+            runtime.Destroyed.Should().Contain(oldChildActorId);
+            runtime.CreatedActors.Select(x => x.Id).Should().NotContain($"{agent.Id}:role_b");
+            publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>()
+                .Should().ContainSingle();
+
+            var persisted = await eventStore.GetEventsAsync(agent.Id);
+            persisted.Count(x => x.EventData.Is(BindWorkflowRunDefinitionEvent.Descriptor))
+                .Should().Be(1);
+            persisted.Count(x => x.EventData.Is(WorkflowRunExecutionStartedEvent.Descriptor))
+                .Should().Be(1);
+        }
+
+        [Fact]
+        public async Task WorkflowRunGAgent_WhenReplacingRunningDefinition_ShouldResetExecutionStateAndRebuildChildTopology()
+        {
+            var publisher = new RecordingEventPublisher();
+            var runtime = new RecordingActorRuntime();
+            var agent = CreateRunAgent(runtime: runtime);
+            SetAgentId(agent, "workflow-run-replace-running");
+            agent.EventPublisher = publisher;
+            await BindInteractiveWorkflowRunDefinitionAsync(agent,
+                "definition-1",
+                BuildValidWorkflowYaml("role_a", "RoleA"),
+                "wf_valid",
+                runId: "run-replace-running");
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent { Prompt = "first", SessionId = "s1" });
+            var oldChildActorId = runtime.CreatedActors.Single().Id;
+            await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
 
             await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
             {
@@ -666,6 +941,8 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             agent.State.Input.Should().Be("second");
             runtime.Linked.Should().Contain(x => x.child.EndsWith(":role_b", StringComparison.Ordinal));
             runtime.CreatedActors.Select(x => x.Id).Should().Contain($"{agent.Id}:role_b");
+            publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>()
+                .Should().HaveCount(2);
         }
 
         [Fact]
@@ -1060,7 +1337,11 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
             fact.Source.PublisherActorId.Should().Be("workflow-run-role-reply:role_a");
             fact.Source.CommittedEventId.Should().Be("evt-role-reply");
             fact.Source.CommittedStateVersion.Should().Be(4);
-            agent.State.ProcessedArtifactSources.Should().ContainSingle();
+            agent.State.ProcessedArtifactSources.Should().ContainSingle()
+                .Which.Should().BeEquivalentTo(fact.Source);
+            agent.State.ProcessedArtifactStateVersionsByPublisher.Should().ContainSingle()
+                .Which.Should().Be(
+                    new KeyValuePair<string, long>("workflow-run-role-reply:role_a", 4));
         }
 
         [Fact]

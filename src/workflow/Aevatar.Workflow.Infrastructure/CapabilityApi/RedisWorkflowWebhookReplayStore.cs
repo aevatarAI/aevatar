@@ -22,7 +22,7 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
     private readonly IDatabase _database;
     private readonly WorkflowWebhookIngressOptions _options;
 
-    internal RedisWorkflowWebhookReplayStore(
+    public RedisWorkflowWebhookReplayStore(
         WorkflowWebhookReplayRedisConnection connection,
         IOptions<WorkflowWebhookIngressOptions> options)
     {
@@ -120,7 +120,7 @@ public sealed class RedisWorkflowWebhookReplayStore : IWorkflowWebhookReplayStor
         Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(value)).ToLowerInvariant();
 }
 
-internal sealed class WorkflowWebhookReplayRedisConnection : IDisposable
+public sealed class WorkflowWebhookReplayRedisConnection : IDisposable
 {
     private readonly IConnectionMultiplexer _connection;
 

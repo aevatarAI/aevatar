@@ -144,9 +144,46 @@ public static class LarkJsonTableFormatter
             case JsonValueKind.Array:
                 AppendKeyValueArray(builder, key, element, depth);
                 break;
+            case JsonValueKind.String when ContainsLineBreak(element.GetString()):
+                // Multiline text (card bodies, approval descriptions, …) loses
+                // its meaning when line breaks are collapsed into "; ". Render
+                // it as an indented block under the key instead.
+                AppendKeyValueMultilineBlock(builder, depth, key ?? "Value", element.GetString() ?? string.Empty);
+                break;
             default:
                 AppendKeyValueLine(builder, depth, key ?? "Value", FormatKeyValueScalar(element));
                 break;
+        }
+    }
+
+    private static bool ContainsLineBreak(string? value) =>
+        value is not null && (value.Contains('\n') || value.Contains('\r'));
+
+    private static void AppendKeyValueMultilineBlock(
+        StringBuilder builder,
+        int depth,
+        string key,
+        string value)
+    {
+        AppendKeyValueHeader(builder, depth, key);
+        var lines = value
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n');
+        foreach (var line in lines)
+        {
+            if (builder.Length >= MaxTableTextLength)
+                return;
+
+            var trimmed = line.TrimEnd();
+            if (trimmed.Length == 0)
+            {
+                builder.AppendLine();
+                continue;
+            }
+
+            AppendKeyValueIndent(builder, depth + 1);
+            builder.AppendLine(trimmed);
         }
     }
 

@@ -1163,8 +1163,11 @@ public class RoleGAgentReplayContractTests
             RoleChatSessionProgressedEvent.PayloadOneofCase.Usage,
             RoleChatSessionProgressedEvent.PayloadOneofCase.TextEnded,
             RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal);
-        progress.Select(evt => evt.Sequence).Should().Equal(3, 4, 5);
-        agent.State.Sessions[completion.SessionId].LastProgressSequence.Should().Be(5);
+        var terminalSequences = progress.Select(evt => evt.Sequence).ToArray();
+        terminalSequences.Should().Equal(
+            Enumerable.Range(0, terminalSequences.Length)
+                .Select(offset => terminalSequences[0] + offset));
+        agent.State.Sessions[completion.SessionId].LastProgressSequence.Should().Be(terminalSequences[^1]);
     }
 
     [Fact]

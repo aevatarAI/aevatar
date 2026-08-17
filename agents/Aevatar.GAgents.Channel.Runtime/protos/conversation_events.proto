@@ -396,13 +396,23 @@ enum LarkCardOperationResultState {
   LARK_CARD_OPERATION_RESULT_STATE_FAULTED = 3;
 }
 
+// Describes what is known about the chat-visible side effect after card creation.
+// Field value 1 intentionally preserves the old is_post_send_failure=true wire value;
+// legacy false/zero remains unspecified and is interpreted as definitely-not-sent.
+enum LarkCardCreateDeliveryDisposition {
+  LARK_CARD_CREATE_DELIVERY_DISPOSITION_UNSPECIFIED = 0;
+  LARK_CARD_CREATE_DELIVERY_DISPOSITION_SENT = 1;
+  LARK_CARD_CREATE_DELIVERY_DISPOSITION_REPLY_AUTHORITY_SPENT_DELIVERY_UNKNOWN = 2;
+  LARK_CARD_CREATE_DELIVERY_DISPOSITION_DEFINITELY_NOT_SENT = 3;
+}
+
 message LarkCardOperationRawResult {
   string card_id = 1;
   string card_message_id = 2;
   bool is_rate_limited = 3;
   bool is_table_limit_exceeded = 4;
   bool is_card_unavailable = 5;
-  bool is_post_send_failure = 6;
+  LarkCardCreateDeliveryDisposition create_delivery_disposition = 6;
   bool final_text_written = 7;
   string raw_error_code = 8;
   string raw_error_summary = 9;

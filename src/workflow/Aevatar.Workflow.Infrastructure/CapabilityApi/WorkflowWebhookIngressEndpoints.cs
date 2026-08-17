@@ -1,6 +1,7 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -8,6 +9,10 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using AppWorkflowCallerNyxIdAuthority =
+    Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority;
+using AppWorkflowCallerCredential =
+    Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -17,6 +22,12 @@ internal static class WorkflowWebhookIngressEndpoints
     {
         group.MapPost("/workflow-webhooks/{routeKey}", HandleAsync)
             .WithName("PostWorkflowWebhook")
+            // External senders (e.g. the NyxID trigger delivery) carry no
+            // bearer identity; authentication for this route is the per-binding
+            // HMAC signature verified inside the handler. Without this
+            // exemption the host's fallback authorization policy rejects every
+            // delivery with an empty 401 before the handler runs.
+            .AllowAnonymous()
             .WithEndpointAudit(
                 "workflow.webhook.ingress",
                 AuditSensitivityLevel.Confidential,
@@ -24,6 +35,8 @@ internal static class WorkflowWebhookIngressEndpoints
                 // Static target: {routeKey} is an opaque webhook key, never recorded.
                 EndpointAuditTargetResolvers.Static("workflow_run", "webhook-ingress"),
                 captureUnauthenticated: true);
+
+        WorkflowWebhookBindingEndpoints.Map(group);
     }
 
     internal static async Task<IResult> HandleAsync(
@@ -37,12 +50,73 @@ internal static class WorkflowWebhookIngressEndpoints
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Webhook");
-        if (!options.Value.Enabled)
+
+        var normalizedRoute = WorkflowWebhookRoute.Normalize(routeKey);
+        if (normalizedRoute == null)
         {
             scope.MarkResult(StatusCodes.Status404NotFound);
             return Results.Json(
-                new { code = "WEBHOOK_INGRESS_DISABLED", message = "Workflow webhook ingress is disabled." },
+                new { code = "WEBHOOK_ROUTE_NOT_FOUND", message = "Webhook route was not found." },
                 statusCode: StatusCodes.Status404NotFound);
+        }
+
+        // Scope-registered bindings are data, always live. The Enabled flag
+        // gates only the static appsettings binding list.
+        var bindingStore = http.RequestServices.GetService<IWorkflowWebhookBindingStore>();
+        var dynamicRecord = bindingStore is null
+            ? null
+            : await bindingStore.GetAsync(normalizedRoute, ct);
+        var staticBindings = options.Value.Bindings
+            .Where(binding => string.Equals(
+                WorkflowWebhookRoute.Normalize(binding.RouteKey),
+                normalizedRoute,
+                StringComparison.Ordinal))
+            .ToArray();
+
+        if (dynamicRecord != null && staticBindings.Length > 0)
+        {
+            scope.MarkResult(StatusCodes.Status409Conflict);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_ROUTE_CONFIGURATION_CONFLICT",
+                    message = "Webhook route has both dynamic and host-configured bindings.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        if (staticBindings.Length > 1)
+        {
+            scope.MarkResult(StatusCodes.Status500InternalServerError);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_ROUTE_CONFIGURATION_CONFLICT",
+                    message = "Webhook route is configured more than once.",
+                },
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+
+        var resolvedBinding = dynamicRecord?.ToBindingOptions()
+            ?? (options.Value.Enabled ? staticBindings.SingleOrDefault() : null);
+        if (resolvedBinding is null)
+        {
+            scope.MarkResult(StatusCodes.Status404NotFound);
+            return Results.Json(
+                new { code = "WEBHOOK_ROUTE_NOT_FOUND", message = "Webhook route was not found." },
+                statusCode: StatusCodes.Status404NotFound);
+        }
+
+        if (dynamicRecord != null && string.IsNullOrWhiteSpace(resolvedBinding.DefinitionActorId))
+        {
+            scope.MarkResult(StatusCodes.Status409Conflict);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_EXACT_TARGET_REQUIRED",
+                    message = "Dynamic webhook binding is not pinned to a workflow definition actor.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
         }
 
         var replayStore = http.RequestServices.GetService<IWorkflowWebhookReplayStore>();
@@ -57,15 +131,29 @@ internal static class WorkflowWebhookIngressEndpoints
         byte[] rawBody;
         try
         {
-            rawBody = await ReadBodyAsync(http.Request, ct);
+            rawBody = await ReadBodyAsync(
+                http.Request,
+                WorkflowWebhookIngressLimits.MaxBodyBytes,
+                ct);
         }
         catch (OperationCanceledException)
         {
             return Results.StatusCode(499);
         }
+        catch (WebhookBodyTooLargeException)
+        {
+            scope.MarkResult(StatusCodes.Status413PayloadTooLarge);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_BODY_TOO_LARGE",
+                    message = "Webhook request body exceeds the supported size.",
+                },
+                statusCode: StatusCodes.Status413PayloadTooLarge);
+        }
 
         var receivedAt = DateTimeOffset.UtcNow;
-        var build = requestBuilder.Build(http.Request, routeKey, rawBody, receivedAt);
+        var build = requestBuilder.Build(http.Request, normalizedRoute, rawBody, receivedAt, resolvedBinding);
         if (!build.Succeeded)
         {
             scope.MarkResult(build.StatusCode);
@@ -74,11 +162,51 @@ internal static class WorkflowWebhookIngressEndpoints
                 statusCode: build.StatusCode);
         }
 
+        // Authenticate and validate the body before touching the definition
+        // projection. Anonymous callers must not be able to probe target
+        // existence or revision drift through this public route.
+        var exactTarget = await WorkflowWebhookExactTargetResolver.ResolveAsync(
+            http.RequestServices.GetService<IWorkflowActorBindingReader>(),
+            resolvedBinding,
+            ct);
+        if (!exactTarget.Succeeded)
+        {
+            scope.MarkResult(exactTarget.StatusCode);
+            return Results.Json(
+                new { code = exactTarget.ErrorCode, message = exactTarget.ErrorMessage },
+                statusCode: exactTarget.StatusCode);
+        }
+
+        var runRequest = exactTarget.Definition == null
+            ? build.Request!
+            : build.Request! with
+            {
+                ExpectedExecutionMode = exactTarget.Definition.ExpectedExecutionMode,
+                ScopeId = exactTarget.Definition.ScopeId,
+                ResolvedDefinitionBinding = exactTarget.Definition,
+            };
+        if (dynamicRecord != null &&
+            !TryAttachUnattendedCaller(
+                dynamicRecord,
+                normalizedRoute,
+                exactTarget.Definition,
+                runRequest,
+                out runRequest))
+        {
+            scope.MarkResult(StatusCodes.Status409Conflict);
+            return Results.Json(
+                new
+                {
+                    code = "WEBHOOK_UNATTENDED_AUTHORIZATION_DRIFT",
+                    message = "Webhook unattended authorization no longer matches the pinned workflow definition.",
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
         var admission = await replayStore.AdmitAsync(build.Admission!, ct);
         switch (admission.Status)
         {
             case WorkflowWebhookReplayAdmissionStatus.Admitted:
-                return await DispatchAsync(http, build.Request!, build.Admission!, replayStore, chatRunService, logger, scope, ct);
+                return await DispatchAsync(http, runRequest, build.Admission!, replayStore, chatRunService, logger, scope, ct);
             case WorkflowWebhookReplayAdmissionStatus.DuplicateCompleted:
             case WorkflowWebhookReplayAdmissionStatus.DuplicateInProgress:
                 scope.MarkResult(StatusCodes.Status202Accepted);
@@ -107,6 +235,62 @@ internal static class WorkflowWebhookIngressEndpoints
                     new { code = "WEBHOOK_REPLAY_ADMISSION_FAILED", message = "Webhook replay admission failed." },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    private static bool TryAttachUnattendedCaller(
+        WorkflowWebhookBindingRecord record,
+        string routeKey,
+        WorkflowDefinitionBinding? definition,
+        WorkflowChatRunRequest source,
+        out WorkflowChatRunRequest result)
+    {
+        result = source;
+        var authority = record.CallerAuthority;
+        var authorization = record.UnattendedEffectAuthorization;
+        if (authority is null && authorization is null)
+            return true;
+        if (authority is null || authorization is null || definition is null ||
+            definition.ExpectedExecutionMode != ExternalCapabilityExecutionMode.Durable ||
+            definition.CapabilityAdmissionPlan is null ||
+            string.IsNullOrWhiteSpace(authority.BindingId))
+        {
+            return false;
+        }
+
+        try
+        {
+            WorkflowUnattendedEffectAuthorizationIntegrity.ValidateForDefinition(
+                authorization,
+                authority,
+                routeKey,
+                definition.DefinitionActorId,
+                definition.ScopeId,
+                definition.WorkflowId,
+                definition.RevisionId,
+                definition.DefinitionVersion,
+                definition.CapabilityAdmissionPlan);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
+
+        result = source with
+        {
+            CallerCredential = new AppWorkflowCallerCredential(
+                BearerToken: null,
+                NyxIdAuthority: new AppWorkflowCallerNyxIdAuthority(
+                    authority.Platform,
+                    authority.Tenant,
+                    authority.ExternalUserId,
+                    authority.Scope,
+                    authority.BindingId),
+                Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken: null,
+                UnattendedEffectAuthorization: authorization.Clone(),
+                DurableCallerCredential: record.CallerDurableCredential?.Clone()),
+        };
+        return true;
     }
 
     private static async Task<IResult> DispatchAsync(
@@ -177,13 +361,31 @@ internal static class WorkflowWebhookIngressEndpoints
         }
     }
 
-    private static async Task<byte[]> ReadBodyAsync(HttpRequest request, CancellationToken ct)
+    private static async Task<byte[]> ReadBodyAsync(
+        HttpRequest request,
+        int maxBytes,
+        CancellationToken ct)
     {
-        using var memory = new MemoryStream();
-        await request.Body.CopyToAsync(memory, ct);
+        if (request.ContentLength is > 0 && request.ContentLength > maxBytes)
+            throw new WebhookBodyTooLargeException();
+
+        using var memory = new MemoryStream(Math.Min(maxBytes, 16 * 1024));
+        var buffer = new byte[16 * 1024];
+        while (true)
+        {
+            var read = await request.Body.ReadAsync(buffer.AsMemory(), ct);
+            if (read == 0)
+                break;
+            if (memory.Length + read > maxBytes)
+                throw new WebhookBodyTooLargeException();
+            await memory.WriteAsync(buffer.AsMemory(0, read), ct);
+        }
         return memory.ToArray();
     }
 
     private static string BuildWorkflowRunStatusUrl(string actorId) =>
         $"/api/workflow-actors/{Uri.EscapeDataString(actorId)}/current-state";
+
+    private sealed class WebhookBodyTooLargeException : Exception;
+
 }

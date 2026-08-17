@@ -57,13 +57,16 @@ internal sealed class UserSkillRunService : IUserSkillRunService
             return SkillRunOutcome.Failed("skill_not_found", $"Skill '{skillGuid}' was not found or is not accessible.");
 
         var (runKind, yamls) = ResolveWorkflowYamls(skill);
+        var commandIdentity = Guid.NewGuid().ToString("N");
 
         var request = new WorkflowChatRunRequest(
             Prompt: prompt ?? string.Empty,
             Source: WorkflowChatSource.InlineYamlBundle(yamls),
             ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             ScopeId: scopeId,
-            CallerCredential: callerCredential);
+            CallerCredential: callerCredential,
+            CommandIdSeed: commandIdentity,
+            CorrelationIdSeed: commandIdentity);
 
         var dispatch = await _chatRunDispatch.DispatchAsync(request, ct);
         if (!dispatch.Succeeded || dispatch.Receipt == null)
@@ -207,6 +210,13 @@ internal sealed class UserSkillRunService : IUserSkillRunService
             return SkillScheduleOutcome.Failed(
                 "schedule_authorization_refresh_unavailable",
                 ex.Message);
+        }
+        catch (StudioMemberAutomationCatalogRouteUnresolvedException ex)
+        {
+            return SkillScheduleOutcome.Failed(
+                "schedule_authorization_route_unresolved",
+                ex.Message,
+                ex.RequiredUserServiceIds);
         }
         catch (StudioMemberAutomationCatalogRefreshSupersededException ex)
         {

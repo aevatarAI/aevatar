@@ -76,6 +76,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
                     payload.TypeUrl ?? string.Empty,
                     payload.Unpack<WorkflowRoleReplyRecordedEvent>(),
                     observedAt),
+            [BuildTypeUrl(WorkflowRuntimeOperationRecordedEvent.Descriptor)] = static (readModel, payload, _) =>
+                ApplyWorkflowRuntimeOperationRecorded(
+                    readModel,
+                    payload.Unpack<WorkflowRuntimeOperationRecordedEvent>()),
             [BuildTypeUrl(WorkflowCompletedEvent.Descriptor)] = static (readModel, payload, observedAt) =>
                 ApplyWorkflowCompleted(
                     readModel,
@@ -475,8 +479,145 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
                 null,
                 eventType,
                 BuildToolCallTimelineData(toolCall));
+
+            EnrichToolOperation(readModel.Operations, evt.SessionId, toolCall);
         }
     }
+
+    private static void ApplyWorkflowRuntimeOperationRecorded(
+        WorkflowRunInsightReportDocument readModel,
+        WorkflowRuntimeOperationRecordedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.SessionId) ||
+            string.IsNullOrWhiteSpace(evt.OperationId) ||
+            evt.Kind == WorkflowRuntimeOperationKind.Unspecified ||
+            evt.Phase == WorkflowRuntimeOperationPhase.Unspecified)
+        {
+            return;
+        }
+
+        var operation = readModel.Operations.FirstOrDefault(candidate =>
+            candidate.Kind == evt.Kind &&
+            string.Equals(candidate.SessionId, evt.SessionId, StringComparison.Ordinal) &&
+            string.Equals(candidate.OperationId, evt.OperationId, StringComparison.Ordinal));
+        if (operation == null)
+        {
+            operation = new WorkflowRuntimeOperationReadModel
+            {
+                SessionId = evt.SessionId,
+                OperationId = evt.OperationId,
+                Kind = evt.Kind,
+                ProgressSequence = evt.ProgressSequence,
+            };
+            readModel.Operations.Add(operation);
+        }
+        var eventTime = evt.EventTime?.ToDateTimeOffset();
+        if (evt.Phase == WorkflowRuntimeOperationPhase.Started)
+        {
+            if (!ShouldApplyOperationPhase(evt.ProgressSequence, operation.StartedProgressSequence))
+                return;
+
+            UpdateOperationAnchorSequence(operation, evt.ProgressSequence);
+            operation.StartedProgressSequence = evt.ProgressSequence;
+            operation.Round = evt.Round;
+            operation.RoleActorId = FirstNonEmpty(evt.RoleActorId, operation.RoleActorId);
+            operation.Model = FirstNonEmpty(evt.Model, operation.Model);
+            operation.Provider = FirstNonEmpty(evt.Provider, operation.Provider);
+            operation.InputSummary = SanitizeAuditTextForDisplay(evt.InputSummary, 2000);
+            operation.AvailableToolNames.Clear();
+            operation.AvailableToolNames.Add(
+                evt.AvailableToolNames
+                    .Where(static name => !string.IsNullOrWhiteSpace(name))
+                    .Select(static name => name.Trim())
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(static name => name, StringComparer.Ordinal));
+            operation.ToolCallId = FirstNonEmpty(evt.ToolCallId, operation.ToolCallId);
+            operation.ToolName = FirstNonEmpty(evt.ToolName, operation.ToolName);
+            if (evt.ProgressSequence > 0 && eventTime.HasValue)
+            {
+                operation.StartedAt = eventTime;
+            }
+            else if (eventTime.HasValue &&
+                     (!operation.StartedAt.HasValue || eventTime.Value < operation.StartedAt.Value))
+            {
+                operation.StartedAt = eventTime;
+            }
+            return;
+        }
+
+        if (!ShouldApplyOperationPhase(evt.ProgressSequence, operation.CompletedProgressSequence))
+            return;
+
+        UpdateOperationAnchorSequence(operation, evt.ProgressSequence);
+        operation.CompletedProgressSequence = evt.ProgressSequence;
+        operation.Round = evt.Round;
+        operation.RoleActorId = FirstNonEmpty(evt.RoleActorId, operation.RoleActorId);
+        operation.Model = FirstNonEmpty(evt.Model, operation.Model);
+        operation.ToolCallId = FirstNonEmpty(evt.ToolCallId, operation.ToolCallId);
+        operation.ToolName = FirstNonEmpty(evt.ToolName, operation.ToolName);
+        if (evt.ProgressSequence > 0 && eventTime.HasValue)
+        {
+            operation.CompletedAt = eventTime;
+        }
+        else if (eventTime.HasValue &&
+                 (!operation.CompletedAt.HasValue || eventTime.Value > operation.CompletedAt.Value))
+        {
+            operation.CompletedAt = eventTime;
+        }
+        operation.Output = SanitizeAuditText(evt.Output);
+        operation.ReasoningContent = SanitizeAuditText(evt.ReasoningContent);
+        operation.FinishReason = SanitizeAuditTextForDisplay(evt.FinishReason, 128);
+        operation.Success = evt.Success;
+        operation.Error = SanitizeAuditText(evt.Error);
+        operation.ArgumentsJson = SanitizeAuditText(evt.ArgumentsJson);
+        operation.ResultJson = SanitizeAuditText(evt.ResultJson);
+        operation.Usage = evt.Usage == null
+            ? new WorkflowUsageMetricsReadModel()
+            : ToReadModelUsage(evt.Usage);
+    }
+
+    private static bool ShouldApplyOperationPhase(long incomingSequence, long currentSequence) =>
+        currentSequence <= 0 || incomingSequence > currentSequence;
+
+    private static void UpdateOperationAnchorSequence(
+        WorkflowRuntimeOperationReadModel operation,
+        long incomingSequence)
+    {
+        if (operation.ProgressSequence <= 0 ||
+            incomingSequence > 0 && incomingSequence < operation.ProgressSequence)
+        {
+            operation.ProgressSequence = incomingSequence;
+        }
+    }
+
+    private static void EnrichToolOperation(
+        IList<WorkflowRuntimeOperationReadModel> operations,
+        string? sessionId,
+        WorkflowRoleReplyToolCall toolCall)
+    {
+        var callId = toolCall.CallId ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(callId))
+            return;
+
+        var operation = operations.FirstOrDefault(candidate =>
+            candidate.Kind == WorkflowRuntimeOperationKind.Tool &&
+            string.Equals(candidate.SessionId, sessionId ?? string.Empty, StringComparison.Ordinal) &&
+            (string.Equals(candidate.ToolCallId, callId, StringComparison.Ordinal) ||
+             string.Equals(candidate.OperationId, callId, StringComparison.Ordinal)));
+        if (operation == null)
+            return;
+
+        operation.ToolName = FirstNonEmpty(toolCall.ToolName, operation.ToolName);
+        operation.ResultJson = FirstNonEmpty(
+            operation.ResultJson,
+            SanitizeAuditText(toolCall.ResultJson));
+        operation.Error = FirstNonEmpty(
+            operation.Error,
+            SanitizeAuditText(toolCall.Error));
+    }
+
+    private static string FirstNonEmpty(string? candidate, string? fallback) =>
+        string.IsNullOrWhiteSpace(candidate) ? fallback ?? string.Empty : candidate;
 
     private static Dictionary<string, string> BuildToolCallTimelineData(WorkflowRoleReplyToolCall toolCall)
     {
@@ -788,6 +929,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         return (status ?? string.Empty).Trim() switch
         {
             "completed" => WorkflowExecutionCompletionStatus.Completed,
+            "timed_out" => WorkflowExecutionCompletionStatus.TimedOut,
             "failed" => WorkflowExecutionCompletionStatus.Failed,
             "stopped" => WorkflowExecutionCompletionStatus.Stopped,
             "running" => existing == WorkflowExecutionCompletionStatus.WaitingForSignal
@@ -801,6 +943,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         (status ?? string.Empty).Trim() switch
         {
             "completed" => true,
+            "timed_out" => false,
             "failed" => false,
             "stopped" => false,
             _ => null,
@@ -808,6 +951,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
 
     private static bool IsTerminalStatus(string? status) =>
         string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "timed_out", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase);
 

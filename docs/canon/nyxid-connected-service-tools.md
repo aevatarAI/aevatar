@@ -12,7 +12,25 @@ NyxID Assistant 的 operation-class 权威边界见 [ADR-0048](../adr/0048-nyxid
 
 模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发，凭证注入、proxy/broker 审计、node routing 和 delegation 由 NyxID 负责；Aevatar 在进入 proxy 前统一执行 credential policy、actor-owned durable approval 和平台 tool audit。两边各自记录本边界事实，NyxID 的审批能力不能替代 Aevatar 本地准入。
 
-NyxID `GET /api/v1/mcp/config` is the only descriptor source for published operations. `GET /api/v1/keys` supplies exact UserService inventory plus credential/node execution readiness for bind-time authored-request admission, credential ownership, and management actions; `/api/v1/user-services` is the route-configuration projection, not the execution-readiness authority. Aevatar never fetches or parses raw OpenAPI from `/keys`. Current-turn published-operation exposure requires the exact ordinal intersection of `/keys` and MCP on both `user_service_id` and route slug; matching an ID with a different slug is route drift and fails closed. Published-operation runtime retains exact MCP endpoint-digest revalidation; authored-request runtime reads neither MCP, OpenAPI, nor inventory.
+NyxID `GET /api/v1/mcp/config` is the only descriptor source for published operations. `GET /api/v1/keys` supplies the caller-executable exact UserService inventory plus credential/node execution readiness; `/api/v1/user-services` is the route-configuration and write-authority surface, not the execution-readiness authority. Aevatar never fetches or parses raw OpenAPI from `/keys`. Current-turn published-operation exposure requires the exact ordinal intersection of `/keys` and MCP on both `user_service_id` and route slug; matching an ID with a different slug is route drift and fails closed. Published-operation runtime retains exact MCP endpoint-digest revalidation; authored-request runtime reads neither MCP, OpenAPI, nor inventory.
+
+### Caller-visible inventory 与 route 自动收敛
+
+三个 NyxID surface 各自只表达一种事实，不能相互代替：
+
+| Surface | Aevatar 使用的权威语义 |
+|---|---|
+| `GET /api/v1/keys` | 当前 caller 可以执行的 exact UserService inventory，以及 active、connected/credential/node readiness、`allowed` 等执行事实。 |
+| `GET /api/v1/mcp/config` | 已发布 typed operation catalog；只定义可被安全建模的 endpoint contract，不授予 UserService access。 |
+| `/api/v1/user-services` | exact UserService route configuration 与该 caller 的 write authority；不作为执行 inventory 或 operation catalog。 |
+
+Aevatar 默认把 `/keys` 中当前 caller 所有 active、connected/credential-ready 且 allowed 的 exact UserService 作为可直接使用的服务全集，不要求用户再在 Aevatar 注册一份服务或维护平行 allowlist。这里的“直接使用”表示拥有 typed operation、authored-request proof 或 platform capability contract 的调用链可选择该 exact UserService；它不把未发布 endpoint 变成 model-visible tool，也不开放 generic raw proxy。inactive、credential-forbidden、identity-conflicted 或 source-unready 的条目仍 fail closed。
+
+route policy 不属于一套全局默认值。每个 capability owner 必须声明自己的 typed route contract；例如它可以要求一种被下游接受的 credential delivery 方式或一个最小 scope membership。只有 fresh command admission 确实选择并需要该 capability、当前 route 又不满足其 contract 时，Application command preflight 才可请求 NyxID adapter 对 exact UserService 做需求驱动的最小收敛，然后 fresh readback 并重新执行同一 contract。readiness/query、read model、actor runtime、persisted revalidation 与普通 inventory discovery 都不得写 route，也不得在读取时顺带 repair。
+
+caller-visible 不等于 caller-writable。自动收敛只接受经过 ingress 验证的 direct human NyxID access token，并且 NyxID authority 必须证明该 exact route 是 caller-owned personal service，或 caller 是该 organization service 的 admin。organization member/viewer 即使 `allowed=true` 仍只能使用已经满足 contract 的 route，Aevatar 不替其修改 shared route；不具备 write authority 的 mismatch 返回 typed blocker。proxy delegation、broker/read token、API key、service account、relay credential 和持久化 command/proof 中的 token-like value 都不能升级成 route mutation authority。
+
+收敛必须只写 capability contract 所需字段，保留当前 route 的其他 typed 值；禁止为“以后可能需要”而统一开启 `forward_access_token`、统一开启 delegation、或给所有服务追加 `proxy:*` / `sandbox:execute`。已经满足 contract 的 route 必须零写入。NyxID 当前 UserService update contract 没有 revision/ETag compare-and-swap，因此该过程是 bounded best-effort convergence，不是线性化事务：它在写前读取 exact route、提交最小 patch、写后 fresh readback；若最终 identity、authority、preserved values 或 contract 不匹配就 fail closed，且不得 blind retry。并发写仍可能在 read/PUT/read 窗口发生，尤其需要重写 scope 集合时不能声称不会覆盖同窗口的第三方变更。
 
 ## 1. 实例与 operation 身份
 
@@ -127,7 +145,7 @@ GET/HEAD/OPTIONS are durable-capable when the binder attests `READ_ONLY` and exa
 
 `nyxid_approvals` 与 `nyxid_services` 使用同一个 closed typed action parser 生成 schema enum、执行 `GetCallSafety` 分类并选择 terminal action，三处不能维护不同的 action 列表。只有合法 JSON object 缺少 `action` 时才默认只读 `list`。空白、malformed JSON、数组、scalar、非字符串/null/空白 action 和 unknown action 一律按 `requires approval + non-read-only + destructive` 分类；若进入 terminal，只返回 `invalid_action`，不调用 NyxID HTTP。
 
-所有 mutation 都需要 durable approval，包括 approval decision、grant revoke、service create/update/route/delete 和 credential rotation。准入发生在 mutation 的任何预读之前，因此 credential rotation 被拒绝时，查找 `api_key_id` 的 GET 和后续 update 都必须为 0。
+所有 caller-requested generic management mutation 都需要 durable approval，包括 approval decision、grant revoke、service create/update/route/delete 和 credential rotation。准入发生在 mutation 的任何预读之前，因此 credential rotation 被拒绝时，查找 `api_key_id` 的 GET 和后续 update 都必须为 0。capability-owned route convergence 不是 model-visible management action：它只允许在上文 direct-human command preflight、exact write authority、typed field contract、最小 patch 与 fresh readback 全部满足时自动执行，不能作为 Class-R/P tool 或 runtime fallback 暴露。
 
 ## 5. 执行与重验
 

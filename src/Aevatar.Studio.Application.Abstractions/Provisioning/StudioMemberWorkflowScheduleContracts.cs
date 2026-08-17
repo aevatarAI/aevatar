@@ -247,3 +247,31 @@ public sealed class StudioMemberAutomationCatalogRefreshUnavailableException : E
     {
     }
 }
+
+public sealed class StudioMemberAutomationCatalogRouteUnresolvedException : Exception
+{
+    public const string NyxIdFailureCode = "api_key_scope_plan_route_unresolved";
+
+    public StudioMemberAutomationCatalogRouteUnresolvedException(
+        IEnumerable<string> requiredUserServiceIds)
+        : base(
+            "NyxID could not resolve a configured route required by this workflow. " +
+            "Repair or deactivate the route before retrying.")
+    {
+        ArgumentNullException.ThrowIfNull(requiredUserServiceIds);
+        RequiredUserServiceIds = requiredUserServiceIds
+            .Select(static serviceId => serviceId?.Trim() ?? string.Empty)
+            .Where(static serviceId => serviceId.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static serviceId => serviceId, StringComparer.Ordinal)
+            .ToArray();
+        if (RequiredUserServiceIds.Count == 0)
+        {
+            throw new ArgumentException(
+                "At least one required UserService id is required.",
+                nameof(requiredUserServiceIds));
+        }
+    }
+
+    public IReadOnlyList<string> RequiredUserServiceIds { get; }
+}

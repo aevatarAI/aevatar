@@ -974,6 +974,9 @@ public static class NyxIdChatControlCommands
                         step.RematerializeDurableAuthorization,
                     RetryAuthorizationSourceKey =
                         step.RetryAuthorizationSourceKey?.Clone(),
+                    Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                        step.RetryToolInput.Presentation ?? step.Source?.Tool?.Presentation,
+                        step.RetryToolInput.ToolName),
                 },
             };
         }

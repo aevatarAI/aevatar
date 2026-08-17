@@ -3,11 +3,13 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
@@ -97,6 +99,12 @@ public sealed class NyxIdChatStateEndpointTests
                 ServiceId = "connected-service-alpha",
                 ReadinessCapabilityId = "readiness-capability-alpha",
                 ProviderResourceId = "repository-alpha",
+                Presentation = ToolPresentationDescriptors.Skill(
+                    "repository_update",
+                    "Repository maintenance",
+                    "Update the exact repository.",
+                    "repository-maintenance",
+                    "remote"),
             },
         };
         task.Steps[1].Kind = NyxIdChatStepKind.Postcondition;
@@ -187,8 +195,10 @@ public sealed class NyxIdChatStateEndpointTests
             .Should().Be(0, "a present all-false message remains a present empty object");
         currentTask["steps"]![1]!.AsObject().ContainsKey("availableActions").Should().BeFalse(
             "an absent message remains absent");
-        currentTask["steps"]![1]!["operation"]!.AsObject().Count.Should().Be(0,
-            "a present empty operation remains a present empty object");
+        var defaultOperation = currentTask["steps"]![1]!["operation"]!.AsObject();
+        defaultOperation.Count.Should().Be(1,
+            "a present operation always exposes its external-state classification");
+        defaultOperation["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
         currentTask["steps"]![0]!.AsObject().ContainsKey("retryInputRebuildable")
             .Should().BeFalse();
         currentTask["steps"]![0]!["operation"]!.AsObject().ContainsKey("idempotencyKey")
@@ -212,6 +222,14 @@ public sealed class NyxIdChatStateEndpointTests
         currentTask.ToJsonString().Should().NotContain("user-service-sensitive-alpha");
         currentTask["steps"]![0]!["source"]!["tool"]!["providerResourceId"]!
             .GetValue<string>().Should().Be("repository-alpha");
+        var presentation = currentTask["steps"]![0]!["source"]!["tool"]!["presentation"]!;
+        presentation["invocationName"]!.GetValue<string>().Should().Be("repository_update");
+        presentation["displayName"]!.GetValue<string>().Should().Be("Repository maintenance");
+        presentation["kind"]!.GetValue<string>().Should().Be("skill");
+        presentation["availability"]!.GetValue<string>().Should().Be("available");
+        presentation["skill"]!["skillName"]!.GetValue<string>().Should()
+            .Be("repository-maintenance");
+        presentation["skill"]!["source"]!.GetValue<string>().Should().Be("remote");
         currentTask["steps"]![1]!["source"]!["postcondition"]!["providerResourceId"]!
             .GetValue<string>().Should().Be("repository-alpha");
         currentTask["schemaVersion"]!.GetValue<int>().Should().Be(6);
@@ -485,7 +503,7 @@ public sealed class NyxIdChatStateEndpointTests
                     2,
                     "tool",
                     "failed",
-                    true,
+                    false,
                     "Read repository.",
                     false,
                     "not_applied",
@@ -496,7 +514,23 @@ public sealed class NyxIdChatStateEndpointTests
                     false,
                     new NyxIdChatAvailableActionsSnapshot(true, false, false),
                     null,
-                    null,
+                    new NyxIdChatConversationOperationSnapshot(
+                        ConversationActorId: "conversation-alpha",
+                        TurnId: "turn-alpha",
+                        TaskId: "task-alpha",
+                        StepId: "step-beta",
+                        OperationId: "operation-beta",
+                        OperationGeneration: 1,
+                        Kind: "tool",
+                        Phase: "failed",
+                        MayChangeExternalState: false,
+                        Idempotent: false,
+                        LatestProgressSequence: 0,
+                        TerminalCode: "TOOL_FAILED",
+                        SafeMessage: "The tool failed.",
+                        RequestedAt: null,
+                        DispatchedAt: null,
+                        CompletedAt: null),
                     new NyxIdChatConversationStepSourceSnapshot(
                         Tool: new NyxIdChatToolStepSourceSnapshot(
                             "repository_read",
@@ -584,6 +618,14 @@ public sealed class NyxIdChatStateEndpointTests
             .GetProperty("source")
             .GetProperty("tool");
         sourceWithoutReadiness.TryGetProperty("readinessCapabilityId", out _).Should().BeFalse();
+        var optionalReadStep = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("activeTask")
+            .GetProperty("steps")[1];
+        optionalReadStep.GetProperty("required").GetBoolean().Should().BeFalse();
+        optionalReadStep.GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
+        optionalReadStep.GetProperty("operation")
+            .GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
     }
 
     [Fact]

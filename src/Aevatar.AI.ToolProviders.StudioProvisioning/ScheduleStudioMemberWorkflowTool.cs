@@ -65,7 +65,7 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
             },
             "prompt": {
               "type": "string",
-              "description": "Optional prompt passed to the workflow chat endpoint when the schedule fires."
+              "description": "Optional JSON prompt template passed to the workflow when the schedule fires. Trusted fire-time placeholders are allowed in JSON string values: {{@schedule.run_date}}, {{@schedule.run_year}}, {{@schedule.run_month}}, {{@schedule.days_until_month_end}}, {{@schedule.fire_at_utc}}, and {{@schedule.timezone}}."
             },
             "display_name": {
               "type": "string",
@@ -256,6 +256,13 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
                 "authorization_catalog_refresh_unavailable",
                 "The authorization catalog could not be refreshed. Retry this request.");
         }
+        catch (StudioMemberAutomationCatalogRouteUnresolvedException ex)
+        {
+            return ErrorJson(
+                "authorization_catalog_route_unresolved",
+                ex.Message,
+                requiredUserServiceIds: ex.RequiredUserServiceIds);
+        }
         catch (StudioMemberAutomationCatalogRefreshSupersededException)
         {
             return ErrorJson(
@@ -384,9 +391,14 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
     private static string ErrorJson(
         string code,
         string message,
-        string? authorizationPlanMismatchReason = null) =>
+        string? authorizationPlanMismatchReason = null,
+        IReadOnlyList<string>? requiredUserServiceIds = null) =>
         JsonSerializer.Serialize(new ScheduleStudioMemberWorkflowErrorJson(
-            new ScheduleStudioMemberWorkflowErrorBody(code, message, authorizationPlanMismatchReason)),
+            new ScheduleStudioMemberWorkflowErrorBody(
+                code,
+                message,
+                authorizationPlanMismatchReason,
+                RequiredUserServiceIds: requiredUserServiceIds)),
             s_jsonOptions);
 
     private static string? Normalize(string? value) =>
@@ -480,7 +492,8 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IStudioMutationReceiptT
         string? ServingRevisionId = null,
         string? TargetRevisionId = null,
         string? BindingOperation = null,
-        string? BindingStatus = null);
+        string? BindingStatus = null,
+        IReadOnlyList<string>? RequiredUserServiceIds = null);
 }
 
 internal static class StudioMemberWorkflowScheduleAuthorizationResolver

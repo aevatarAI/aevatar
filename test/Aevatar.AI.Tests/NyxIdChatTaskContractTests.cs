@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Google.Protobuf;
@@ -365,13 +366,18 @@ public sealed class NyxIdChatTaskContractTests
     }
 
     [Fact]
-    public void FormatterOutput_ShouldIncludeDecoderRequiredStepBooleansWhenFalse()
+    public void FormatterOutput_ShouldIncludeWireRequiredBooleansWhenFalse()
     {
         var step = new NyxIdChatTaskPlanStep
         {
             StepId = "step-optional-read",
             Required = false,
             MayChangeExternalState = false,
+            Operation = new NyxIdChatTaskPlanOperation
+            {
+                OperationId = "operation-read",
+                MayChangeExternalState = false,
+            },
         };
         var plan = new NyxIdChatTaskPlan();
         plan.Steps.Add(step);
@@ -380,11 +386,54 @@ public sealed class NyxIdChatTaskContractTests
             .FormatTaskPlan(plan)["steps"]![0]!;
         planStep["required"]!.GetValue<bool>().Should().BeFalse();
         planStep["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
+        planStep["operation"]!["mayChangeExternalState"]!
+            .GetValue<bool>().Should().BeFalse();
 
         var changedStep = NyxIdChatTaskPlanJsonFormatter
             .FormatTaskPlan(new NyxIdChatTaskPlanStepChanged { Step = step })["step"]!;
         changedStep["required"]!.GetValue<bool>().Should().BeFalse();
         changedStep["mayChangeExternalState"]!.GetValue<bool>().Should().BeFalse();
+        changedStep["operation"]!["mayChangeExternalState"]!
+            .GetValue<bool>().Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(ToolPresentationKind.Generic, "generic")]
+    [InlineData(ToolPresentationKind.BuiltIn, "builtIn")]
+    [InlineData(ToolPresentationKind.NyxIdOperation, "nyxIdOperation")]
+    [InlineData(ToolPresentationKind.Mcp, "mcp")]
+    [InlineData(ToolPresentationKind.Skill, "skill")]
+    public void FormatterOutput_ShouldUseCanonicalToolPresentationKind(
+        ToolPresentationKind kind,
+        string expected)
+    {
+        var presentation = new ToolPresentationDescriptor
+        {
+            Kind = kind,
+            Availability = ToolAvailability.Available,
+        };
+
+        var node = NyxIdChatTaskPlanJsonFormatter.FormatProtobuf(presentation);
+
+        node["kind"]!.GetValue<string>().Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(ToolAvailability.Available, "available")]
+    [InlineData(ToolAvailability.Unavailable, "unavailable")]
+    public void FormatterOutput_ShouldUseCanonicalToolAvailability(
+        ToolAvailability availability,
+        string expected)
+    {
+        var presentation = new ToolPresentationDescriptor
+        {
+            Kind = ToolPresentationKind.Generic,
+            Availability = availability,
+        };
+
+        var node = NyxIdChatTaskPlanJsonFormatter.FormatProtobuf(presentation);
+
+        node["availability"]!.GetValue<string>().Should().Be(expected);
     }
 
     [Fact]

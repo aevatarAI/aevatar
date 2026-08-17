@@ -20,9 +20,12 @@ public class NyxTelegramProvisioningServiceTests
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-tg-1","status":"pending_webhook"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-tg-1","default_agent":true}""");
 
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler));
+        var nyxOptions = new NyxIdToolOptions
+        {
+            BaseUrl = "http://nyxid.internal:3001",
+            ApiBaseUrl = "https://nyx.example.com",
+        };
+        var nyxClient = new NyxIdApiClient(nyxOptions, new HttpClient(handler));
 
         EventEnvelope? capturedEnvelope = null;
         var actor = Substitute.For<IActor>();
@@ -38,7 +41,7 @@ public class NyxTelegramProvisioningServiceTests
 
         var service = new NyxTelegramProvisioningService(
             nyxClient,
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            nyxOptions,
             commandFacade,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxTelegramProvisioningService>>());
 
@@ -60,6 +63,7 @@ public class NyxTelegramProvisioningServiceTests
         result.NyxConversationRouteId.Should().Be("route-tg-1");
         result.RelayCallbackUrl.Should().Be("https://aevatar.example.com/api/webhooks/nyxid-relay");
         result.WebhookUrl.Should().Be("https://nyx.example.com/api/v1/webhooks/channel/telegram/bot-tg-1");
+        result.WebhookUrl.Should().NotContain("nyxid.internal");
 
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Is(ChannelBotRegisterCommand.Descriptor).Should().BeTrue();
@@ -139,6 +143,32 @@ public class NyxTelegramProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_rejects_dedicated_internal_transport_without_public_api_base_url()
+    {
+        var handler = new RecordingHandler();
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "http://nyxid.internal:3001",
+            InternalApiBaseUrl = "http://nyxid.internal:3001",
+        };
+        var service = CreateService(handler, options);
+
+        var result = await service.ProvisionAsync(
+            new NyxTelegramProvisioningRequest(
+                AccessToken: "user-token",
+                BotToken: "bot-token",
+                WebhookBaseUrl: "https://aevatar.example.com",
+                ScopeId: "scope-1",
+                Label: "Ops Bot",
+                NyxProviderSlug: "api-telegram-bot"),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("nyx_api_base_url_not_configured");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task INyxChannelBotProvisioningService_reads_bot_token_from_credentials_map()
     {
         var handler = new RecordingHandler();
@@ -215,10 +245,13 @@ public class NyxTelegramProvisioningServiceTests
         handler.Requests.Should().BeEmpty();
     }
 
-    private static NyxTelegramProvisioningService CreateService(RecordingHandler handler)
+    private static NyxTelegramProvisioningService CreateService(
+        RecordingHandler handler,
+        NyxIdToolOptions? options = null)
     {
+        options ??= new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" };
         var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            options,
             new HttpClient(handler));
 
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
@@ -231,7 +264,7 @@ public class NyxTelegramProvisioningServiceTests
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         return new NyxTelegramProvisioningService(
             nyxClient,
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            options,
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxTelegramProvisioningService>>());
     }

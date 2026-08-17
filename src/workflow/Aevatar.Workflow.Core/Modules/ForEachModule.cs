@@ -10,9 +10,12 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Aevatar.Workflow.Core.Modules;
 
@@ -25,9 +28,12 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 {
-    private const string ModuleStateKey = "foreach";
+    internal const string ModuleStateKey = "foreach";
     private const string InputFileRefsItemsSource = "input_file_refs";
+    private const int MaxConcurrentChildPublications = BackpressureHelper.DefaultMaxConcurrentWorkers;
+    internal static TimeSpan DurablePublicationRetryDelay => TimeSpan.FromSeconds(1);
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
+    private readonly HashSet<AcceptedChildPublicationKey> _acceptedChildPublications = [];
 
     /// <summary>Module name.</summary>
     public string Name => "foreach";
@@ -38,7 +44,8 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
     /// <inheritdoc />
     public bool CanHandle(EventEnvelope envelope) =>
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
-        envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true;
+        envelope.Payload?.Is(StepCompletedEvent.Descriptor) == true ||
+        envelope.Payload?.Is(ForEachPublicationRetryFiredEvent.Descriptor) == true;
 
     /// <inheritdoc />
     public async Task HandleAsync(EventEnvelope envelope, IWorkflowExecutionContext ctx, CancellationToken ct)
@@ -46,12 +53,67 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         var payload = envelope.Payload;
         if (payload == null) return;
 
+        if (payload.Is(ForEachPublicationRetryFiredEvent.Descriptor))
+        {
+            var retry = payload.Unpack<ForEachPublicationRetryFiredEvent>();
+            var state = LoadState(ctx);
+            if (state.Parents.TryGetValue(retry.ParentKey, out var retryParent) &&
+                retryParent.PendingCompletion != null)
+            {
+                await PublishPendingCompletionAsync(state, retry.ParentKey, retryParent, ctx, ct);
+            }
+
+            await PublishPendingDispatchesAsync(state, ctx, ct);
+            return;
+        }
+
         if (payload.Is(StepRequestEvent.Descriptor))
         {
             var evt = payload.Unpack<StepRequestEvent>();
             if (evt.StepType != "foreach") return;
+            if (!WorkflowExecutionStateAccess.MatchesAuthoritativeRun(ctx.RunId, evt.RunId))
+            {
+                ctx.Logger.LogWarning(
+                    "ForEach: ignore fenced request currentRun={CurrentRunId} requestedRun={RequestedRunId} step={StepId}",
+                    ctx.RunId,
+                    evt.RunId,
+                    evt.StepId);
+                return;
+            }
+
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
-            var parentKey = BuildRunStepKey(runId, evt.StepId);
+            var parentKey = BuildParentAttemptKey(runId, evt.StepId, evt.ExecutionId);
+            var state = LoadState(ctx);
+            FenceCompletedChildOutputsToRun(state, runId);
+
+            if (state.CompletionTombstones.ContainsKey(parentKey))
+                return;
+
+            // A redelivered parent request is a recovery signal. Its durable state is authoritative;
+            // rebuilding it from the request would erase collected results and re-fan out every item.
+            if (state.Parents.TryGetValue(parentKey, out var existingParent))
+            {
+                MigrateLegacyParentState(existingParent, runId, evt.StepId);
+                await SaveStateWithAcceptedChildPublicationsAsync(state, ctx, ct);
+                if (existingParent.PendingCompletion != null)
+                    await PublishPendingCompletionAsync(state, parentKey, existingParent, ctx, ct);
+                else
+                    await PublishPendingDispatchesAsync(state, ctx, ct);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(evt.ExecutionId) &&
+                TryAdoptLegacyParentAttempt(state, parentKey, runId, evt, out existingParent))
+            {
+                // Moving the map entry and enriching its identity are persisted together. The
+                // redelivery may only recover already-durable publication intents after that point.
+                await SaveStateWithAcceptedChildPublicationsAsync(state, ctx, ct);
+                if (existingParent.PendingCompletion != null)
+                    await PublishPendingCompletionAsync(state, parentKey, existingParent, ctx, ct);
+                else
+                    await PublishPendingDispatchesAsync(state, ctx, ct);
+                return;
+            }
 
             // ─── Parameters ───
             var delimiter = WorkflowParameterValueParser.NormalizeEscapedText(
@@ -74,22 +136,45 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 items = WorkflowParameterValueParser.ParseStringList(itemListRaw).ToArray();
             if (items.Length == 0)
             {
-                await ctx.PublishAsync(new StepCompletedEvent
+                var emptyParent = new ForEachParentState
                 {
-                    StepId = evt.StepId,
-                    RunId = runId,
-                    Success = true, Output = "",
-                }, TopologyAudience.Self, ct);
+                    Expected = 0,
+                    ParentRunId = runId,
+                    ParentStepId = evt.StepId,
+                    ParentExecutionId = evt.ExecutionId,
+                    ParentIdempotencyKey = evt.IdempotencyKey,
+                    PendingCompletion = new StepCompletedEvent
+                    {
+                        StepId = evt.StepId,
+                        RunId = runId,
+                        ExecutionId = evt.ExecutionId,
+                        Success = true,
+                        Output = string.Empty,
+                    },
+                };
+                state.Parents[parentKey] = emptyParent;
+                await SaveStateAsync(state, ctx, ct);
+                await PublishPendingCompletionAsync(state, parentKey, emptyParent, ctx, ct);
                 return;
             }
 
-            var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
-            state.Parents[parentKey] = new ForEachParentState
+            var parentState = new ForEachParentState
             {
                 Expected = items.Length,
                 ItemFileRefs = { fileItems },
                 ItemsSource = useInputFileRefs ? InputFileRefsItemsSource : string.Empty,
+                ParentRunId = runId,
+                ParentStepId = evt.StepId,
+                ParentExecutionId = evt.ExecutionId,
+                ParentIdempotencyKey = evt.IdempotencyKey,
             };
+
+            // Tombstones keep the module state alive after an attempt completes. Once no parent
+            // remains, the retained backpressure state belongs to the previous attempt and must
+            // not override this request's concurrency configuration.
+            if (state.Parents.Count == 0)
+                state.Backpressure = new BackpressureQueueState();
+            state.Parents[parentKey] = parentState;
 
             var maxConcurrent = BackpressureHelper.ResolveMaxConcurrent(evt.Parameters);
             var minConcurrent = BackpressureHelper.ResolveMinConcurrent(evt.Parameters, maxConcurrent);
@@ -103,7 +188,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 evt.StepId, items.Length, subStepType);
 
             // ─── Dispatch sub-step for each item (with backpressure) ───
-            var bpApplied = false;
+            BackpressureAppliedEvent? backpressureApplied = null;
             for (var i = 0; i < items.Length; i++)
             {
                 var itemInput = items[i].Trim();
@@ -120,37 +205,41 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 }
 
                 var entry = BackpressureHelper.ToQueueEntry(
-                    $"{evt.StepId}_item_{i}",
+                    BuildChildStepId(evt.StepId, i, evt.ExecutionId),
                     subStepType,
                     runId,
                     itemInput,
                     subTargetRole ?? "",
                     subParams,
                     useInputFileRefs ? [fileItems[i]] : null,
-                    evt.ExternalInvocation);
+                    evt.ExternalInvocation,
+                    BuildChildExecutionId(runId, evt.StepId, i, evt.ExecutionId),
+                    BuildChildIdempotencyKey(runId, evt.StepId, i, evt.ExecutionId, evt.IdempotencyKey));
+                parentState.ChildExecutionIds[entry.StepId] = entry.ExecutionId;
 
                 if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
                 {
-                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(entry), TopologyAudience.Self, ct);
+                    parentState.PendingDispatches.Add(entry);
                 }
-                else if (!bpApplied)
+                else if (backpressureApplied == null)
                 {
-                    bpApplied = true;
-                    await ctx.PublishAsync(new BackpressureAppliedEvent
+                    backpressureApplied = new BackpressureAppliedEvent
                     {
                         StepId = evt.StepId,
                         RunId = runId,
                         QueuedCount = BackpressureHelper.QueuedCount(state.Backpressure),
                         ActiveCount = state.Backpressure.ActiveWorkers,
                         MaxConcurrent = state.Backpressure.MaxConcurrentWorkers,
-                    }, TopologyAudience.Self, ct);
+                    };
                 }
             }
-            var topUpEntries = BackpressureHelper.TopUpToTarget(state.Backpressure);
-            // Always save after loop — TryAdmit mutates ActiveWorkers even when no items are queued
+
+            // Checkpoint the parent, queue, active-worker count, and all immediate dispatch intents
+            // before the first child publication can escape this actor turn.
             await SaveStateAsync(state, ctx, ct);
-            foreach (var topUpEntry in topUpEntries)
-                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(topUpEntry), TopologyAudience.Self, ct);
+            if (backpressureApplied != null)
+                await TryPublishBackpressureAppliedAsync(backpressureApplied, ctx, ct);
+            await PublishPendingDispatchesAsync(state, ctx, ct);
         }
         else
         {
@@ -158,16 +247,48 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             var evt = payload.Unpack<StepCompletedEvent>();
             // Only collect direct foreach item completions: "<parent>_item_<index>".
             // Ignore nested children like "_item_0_sub_1" or "_item_0_vote".
-            var parent = TryGetParentFromDirectItemStepId(evt.StepId);
+            var parsedParent = TryGetParentFromDirectItemStepId(evt.StepId);
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
-            var parentKey = parent == null ? null : BuildRunStepKey(runId, parent);
-            var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
+            var state = LoadState(ctx);
 
-            if (parent == null || parentKey == null || !state.Parents.TryGetValue(parentKey, out var parentState)) return;
-
-            // Deduplicate: ignore if this item step was already collected
-            if (parentState.CollectedStepIds.Contains(evt.StepId))
+            if (parsedParent == null ||
+                !TryResolveParentState(
+                    state,
+                    runId,
+                    parsedParent,
+                    evt.StepId,
+                    evt.ExecutionId,
+                    out var parentKey,
+                    out var parentState))
+            {
                 return;
+            }
+            var parent = string.IsNullOrWhiteSpace(parentState.ParentStepId)
+                ? parsedParent
+                : parentState.ParentStepId;
+            MigrateLegacyParentState(parentState, runId, parent);
+
+            // A duplicate completion also drives recovery if the terminal publication previously failed.
+            if (parentState.PendingCompletion != null)
+            {
+                await PublishPendingCompletionAsync(state, parentKey, parentState, ctx, ct);
+                await PublishPendingDispatchesAsync(state, ctx, ct);
+                return;
+            }
+
+            // A completion settles the retained durable intent even if this activation did not
+            // observe the original publication acceptance.
+            RemovePendingDispatch(parentState, evt.StepId);
+            AddIfMissing(parentState.DispatchedStepIds, evt.StepId);
+
+            // A worker is settled exactly once. Replays may still recover a durable top-up intent.
+            if (parentState.CollectedStepIds.Contains(evt.StepId))
+            {
+                await SaveStateWithAcceptedChildPublicationsAsync(state, ctx, ct);
+                await PublishPendingDispatchesAsync(state, ctx, ct);
+                return;
+            }
+
             parentState.CollectedStepIds.Add(evt.StepId);
             var itemIndex = ExtractDirectItemIndex(evt.StepId);
             var fileRef = itemIndex >= 0 && itemIndex < parentState.ItemFileRefs.Count
@@ -178,7 +299,13 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
                 BackpressureHelper.DefaultMaxConcurrentWorkers);
-            var drained = BackpressureHelper.CompleteAndTopUp(state.Backpressure);
+            IReadOnlyList<BackpressureQueueEntry> drained = [];
+            if (!parentState.SettledWorkerStepIds.Contains(evt.StepId))
+            {
+                parentState.SettledWorkerStepIds.Add(evt.StepId);
+                drained = BackpressureHelper.CompleteAndTopUp(state.Backpressure);
+                StagePendingDispatches(state, drained);
+            }
 
             if (parentState.Collected.Count >= parentState.Expected)
             {
@@ -200,28 +327,90 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     "ForEach {StepId}: all {Count} items completed, success={Success}",
                     parent, results.Count, allSuccess);
 
-                state.Parents.Remove(parentKey);
-                await SaveStateAsync(state, ctx, ct);
-
-                await ctx.PublishAsync(new StepCompletedEvent
+                parentState.PendingCompletion = new StepCompletedEvent
                 {
                     StepId = parent,
                     RunId = runId,
+                    ExecutionId = parentState.ParentExecutionId,
                     Success = allSuccess, Output = merged, Error = error,
                     FileItemResults = fileItemResults,
-                }, TopologyAudience.Self, ct);
-            }
-            else
-            {
-                await SaveStateAsync(state, ctx, ct);
+                };
             }
 
-            foreach (var drainedEntry in drained)
-                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drainedEntry), TopologyAudience.Self, ct);
+            // Completion settlement, queue cursor advancement, top-up intents, and terminal outbox
+            // are one durable checkpoint before any resulting publication.
+            await SaveStateWithAcceptedChildPublicationsAsync(state, ctx, ct);
+
+            if (parentState.PendingCompletion != null)
+                await PublishPendingCompletionAsync(state, parentKey, parentState, ctx, ct);
+            await PublishPendingDispatchesAsync(state, ctx, ct);
         }
     }
 
     private static string BuildRunStepKey(string runId, string stepId) => $"{runId}:{stepId}";
+
+    private static string BuildParentAttemptKey(string runId, string stepId, string? executionId) =>
+        string.IsNullOrWhiteSpace(executionId)
+            ? BuildRunStepKey(runId, stepId)
+            : $"{BuildRunStepKey(runId, stepId)}:execution:{RuntimeCallbackKeyComposer.EncodeSegment(executionId.Trim())}";
+
+    private static string BuildChildStepId(string parentStepId, int itemIndex, string? parentExecutionId)
+    {
+        if (string.IsNullOrWhiteSpace(parentExecutionId))
+            return $"{parentStepId}_item_{itemIndex}";
+
+        var attemptHash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(parentExecutionId.Trim())))
+            .ToLowerInvariant()[..16];
+        return $"{parentStepId}_execution_{attemptHash}_item_{itemIndex}";
+    }
+
+    internal static bool IsDirectChildStepId(string parentStepId, string childStepId)
+    {
+        if (string.IsNullOrWhiteSpace(parentStepId) || string.IsNullOrWhiteSpace(childStepId) ||
+            !childStepId.StartsWith(parentStepId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var suffix = childStepId[parentStepId.Length..];
+        if (IsDirectItemSuffix(suffix))
+            return true;
+
+        const string executionMarker = "_execution_";
+        const int attemptHashLength = 16;
+        if (!suffix.StartsWith(executionMarker, StringComparison.Ordinal) ||
+            suffix.Length <= executionMarker.Length + attemptHashLength)
+        {
+            return false;
+        }
+
+        var attemptHash = suffix.AsSpan(executionMarker.Length, attemptHashLength);
+        foreach (var value in attemptHash)
+        {
+            if (value is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
+                return false;
+        }
+
+        return IsDirectItemSuffix(suffix[(executionMarker.Length + attemptHashLength)..]);
+    }
+
+    private static bool IsDirectItemSuffix(string suffix)
+    {
+        const string itemMarker = "_item_";
+        if (!suffix.StartsWith(itemMarker, StringComparison.Ordinal))
+            return false;
+
+        var itemIndexText = suffix.AsSpan(itemMarker.Length);
+        return itemIndexText.Length > 0 &&
+               (itemIndexText.Length == 1 || itemIndexText[0] != '0') &&
+               int.TryParse(
+                   itemIndexText,
+                   System.Globalization.NumberStyles.None,
+                   System.Globalization.CultureInfo.InvariantCulture,
+                   out var itemIndex) &&
+               itemIndex >= 0;
+    }
 
     private static string? TryGetParentFromDirectItemStepId(string stepId)
     {
@@ -244,6 +433,599 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 
         var suffix = stepId[(idx + marker.Length)..];
         return int.TryParse(suffix, out var index) ? index : -1;
+    }
+
+    private static string BuildChildExecutionId(
+        string runId,
+        string parentStepId,
+        int itemIndex,
+        string? parentExecutionId)
+    {
+        var identity = new List<string> { runId, parentStepId };
+        if (!string.IsNullOrWhiteSpace(parentExecutionId))
+            identity.Add(parentExecutionId.Trim());
+        identity.Add(itemIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return RuntimeCallbackKeyComposer.BuildCallbackId("foreach-child-execution", identity.ToArray());
+    }
+
+    private static string BuildChildIdempotencyKey(
+        string runId,
+        string parentStepId,
+        int itemIndex,
+        string? parentExecutionId,
+        string? parentIdempotencyKey)
+    {
+        var identity = new List<string> { runId, parentStepId };
+        if (!string.IsNullOrWhiteSpace(parentIdempotencyKey))
+            identity.Add(parentIdempotencyKey.Trim());
+        if (!string.IsNullOrWhiteSpace(parentExecutionId))
+            identity.Add(parentExecutionId.Trim());
+        identity.Add(itemIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return RuntimeCallbackKeyComposer.BuildCallbackId("foreach-child", identity.ToArray());
+    }
+
+    private static EventEnvelopePublishOptions BuildChildPublishOptions(BackpressureQueueEntry entry) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = string.IsNullOrWhiteSpace(entry.IdempotencyKey)
+                    ? RuntimeCallbackKeyComposer.BuildCallbackId("foreach-child", entry.RunId, entry.StepId)
+                    : entry.IdempotencyKey,
+            },
+        };
+
+    private static EventEnvelopePublishOptions BuildCompletionPublishOptions(string parentKey) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId("foreach-completion", parentKey),
+            },
+        };
+
+    internal static IReadOnlyList<ForEachPublicationRetryFiredEvent> BuildPendingPublicationRetries(
+        ForEachModuleState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        return state.Parents
+            .Where(static parent =>
+                parent.Value.PendingCompletion != null || parent.Value.PendingDispatches.Count > 0)
+            .Select(static parent => new ForEachPublicationRetryFiredEvent { ParentKey = parent.Key })
+            .ToArray();
+    }
+
+    internal static string BuildPublicationRetryCallbackId(ForEachPublicationRetryFiredEvent retry) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId("foreach-publication-retry", retry.ParentKey);
+
+    internal static EventEnvelopePublishOptions BuildPublicationRetryOptions(
+        ForEachPublicationRetryFiredEvent retry) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = BuildPublicationRetryCallbackId(retry),
+            },
+        };
+
+    private static void StagePendingDispatches(
+        ForEachModuleState state,
+        IEnumerable<BackpressureQueueEntry> entries)
+    {
+        foreach (var entry in entries)
+        {
+            var parsedParent = TryGetParentFromDirectItemStepId(entry.StepId);
+            if (parsedParent == null)
+                continue;
+
+            if (!TryResolveParentState(
+                    state,
+                    WorkflowRunIdNormalizer.Normalize(entry.RunId),
+                    parsedParent,
+                    entry.StepId,
+                    entry.ExecutionId,
+                    out _,
+                    out var parentState) ||
+                parentState.CollectedStepIds.Contains(entry.StepId) ||
+                parentState.DispatchedStepIds.Contains(entry.StepId) ||
+                parentState.PendingDispatches.Any(pending =>
+                    string.Equals(pending.StepId, entry.StepId, StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            EnsureStableChildIdentity(entry, parentState);
+            parentState.ChildExecutionIds[entry.StepId] = entry.ExecutionId;
+            parentState.PendingDispatches.Add(entry);
+        }
+    }
+
+    private async Task PublishPendingDispatchesAsync(
+        ForEachModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var checkpointRequired = false;
+        var identityCheckpointRequired = false;
+        var retryParentKeys = new HashSet<string>(StringComparer.Ordinal);
+        var pendingPublications = new List<PendingDispatchPublication>();
+
+        foreach (var (parentKey, parentState) in state.Parents.ToArray())
+        {
+            foreach (var entry in parentState.PendingDispatches.ToArray())
+            {
+                if (parentState.CollectedStepIds.Contains(entry.StepId))
+                {
+                    RemovePendingDispatch(parentState, entry.StepId);
+                    checkpointRequired = true;
+                    continue;
+                }
+
+                identityCheckpointRequired |= EnsureStableChildIdentity(entry, parentState);
+                if (_acceptedChildPublications.Contains(
+                        BuildAcceptedChildPublicationKey(parentKey, entry)))
+                {
+                    continue;
+                }
+                pendingPublications.Add(new PendingDispatchPublication(parentKey, entry));
+            }
+        }
+
+        // Upgrade-era pending entries may predate stable child identities. Fence those identities
+        // before any publication so a crash cannot replay the same child under a different operation.
+        if (identityCheckpointRequired)
+        {
+            await SaveStateAsync(state, ctx, ct);
+            checkpointRequired = false;
+        }
+
+        var publicationResults = new List<PendingDispatchPublicationResult>(pendingPublications.Count);
+        foreach (var batch in pendingPublications.Chunk(MaxConcurrentChildPublications))
+        {
+            publicationResults.AddRange(await Task.WhenAll(batch.Select(
+                publication => TryPublishPendingDispatchAsync(publication, ctx, ct))));
+        }
+
+        foreach (var result in publicationResults)
+        {
+            if (result.Error != null)
+            {
+                ctx.Logger.LogWarning(
+                    result.Error,
+                    "ForEach child publication remains pending run={RunId} step={StepId}",
+                    result.Entry.RunId,
+                    result.Entry.StepId);
+                retryParentKeys.Add(result.ParentKey);
+                continue;
+            }
+
+            _acceptedChildPublications.Add(
+                BuildAcceptedChildPublicationKey(result.ParentKey, result.Entry));
+        }
+
+        // Successful publication acceptance is an actor-local optimization, not authoritative
+        // state. The next required state checkpoint folds accepted intents into the dispatch
+        // ledger. A crash before then replays the durable intent with the same stable identity.
+        if (checkpointRequired)
+            await SaveStateAsync(state, ctx, ct);
+
+        foreach (var parentKey in retryParentKeys)
+            await TrySchedulePublicationRetryAsync(parentKey, ctx, ct);
+    }
+
+    private static async Task<PendingDispatchPublicationResult> TryPublishPendingDispatchAsync(
+        PendingDispatchPublication publication,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        try
+        {
+            await ctx.PublishAsync(
+                BackpressureHelper.ToStepRequest(publication.Entry),
+                TopologyAudience.Self,
+                ct,
+                BuildChildPublishOptions(publication.Entry));
+            return new PendingDispatchPublicationResult(publication, null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new PendingDispatchPublicationResult(publication, ex);
+        }
+    }
+
+    private sealed record PendingDispatchPublication(
+        string ParentKey,
+        BackpressureQueueEntry Entry);
+
+    private sealed record PendingDispatchPublicationResult(
+        PendingDispatchPublication Publication,
+        Exception? Error)
+    {
+        public string ParentKey => Publication.ParentKey;
+
+        public BackpressureQueueEntry Entry => Publication.Entry;
+    }
+
+    private ForEachModuleState LoadState(IWorkflowExecutionContext ctx)
+    {
+        var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
+        PruneAcceptedChildPublications(state);
+        return state;
+    }
+
+    private async Task SaveStateWithAcceptedChildPublicationsAsync(
+        ForEachModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        StageAcceptedChildPublicationAcknowledgements(state);
+        await SaveStateAsync(state, ctx, ct);
+        PruneAcceptedChildPublications(state);
+    }
+
+    private void StageAcceptedChildPublicationAcknowledgements(ForEachModuleState state)
+    {
+        foreach (var (parentKey, parentState) in state.Parents)
+        {
+            foreach (var entry in parentState.PendingDispatches.ToArray())
+            {
+                if (!_acceptedChildPublications.Contains(
+                        BuildAcceptedChildPublicationKey(parentKey, entry)))
+                {
+                    continue;
+                }
+
+                AddIfMissing(parentState.DispatchedStepIds, entry.StepId);
+                RemovePendingDispatch(parentState, entry.StepId);
+            }
+        }
+    }
+
+    private void PruneAcceptedChildPublications(ForEachModuleState state)
+    {
+        if (_acceptedChildPublications.Count == 0)
+            return;
+
+        var durablePending = state.Parents
+            .SelectMany(parent => parent.Value.PendingDispatches.Select(entry =>
+                BuildAcceptedChildPublicationKey(parent.Key, entry)))
+            .ToHashSet();
+        _acceptedChildPublications.RemoveWhere(key => !durablePending.Contains(key));
+    }
+
+    private static AcceptedChildPublicationKey BuildAcceptedChildPublicationKey(
+        string parentKey,
+        BackpressureQueueEntry entry) =>
+        new(
+            parentKey,
+            entry.StepId,
+            entry.ExecutionId,
+            entry.IdempotencyKey);
+
+    private readonly record struct AcceptedChildPublicationKey(
+        string ParentKey,
+        string StepId,
+        string ExecutionId,
+        string IdempotencyKey);
+
+    private static async Task PublishPendingCompletionAsync(
+        ForEachModuleState state,
+        string parentKey,
+        ForEachParentState parentState,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var completion = parentState.PendingCompletion;
+        if (completion == null)
+            return;
+
+        try
+        {
+            await ctx.PublishAsync(
+                completion.Clone(),
+                TopologyAudience.Self,
+                ct,
+                BuildCompletionPublishOptions(parentKey));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ctx.Logger.LogWarning(
+                ex,
+                "ForEach terminal completion publication remains pending parent={ParentKey}",
+                parentKey);
+            await TrySchedulePublicationRetryAsync(parentKey, ctx, ct);
+            return;
+        }
+
+        PreserveCompletedChildOutputs(state, parentState);
+        state.Parents.Remove(parentKey);
+        AddCompletionTombstone(state, parentKey);
+        if (state.Parents.Count == 0)
+            state.Backpressure = new BackpressureQueueState();
+        await SaveStateAsync(state, ctx, ct);
+    }
+
+    private static async Task TryPublishBackpressureAppliedAsync(
+        BackpressureAppliedEvent evt,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        try
+        {
+            await ctx.PublishAsync(evt, TopologyAudience.Self, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ctx.Logger.LogWarning(
+                ex,
+                "ForEach backpressure observation publication failed run={RunId} step={StepId}",
+                evt.RunId,
+                evt.StepId);
+        }
+    }
+
+    private static async Task TrySchedulePublicationRetryAsync(
+        string parentKey,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var retry = new ForEachPublicationRetryFiredEvent { ParentKey = parentKey };
+        var callbackId = BuildPublicationRetryCallbackId(retry);
+        try
+        {
+            await ctx.ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                DurablePublicationRetryDelay,
+                retry,
+                BuildPublicationRetryOptions(retry),
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ctx.Logger.LogWarning(
+                ex,
+                "ForEach durable publication retry scheduling failed; using typed self continuation parent={ParentKey}",
+                parentKey);
+            try
+            {
+                await ctx.PublishAsync(
+                    retry,
+                    TopologyAudience.Self,
+                    ct,
+                    BuildPublicationRetryOptions(retry));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception continuationException)
+            {
+                throw new WorkflowRuntimeEnvelopeRetryablePublicationPendingException(
+                    "Durable foreach publication recovery remains pending.",
+                    continuationException);
+            }
+        }
+    }
+
+    private static bool EnsureStableChildIdentity(
+        BackpressureQueueEntry entry,
+        ForEachParentState parentState)
+    {
+        var parent = string.IsNullOrWhiteSpace(parentState.ParentStepId)
+            ? TryGetParentFromDirectItemStepId(entry.StepId)
+            : parentState.ParentStepId;
+        var index = ExtractDirectItemIndex(entry.StepId);
+        if (parent == null || index < 0)
+            return false;
+
+        var changed = false;
+        var runId = WorkflowRunIdNormalizer.Normalize(entry.RunId);
+        if (string.IsNullOrWhiteSpace(entry.ExecutionId))
+        {
+            entry.ExecutionId = BuildChildExecutionId(runId, parent, index, parentState.ParentExecutionId);
+            changed = true;
+        }
+        if (string.IsNullOrWhiteSpace(entry.IdempotencyKey))
+        {
+            entry.IdempotencyKey = BuildChildIdempotencyKey(
+                runId,
+                parent,
+                index,
+                parentState.ParentExecutionId,
+                parentState.ParentIdempotencyKey);
+            changed = true;
+        }
+
+        if (!parentState.ChildExecutionIds.TryGetValue(entry.StepId, out var executionId) ||
+            !string.Equals(executionId, entry.ExecutionId, StringComparison.Ordinal))
+        {
+            parentState.ChildExecutionIds[entry.StepId] = entry.ExecutionId;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static void MigrateLegacyParentState(
+        ForEachParentState parentState,
+        string fallbackRunId,
+        string fallbackStepId)
+    {
+        if (string.IsNullOrWhiteSpace(parentState.ParentRunId))
+            parentState.ParentRunId = fallbackRunId;
+        if (string.IsNullOrWhiteSpace(parentState.ParentStepId))
+            parentState.ParentStepId = fallbackStepId;
+
+        // Before the settlement ledger existed, collected results and the backpressure decrement
+        // were saved atomically. Treat every persisted legacy collection as already settled.
+        foreach (var stepId in parentState.CollectedStepIds)
+            AddIfMissing(parentState.SettledWorkerStepIds, stepId);
+    }
+
+    private static bool TryAdoptLegacyParentAttempt(
+        ForEachModuleState state,
+        string typedParentKey,
+        string runId,
+        StepRequestEvent request,
+        out ForEachParentState parentState)
+    {
+        var legacyParentKey = BuildRunStepKey(runId, request.StepId);
+        if (string.Equals(legacyParentKey, typedParentKey, StringComparison.Ordinal) ||
+            !state.Parents.TryGetValue(legacyParentKey, out parentState!))
+        {
+            parentState = null!;
+            return false;
+        }
+
+        MigrateLegacyParentState(parentState, runId, request.StepId);
+        parentState.ParentExecutionId = request.ExecutionId;
+        if (string.IsNullOrWhiteSpace(parentState.ParentIdempotencyKey))
+            parentState.ParentIdempotencyKey = request.IdempotencyKey;
+
+        foreach (var pending in parentState.PendingDispatches)
+            EnsureStableChildIdentity(pending, parentState);
+
+        if (state.Backpressure != null)
+        {
+            foreach (var queued in state.Backpressure.Queue)
+            {
+                if (string.Equals(
+                        WorkflowRunIdNormalizer.Normalize(queued.RunId),
+                        runId,
+                        StringComparison.Ordinal) &&
+                    string.Equals(
+                        TryGetParentFromDirectItemStepId(queued.StepId),
+                        request.StepId,
+                        StringComparison.Ordinal))
+                {
+                    EnsureStableChildIdentity(queued, parentState);
+                }
+            }
+        }
+
+        for (var itemIndex = 0; itemIndex < parentState.Expected; itemIndex++)
+        {
+            var childStepId = $"{request.StepId}_item_{itemIndex}";
+            if (!parentState.ChildExecutionIds.ContainsKey(childStepId))
+            {
+                parentState.ChildExecutionIds[childStepId] = BuildChildExecutionId(
+                    runId,
+                    request.StepId,
+                    itemIndex,
+                    request.ExecutionId);
+            }
+        }
+
+        state.Parents.Remove(legacyParentKey);
+        state.Parents[typedParentKey] = parentState;
+        return true;
+    }
+
+    private static bool TryResolveParentState(
+        ForEachModuleState state,
+        string runId,
+        string parentStepId,
+        string childStepId,
+        string? childExecutionId,
+        out string parentKey,
+        out ForEachParentState parentState)
+    {
+        foreach (var candidate in state.Parents)
+        {
+            if (!string.Equals(candidate.Value.ParentRunId, runId, StringComparison.Ordinal) ||
+                !candidate.Value.ChildExecutionIds.ContainsKey(childStepId))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(childExecutionId) &&
+                candidate.Value.ChildExecutionIds.TryGetValue(childStepId, out var expectedExecutionId) &&
+                !string.IsNullOrWhiteSpace(expectedExecutionId) &&
+                !string.Equals(expectedExecutionId, childExecutionId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            parentKey = candidate.Key;
+            parentState = candidate.Value;
+            return true;
+        }
+
+        var legacyKey = BuildRunStepKey(runId, parentStepId);
+        if (state.Parents.TryGetValue(legacyKey, out var legacyParent))
+        {
+            parentKey = legacyKey;
+            parentState = legacyParent;
+            return true;
+        }
+
+        parentKey = string.Empty;
+        parentState = null!;
+        return false;
+    }
+
+    private static void RemovePendingDispatch(ForEachParentState parentState, string stepId)
+    {
+        for (var i = parentState.PendingDispatches.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(parentState.PendingDispatches[i].StepId, stepId, StringComparison.Ordinal))
+                parentState.PendingDispatches.RemoveAt(i);
+        }
+    }
+
+    private static void AddIfMissing(Google.Protobuf.Collections.RepeatedField<string> values, string value)
+    {
+        if (!values.Contains(value))
+            values.Add(value);
+    }
+
+    private static void AddCompletionTombstone(ForEachModuleState state, string parentKey)
+    {
+        state.CompletionTombstones[parentKey] = true;
+    }
+
+    private static void PreserveCompletedChildOutputs(
+        ForEachModuleState state,
+        ForEachParentState parentState)
+    {
+        if (string.IsNullOrWhiteSpace(parentState.ParentRunId))
+            return;
+
+        FenceCompletedChildOutputsToRun(state, parentState.ParentRunId);
+        state.CompletedChildOutputsRunId = parentState.ParentRunId;
+        foreach (var result in parentState.Collected)
+        {
+            if (!string.IsNullOrWhiteSpace(result.StepId))
+                state.CompletedChildOutputs[result.StepId] = result.Output ?? string.Empty;
+        }
+    }
+
+    private static void FenceCompletedChildOutputsToRun(ForEachModuleState state, string runId)
+    {
+        if (state.CompletedChildOutputs.Count == 0 ||
+            string.Equals(state.CompletedChildOutputsRunId, runId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        state.CompletedChildOutputs.Clear();
+        state.CompletedChildOutputsRunId = string.Empty;
     }
 
     private static bool IsInputFileRefsSource(ForEachParentState parentState) =>
@@ -281,8 +1063,12 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        if (state.Parents.Count == 0)
+        if (state.Parents.Count == 0 &&
+            state.CompletionTombstones.Count == 0 &&
+            state.CompletedChildOutputs.Count == 0)
+        {
             return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
+        }
 
         return WorkflowExecutionStateAccess.SaveAsync(ctx, ModuleStateKey, state, ct);
     }

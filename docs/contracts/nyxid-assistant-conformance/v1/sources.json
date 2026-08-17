@@ -2,28 +2,28 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "3d3b99c4bd5bfed30a8af720250db1ca89c82c63",
-    "contract_files_sha256": "5b1ec2eda9f83cae52982151c73f1a28b3427bbf0559c2d1672a16accd6b76e5",
+    "revision": "38a800cf3b311a1e38bccc19234cff70ad75b505",
+    "contract_files_sha256": "7208864e472b1e04b294d7b4d76dfb714df95c62f3a28afb93630a3dfd4f1fe1",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "4dfe12f2699a1b193d80273d2ae6e4066e1a78b79325cf52c711af47b1b4ec46",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "1daa67dc2cad48249268990e525ada39b65a580d150a9ae8ed896d5392f6a130",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdChatBrowserActions.cs": "ed34d2ea4f13058f1a80b9809baf05a3ac4694606d89945cae15da57a13639e5",
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "24b36e1a4e43f611dbcec3c48415a184752886fed6d7369a58c006bed554a567",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "1c5ab116db46b0dd3cf349fc4744327db910a61afd2d3bbad10f34062d002a69",
       "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_recovery_secret.proto": "07dbc449a732df6c7a6d0a97054ddbe35a517f4af4c5670b05ed0bea0bf2011a",
-      "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "f1dd8f876c72af40c4e2e4158f1801cdf073ac345edc381c5c27bed88b7082f2",
+      "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "767aa8352e7e7b8cdadfab4f31c55ecc847298ce8c926c56d3af89759390647a",
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "30c9de6c6e77a7aee14f0eb4a2f74bd15b8874bcfed88ba957cdd8213b9114eb",
-      "src/Aevatar.AI.Abstractions/ai_messages.proto": "06e24d63b85a38ad8d4e1dd9696577b3869cfc2ba39356b4b3e5d748ca425bd8",
-      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "dc0b1ba28ee88516ba75634a2d181284699b74a8fe5f74483ac4a515ce4153ae",
-      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "5dd5e5f062c6a3bc2109be12d2cbf66b8c5b67ace135f9c76d79fbcaa9c87a28",
+      "src/Aevatar.AI.Abstractions/ai_messages.proto": "f92d1935df098ce58cdf794d3f3e4d5f4a9e4c71610508cefcc014035aec649d",
+      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "5b438c99211a43f4f9233f67f9d00b8c0dbf1d1f36cda64c51b72bfe3792f56d",
+      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "1b033df9cb55c741e9b52054cbd4a91067f03c8c3797bd076a7e3d6133eb0fcb",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "2c4f2cda99154f2e667c6cfd291497e697ef11df17f081f96ec70070a8af8b8c",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs": "18212bb64644cfbca401065bccce439ea5fa00316deff57d730a0d9ac2650e53",
-      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "bbe2b3f041c1778310f51510dac8273dcafef5a6b8f9e4e834ec54a88ae835bd"
+      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "849cb0ac8b5e9a7330a27297cd6381dd9a5bbe47de44844b1b863b2e593cb9af"
     }
   },
   "nyxid": {
     "repository": "https://github.com/ChronoAIProject/NyxID.git",
-    "revision": "17e2b5ff65cb4651eeaf7dad8e728c76250ca75d",
-    "tree": "a48e6d6ace55c636e62a62cb5488a0e0203e59d4",
+    "revision": "47f2e0086c6c2117f644f8559d871a01d2a61982",
+    "tree": "b26638257388b65d55c47a1fa57268436cdda8d5",
     "cli_source": "cli/src/cli.rs",
     "cli_source_sha256": "51dd82101d7671859351e9989e8d554b4aa1cb898a4e04d948df28aa37de0195",
     "cargo_lock_sha256": "a7f1bb375e4d5135b369caea4b803273956c96b63125d4221da70dd8115638b8"
@@ -50,7 +50,7 @@
     "transition_payloads": {
       "nyxid-assistant-actions.v4": {
         "checked_in_payload": "registry-v4.json",
-        "checked_in_payload_sha256": "5d63814c3c2947f65218e9d8ff5d9ec7d9abfc220a32a661cec845b6c189e947"
+        "checked_in_payload_sha256": "d2f9a618cd694038454292a79fe131d4a58042b9cdb0405e927db2c351a0718f"
       },
       "nyxid-assistant-actions.v5": {
         "checked_in_payload": "registry-v5.json",

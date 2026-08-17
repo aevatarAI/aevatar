@@ -21,10 +21,12 @@ namespace Aevatar.GAgents.StudioMember;
 [GAgent("studio.member")]
 public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProjectedActor
 {
+    private const string MemberDeletedFailureCode = "STUDIO_MEMBER_DELETED";
     private static readonly TimeSpan ScheduleProvisioningInitialDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan ScheduleProvisioningRetryDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ScheduleProvisioningAttemptWatchdogDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ScheduleProvisioningBudget = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ScheduleProvisioningOneShotMinimumLeadTime = TimeSpan.FromSeconds(10);
     private readonly IStudioMemberWorkflowScheduleProvisioningPort? _scheduleProvisioningPort;
 
     public static string ProjectionKind => "studio-member";
@@ -38,6 +40,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
+        if (TryBuildCommittedDeleteBindingTermination(State, out var termination))
+        {
+            await SendBindingAuthorityTerminationAsync(termination, ct);
+            return;
+        }
+
         if (CanRecoverScheduleProvisioning())
             await ScheduleWorkflowScheduleProvisioningAttemptAsync(ScheduleProvisioningInitialDelay, ct);
     }
@@ -304,15 +312,21 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         {
             throw new InvalidOperationException("member not yet created.");
         }
-        if (State.Deleted)
+        if (TryBuildCommittedDeleteBindingTermination(State, out var termination)
+            && string.Equals(termination.BindingRunId, evt.BindingRunId, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("member has been deleted.");
+            await SendBindingAuthorityTerminationAsync(termination);
+            return;
         }
-
         if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded))
         {
             await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded);
             return;
+        }
+
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
@@ -335,15 +349,22 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         {
             throw new InvalidOperationException("member not yet created.");
         }
+        if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Failed))
+        {
+            if (TryBuildCommittedDeleteBindingTermination(State, out var termination)
+                && !termination.Failure.Equals(evt.Failure))
+            {
+                await SendBindingAuthorityTerminationAsync(termination);
+                return;
+            }
+
+            await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
+            return;
+        }
+
         if (State.Deleted)
         {
             throw new InvalidOperationException("member has been deleted.");
-        }
-
-        if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Failed))
-        {
-            await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
-            return;
         }
 
         if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
@@ -457,16 +478,13 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         }
 
         var provisioning = State.WorkflowScheduleProvisioning!;
-        if (provisioning.Intent.ScheduleMode == StudioMemberWorkflowScheduleMode.OneShotAtUtc &&
-            provisioning.ResolvedOneShotFireAtUtc == null)
+        if (ShouldRefreshScheduleProvisioningOneShotTiming(provisioning, now))
         {
-            var delaySeconds = provisioning.Intent.OneShotDelaySeconds > 0
-                ? provisioning.Intent.OneShotDelaySeconds
-                : 30;
             await PersistDomainEventAsync(new StudioMemberWorkflowScheduleProvisioningTimingResolved
             {
                 ProvisioningId = command.ProvisioningId,
-                OneShotFireAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(delaySeconds)),
+                OneShotFireAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(
+                    ResolveScheduleProvisioningOneShotDelaySeconds(provisioning.Intent))),
                 ResolvedAtUtc = Timestamp.FromDateTimeOffset(now),
             });
             provisioning = State.WorkflowScheduleProvisioning!;
@@ -679,7 +697,14 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         }
 
         if (State.Deleted)
+        {
+            if (IsRuntimeEnvelopeRedelivery()
+                && TryBuildCommittedDeleteBindingTermination(State, out var replayTermination))
+            {
+                await SendBindingAuthorityTerminationAsync(replayTermination);
+            }
             return;
+        }
 
         var deletedAt = evt.RequestedAtUtc
             ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
@@ -696,7 +721,8 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (TryBuildDeleteBindingFailure(State, deletedAt, out var bindingFailed))
         {
             await PersistDomainEventsAsync([bindingFailed, deleted]);
-            await SendTerminalAcknowledgementAsync(bindingFailed.BindingRunId, StudioMemberBindingRunStatus.Failed);
+            await SendBindingAuthorityTerminationAsync(
+                BuildBindingAuthorityTermination(State, bindingFailed));
             return;
         }
 
@@ -1155,13 +1181,50 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             BindingRunId = binding.CurrentBindingRunId,
             Failure = new StudioMemberBindingFailure
             {
-                Code = "STUDIO_MEMBER_DELETED",
+                Code = MemberDeletedFailureCode,
                 Message = "member was deleted before binding completed.",
                 FailedAtUtc = deletedAt,
             },
         };
         return true;
     }
+
+    private static bool TryBuildCommittedDeleteBindingTermination(
+        StudioMemberState state,
+        out StudioMemberBindingAuthorityTerminated termination)
+    {
+        termination = new StudioMemberBindingAuthorityTerminated();
+        var binding = state.Binding;
+        if (!state.Deleted
+            || binding == null
+            || string.IsNullOrEmpty(binding.CurrentBindingRunId)
+            || binding.CurrentStatus != StudioMemberBindingRunStatus.Failed
+            || binding.LastFailure == null
+            || !string.Equals(binding.LastFailure.Code, MemberDeletedFailureCode, StringComparison.Ordinal)
+            || binding.LastFailure.FailedAtUtc == null)
+        {
+            return false;
+        }
+
+        termination = new StudioMemberBindingAuthorityTerminated
+        {
+            BindingRunId = binding.CurrentBindingRunId,
+            ScopeId = state.ScopeId,
+            MemberId = state.MemberId,
+            Failure = binding.LastFailure.Clone(),
+        };
+        return true;
+    }
+
+    private static StudioMemberBindingAuthorityTerminated BuildBindingAuthorityTermination(
+        StudioMemberState state,
+        StudioMemberBindingFailedEvent bindingFailed) => new()
+    {
+        BindingRunId = bindingFailed.BindingRunId,
+        ScopeId = state.ScopeId,
+        MemberId = state.MemberId,
+        Failure = bindingFailed.Failure.Clone(),
+    };
 
     private static bool CanAcceptBindingRunProgress(StudioMemberState state, string bindingRunId)
     {
@@ -1289,6 +1352,32 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
                 Status = status,
                 AcknowledgedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             });
+
+    private bool IsRuntimeEnvelopeRedelivery() =>
+        ActiveInboundEnvelope?.Runtime?.Retry?.Attempt > 0;
+
+    private async Task SendBindingAuthorityTerminationAsync(
+        StudioMemberBindingAuthorityTerminated termination,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            await SendToAsync(
+                StudioMemberConventions.BuildBindingRunActorId(termination.BindingRunId),
+                termination,
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new StudioMemberBindingAuthorityTerminationPublicationPendingException(
+                "Committed member deletion still requires its binding-run termination publication.",
+                exception);
+        }
+    }
 
     private async Task SendBindingRejectionAsync(
         string runActorId,
@@ -1456,6 +1545,22 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         var deadline = State.WorkflowScheduleProvisioning?.DeadlineAtUtc;
         return deadline != null && now >= deadline.ToDateTimeOffset();
     }
+
+    private static bool ShouldRefreshScheduleProvisioningOneShotTiming(
+        StudioMemberWorkflowScheduleProvisioningState provisioning,
+        DateTimeOffset now)
+    {
+        if (provisioning.Intent.ScheduleMode != StudioMemberWorkflowScheduleMode.OneShotAtUtc)
+            return false;
+
+        var currentFireAt = provisioning.ResolvedOneShotFireAtUtc?.ToDateTimeOffset().ToUniversalTime();
+        return currentFireAt == null ||
+               currentFireAt.Value <= now.Add(ScheduleProvisioningOneShotMinimumLeadTime);
+    }
+
+    private static int ResolveScheduleProvisioningOneShotDelaySeconds(
+        StudioMemberWorkflowScheduleProvisioningIntent intent) =>
+        intent.OneShotDelaySeconds > 0 ? intent.OneShotDelaySeconds : 30;
 
     private Task FailWorkflowScheduleProvisioningAsync(string code, string message)
     {

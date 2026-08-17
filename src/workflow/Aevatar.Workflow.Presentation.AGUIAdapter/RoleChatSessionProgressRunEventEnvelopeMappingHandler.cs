@@ -53,6 +53,7 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                     new WorkflowRunEventEnvelope
                     {
                         Timestamp = timestamp,
+                        Sequence = progress.Sequence,
                         TextMessageStart = new WorkflowTextMessageStartEventPayload
                         {
                             MessageId = messageId,
@@ -68,6 +69,7 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                     new WorkflowRunEventEnvelope
                     {
                         Timestamp = timestamp,
+                        Sequence = progress.Sequence,
                         TextMessageContent = new WorkflowTextMessageContentEventPayload
                         {
                             MessageId = messageId,
@@ -83,6 +85,7 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                     new WorkflowRunEventEnvelope
                     {
                         Timestamp = timestamp,
+                        Sequence = progress.Sequence,
                         Custom = new WorkflowCustomEventPayload
                         {
                             Name = "aevatar.llm.reasoning",
@@ -103,6 +106,7 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                     new WorkflowRunEventEnvelope
                     {
                         Timestamp = timestamp,
+                        Sequence = progress.Sequence,
                         Custom = new WorkflowCustomEventPayload
                         {
                             Name = "aevatar.media.chunk",
@@ -121,6 +125,7 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                     new WorkflowRunEventEnvelope
                     {
                         Timestamp = timestamp,
+                        Sequence = progress.Sequence,
                         ToolCallStart = new WorkflowToolCallStartEventPayload
                         {
                             ToolCallId = progress.ToolStarted.CallId,
@@ -136,10 +141,18 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                     new WorkflowRunEventEnvelope
                     {
                         Timestamp = timestamp,
+                        Sequence = progress.Sequence,
                         ToolCallEnd = new WorkflowToolCallEndEventPayload
                         {
                             ToolCallId = progress.ToolCompleted.Result.CallId,
                             Result = progress.ToolCompleted.Result.ResultJson,
+                            Success = progress.ToolCompleted.Result.Success,
+                            Error = string.IsNullOrWhiteSpace(progress.ToolCompleted.Result.Error)
+                                ? null
+                                : progress.ToolCompleted.Result.Error,
+                            ArgumentsJson = string.IsNullOrWhiteSpace(progress.ToolCompleted.SafeArgumentsJson)
+                                ? null
+                                : progress.ToolCompleted.SafeArgumentsJson,
                         },
                     },
                 ];
@@ -151,6 +164,7 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                     new WorkflowRunEventEnvelope
                     {
                         Timestamp = timestamp,
+                        Sequence = progress.Sequence,
                         Usage = new WorkflowUsageEventPayload
                         {
                             Available = true,
@@ -169,6 +183,7 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                     new WorkflowRunEventEnvelope
                     {
                         Timestamp = timestamp,
+                        Sequence = progress.Sequence,
                         TextMessageEnd = new WorkflowTextMessageEndEventPayload
                         {
                             MessageId = messageId,
@@ -183,6 +198,7 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                     new WorkflowRunEventEnvelope
                     {
                         Timestamp = timestamp,
+                        Sequence = progress.Sequence,
                         Custom = new WorkflowCustomEventPayload
                         {
                             Name = "nyxid.authorization.required",
@@ -190,8 +206,61 @@ public sealed class RoleChatSessionProgressRunEventEnvelopeMappingHandler
                         },
                     },
                 ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ModelStarted:
+                return
+                [
+                    new WorkflowRunEventEnvelope
+                    {
+                        Timestamp = timestamp,
+                        Sequence = progress.Sequence,
+                        ModelCallStart = new WorkflowModelCallStartEventPayload
+                        {
+                            OperationId = progress.ModelStarted.OperationId,
+                            SessionId = progress.SessionId,
+                            Round = progress.ModelStarted.Round,
+                            Model = progress.ModelStarted.Model,
+                            Provider = progress.ModelStarted.Provider,
+                            InputSummary = progress.ModelStarted.InputSummary,
+                            AvailableToolNames = { progress.ModelStarted.AvailableToolNames },
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ModelCompleted:
+                return
+                [
+                    new WorkflowRunEventEnvelope
+                    {
+                        Timestamp = timestamp,
+                        Sequence = progress.Sequence,
+                        ModelCallEnd = new WorkflowModelCallEndEventPayload
+                        {
+                            OperationId = progress.ModelCompleted.OperationId,
+                            SessionId = progress.SessionId,
+                            Round = progress.ModelCompleted.Round,
+                            Model = progress.ModelCompleted.Model,
+                            Content = progress.ModelCompleted.Content,
+                            ReasoningContent = progress.ModelCompleted.ReasoningContent,
+                            Usage = ToUsage(progress.ModelCompleted.Usage, progress.ModelCompleted.Model),
+                            FinishReason = progress.ModelCompleted.FinishReason,
+                            Success = progress.ModelCompleted.Success,
+                            Error = progress.ModelCompleted.Error,
+                        },
+                    },
+                ];
             default:
                 return [];
         }
     }
+
+    private static WorkflowUsageEventPayload? ToUsage(TokenUsagePayload? usage, string? model) =>
+        usage is null
+            ? null
+            : new WorkflowUsageEventPayload
+            {
+                Available = true,
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+                Model = string.IsNullOrWhiteSpace(model) ? null : model,
+            };
 }

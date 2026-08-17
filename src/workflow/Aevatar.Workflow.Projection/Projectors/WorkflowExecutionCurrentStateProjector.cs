@@ -142,7 +142,9 @@ public sealed class WorkflowExecutionCurrentStateProjector
             Tenant = WorkflowAuditTextSanitizer.Sanitize(initiator.Tenant),
             ExternalUserId = WorkflowAuditTextSanitizer.Sanitize(initiator.ExternalUserId),
             Scope = WorkflowAuditTextSanitizer.Sanitize(initiator.Scope),
-            BindingId = WorkflowAuditTextSanitizer.Sanitize(initiator.BindingId),
+            // Never publish the NyxID binding handle. It can be exchanged for
+            // a short-lived credential by trusted server-side infrastructure.
+            BindingId = string.Empty,
             DisplayValue = string.IsNullOrWhiteSpace(initiator.DisplayValue)
                 ? "Unknown"
                 : WorkflowAuditTextSanitizer.Sanitize(initiator.DisplayValue),
@@ -342,7 +344,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
     private static string ResolveCurrentStateStatus(WorkflowRunState state)
     {
         var status = state.Status ?? string.Empty;
-        if (status is "completed" or "failed" or "stopped")
+        if (status is "completed" or "timed_out" or "failed" or "stopped")
             return status;
 
         foreach (var executionState in state.ExecutionStates.Values)
@@ -398,6 +400,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
         return (status ?? string.Empty).Trim() switch
         {
             "completed" => true,
+            "timed_out" => false,
             "failed" => false,
             _ => null,
         };

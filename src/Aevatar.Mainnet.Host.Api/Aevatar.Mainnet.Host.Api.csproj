@@ -42,6 +42,7 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatRouting\Aevatar.GAgents.ChatRouting.csproj" />
     <ProjectReference Include="..\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StatusDashboard\Aevatar.GAgents.StatusDashboard.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.AgentCatalog\Aevatar.AI.ToolProviders.AgentCatalog.csproj" />
@@ -63,9 +64,16 @@
   <ItemGroup>
     <EmbeddedResource Include="BackendConsole\admin.html" />
     <EmbeddedResource Include="BackendConsole\auto-callback.html" />
+    <EmbeddedResource Include="BackendConsole\delivery.html" />
     <EmbeddedResource Include="Status\status.html" />
     <EmbeddedResource Include="Cqrs\cqrs-observatory.html" />
     <EmbeddedResource Include="Voice\voice-console.html" />
     <EmbeddedResource Include="Skills\workflow-skills.html" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\delivery-workflows\hr_onboarding_email_approval.yaml;..\..\delivery-workflows\hr_monthly_attendance_approval.yaml;..\..\delivery-workflows\hr_attendance_fill_reminder.yaml;..\..\delivery-workflows\fin_invoice_precheck_approval.yaml;..\..\delivery-workflows\fin_budget_variance_monitor.yaml" Link="delivery-workflows\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
 </Project>

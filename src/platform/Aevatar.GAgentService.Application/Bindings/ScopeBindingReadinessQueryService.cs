@@ -49,10 +49,25 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
             request.AppId);
         var observedAtUtc = DateTimeOffset.UtcNow;
 
+        async Task<ScopeBindingReadinessSnapshot> WithTerminalActivationFailureAsync(
+            ScopeBindingReadinessSnapshot pendingSnapshot)
+        {
+            var failureCode = await GetTerminalActivationFailureCodeAsync(
+                    identity,
+                    expectedRevisionId,
+                    request.ExpectedActivationAttemptId,
+                    ct)
+                .ConfigureAwait(false);
+            return pendingSnapshot with
+            {
+                TerminalActivationFailureCode = failureCode,
+            };
+        }
+
         var service = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct).ConfigureAwait(false);
         if (service == null)
         {
-            return new ScopeBindingReadinessSnapshot(
+            return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
                 normalizedServiceId,
                 ScopeBindingReadinessStatus.ServiceCatalogMissing,
@@ -60,13 +75,13 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ServingSetVisible: false,
                 EligibleServingTargetVisible: false,
                 InvokeReady: false,
-                ObservedAtUtc: observedAtUtc);
+                ObservedAtUtc: observedAtUtc)).ConfigureAwait(false);
         }
 
         var servingSet = await _serviceServingQueryPort.GetServiceServingSetAsync(identity, ct).ConfigureAwait(false);
         if (servingSet == null)
         {
-            return new ScopeBindingReadinessSnapshot(
+            return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
                 normalizedServiceId,
                 ScopeBindingReadinessStatus.ServingSetMissing,
@@ -74,7 +89,7 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ServingSetVisible: false,
                 EligibleServingTargetVisible: false,
                 InvokeReady: false,
-                ObservedAtUtc: observedAtUtc);
+                ObservedAtUtc: observedAtUtc)).ConfigureAwait(false);
         }
 
         var serviceEndpointIds = expectedEndpointIds.Count > 0
@@ -83,7 +98,7 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
         var eligibleTarget = FindEligibleServingTarget(servingSet, serviceEndpointIds, expectedRevisionId, expectedDeploymentId);
         if (eligibleTarget == null)
         {
-            return new ScopeBindingReadinessSnapshot(
+            return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
                 normalizedServiceId,
                 ScopeBindingReadinessStatus.EligibleServingTargetMissing,
@@ -91,12 +106,12 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ServingSetVisible: true,
                 EligibleServingTargetVisible: false,
                 InvokeReady: false,
-                ObservedAtUtc: observedAtUtc);
+                ObservedAtUtc: observedAtUtc)).ConfigureAwait(false);
         }
 
         if (!IsServiceCatalogTargetVisible(service, expectedEndpointIds))
         {
-            return new ScopeBindingReadinessSnapshot(
+            return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
                 normalizedServiceId,
                 ScopeBindingReadinessStatus.ServiceCatalogTargetMissing,
@@ -106,13 +121,13 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 InvokeReady: false,
                 RevisionId: eligibleTarget.RevisionId,
                 DeploymentId: eligibleTarget.DeploymentId,
-                ObservedAtUtc: observedAtUtc);
+                ObservedAtUtc: observedAtUtc)).ConfigureAwait(false);
         }
 
         var trafficView = await _serviceServingQueryPort.GetServiceTrafficViewAsync(identity, ct).ConfigureAwait(false);
         if (!IsTrafficViewTargetVisible(trafficView, serviceEndpointIds, expectedRevisionId, expectedDeploymentId))
         {
-            return new ScopeBindingReadinessSnapshot(
+            return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
                 normalizedServiceId,
                 ScopeBindingReadinessStatus.TrafficViewTargetMissing,
@@ -122,14 +137,14 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 InvokeReady: false,
                 RevisionId: eligibleTarget.RevisionId,
                 DeploymentId: eligibleTarget.DeploymentId,
-                ObservedAtUtc: observedAtUtc);
+                ObservedAtUtc: observedAtUtc)).ConfigureAwait(false);
         }
 
         var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(identity, ct).ConfigureAwait(false);
         var artifact = FindPreparedArtifact(revisionCatalog, eligibleTarget.RevisionId);
         if (!DoesArtifactExposeEndpoints(artifact, serviceEndpointIds))
         {
-            return new ScopeBindingReadinessSnapshot(
+            return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
                 normalizedServiceId,
                 ScopeBindingReadinessStatus.PreparedArtifactMissing,
@@ -139,12 +154,12 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 InvokeReady: false,
                 RevisionId: eligibleTarget.RevisionId,
                 DeploymentId: eligibleTarget.DeploymentId,
-                ObservedAtUtc: observedAtUtc);
+                ObservedAtUtc: observedAtUtc)).ConfigureAwait(false);
         }
 
         if (WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(artifact!))
         {
-            return new ScopeBindingReadinessSnapshot(
+            return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
                 normalizedServiceId,
                 ScopeBindingReadinessStatus.InvocationCatalogNotReady,
@@ -154,13 +169,13 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 InvokeReady: false,
                 RevisionId: eligibleTarget.RevisionId,
                 DeploymentId: eligibleTarget.DeploymentId,
-                ObservedAtUtc: observedAtUtc);
+                ObservedAtUtc: observedAtUtc)).ConfigureAwait(false);
         }
 
         var invocationCatalog = await _invocationCatalogQueryReader.GetAsync(identity, ct).ConfigureAwait(false);
         if (!IsInvocationCatalogReady(invocationCatalog, serviceEndpointIds, eligibleTarget))
         {
-            return new ScopeBindingReadinessSnapshot(
+            return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
                 normalizedServiceId,
                 ScopeBindingReadinessStatus.InvocationCatalogNotReady,
@@ -170,7 +185,7 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 InvokeReady: false,
                 RevisionId: eligibleTarget.RevisionId,
                 DeploymentId: eligibleTarget.DeploymentId,
-                ObservedAtUtc: invocationCatalog?.ObservedAt ?? observedAtUtc);
+                ObservedAtUtc: invocationCatalog?.ObservedAt ?? observedAtUtc)).ConfigureAwait(false);
         }
 
         return new ScopeBindingReadinessSnapshot(
@@ -184,6 +199,36 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
             RevisionId: eligibleTarget.RevisionId,
             DeploymentId: eligibleTarget.DeploymentId,
             ObservedAtUtc: observedAtUtc);
+    }
+
+    private async Task<ServiceDeploymentActivationFailureCode?> GetTerminalActivationFailureCodeAsync(
+        ServiceIdentity identity,
+        string? expectedRevisionId,
+        string? expectedActivationAttemptId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(expectedRevisionId) ||
+            string.IsNullOrWhiteSpace(expectedActivationAttemptId))
+            return null;
+
+        var deploymentCatalog = await _serviceLifecycleQueryPort
+            .GetServiceDeploymentsAsync(identity, ct)
+            .ConfigureAwait(false);
+        var failure = deploymentCatalog?.ActivationFailures
+            .Where(candidate => string.Equals(
+                candidate.RevisionId,
+                expectedRevisionId,
+                StringComparison.Ordinal) &&
+                string.Equals(
+                    candidate.ActivationAttemptId,
+                    expectedActivationAttemptId,
+                    StringComparison.Ordinal))
+            .OrderByDescending(candidate => candidate.OccurredAt)
+            .FirstOrDefault();
+        if (failure == null || failure.FailureCode == ServiceDeploymentActivationFailureCode.Unspecified)
+            return null;
+
+        return failure.FailureCode;
     }
 
     private static bool IsInvocationCatalogReady(

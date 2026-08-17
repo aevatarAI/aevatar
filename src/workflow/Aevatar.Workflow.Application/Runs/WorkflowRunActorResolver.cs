@@ -153,7 +153,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             return new WorkflowActorResolutionResult(
                 null,
                 workflowNameForRun,
-                WorkflowChatRunStartError.InvalidWorkflowYaml,
+                draftAdmission.FailureDetail.Error,
                 draftAdmission.FailureDetail);
         }
 
@@ -232,7 +232,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 return new WorkflowActorResolutionResult(
                     null,
                     workflowNameForRun,
-                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    draftAdmission.FailureDetail.Error,
                     draftAdmission.FailureDetail);
             }
 
@@ -504,7 +504,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
             return new DraftRunCapabilityAdmissionPreparation(
                 null,
                 WorkflowChatRunStartFailureDetail.Create(
-                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    WorkflowChatRunStartError.ExternalCapabilityNotReady,
                     ex.Message,
                     ex.Readiness));
         }

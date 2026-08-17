@@ -208,8 +208,10 @@ export function normalizeFrame(raw) {
   if (raw.textMessageStart) return { type: "text_start", ...raw.textMessageStart, raw };
   if (raw.textMessageContent) return { type: "text_delta", ...raw.textMessageContent, raw };
   if (raw.textMessageEnd) return { type: "text_end", ...raw.textMessageEnd, raw };
-  if (raw.toolCallStart) return { type: "tool_start", ...raw.toolCallStart, raw };
-  if (raw.toolCallEnd) return { type: "tool_end", ...raw.toolCallEnd, raw };
+  if (raw.modelCallStart) return normalizeOperationFrame("model_start", raw.modelCallStart, raw);
+  if (raw.modelCallEnd) return normalizeOperationFrame("model_end", raw.modelCallEnd, raw);
+  if (raw.toolCallStart) return normalizeOperationFrame("tool_start", raw.toolCallStart, raw);
+  if (raw.toolCallEnd) return normalizeOperationFrame("tool_end", raw.toolCallEnd, raw);
   if (raw.usage) return { type: "usage", ...raw.usage, raw };
   if (raw.stateSnapshot) return { type: "state_snapshot", ...raw.stateSnapshot, raw };
   if (raw.custom) return normalizeCustom(raw.custom, raw);
@@ -232,10 +234,14 @@ function normalizeTypedFrame(raw) {
       return { type: "text_delta", ...(raw.textMessageContent || {}), raw };
     case "TEXT_MESSAGE_END":
       return { type: "text_end", ...(raw.textMessageEnd || {}), raw };
+    case "MODEL_CALL_START":
+      return normalizeOperationFrame("model_start", raw.modelCallStart || {}, raw);
+    case "MODEL_CALL_END":
+      return normalizeOperationFrame("model_end", raw.modelCallEnd || {}, raw);
     case "TOOL_CALL_START":
-      return { type: "tool_start", ...(raw.toolCallStart || {}), raw };
+      return normalizeOperationFrame("tool_start", raw.toolCallStart || {}, raw);
     case "TOOL_CALL_END":
-      return { type: "tool_end", ...(raw.toolCallEnd || {}), raw };
+      return normalizeOperationFrame("tool_end", raw.toolCallEnd || {}, raw);
     case "TOOL_APPROVAL_REQUEST":
       return {
         type: "approval",
@@ -260,6 +266,16 @@ function normalizeTypedFrame(raw) {
     default:
       return { type: String(raw.type).toLowerCase(), raw };
   }
+}
+
+function normalizeOperationFrame(type, payload, raw) {
+  const sequence = Number(raw.sequence ?? payload.sequence);
+  return {
+    type,
+    ...payload,
+    ...(Number.isSafeInteger(sequence) && sequence > 0 ? { sequence } : {}),
+    raw,
+  };
 }
 
 function normalizeRunStarted(raw) {

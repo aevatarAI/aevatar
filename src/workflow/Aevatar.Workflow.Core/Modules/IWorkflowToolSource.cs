@@ -2,9 +2,23 @@ using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Core.Modules;
 
+/// <summary>
+/// Declares whether an uncertain actor recovery may redispatch the same logical tool call.
+/// The default is fail-closed: tools must opt in to a recovery strategy explicitly.
+/// </summary>
+public enum WorkflowToolRecoverySafety
+{
+    Unspecified = 0,
+    ReplayableReadOnly = 1,
+    DurableStartOnceRedispatch = 2,
+    EffectfulNonReplayable = 3,
+}
+
 public interface IWorkflowTool
 {
     string Name { get; }
+
+    WorkflowToolRecoverySafety RecoverySafety => WorkflowToolRecoverySafety.Unspecified;
 
     Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default);
 }
@@ -116,7 +130,8 @@ public sealed record WorkflowToolExecutionRequest
         string ScheduleId = "",
         WorkflowCapabilityInvocationAdmission? InvocationAdmission = null,
         WorkflowLlmControlContext? LlmControl = null,
-        long IssuedAtUnixMs = 0)
+        long IssuedAtUnixMs = 0,
+        WorkflowUnattendedInvocationPermit? UnattendedInvocationPermit = null)
     {
         this.ArgumentsJson = ArgumentsJson;
         this.RunId = RunId;
@@ -133,6 +148,7 @@ public sealed record WorkflowToolExecutionRequest
         this.InvocationAdmission = InvocationAdmission?.Clone();
         this.LlmControl = LlmControl?.Clone();
         this.IssuedAtUnixMs = IssuedAtUnixMs;
+        this.UnattendedInvocationPermit = UnattendedInvocationPermit?.Clone();
     }
 
     public string ArgumentsJson { get; init; }
@@ -168,6 +184,8 @@ public sealed record WorkflowToolExecutionRequest
     public WorkflowCapabilityInvocationAdmission? InvocationAdmission { get; init; }
 
     public WorkflowLlmControlContext? LlmControl { get; init; }
+
+    public WorkflowUnattendedInvocationPermit? UnattendedInvocationPermit { get; init; }
 
     private static IReadOnlyList<WorkflowFileRef> CopyInputFileRefs(
         IReadOnlyList<WorkflowFileRef>? inputFileRefs) =>

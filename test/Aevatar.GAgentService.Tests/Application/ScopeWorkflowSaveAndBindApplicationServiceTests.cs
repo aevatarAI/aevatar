@@ -71,6 +71,32 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
     }
 
     [Fact]
+    public async Task SaveAndBindAsync_ShouldReplayWorkflowRevisionDuringBinding()
+    {
+        const string revisionId = "rev-explicit";
+        var workflowPort = new RecordingScopeWorkflowCommandPort();
+        var bindingPort = new RecordingScopeBindingCommandPort();
+        var service = new ScopeWorkflowSaveAndBindApplicationService(
+            workflowPort,
+            bindingPort,
+            new RecordingAdmissionService());
+
+        var result = await service.SaveAndBindAsync(new ScopeWorkflowSaveAndBindRequest(
+            "scope-a",
+            "wf-alpha",
+            "name: main\nsteps: []\n",
+            RevisionId: revisionId));
+
+        result.RevisionId.Should().Be(revisionId);
+        workflowPort.Request!.RevisionId.Should().Be(revisionId);
+        bindingPort.Request!.RevisionId.Should().Be(revisionId);
+        bindingPort.Request.AllowExistingRevisionReplay.Should().BeTrue();
+        bindingPort.Request.ReplayRevisionId.Should().Be(revisionId);
+        bindingPort.Request.AcceptedRevisionCreation.Should().Be(
+            new ScopeBindingAcceptedRevisionCreation(workflowPort.Result!.ServiceKey, revisionId));
+    }
+
+    [Fact]
     public async Task SaveAndBindAsync_ShouldRejectRevisionMismatch()
     {
         var workflowPort = new RecordingScopeWorkflowCommandPort();
@@ -177,8 +203,11 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
             bindingPort.Request.CapabilityAdmission!.ExistingPlan);
     }
 
-    [Fact]
-    public async Task SaveAndBindAsync_WithExistingPlanAndNoFreshConfirmation_ShouldRevalidateAndDispatch()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SaveAndBindAsync_WithExistingPlan_ShouldUseCredentialAwareAdmissionPathAndDispatch(
+        bool includeCallerCredential)
     {
         var existingPlan = await ScopeExplicitRequestAdmissionTestFixture.CreatePersistedPlanAsync(
             "scope_workflow_save_and_bind");
@@ -195,11 +224,14 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
             ServiceId: ScopeExplicitRequestAdmissionTestFixture.ServiceId,
             RevisionId: ScopeExplicitRequestAdmissionTestFixture.RevisionId)
         {
-            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreatePersistedContext(existingPlan),
+            CapabilityAdmission = ScopeExplicitRequestAdmissionTestFixture.CreatePersistedContext(
+                existingPlan,
+                includeCallerCredential),
         });
 
         result.ScopeId.Should().Be(ScopeExplicitRequestAdmissionTestFixture.ScopeId);
-        admission.RevalidatePersistedCallCount.Should().Be(1);
+        admission.RefreshPersistedCallCount.Should().Be(includeCallerCredential ? 1 : 0);
+        admission.RevalidatePersistedCallCount.Should().Be(includeCallerCredential ? 0 : 1);
         admission.AdmitCallCount.Should().Be(0);
         workflowPort.Request.Should().NotBeNull();
         bindingPort.Request.Should().NotBeNull();
@@ -226,6 +258,8 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
 
         public List<PersistedWorkflowCapabilityAdmissionRequest> PersistedRequests { get; } = [];
 
+        public List<RefreshPersistedWorkflowCapabilityAdmissionRequest> RefreshRequests { get; } = [];
+
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
@@ -245,11 +279,23 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
                 ? Task.FromResult(Plan.Clone())
                 : Task.FromException<WorkflowCapabilityAdmissionPlan>(_exception);
         }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RefreshRequests.Add(request);
+            return _exception is null
+                ? Task.FromResult(request.Persisted.Plan.Clone())
+                : Task.FromException<WorkflowCapabilityAdmissionPlan>(_exception);
+        }
     }
 
     private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
     {
         public ScopeWorkflowUpsertRequest? Request { get; private set; }
+
+        public ScopeWorkflowUpsertResult? Result { get; private set; }
 
         public Task<ScopeWorkflowUpsertResult> UpsertAsync(
             ScopeWorkflowUpsertRequest request,
@@ -257,7 +303,7 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
         {
             Request = request;
             var revisionId = request.RevisionId ?? string.Empty;
-            return Task.FromResult(new ScopeWorkflowUpsertResult(
+            Result = new ScopeWorkflowUpsertResult(
                 request.ScopeId,
                 request.WorkflowId,
                 $"scope:{request.ScopeId}:workflow:{request.WorkflowId}",
@@ -269,7 +315,8 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
                 [],
                 $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}",
                 DisplayName: request.DisplayName ?? string.Empty,
-                WorkflowName: request.WorkflowName ?? string.Empty));
+                WorkflowName: request.WorkflowName ?? string.Empty);
+            return Task.FromResult(Result);
         }
     }
 

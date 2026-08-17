@@ -86,7 +86,7 @@ public sealed class UserConfigControllerSettingsTests
                 "chrono-llm-public",
                 "Chrono LLM (public)"))
             .RespondToPathWith(
-                "/api/v1/proxy/s/chrono-llm-public/models",
+                "/api/v1/proxy/s/chrono-llm-public/models?_nyxid_via=us-chrono-public",
                 """
                 {
                   "object": "list",
@@ -120,7 +120,7 @@ public sealed class UserConfigControllerSettingsTests
                 "/api/v1/keys",
                 "/api/v1/proxy/services?per_page=100",
                 "/api/v1/user-services",
-                "/api/v1/proxy/s/chrono-llm-public/models");
+                "/api/v1/proxy/s/chrono-llm-public/models?_nyxid_via=us-chrono-public");
     }
 
     [Fact]
@@ -135,8 +135,6 @@ public sealed class UserConfigControllerSettingsTests
                   "service_slug": "chrono-llm",
                   "display_name": "Chrono LLM",
                   "route_value": "/api/v1/proxy/s/chrono-llm",
-                  "default_model": "gpt-5.5",
-                  "models": ["gpt-5.5"],
                   "status": "ready",
                   "source": "user_service",
                   "allowed": true
@@ -193,7 +191,13 @@ public sealed class UserConfigControllerSettingsTests
                 }
               ]
             }
-            """);
+            """)
+            .RespondToPathWith(
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-alpha",
+                """{"data":[{"id":"model-alpha"}]}""")
+            .RespondToPathWith(
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-beta",
+                """{"data":[{"id":"model-beta"}]}""");
         var catalog = CreateCatalogPort(httpHandler);
 
         var result = await catalog.GetServicesAsync("user-token-1", CancellationToken.None);
@@ -206,7 +210,18 @@ public sealed class UserConfigControllerSettingsTests
         result.Services.Select(service => service.Identity!.NyxIdUserServiceId)
             .Should()
             .NotContain(["llm-diagnostic-id", "key-alpha", "catalog-alpha"]);
+        result.Services.Single(service => service.Identity!.NyxIdUserServiceId == "us-alpha")
+            .ModelCatalog.ModelIds.Should().Equal("model-alpha");
+        result.Services.Single(service => service.Identity!.NyxIdUserServiceId == "us-beta")
+            .ModelCatalog.ModelIds.Should().Equal("model-beta");
         httpHandler.Requests.Select(request => request.Path).Should().Contain("/api/v1/user-services");
+        httpHandler.Requests
+            .Select(request => request.Path)
+            .Where(path => path.Contains("/models", StringComparison.Ordinal))
+            .Should()
+            .Equal(
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-alpha",
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-beta");
     }
 
     [Fact]
@@ -223,6 +238,31 @@ public sealed class UserConfigControllerSettingsTests
 
         await act.Should().ThrowAsync<InvalidOperationException>();
         httpHandler.Requests.Select(request => request.Path).Should().Contain("/api/v1/user-services");
+    }
+
+    [Fact]
+    public async Task GetServicesAsync_WithSplitNyxIdHosts_ShouldUseOnlyPublicApiBaseUrl()
+    {
+        var httpHandler = new RecordingHttpHandler(
+            (HttpStatusCode.OK, """{"services":[]}"""),
+            (HttpStatusCode.OK, """{"keys":[]}"""),
+            (HttpStatusCode.OK, """{"services":[]}"""))
+            .RespondToUserServicesWith("""{"services":[]}""");
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test",
+                ["Aevatar:NyxId:Authority"] = "https://nyx-authority.example.test",
+            })
+            .Build();
+        var catalog = CreateCatalogPort(httpHandler, configuration);
+
+        await catalog.GetServicesAsync("user-token-1", CancellationToken.None);
+
+        httpHandler.RequestUris.Should().HaveCount(4)
+            .And.OnlyContain(uri => uri.StartsWith("https://nyx-api.example.test/", StringComparison.Ordinal));
+        catalog.ResolveGatewayUrl().Should().Be("https://nyx-api.example.test/api/v1/llm/gateway/v1");
     }
 
     [Fact]
@@ -488,7 +528,9 @@ public sealed class UserConfigControllerSettingsTests
             }
             """))
             .RespondToUserServicesWith(PersonalUserServicesJson("us-chrono", "chrono-llm", "Chrono LLM"))
-            .RespondToPathWith("/api/v1/proxy/s/chrono-llm/models", """{"data":[]}""");
+            .RespondToPathWith(
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-chrono",
+                """{"data":[]}""");
         var controller = CreateController(
             current: UserServiceConfig("gpt-5.5", "chrono-llm", "us-chrono"),
             httpHandler: httpHandler,
@@ -513,7 +555,7 @@ public sealed class UserConfigControllerSettingsTests
                 "/api/v1/keys",
                 "/api/v1/proxy/services?per_page=100",
                 "/api/v1/user-services",
-                "/api/v1/proxy/s/chrono-llm/models");
+                "/api/v1/proxy/s/chrono-llm/models?_nyxid_via=us-chrono");
     }
 
     [Fact]
@@ -892,9 +934,11 @@ public sealed class UserConfigControllerSettingsTests
         })
         .Build();
 
-    private static NyxIdLlmCatalogHttpClient CreateCatalogPort(RecordingHttpHandler httpHandler) => new(
+    private static NyxIdLlmCatalogHttpClient CreateCatalogPort(
+        RecordingHttpHandler httpHandler,
+        IConfiguration? configuration = null) => new(
         new StubHttpClientFactory(httpHandler),
-        BuildNyxIdConfiguration(),
+        configuration ?? BuildNyxIdConfiguration(),
         NullLogger<NyxIdLlmCatalogHttpClient>.Instance);
 
     private static string PersonalUserServicesJson(string id, string slug, string label, string? defaultModel = null)
@@ -1060,6 +1104,7 @@ public sealed class UserConfigControllerSettingsTests
         }
 
         public List<(string Path, string Method, string? Authorization, string Body)> Requests { get; } = [];
+        public List<string> RequestUris { get; } = [];
 
         public RecordingHttpHandler RespondToUserServicesWith(
             string body,
@@ -1083,6 +1128,7 @@ public sealed class UserConfigControllerSettingsTests
             CancellationToken cancellationToken)
         {
             var pathAndQuery = request.RequestUri?.PathAndQuery ?? string.Empty;
+            RequestUris.Add(request.RequestUri?.AbsoluteUri ?? string.Empty);
             Requests.Add((
                 pathAndQuery,
                 request.Method.Method,

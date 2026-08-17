@@ -5,26 +5,79 @@
 
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Abstractions.Credentials;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>工具调用模块。处理 type=tool_call 的步骤。</summary>
-public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
+public sealed partial class ToolCallModule :
+    IEventModule<IWorkflowExecutionContext>,
+    IWorkflowExecutionBackgroundWorkOwner
 {
     internal const string ModuleStateKey = "tool_call";
+    private const int DefaultToolTimeoutMs = 360_000;
+    private const int MaxToolTimeoutMs = 1_800_000;
+    private const int MinToolTimeoutMs = 100;
+    private const string ToolTimeoutCallbackPrefix = "workflow-tool-timeout";
+    private const string ToolRetryCallbackPrefix = "workflow-tool-retry";
+    private const string ToolExecutionRecoveryCallbackPrefix = "workflow-tool-execution-recovery";
+    private const string ToolOutcomeUnknownCode = "tool_outcome_unknown";
+    private const string ToolOutcomeUnknownMessage =
+        "The tool call timed out and the external execution outcome cannot be proven.";
+    private const int MaxToolExecutionAttempts = 5;
+    private const int MaxCompletionSignalTransportAttempts = 4;
+    private static readonly TimeSpan ToolRetryBaseDelay = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan MaxToolRetryDelay = TimeSpan.FromSeconds(4);
+    private const string ProjectedToolFailureCode = "WORKFLOW_PROJECTED_TOOL_CALL_FAILED";
+    private const string ProjectedToolFailureMessage =
+        "The projected tool call failed before a durable response was produced.";
+    private const string NyxIdProxyHttpFailurePrefix = "NYXID_PROXY_HTTP_";
     private static readonly TimeSpan PublicationRetryDelay = TimeSpan.FromMilliseconds(250);
+    private static readonly HashSet<string> ProjectionSafeFailureCodes = new(StringComparer.Ordinal)
+    {
+        "authorization_required",
+        "credential_denied",
+        "invalid_tool_execution_identity",
+        "tool_admission_conflict",
+        "tool_admission_unavailable",
+        "tool_denied",
+        "tool_error",
+        "tool_execution_already_started",
+        "tool_outcome_unknown",
+        "tool_approval_deadline_exceeded",
+        "tool_retry_deadline_exceeded",
+        "tool_call_protected_material_digest_mismatch",
+        "tool_call_protected_material_identity_mismatch",
+        "tool_call_protected_material_invalid_encoding",
+        "tool_call_protected_material_invalid_identity",
+        "tool_call_protected_material_invalid_reference",
+        "tool_call_protected_material_resolve_failed",
+        "tool_call_protected_material_schema_mismatch",
+        "tool_call_protected_material_store_failed",
+        "tool_call_protected_material_store_unavailable",
+        "tool_call_protected_material_unavailable",
+        "tool_watchdog_unavailable",
+        "NYXID_PROXY_FORBIDDEN",
+        "NYXID_PROXY_RESPONSE_TOO_LARGE",
+        "NYXID_PROXY_SERVICE_ID_REQUIRED",
+        "NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN",
+        "NYXID_PROXY_UNAUTHORIZED",
+    };
 
     internal static TimeSpan DurablePublicationRetryDelay => PublicationRetryDelay;
 
     private readonly IEnumerable<IWorkflowToolSource> _toolSources;
     private readonly ILogger<ToolCallModule> _logger;
     private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
+    private readonly ConcurrentDictionary<string, BackgroundExecutionRegistration> _backgroundExecutions =
+        new(StringComparer.Ordinal);
     private volatile Lazy<Task<IReadOnlyDictionary<string, IWorkflowTool>>>? _toolIndex;
 
     public ToolCallModule(
@@ -44,6 +97,10 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
     public bool CanHandle(EventEnvelope envelope) =>
         envelope.Payload?.Is(StepRequestEvent.Descriptor) == true ||
         envelope.Payload?.Is(WorkflowResumedEvent.Descriptor) == true ||
+        envelope.Payload?.Is(WorkflowToolCallAttemptCompletedEvent.Descriptor) == true ||
+        envelope.Payload?.Is(WorkflowToolCallTimeoutFiredEvent.Descriptor) == true ||
+        envelope.Payload?.Is(WorkflowToolCallRetryFiredEvent.Descriptor) == true ||
+        envelope.Payload?.Is(WorkflowToolCallExecutionRecoveryFiredEvent.Descriptor) == true ||
         envelope.Payload?.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor) == true;
 
     /// <inheritdoc />
@@ -51,6 +108,46 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
     {
         var payload = envelope.Payload;
         if (payload == null) return;
+
+        if (payload.Is(WorkflowToolCallAttemptCompletedEvent.Descriptor))
+        {
+            await HandleToolAttemptCompletedAsync(
+                payload.Unpack<WorkflowToolCallAttemptCompletedEvent>(),
+                envelope,
+                ctx,
+                ct);
+            return;
+        }
+
+        if (payload.Is(WorkflowToolCallTimeoutFiredEvent.Descriptor))
+        {
+            await HandleToolTimeoutFiredAsync(
+                payload.Unpack<WorkflowToolCallTimeoutFiredEvent>(),
+                envelope,
+                ctx,
+                ct);
+            return;
+        }
+
+        if (payload.Is(WorkflowToolCallRetryFiredEvent.Descriptor))
+        {
+            await HandleApprovedToolRetryFiredAsync(
+                payload.Unpack<WorkflowToolCallRetryFiredEvent>(),
+                envelope,
+                ctx,
+                ct);
+            return;
+        }
+
+        if (payload.Is(WorkflowToolCallExecutionRecoveryFiredEvent.Descriptor))
+        {
+            await HandleToolExecutionRecoveryFiredAsync(
+                payload.Unpack<WorkflowToolCallExecutionRecoveryFiredEvent>(),
+                envelope,
+                ctx,
+                ct);
+            return;
+        }
 
         if (payload.Is(WorkflowToolCallPublicationRetryFiredEvent.Descriptor))
         {
@@ -116,16 +213,6 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        // 发布 Tool 调用开始事件（供观测/UI）
-        await ctx.PublishAsync(new WorkflowToolCallStartedEvent
-        {
-            ToolName = toolName,
-            ArgumentsJson = argumentsJson,
-            CallId = callId,
-            RunId = request.RunId,
-            StepId = request.StepId,
-        }, TopologyAudience.Self, ct);
-
         var toolIndex = await GetOrDiscoverAsync(ct);
         if (!toolIndex.TryGetValue(toolName, out var tool))
         {
@@ -134,11 +221,10 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        WorkflowToolExecutionResult result;
+        WorkflowToolExecutionRequest executionRequest;
         try
         {
-            result = await ExecuteToolAsync(
-                tool,
+            executionRequest = await BuildToolExecutionRequestAsync(
                 argumentsJson,
                 request,
                 callId,
@@ -149,25 +235,82 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
         catch (Exception ex)
         {
-            ctx.Logger.LogWarning(ex, "ToolCall: step={StepId} tool={Tool} execution failed", request.StepId, toolName);
-            result = WorkflowToolExecutionResult.Failed(string.Empty, string.Empty, ex.Message);
+            ctx.Logger.LogWarning(
+                "ToolCall: step={StepId} tool={Tool} dispatch preparation failed failure_type={FailureType}",
+                request.StepId,
+                toolName,
+                ex.GetType().Name);
+            var result = request.ExternalInvocation?.ResponseProjection is null
+                ? WorkflowToolExecutionResult.Failed(string.Empty, string.Empty, ex.Message)
+                : ProjectedToolFailure();
+            await PersistAndPublishToolOutcomeAsync(state, ctx, request, toolName, callId, result, ct);
+            return;
         }
 
-        if (result.PendingApproval != null)
+        ToolCallProtectedMaterial protectedMaterial;
+        RuntimeSecretReference protectedMaterialReference;
+        try
         {
-            await SuspendForApprovalAsync(
+            protectedMaterial = BuildProtectedMaterial(
+                request,
+                request.RunId,
+                toolName,
+                callId,
+                approvalRequestId: string.Empty);
+            protectedMaterialReference = await StoreProtectedMaterialAsync(protectedMaterial, ctx, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var errorCode = exception is InvalidOperationException &&
+                            IsProtectedMaterialErrorCode(exception.Message)
+                ? exception.Message
+                : ToolCallProtectedMaterialErrorCodes.StoreFailed;
+            ctx.Logger.LogWarning(
+                "ToolCall: protected material store failed run={RunId} step={StepId} failure_type={FailureType}",
+                request.RunId,
+                request.StepId,
+                exception.GetType().Name);
+            await PersistAndPublishToolFailureAsync(
                 state,
                 ctx,
                 request,
                 toolName,
+                "The tool call was not dispatched because its protected material could not be stored.",
+                errorCode,
+                string.Empty,
                 callId,
-                issuedAtUnixMs,
-                result.PendingApproval,
+                string.Empty,
+                WorkflowToolCallTerminalDecision.NoApproval,
+                terminalInvoked: false,
+                retryable: false,
+                protectedMaterialReference: null,
                 ct);
             return;
         }
 
-        await PersistAndPublishToolOutcomeAsync(state, ctx, request, toolName, callId, result, ct);
+        var pending = BuildPendingExecution(
+            request,
+            toolName,
+            callId,
+            issuedAtUnixMs,
+            ResolveToolTimeoutMs(request),
+            ctx.UtcNow,
+            approvalRequestId: string.Empty,
+            WorkflowToolCallTerminalDecision.NoApproval,
+            protectedMaterialReference,
+            ComputeProtectedMaterialDigest(protectedMaterial));
+        await StartToolExecutionAsync(
+            state,
+            pending,
+            tool,
+            executionRequest,
+            request.ExternalInvocation?.ResponseProjection,
+            ctx,
+            ct);
     }
 
     internal static IReadOnlyList<WorkflowToolCallPublicationRetryFiredEvent> BuildPendingPublicationRetries(
@@ -255,7 +398,17 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 retry.RunId,
                 retry.StepId,
                 retry.PublicationKind);
-            await TrySchedulePublicationRecoveryAsync(ctx, retry, ct, allowImmediateContinuation: false);
+            var awakened = await TrySchedulePublicationRecoveryAsync(
+                ctx,
+                retry,
+                ct,
+                allowImmediateContinuation: false);
+            if (!awakened)
+            {
+                throw new WorkflowRuntimeEnvelopeRetryablePublicationPendingException(
+                    "Durable tool-call publication retry has no confirmed wakeup.",
+                    ex);
+            }
         }
     }
 
@@ -299,8 +452,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         return lookup.Admission;
     }
 
-    private async Task<WorkflowToolExecutionResult> ExecuteToolAsync(
-        IWorkflowTool tool,
+    private async Task<WorkflowToolExecutionRequest> BuildToolExecutionRequestAsync(
         string argumentsJson,
         StepRequestEvent request,
         string callId,
@@ -317,30 +469,88 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 _callerAccessTokenProvider,
                 ct)
             : new WorkflowCallerCredential();
+        var unattendedPermit = ResolveUnattendedInvocationPermit(
+            ctx,
+            credential.Found ? credential.Credential : null,
+            admission);
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
             ctx,
             ctx.AgentId ?? string.Empty,
             request.RunId ?? string.Empty,
             request.StepId ?? string.Empty);
-        return await tool.ExecuteAsync(
-            new WorkflowToolExecutionRequest(
-                ArgumentsJson: argumentsJson,
-                RunId: request.RunId ?? string.Empty,
-                StepId: request.StepId ?? string.Empty,
-                ExecutionId: request.ExecutionId ?? string.Empty,
-                CallId: callId,
-                ScopeId: ctx.ScopeId ?? string.Empty,
-                CallerCredential: callerCredential,
-                RuntimeContext: runtimeContext,
-                ApprovalGrant: approvalGrant,
-                InputFileRefs: request.InputFileRefs,
-                IdempotencyKey: request.IdempotencyKey ?? string.Empty,
-                ScheduleId: ctx.ScheduleId ?? string.Empty,
-                InvocationAdmission: admission,
-                LlmControl: GetLlmControl(ctx),
-                IssuedAtUnixMs: issuedAtUnixMs),
-            ct);
+        return new WorkflowToolExecutionRequest(
+            ArgumentsJson: argumentsJson,
+            RunId: request.RunId ?? string.Empty,
+            StepId: request.StepId ?? string.Empty,
+            ExecutionId: request.ExecutionId ?? string.Empty,
+            CallId: callId,
+            ScopeId: ctx.ScopeId ?? string.Empty,
+            CallerCredential: callerCredential.Clone(),
+            RuntimeContext: runtimeContext,
+            ApprovalGrant: approvalGrant,
+            InputFileRefs: request.InputFileRefs,
+            IdempotencyKey: request.IdempotencyKey ?? string.Empty,
+            ScheduleId: ctx.ScheduleId ?? string.Empty,
+            InvocationAdmission: admission,
+            LlmControl: GetLlmControl(ctx),
+            IssuedAtUnixMs: issuedAtUnixMs,
+            UnattendedInvocationPermit: unattendedPermit);
     }
+
+    private static WorkflowUnattendedInvocationPermit? ResolveUnattendedInvocationPermit(
+        IWorkflowExecutionContext ctx,
+        WorkflowCallerCredential? credential,
+        WorkflowCapabilityInvocationAdmission? admission)
+    {
+        if (ctx is not IWorkflowExecutionStateHostAccessor accessor ||
+            accessor.StateHost.ExecutionContextSnapshot.UnattendedEffectAuthorization is not { } authorization)
+            return null;
+
+        if (!string.Equals(accessor.StateHost.RunOrigin, WorkflowRunOrigins.Webhook, StringComparison.Ordinal) ||
+            credential?.NyxIdAuthority is not { } authority ||
+            string.IsNullOrWhiteSpace(authority.BindingId))
+        {
+            throw new InvalidOperationException(
+                "The unattended webhook authorization is not bound to a valid actor-owned caller authority.");
+        }
+
+        try
+        {
+            WorkflowUnattendedEffectAuthorizationIntegrity.ValidateForActorState(
+                authorization,
+                authority,
+                accessor.StateHost.DefinitionActorId,
+                accessor.StateHost.ScopeId,
+                accessor.StateHost.WorkflowId,
+                accessor.StateHost.RevisionId,
+                accessor.StateHost.DefinitionVersion,
+                accessor.StateHost.CapabilityAdmissionPlanSnapshot);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidOperationException(
+                "The unattended webhook authorization no longer matches the actor-owned workflow definition.",
+                exception);
+        }
+
+        var permit = WorkflowUnattendedEffectAuthorizationIntegrity.CreateInvocationPermit(
+            authorization,
+            authority,
+            admission);
+        if (permit is null && RequiresUnattendedEffectPermit(admission))
+        {
+            throw new InvalidOperationException(
+                "The workflow effect is not covered by the exact unattended webhook authorization.");
+        }
+
+        return permit;
+    }
+
+    private static bool RequiresUnattendedEffectPermit(WorkflowCapabilityInvocationAdmission? admission) =>
+        admission?.Capability?.CapabilityCase ==
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserRequest &&
+        admission.Capability.NyxIdUserRequest.ExecutionPolicy is { } policy &&
+        policy.Risk == NyxIdOperationRisk.Write;
 
     private static WorkflowLlmControlContext? GetLlmControl(IWorkflowExecutionContext ctx)
     {
@@ -383,13 +593,71 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        var materialResolution = await ResolveAndVerifyProtectedMaterialAsync(
+            pending.ProtectedMaterialReference,
+            pending.ProtectedMaterialDigestSha256,
+            pending.RunId,
+            pending.StepId,
+            pending.ExecutionId,
+            pending.ToolCallId,
+            ctx,
+            ct);
+        if (!materialResolution.Resolved)
+        {
+            state.PendingApprovals.Remove(pendingKey);
+            await PersistAndPublishToolFailureAsync(
+                state,
+                ctx,
+                ToStepRequest(pending, material: null),
+                pending.ToolName,
+                "The approved tool call was not dispatched because its protected material is unavailable.",
+                materialResolution.ErrorCode,
+                string.Empty,
+                pending.ToolCallId,
+                pending.ApprovalRequestId,
+                resumed.Approved
+                    ? WorkflowToolCallTerminalDecision.Approved
+                    : WorkflowToolCallTerminalDecision.Denied,
+                terminalInvoked: false,
+                retryable: false,
+                pending.ProtectedMaterialReference,
+                ct);
+            return;
+        }
+
+        var protectedMaterial = materialResolution.Material!;
+        var resumedRequest = ToStepRequest(pending, protectedMaterial);
+        if (pending.TimeoutDeadlineUnixMs <= 0 ||
+            ctx.UtcNow.ToUnixTimeMilliseconds() >= pending.TimeoutDeadlineUnixMs)
+        {
+            state.PendingApprovals.Remove(pendingKey);
+            await PersistAndPublishToolFailureAsync(
+                state,
+                ctx,
+                resumedRequest,
+                pending.ToolName,
+                "The approved tool call was not dispatched because its original execution deadline elapsed.",
+                "tool_approval_deadline_exceeded",
+                string.Empty,
+                pending.ToolCallId,
+                pending.ApprovalRequestId,
+                resumed.Approved
+                    ? WorkflowToolCallTerminalDecision.Approved
+                    : WorkflowToolCallTerminalDecision.Denied,
+                terminalInvoked: false,
+                retryable: false,
+                pending.ProtectedMaterialReference,
+                ct);
+            return;
+        }
+
         if (!resumed.Approved)
         {
             state.PendingApprovals.Remove(pendingKey);
             await PersistAndPublishToolFailureAsync(
                 state,
                 ctx,
-                ToStepRequest(pending),
+                resumedRequest,
                 pending.ToolName,
                 BuildRejectedApprovalError(resumed),
                 "approval_denied",
@@ -397,6 +665,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 pending.ToolCallId,
                 pending.ApprovalRequestId,
                 WorkflowToolCallTerminalDecision.Denied,
+                terminalInvoked: false,
+                retryable: false,
+                pending.ProtectedMaterialReference,
                 ct);
             return;
         }
@@ -408,16 +679,21 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             await PersistAndPublishToolFailureAsync(
                 state,
                 ctx,
-                ToStepRequest(pending),
+                resumedRequest,
                 pending.ToolName,
                 "tool not found or no tool sources configured",
+                string.Empty,
+                string.Empty,
+                pending.ToolCallId,
                 pending.ApprovalRequestId,
                 WorkflowToolCallTerminalDecision.Approved,
+                terminalInvoked: false,
+                retryable: false,
+                pending.ProtectedMaterialReference,
                 ct);
             return;
         }
 
-        var resumedRequest = ToStepRequest(pending);
         var admission = ResolveInvocationAdmission(ctx, resumedRequest, pending.ToolName, out var admissionError);
         if (admissionError != null)
         {
@@ -428,18 +704,23 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 resumedRequest,
                 pending.ToolName,
                 admissionError,
+                string.Empty,
+                string.Empty,
+                pending.ToolCallId,
                 pending.ApprovalRequestId,
                 WorkflowToolCallTerminalDecision.Approved,
+                terminalInvoked: false,
+                retryable: false,
+                pending.ProtectedMaterialReference,
                 ct);
             return;
         }
 
-        WorkflowToolExecutionResult result;
+        WorkflowToolExecutionRequest executionRequest;
         try
         {
-            result = await ExecuteToolAsync(
-                tool,
-                pending.ArgumentsJson,
+            executionRequest = await BuildToolExecutionRequestAsync(
+                protectedMaterial.ArgumentsJson,
                 resumedRequest,
                 pending.ToolCallId,
                 pending.IssuedAtUnixMs,
@@ -454,50 +735,141 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         catch (Exception ex)
         {
             ctx.Logger.LogWarning(
-                ex,
-                "ToolCall: step={StepId} tool={Tool} approved replay failed",
-                pending.StepId,
-                pending.ToolName);
-            result = WorkflowToolExecutionResult.Failed(string.Empty, string.Empty, ex.Message);
-        }
-
-        if (result.Failure is { TerminalInvoked: false, Retryable: true } retryableFailure)
-        {
-            ctx.Logger.LogWarning(
-                "ToolCall: step={StepId} tool={Tool} approved replay remains pending after retryable pre-terminal failure code={FailureCode}",
+                "ToolCall: step={StepId} tool={Tool} approved dispatch preparation failed failure_type={FailureType}",
                 pending.StepId,
                 pending.ToolName,
-                retryableFailure.ErrorCode);
-            throw new InvalidOperationException(retryableFailure.ErrorMessage);
-        }
-
-        if (result.PendingApproval != null)
-        {
+                ex.GetType().Name);
             state.PendingApprovals.Remove(pendingKey);
-            await SuspendForApprovalAsync(
+            var result = resumedRequest.ExternalInvocation?.ResponseProjection is null
+                ? WorkflowToolExecutionResult.Failed(string.Empty, string.Empty, ex.Message)
+                : ProjectedToolFailure();
+            await PersistAndPublishToolOutcomeAsync(
                 state,
                 ctx,
                 resumedRequest,
                 pending.ToolName,
                 pending.ToolCallId,
-                pending.IssuedAtUnixMs,
-                result.PendingApproval,
+                result,
+                pending.ApprovalRequestId,
+                WorkflowToolCallTerminalDecision.Approved,
+                pending.ProtectedMaterialReference,
                 ct);
             return;
         }
 
         state.PendingApprovals.Remove(pendingKey);
-        await PersistAndPublishToolOutcomeAsync(
-            state,
-            ctx,
+        var executionPending = BuildPendingExecution(
             resumedRequest,
             pending.ToolName,
             pending.ToolCallId,
-            result,
+            pending.IssuedAtUnixMs,
+            pending.TimeoutMs,
+            ctx.UtcNow,
             pending.ApprovalRequestId,
             WorkflowToolCallTerminalDecision.Approved,
+            pending.ProtectedMaterialReference,
+            pending.ProtectedMaterialDigestSha256,
+            pending.TimeoutDeadlineUnixMs,
+            pending.ContinuationId,
+            checked(pending.Attempt + 1));
+        await StartToolExecutionAsync(
+            state,
+            executionPending,
+            tool,
+            executionRequest,
+            resumedRequest.ExternalInvocation?.ResponseProjection,
+            ctx,
             ct);
     }
+
+    private static WorkflowToolExecutionResult ApplyResponseProjection(
+        WorkflowToolResponseProjection? projection,
+        WorkflowToolExecutionResult result,
+        ILogger logger,
+        string runId,
+        string stepId)
+    {
+        if (projection is null)
+            return result;
+
+        if (result.PendingApproval is not null)
+        {
+            if (result.Failure is not null ||
+                result.ManagedHandoff is not null ||
+                !string.IsNullOrEmpty(result.ResultJson))
+            {
+                logger.LogWarning(
+                    "ToolCall: projected response returned an inconsistent approval outcome run={RunId} step={StepId}",
+                    runId,
+                    stepId);
+                return ProjectedToolFailure();
+            }
+
+            return result;
+        }
+
+        // A provider failure remains the authoritative failure, but its response body must not
+        // bypass an authored persistence boundary.
+        if (result.Failure is not null)
+        {
+            var safeCode = IsProjectionSafeFailureCode(result.Failure.ErrorCode)
+                ? result.Failure.ErrorCode
+                : ProjectedToolFailureCode;
+            return result with
+            {
+                ResultJson = string.Empty,
+                Failure = result.Failure with
+                {
+                    ErrorCode = safeCode,
+                    ErrorMessage = ProjectedToolFailureMessage,
+                },
+            };
+        }
+
+        try
+        {
+            return result with
+            {
+                ResultJson = WorkflowToolResponseProjector.Project(result.ResultJson, projection),
+            };
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        {
+            logger.LogWarning(
+                "ToolCall: response projection failed before persistence run={RunId} step={StepId}",
+                runId,
+                stepId);
+            return WorkflowToolExecutionResult.Failed(
+                string.Empty,
+                "WORKFLOW_TOOL_RESPONSE_PROJECTION_FAILED",
+                "The tool response did not satisfy the admitted response projection.",
+                terminalInvoked: true,
+                retryable: false);
+        }
+    }
+
+    private static bool IsProjectionSafeFailureCode(string errorCode)
+    {
+        if (string.IsNullOrEmpty(errorCode))
+            return false;
+
+        if (ProjectionSafeFailureCodes.Contains(errorCode))
+            return true;
+
+        return errorCode.Length == NyxIdProxyHttpFailurePrefix.Length + 3 &&
+               errorCode.StartsWith(NyxIdProxyHttpFailurePrefix, StringComparison.Ordinal) &&
+               errorCode[NyxIdProxyHttpFailurePrefix.Length] is >= '1' and <= '5' &&
+               errorCode[NyxIdProxyHttpFailurePrefix.Length + 1] is >= '0' and <= '9' &&
+               errorCode[NyxIdProxyHttpFailurePrefix.Length + 2] is >= '0' and <= '9';
+    }
+
+    private static WorkflowToolExecutionResult ProjectedToolFailure() =>
+        WorkflowToolExecutionResult.Failed(
+            string.Empty,
+            ProjectedToolFailureCode,
+            ProjectedToolFailureMessage,
+            terminalInvoked: true,
+            retryable: false);
 
     private static bool TryResolvePending(
         ToolCallModuleState state,
@@ -583,7 +955,15 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         string toolName,
         string callId,
         long issuedAtUnixMs,
+        int timeoutMs,
+        long timeoutDeadlineUnixMs,
+        string timeoutCallbackId,
+        WorkflowRuntimeCallbackLeaseState? timeoutLease,
+        string continuationId,
+        int attempt,
         WorkflowToolApprovalPendingOutcome pending,
+        RuntimeSecretReference protectedMaterialReference,
+        string protectedMaterialDigestSha256,
         CancellationToken ct)
     {
         var pendingState = new PendingToolCallApprovalState
@@ -594,13 +974,17 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ToolName = NormalizeRequired(toolName),
             ToolCallId = NormalizeRequired(callId),
             ApprovalRequestId = NormalizeRequired(pending.ApprovalRequestId),
-            ArgumentsJson = pending.ArgumentsJson ?? string.Empty,
-            IdempotencyKey = request.IdempotencyKey ?? string.Empty,
-            ExternalInvocation = request.ExternalInvocation?.Clone(),
             IssuedAtUnixMs = issuedAtUnixMs,
-            DisplayName = ResolveStepDisplayName(request.DisplayName, request.StepId),
+            TimeoutMs = timeoutMs,
+            TimeoutDeadlineUnixMs = timeoutDeadlineUnixMs,
+            TimeoutCallbackId = NormalizeRequired(timeoutCallbackId),
+            TimeoutLease = timeoutLease?.Clone(),
+            ContinuationId = NormalizeRequired(continuationId),
+            Attempt = Math.Max(1, attempt),
+            ProtectedMaterialReference = protectedMaterialReference.Clone(),
+            ProtectedMaterialDigestSha256 = protectedMaterialDigestSha256,
+            ExecutionPhase = WorkflowToolCallExecutionPhase.ApprovalPending,
         };
-        pendingState.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         pendingState.Suspension = BuildSuspension(pendingState);
         state.PendingApprovals[BuildPendingKey(pendingState)] = pendingState;
         await SaveStateAsync(state, ctx, ct);
@@ -628,6 +1012,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             result,
             string.Empty,
             WorkflowToolCallTerminalDecision.NoApproval,
+            protectedMaterialReference: null,
             ct);
 
     private static Task PersistAndPublishToolOutcomeAsync(
@@ -639,6 +1024,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         WorkflowToolExecutionResult result,
         string approvalRequestId,
         WorkflowToolCallTerminalDecision terminalDecision,
+        RuntimeSecretReference? protectedMaterialReference,
         CancellationToken ct)
     {
         if (result.Failure != null)
@@ -654,6 +1040,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 callId,
                 approvalRequestId,
                 terminalDecision,
+                result.Failure.TerminalInvoked,
+                result.Failure.Retryable,
+                protectedMaterialReference,
                 ct);
         }
 
@@ -677,6 +1066,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ApprovalRequestId = approvalRequestId,
             TerminalDecision = terminalDecision,
             ToolCompletion = toolCompletion,
+            ProtectedMaterialReference = protectedMaterialReference?.Clone(),
         };
         if (result.ManagedHandoff == null)
         {
@@ -693,33 +1083,42 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         return PersistAndPublishCompletionAsync(state, entry, ctx, ct);
     }
 
-    private static async Task<bool> TryHandleStepRedeliveryAsync(
+    private async Task<bool> TryHandleStepRedeliveryAsync(
         ToolCallModuleState state,
         StepRequestEvent request,
         string callId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var cached = FindCompletion(
-            state,
-            request.RunId,
-            request.StepId,
-            callId,
-            request.ExecutionId);
-        if (cached != null)
-        {
-            await TrySchedulePublicationRecoveryAsync(ctx, BuildCompletionRetry(cached), ct);
-            await PublishUnpublishedCompletionEventsAsync(state, cached, ctx, ct);
-            return true;
-        }
-
-        if (FindCompletionTombstone(
+        if (await TryDrainPersistedCompletionAsync(
                 state,
                 request.RunId,
                 request.StepId,
                 callId,
-                request.ExecutionId) != null)
+                request.ExecutionId,
+                ctx,
+                ct))
         {
+            return true;
+        }
+
+        if (state.PendingExecutions.TryGetValue(BuildExecutionKey(callId, request.ExecutionId), out var execution) &&
+            MatchesExecutionIdentity(
+                execution,
+                request.RunId,
+                request.StepId,
+                callId,
+                request.ExecutionId))
+        {
+            var pendingKey = BuildExecutionKey(execution.CallId, execution.ExecutionId);
+            if (execution.ExecutionPhase == WorkflowToolCallExecutionPhase.ExecutionPending &&
+                !_backgroundExecutions.ContainsKey(pendingKey))
+            {
+                if (!await EnsurePendingExecutionWatchdogAsync(execution, ctx, ct))
+                    return true;
+                await EnsureExecutionRecoveryWakeupAsync(execution, ctx, ct);
+            }
+
             return true;
         }
 
@@ -741,7 +1140,82 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    private static async Task<bool> TryHandleResumeRedeliveryAsync(
+    private static async Task<bool> TryDrainPersistedCompletionAsync(
+        ToolCallModuleState state,
+        string? runId,
+        string? stepId,
+        string? callId,
+        string? executionId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct,
+        string? approvalRequestId = null,
+        WorkflowToolCallTerminalDecision? terminalDecision = null)
+    {
+        var cached = FindCompletion(
+            state,
+            runId,
+            stepId,
+            callId,
+            executionId,
+            approvalRequestId,
+            terminalDecision);
+        if (cached != null)
+        {
+            await TrySchedulePublicationRecoveryAsync(ctx, BuildCompletionRetry(cached), ct);
+            await PublishUnpublishedCompletionEventsAsync(state, cached, ctx, ct);
+            return true;
+        }
+
+        return FindCompletionTombstone(
+                state,
+                runId,
+                stepId,
+                callId,
+                executionId,
+                approvalRequestId,
+                terminalDecision) != null;
+    }
+
+    private static async Task<bool> TryDrainPersistedAttemptSuccessorAsync(
+        ToolCallModuleState state,
+        string? runId,
+        string? stepId,
+        string? callId,
+        string? executionId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (await TryDrainPersistedCompletionAsync(
+                state,
+                runId,
+                stepId,
+                callId,
+                executionId,
+                ctx,
+                ct))
+        {
+            return true;
+        }
+
+        var pending = state.PendingApprovals.Values.FirstOrDefault(candidate =>
+            MatchesCallIdentity(
+                candidate.RunId,
+                candidate.StepId,
+                candidate.ToolCallId,
+                candidate.ExecutionId,
+                runId,
+                stepId,
+                callId,
+                executionId));
+        if (pending == null)
+            return false;
+
+        await TrySchedulePublicationRecoveryAsync(ctx, BuildSuspensionRetry(pending), ct);
+        await PublishPendingSuspensionAsync(state, pending, ctx, ct);
+        return true;
+    }
+
+    private async Task<bool> TryHandleResumeRedeliveryAsync(
         ToolCallModuleState state,
         WorkflowResumedEvent resumed,
         IWorkflowExecutionContext ctx,
@@ -753,29 +1227,45 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         var decision = resumed.Approved
             ? WorkflowToolCallTerminalDecision.Approved
             : WorkflowToolCallTerminalDecision.Denied;
-        var cached = FindCompletion(
+        if (state.PendingExecutions.TryGetValue(
+                BuildExecutionKey(
+                    resumed.ToolApproval.ToolCallId,
+                    resumed.ToolApproval.ExecutionId),
+                out var execution) &&
+            MatchesExecutionIdentity(
+                execution,
+                resumed.RunId,
+                resumed.StepId,
+                resumed.ToolApproval.ToolCallId,
+                resumed.ToolApproval.ExecutionId) &&
+            string.Equals(
+                execution.ApprovalRequestId,
+                NormalizeRequired(resumed.ToolApproval.ApprovalRequestId),
+                StringComparison.Ordinal) &&
+            execution.TerminalDecision == decision)
+        {
+            var pendingKey = BuildExecutionKey(execution.CallId, execution.ExecutionId);
+            if (execution.ExecutionPhase == WorkflowToolCallExecutionPhase.ExecutionPending &&
+                !_backgroundExecutions.ContainsKey(pendingKey))
+            {
+                if (!await EnsurePendingExecutionWatchdogAsync(execution, ctx, ct))
+                    return true;
+                await EnsureExecutionRecoveryWakeupAsync(execution, ctx, ct);
+            }
+
+            return true;
+        }
+
+        return await TryDrainPersistedCompletionAsync(
             state,
             resumed.RunId,
             resumed.StepId,
             resumed.ToolApproval.ToolCallId,
             resumed.ToolApproval.ExecutionId,
+            ctx,
+            ct,
             resumed.ToolApproval.ApprovalRequestId,
             decision);
-        if (cached != null)
-        {
-            await TrySchedulePublicationRecoveryAsync(ctx, BuildCompletionRetry(cached), ct);
-            await PublishUnpublishedCompletionEventsAsync(state, cached, ctx, ct);
-            return true;
-        }
-
-        return FindCompletionTombstone(
-                   state,
-                   resumed.RunId,
-                   resumed.StepId,
-                   resumed.ToolApproval.ToolCallId,
-                   resumed.ToolApproval.ExecutionId,
-                   resumed.ToolApproval.ApprovalRequestId,
-                   decision) != null;
     }
 
     private static WorkflowToolCallCompletionOutboxEntry? FindCompletion(
@@ -872,6 +1362,93 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
+        if (!CanMergeCompletionCheckpoints(completion))
+        {
+            await PublishCompletionEventsWithLegacyCheckpointsAsync(state, completion, ctx, ct);
+            return;
+        }
+
+        if (completion.ToolCompletion != null && !completion.ToolCompletionPublished)
+        {
+            await ExecuteDurablePublicationAsync(
+                () => ctx.PublishAsync(
+                    completion.ToolCompletion.Clone(),
+                    TopologyAudience.Self,
+                    ct,
+                    BuildPublicationOptions("workflow-tool-call-completed", completion)),
+                "tool completion",
+                ct);
+        }
+
+        if (completion.StepCompletion != null && !completion.StepCompletionPublished)
+        {
+            await ExecuteDurablePublicationAsync(
+                () => ctx.PublishAsync(
+                    completion.StepCompletion.Clone(),
+                    TopologyAudience.Self,
+                    ct,
+                    BuildPublicationOptions("workflow-tool-step-completed", completion)),
+                "step completion",
+                ct);
+        }
+
+        if (completion.ProtectedMaterialReference != null)
+        {
+            await ExecuteDurablePublicationAsync(
+                async () =>
+                {
+                    if (!await RevokeOrConfirmProtectedMaterialUnavailableAsync(
+                            completion.ProtectedMaterialReference,
+                            ctx,
+                            ct))
+                    {
+                        throw new InvalidOperationException(
+                            "Protected tool-call material cleanup remains pending.");
+                    }
+                },
+                "protected tool-call material cleanup",
+                ct);
+        }
+
+        // Step-less outcomes have no StepCompleted fact to duplicate. Typed step completions are
+        // deduplicated by the WorkflowRun consumer, so one final checkpoint can atomically replace
+        // the outbox entry with its terminal tombstone after publication and cleanup succeed.
+        await ExecuteDurablePublicationAsync(
+            () => CompressCompletionToTombstoneAsync(state, completion, ctx, ct),
+            "completion tombstone checkpoint",
+            ct);
+    }
+
+    private static bool CanMergeCompletionCheckpoints(
+        WorkflowToolCallCompletionOutboxEntry completion)
+    {
+        var stepCompletion = completion.StepCompletion;
+        if (stepCompletion == null)
+            return true;
+
+        return !string.IsNullOrWhiteSpace(completion.RunId) &&
+               !string.IsNullOrWhiteSpace(completion.StepId) &&
+               !string.IsNullOrWhiteSpace(completion.ExecutionId) &&
+               string.Equals(
+                   NormalizeRequired(completion.RunId),
+                   NormalizeRequired(stepCompletion.RunId),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   NormalizeRequired(completion.StepId),
+                   NormalizeRequired(stepCompletion.StepId),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   NormalizeRequired(completion.ExecutionId),
+                   NormalizeRequired(stepCompletion.ExecutionId),
+                   StringComparison.Ordinal);
+    }
+
+    private static async Task PublishCompletionEventsWithLegacyCheckpointsAsync(
+        ToolCallModuleState state,
+        WorkflowToolCallCompletionOutboxEntry completion,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
         if (completion.ToolCompletion != null && !completion.ToolCompletionPublished)
         {
             await ExecuteDurablePublicationAsync(
@@ -909,6 +1486,27 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         if ((completion.ToolCompletion == null || completion.ToolCompletionPublished) &&
             (completion.StepCompletion == null || completion.StepCompletionPublished))
         {
+            if (completion.ProtectedMaterialReference != null)
+            {
+                await ExecuteDurablePublicationAsync(
+                    async () =>
+                    {
+                        if (!await RevokeOrConfirmProtectedMaterialUnavailableAsync(
+                                completion.ProtectedMaterialReference,
+                                ctx,
+                                ct))
+                        {
+                            throw new InvalidOperationException(
+                                "Protected tool-call material cleanup remains pending.");
+                        }
+
+                        completion.ProtectedMaterialReference = null;
+                        await SaveStateAsync(state, ctx, ct);
+                    },
+                    "protected tool-call material cleanup",
+                    ct);
+            }
+
             await ExecuteDurablePublicationAsync(
                 () => CompressCompletionToTombstoneAsync(state, completion, ctx, ct),
                 "completion tombstone checkpoint",
@@ -934,7 +1532,10 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ComposeWorkflowToolCallId(request),
             string.Empty,
             WorkflowToolCallTerminalDecision.NoApproval,
-            ct);
+            terminalInvoked: false,
+            retryable: false,
+            protectedMaterialReference: null,
+            ct: ct);
 
     private static Task PersistAndPublishToolFailureAsync(
         ToolCallModuleState state,
@@ -956,7 +1557,10 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             ComposeWorkflowToolCallId(request),
             approvalRequestId,
             terminalDecision,
-            ct);
+            terminalInvoked: false,
+            retryable: false,
+            protectedMaterialReference: null,
+            ct: ct);
 
     private static Task PersistAndPublishToolFailureAsync(
         ToolCallModuleState state,
@@ -969,6 +1573,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         string callId,
         string approvalRequestId,
         WorkflowToolCallTerminalDecision terminalDecision,
+        bool terminalInvoked,
+        bool retryable,
+        RuntimeSecretReference? protectedMaterialReference,
         CancellationToken ct)
     {
         var detail = string.IsNullOrWhiteSpace(errorCode)
@@ -984,6 +1591,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             StepId = request.StepId,
             ApprovalRequestId = approvalRequestId,
             TerminalDecision = terminalDecision,
+            ProtectedMaterialReference = protectedMaterialReference?.Clone(),
             ToolCompletion = new WorkflowToolCallCompletedEvent
             {
                 CallId = callId,
@@ -1001,6 +1609,12 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 Success = false,
                 Output = resultJson,
                 Error = errorMessage,
+                FailureOutcome = string.Equals(errorCode, ToolOutcomeUnknownCode, StringComparison.Ordinal)
+                    ? WorkflowStepFailureOutcome.OutcomeUncertain
+                    : WorkflowStepFailureOutcome.CalleeConfirmed,
+                RetryDisposition = !terminalInvoked && retryable
+                    ? WorkflowStepRetryDisposition.Allowed
+                    : WorkflowStepRetryDisposition.Forbidden,
             },
         }, ctx, ct);
     }
@@ -1122,6 +1736,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                         TopologyAudience.Self,
                         ct,
                         BuildPublicationRetryOptions(retry));
+                    return true;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -1245,19 +1860,21 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             },
         };
 
-    private static StepRequestEvent ToStepRequest(PendingToolCallApprovalState pending) =>
+    private static StepRequestEvent ToStepRequest(
+        PendingToolCallApprovalState pending,
+        ToolCallProtectedMaterial? material) =>
         new()
         {
             StepId = pending.StepId,
             StepType = "tool_call",
             RunId = pending.RunId,
             ExecutionId = pending.ExecutionId,
-            Input = pending.ArgumentsJson,
-            IdempotencyKey = pending.IdempotencyKey,
-            DisplayName = ResolveStepDisplayName(pending.DisplayName, pending.StepId),
+            Input = material?.Input ?? string.Empty,
+            IdempotencyKey = material?.IdempotencyKey ?? string.Empty,
+            DisplayName = ResolveStepDisplayName(material?.DisplayName, pending.StepId),
             Parameters = { ["tool"] = pending.ToolName },
-            InputFileRefs = { pending.InputFileRefs.Select(static fileRef => fileRef.Clone()) },
-            ExternalInvocation = pending.ExternalInvocation?.Clone(),
+            InputFileRefs = { material?.InputFileRefs.Select(static fileRef => fileRef.Clone()) ?? [] },
+            ExternalInvocation = material?.ExternalInvocation?.Clone(),
         };
 
     private static string BuildRejectedApprovalError(WorkflowResumedEvent resumed)
@@ -1333,7 +1950,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
+        ScrubLegacyPayloadFields(state);
         if (state.PendingApprovals.Count == 0 &&
+            state.PendingExecutions.Count == 0 &&
             state.Completions.Count == 0 &&
             state.CompletionTombstones.Count == 0)
             return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);

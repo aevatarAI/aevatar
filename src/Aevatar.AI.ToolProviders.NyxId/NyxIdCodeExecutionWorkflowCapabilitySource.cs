@@ -73,7 +73,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 "CODE_EXECUTION_SOURCE_CREDENTIAL_REQUIRED",
                 "A NyxID caller credential authorized to read the code execution route is required.");
         }
-        if (string.IsNullOrWhiteSpace(options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(options.EffectiveTransportBaseUrl))
         {
             return Failure(
                 selector,
@@ -83,13 +83,12 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 "Platform code execution route facts are currently unavailable.");
         }
 
-        NyxIdApiAccessResult<NyxIdUserServices> inventory;
+        NyxIdUserServiceAuthoritySnapshot authority;
         try
         {
-            var response = await clientFactory.CreateClient()
-                .ListUserServicesAsync(bearerToken, cancellationToken)
+            authority = await new NyxIdUserServiceAuthorityReader(clientFactory)
+                .ReadAsync(bearerToken, cancellationToken)
                 .ConfigureAwait(false);
-            inventory = NyxIdApiAccessResponseParser.ParseCodeExecutionUserServices(response);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -108,8 +107,8 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 "Platform code execution route facts are currently unavailable.");
         }
 
-        var resolution = NyxIdCodeExecutionRouteResolver.Resolve(inventory);
-        var source = inventory.Succeeded ? BuildSource(access, inventory.Value!.Services) : null;
+        var resolution = NyxIdCodeExecutionRouteResolver.Resolve(authority);
+        var source = authority.Succeeded ? BuildSource(access, authority) : null;
         if (!resolution.IsReady)
         {
             _logger.LogWarning(
@@ -151,13 +150,14 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
 
     private ExternalCapabilitySourceStamp BuildSource(
         ExternalWorkflowCapabilityAccessContext access,
-        IReadOnlyList<NyxIdUserService> services)
+        NyxIdUserServiceAuthoritySnapshot authority)
     {
         var observedAt = _timeProvider.GetUtcNow();
-        var components = services
+        var routeComponents = authority.Routes.Value!.Services
             .OrderBy(static service => service.Id, StringComparer.Ordinal)
             .SelectMany(static service => new[]
             {
+                "route",
                 service.Id,
                 service.Slug,
                 service.CatalogServiceId,
@@ -169,13 +169,32 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 service.InjectDelegationToken?.ToString(CultureInfo.InvariantCulture),
                 service.DelegationTokenScope,
             });
+        var executionComponents = authority.ExecutionInventory.Value!.Services
+            .OrderBy(static service => service.Id, StringComparer.Ordinal)
+            .SelectMany(static service => new[]
+            {
+                "execution",
+                service.Id,
+                service.Slug,
+                service.IsActive.ToString(CultureInfo.InvariantCulture),
+                service.Connected.ToString(CultureInfo.InvariantCulture),
+                service.CredentialSource.Kind.ToString(),
+                service.CredentialSource.OrganizationId,
+                service.CredentialSource.Allowed.ToString(CultureInfo.InvariantCulture),
+                service.CatalogServiceId,
+                service.CatalogServiceSlug,
+                service.CredentialStatus.ToString(),
+                service.NodeId,
+                service.NodeStatus.ToString(),
+            });
         return new ExternalCapabilitySourceStamp
         {
             SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
             SourceId = $"nyxid-user-services:caller:{access.CallerId}",
             ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
             FreshUntil = Timestamp.FromDateTimeOffset(observedAt + FreshnessWindow),
-            ContentDigest = ExternalWorkflowCapabilityContractDigest.Compute(components),
+            ContentDigest = ExternalWorkflowCapabilityContractDigest.Compute(
+                routeComponents.Concat(executionComponents)),
         };
     }
 
@@ -233,6 +252,15 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 source,
                 remediationAction: ExternalCapabilityRemediationActionKind.ConnectCredential,
                 remediationLabel: "Update the platform code service identity settings"),
+            NyxIdCodeExecutionRouteResolutionKind.ExecutionNotReady => Failure(
+                selector,
+                executionMode,
+                ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
+                "CODE_EXECUTION_ROUTE_NOT_READY",
+                "The canonical platform code execution service is not executable for this caller.",
+                source,
+                remediationAction: ExternalCapabilityRemediationActionKind.ConnectCredential,
+                remediationLabel: "Restore the platform code service credential or node"),
             NyxIdCodeExecutionRouteResolutionKind.Ambiguous => Failure(
                 selector,
                 executionMode,
@@ -309,5 +337,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
     }
 
     private string TrustedLocator() =>
-        string.IsNullOrWhiteSpace(options.BaseUrl) ? string.Empty : options.BaseUrl.TrimEnd('/');
+        string.IsNullOrWhiteSpace(options.EffectiveApiBaseUrl)
+            ? string.Empty
+            : options.EffectiveApiBaseUrl.TrimEnd('/');
 }

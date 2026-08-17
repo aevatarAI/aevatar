@@ -19,6 +19,8 @@ The first supported recovery targets are:
   current workflow draft;
 - `NyxIdAuthorizationCatalogGAgent`, whose current event stream is empty of
   catalog facts and must be rebuilt by a fresh authenticated NyxID observation.
+- `AevatarOAuthClientGAgent`, whose surviving committed state can rebuild an
+  OAuth client replica polluted by an orphaned, uncommitted higher version.
 
 ## Confirmed Failure Shape
 
@@ -63,8 +65,8 @@ primary term. It reports `AlreadyAbsent` only when that reinspection proves the
 leased revision is absent; otherwise it preserves the failure.
 
 Repair-store registration is explicit and opt-in. It is enabled only for
-`StudioWorkspaceCurrentStateDocument` and
-`NyxIdAuthorizationCatalogDocument`. The ordinary projection writer contract is
+`StudioWorkspaceCurrentStateDocument`, `NyxIdAuthorizationCatalogDocument`,
+and `AevatarOAuthClientDocument`. The ordinary projection writer contract is
 unchanged, the in-memory provider receives no repair capability, and other
 Elasticsearch read models cannot resolve this maintenance interface. Catalog
 repair command and refresh adapters are likewise separate from the ordinary
@@ -159,12 +161,12 @@ surfaces described by the runbook.
 
 ## Operator API
 
-Expose two platform-admin-only endpoints under the scheduled Agent Key
-administrative boundary:
+Expose platform-admin-only endpoints under narrow administrative boundaries:
 
 ```text
 POST /api/admin/scheduled-agent-key/projection-repair/workspace
 POST /api/admin/scheduled-agent-key/projection-repair/nyxid-catalog
+POST /api/admin/identity/projection-repair/aevatar-oauth-client
 ```
 
 Each request has a single `apply` boolean:
@@ -175,6 +177,22 @@ Each request has a single `apply` boolean:
 
 Workspace additionally requires `scope_id`. Catalog identity is derived from the
 elevated caller.
+
+OAuth client recovery conditionally deletes only the exact ahead-of-source
+document, then dispatches a typed command that requires the actor's current
+version to be at least the inspected committed source and to equal the live
+EventStore commit point before it republishes current committed state. This
+admits a legitimate commit that races inspection while rejecting a zombie
+activation whose in-memory state is ahead of EventStore.
+It never copies a client ID, HMAC key, or vault reference from Elasticsearch
+into the actor. Its `202` response acknowledges dispatch, not visibility.
+
+Before OAuth apply, the operator must use the platform-approved read-only
+runtime-state inspection to prove that the committed-state publication
+checkpoint identifies the same source version and exact committed event, with
+no newer runtime snapshot. The repair route does not mutate or lower that
+checkpoint or snapshot. A checkpoint-ahead or snapshot-ahead incident is a
+different recovery class and must stop before the Elasticsearch CAS delete.
 
 Bearer tokens are used only for platform-admin authorization and the existing
 NyxID refresh call. Tokens, Agent Keys, service credentials, and catalog
@@ -206,19 +224,28 @@ as `403`.
   `rebuild:{actorId}:{latestVersion}` event ID, republishes a version greater
   than or equal to the inspected minimum, and appends no event.
 - Catalog recovery always fetches fresh typed NyxID facts.
+- OAuth recovery never lowers projection watermarks or the monotonic writer;
+  it removes the exact orphaned replica before authoritative republish.
+- A new OAuth invocation never treats an already-missing document as delete
+  provenance. Only an ambiguous result reconciled against the exact lease in
+  the same invocation may return `AlreadyAbsent`; a later missing-document
+  recovery uses the existing governed client projection rebuild endpoint.
+- OAuth recovery requires an operator-proven publication checkpoint and
+  snapshot no newer than the exact committed source; it does not repair those
+  runtime records.
+- The durable materialization scope deliberately processes the lower repair
+  version even when its historical high-water mark is greater. That watermark
+  remains diagnostic history and is not a readiness predicate for this repair.
 - Post-delete Workspace dispatch and Catalog refresh are not canceled by client
   disconnect.
 - Downstream endpoint failures return sanitized `503` responses.
 - No query path primes, replays, deletes, or rebuilds a projection.
 - No generic background scan or startup auto-delete is introduced.
 
-The already-absent continuation remains an operator/audit rule: code can verify
-the current actor identity, unchanged positive source version, and strict
-`expectedDocumentVersion > expectedSourceVersion`, but it cannot reconstruct
-the deleted document's prior fingerprint. A signed inspection token or durable
-repair-request-ID record that would make that provenance code-verifiable is
-explicitly deferred. This hardening introduces no new secret, configuration
-setting, infrastructure operation, or operator step.
+Workspace and Catalog retain their target-specific already-absent continuation
+rules. OAuth does not: code cannot reconstruct a deleted document's prior
+fingerprint in a later invocation, so it fails closed and uses the existing
+governed client projection rebuild path after a post-delete process failure.
 
 ## Rejected Alternatives
 

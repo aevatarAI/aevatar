@@ -47,6 +47,7 @@ public sealed class WorkflowRunForkSeedReadModelMapper
         var variables = kernelState == null
             ? new Dictionary<string, string>(StringComparer.Ordinal)
             : CopyMap(kernelState.Variables);
+        MergeForEachChildOutputs(variables, TryReadForEachState(state), state.RunId);
         var completedStepIds = ResolveCompletedStepIds(variables);
         var lastFailedStepId = string.Equals(state.Status, FailedStatus, StringComparison.OrdinalIgnoreCase)
             ? kernelState?.CurrentStepId?.Trim() ?? string.Empty
@@ -78,6 +79,54 @@ public sealed class WorkflowRunForkSeedReadModelMapper
         }
 
         return null;
+    }
+
+    private static ForEachModuleState? TryReadForEachState(WorkflowRunState state)
+    {
+        foreach (var packedState in state.ExecutionStates.Values)
+        {
+            if (packedState?.Is(ForEachModuleState.Descriptor) == true)
+                return packedState.Unpack<ForEachModuleState>();
+        }
+
+        return null;
+    }
+
+    private static void MergeForEachChildOutputs(
+        IDictionary<string, string> variables,
+        ForEachModuleState? forEachState,
+        string? runId)
+    {
+        var currentRunId = runId ?? string.Empty;
+        if (forEachState == null || string.IsNullOrWhiteSpace(currentRunId))
+            return;
+
+        var kernelVariableKeys = variables.Keys.ToHashSet(StringComparer.Ordinal);
+        if (string.Equals(forEachState.CompletedChildOutputsRunId, currentRunId, StringComparison.Ordinal))
+        {
+            foreach (var (stepId, output) in forEachState.CompletedChildOutputs
+                         .OrderBy(static item => item.Key, StringComparer.Ordinal))
+            {
+                if (!string.IsNullOrWhiteSpace(stepId) && !kernelVariableKeys.Contains(stepId))
+                    variables[stepId] = output ?? string.Empty;
+            }
+        }
+
+        foreach (var parent in forEachState.Parents
+                     .Where(parent => string.Equals(
+                         parent.Value.ParentRunId,
+                         currentRunId,
+                         StringComparison.Ordinal))
+                     .OrderBy(static item => item.Key, StringComparer.Ordinal))
+        {
+            foreach (var result in parent.Value.Collected
+                         .OrderBy(static item => item.Index)
+                         .ThenBy(static item => item.StepId, StringComparer.Ordinal))
+            {
+                if (!string.IsNullOrWhiteSpace(result.StepId) && !kernelVariableKeys.Contains(result.StepId))
+                    variables[result.StepId] = result.Output ?? string.Empty;
+            }
+        }
     }
 
     private static IReadOnlyList<string> ResolveCompletedStepIds(IReadOnlyDictionary<string, string> variables) =>

@@ -47,25 +47,40 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
         var explicitRequestConfirmations = suppliedAdmission?.ExplicitRequestConfirmations ?? [];
         var executionMode = suppliedAdmission?.ExecutionMode
             ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAccess = new ExternalWorkflowCapabilityAccessContext(
+            request.ScopeId,
+            callerId,
+            callerCredential,
+            organizationBearerToken);
         var capabilityAdmissionPlan = existingPlan is not null
-            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                new PersistedWorkflowCapabilityAdmissionRequest(
-                    existingPlan,
-                    request.WorkflowYaml,
-                    inlineWorkflowYamls,
-                    "studio_member_workflow_binding",
-                    executionMode,
-                    workflowId,
-                    revisionId),
-                ct)
+            ? callerCredential is not null
+                ? await _capabilityAdmissionService.RefreshPersistedAsync(
+                    new RefreshPersistedWorkflowCapabilityAdmissionRequest(
+                        new PersistedWorkflowCapabilityAdmissionRequest(
+                            existingPlan,
+                            request.WorkflowYaml,
+                            inlineWorkflowYamls,
+                            "studio_member_workflow_binding",
+                            executionMode,
+                            workflowId,
+                            revisionId),
+                        capabilityAccess,
+                        explicitRequestConfirmations),
+                    ct)
+                : await _capabilityAdmissionService.RevalidatePersistedAsync(
+                    new PersistedWorkflowCapabilityAdmissionRequest(
+                        existingPlan,
+                        request.WorkflowYaml,
+                        inlineWorkflowYamls,
+                        "studio_member_workflow_binding",
+                        executionMode,
+                        workflowId,
+                        revisionId),
+                    ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
-                new ExternalWorkflowCapabilityAccessContext(
-                    request.ScopeId,
-                    callerId,
-                    callerCredential,
-                    organizationBearerToken),
-                request.WorkflowYaml,
+                    capabilityAccess,
+                    request.WorkflowYaml,
                 inlineWorkflowYamls,
                 "studio_member_workflow_binding",
                 executionMode,

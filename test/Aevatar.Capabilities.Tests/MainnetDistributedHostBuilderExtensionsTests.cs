@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
@@ -38,6 +39,8 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "512");
         using var maxEventDeliveryTime = new EnvironmentVariableScope(
             "AEVATAR_Orleans__MaxEventDeliveryTime", "00:04:00");
+        using var responseTimeout = new EnvironmentVariableScope(
+            "AEVATAR_Orleans__ResponseTimeout", "00:05:00");
         using var keyringFile = TemporaryKeyringFile.Create();
         using var keyringPath = new EnvironmentVariableScope("AEVATAR_ActorRuntime__SecretStoreKeyringPath", keyringFile.Path);
 
@@ -56,6 +59,8 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         runtimeOptions.QueueCount.Should().Be(6);
         runtimeOptions.QueueCacheSize.Should().Be(512);
         runtimeOptions.MaxEventDeliveryTime.Should().Be(TimeSpan.FromMinutes(4));
+        app.Services.GetRequiredService<IOptions<SiloMessagingOptions>>().Value.ResponseTimeout
+            .Should().Be(TimeSpan.FromMinutes(5));
         transportOptions.TopicPartitionCount.Should().Be(6);
         transportOptions.TopicName.Should().Be("mainnet-kafka-provider-events");
         transportOptions.ReceiverBufferCapacity.Should().Be(96);
@@ -104,6 +109,133 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         // Bare env var should win.
         builder.Configuration["Projection:Policies:Environment"]
             .Should().Be("Development", "bare env vars must override Distributed.json");
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_StaleInternalTransportWithoutOptIn_ShouldUsePublicApi()
+    {
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var internalOptIn = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", null);
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://stale-nyxid.internal:3001",
+            ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test",
+        });
+
+        builder.AddMainnetDistributedOrleansHost();
+
+        builder.Configuration["Aevatar:NyxId:InternalApiBaseUrl"].Should().BeEmpty();
+        var options = ResolveNyxIdOptions(builder.Configuration);
+        options.InternalApiBaseUrl.Should().BeNull();
+        options.EffectiveTransportBaseUrl.Should().Be("https://nyx-api.example.test");
+        options.PublicTransportFallbackBaseUrl.Should().BeNull();
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_ExplicitEnvironmentOptIn_ShouldUseInternalTransport()
+    {
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var internalOptIn = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
+        using var internalApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl", "http://nyxid.internal:3001");
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://stale-nyxid.internal:3001",
+            ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test",
+            ["Aevatar:NyxId:InternalApiFallbackTimeoutSeconds"] = "7",
+        });
+
+        builder.AddMainnetDistributedOrleansHost();
+
+        builder.Configuration["Aevatar:NyxId:InternalApiBaseUrl"]
+            .Should().Be("http://nyxid.internal:3001");
+        var options = ResolveNyxIdOptions(builder.Configuration);
+        options.InternalApiBaseUrl.Should().Be("http://nyxid.internal:3001");
+        options.EffectiveTransportBaseUrl.Should().Be("http://nyxid.internal:3001");
+        options.PublicTransportFallbackBaseUrl.Should().Be("https://nyx-api.example.test");
+        options.InternalApiFallbackTimeoutSeconds.Should().Be(7);
+    }
+
+    [Theory]
+    [InlineData("false", "not-an-absolute-url")]
+    [InlineData("invalid", "https://user@stale-nyxid.internal")]
+    public void AddMainnetDistributedOrleansHost_NonTrueEnvironmentGate_ShouldIgnoreConfiguredInternalTransport(
+        string gateValue,
+        string staleInternalApiBaseUrl)
+    {
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var internalOptIn = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", gateValue);
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:EnableInternalApiTransport"] = "true",
+            ["Aevatar:NyxId:InternalApiBaseUrl"] = staleInternalApiBaseUrl,
+            ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test",
+        });
+
+        builder.AddMainnetDistributedOrleansHost();
+
+        builder.Configuration["Aevatar:NyxId:EnableInternalApiTransport"].Should().Be(gateValue);
+        builder.Configuration["Aevatar:NyxId:InternalApiBaseUrl"].Should().BeEmpty();
+        ResolveNyxIdOptions(builder.Configuration).EffectiveTransportBaseUrl
+            .Should().Be("https://nyx-api.example.test");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("nyxid.internal")]
+    [InlineData("http:/nyxid.internal")]
+    [InlineData("ftp://nyxid.internal")]
+    [InlineData("https://user@nyxid.internal")]
+    [InlineData("https://nyxid.internal?mode=internal")]
+    [InlineData("https://nyxid.internal#internal")]
+    public void AddMainnetDistributedOrleansHost_EnabledWithInvalidInternalUrl_ShouldFailFast(
+        string? internalApiBaseUrl)
+    {
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var internalOptIn = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
+        using var environmentInternalApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl", null);
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:InternalApiBaseUrl"] = internalApiBaseUrl,
+            ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test",
+        });
+
+        var act = () => builder.AddMainnetDistributedOrleansHost();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Aevatar:NyxId:InternalApiBaseUrl*absolute HTTP(S) base URL*" +
+                         "Aevatar:NyxId:EnableInternalApiTransport*");
+    }
+
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_EnabledWithSamePublicAndInternalUrl_ShouldNotConfigureFallback()
+    {
+        using var runtimeProvider = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var internalOptIn = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__EnableInternalApiTransport", "true");
+        using var internalApiBaseUrl = new EnvironmentVariableScope(
+            "AEVATAR_Aevatar__NyxId__InternalApiBaseUrl", "https://nyx-api.example.test");
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test",
+        });
+
+        builder.AddMainnetDistributedOrleansHost();
+
+        var options = ResolveNyxIdOptions(builder.Configuration);
+        options.EffectiveTransportBaseUrl.Should().Be("https://nyx-api.example.test");
+        options.PublicTransportFallbackBaseUrl.Should().BeNull();
     }
 
     [Fact]
@@ -183,6 +315,50 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
             .Should().BeGreaterThanOrEqualTo(AevatarOrleansRuntimeOptions.DefaultQueueCacheSize);
     }
 
+    [Fact]
+    public void AddMainnetDistributedOrleansHost_DistributedProfile_ShouldKeepResponseTimeoutAboveDeliveryTime()
+    {
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
+        builder.AddMainnetDistributedOrleansHost();
+
+        using var app = builder.Build();
+        var maxEventDeliveryTime = app.Services
+            .GetRequiredService<AevatarOrleansRuntimeOptions>()
+            .MaxEventDeliveryTime;
+        var responseTimeout = app.Services
+            .GetRequiredService<IOptions<SiloMessagingOptions>>()
+            .Value.ResponseTimeout;
+
+        responseTimeout.Should().Be(TimeSpan.FromMinutes(4));
+        responseTimeout.Should().BeGreaterThan(maxEventDeliveryTime);
+    }
+
+    [Theory]
+    [InlineData("00:03:00")]
+    [InlineData("00:02:59")]
+    public void AddMainnetDistributedOrleansHost_ResponseTimeoutNotAboveDeliveryTime_ShouldThrow(
+        string configuredResponseTimeout)
+    {
+        using var responseTimeout = new EnvironmentVariableScope(
+            "AEVATAR_Orleans__ResponseTimeout", configuredResponseTimeout);
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["ActorRuntime:Provider"] = "Orleans",
+        });
+
+        builder.AddAevatarDefaultHost(options => options.AllowLocalFileSecretsStore = false);
+
+        var act = () => builder.AddMainnetDistributedOrleansHost();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("Orleans:ResponseTimeout must be greater than Orleans:MaxEventDeliveryTime.");
+    }
+
     private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?> values)
     {
         var options = new WebApplicationOptions
@@ -194,12 +370,20 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         return builder;
     }
 
+    private static NyxIdToolOptions ResolveNyxIdOptions(IConfiguration configuration)
+    {
+        var services = new ServiceCollection();
+        services.AddNyxIdApiAccess(configuration);
+        using var provider = services.BuildServiceProvider();
+        return provider.GetRequiredService<NyxIdToolOptions>();
+    }
+
     private sealed class EnvironmentVariableScope : IDisposable
     {
         private readonly string _name;
         private readonly string? _previous;
 
-        public EnvironmentVariableScope(string name, string value)
+        public EnvironmentVariableScope(string name, string? value)
         {
             _name = name;
             _previous = Environment.GetEnvironmentVariable(name);

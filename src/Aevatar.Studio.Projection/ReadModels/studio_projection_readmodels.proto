@@ -5,6 +5,9 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "llm_selection.proto";
+import "llm_model_catalog_policy_messages.proto";
+import "workflow_delivery_messages.proto";
+import "Tools/tool_presentation.proto";
 
 message ContentArtifactCitationDocument {
   string citation_id = 1;
@@ -164,6 +167,31 @@ message WorkOrderCurrentStateDocument {
   string terminal_reason = 76;
 }
 
+// Actor-scoped current-state replica for WorkflowDeliveryGAgent. The immutable
+// package source remains available to the application boundary, while public
+// delivery responses are responsible for selecting the fields they expose.
+message WorkflowDeliveryCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string delivery_id = 20;
+  aevatar.gagents.workflow_delivery.WorkflowPackageVersionSnapshot package = 21;
+  string target_scope_id = 22;
+  google.protobuf.Timestamp expires_at_utc = 23;
+  string note = 24;
+  aevatar.gagents.workflow_delivery.WorkflowDeliveryLifecycleStatus lifecycle_status = 25;
+  string created_by = 26;
+  google.protobuf.Timestamp created_at_utc = 27;
+  google.protobuf.Timestamp accessed_at_utc = 28;
+  string revoked_by = 29;
+  google.protobuf.Timestamp revoked_at_utc = 30;
+  repeated aevatar.gagents.workflow_delivery.WorkflowDeliveryConnectionState connections = 31;
+  aevatar.gagents.workflow_delivery.WorkflowInstallationState installation = 32;
+}
+
 // ─── Workflow Board Execution Materialized View ───
 //
 // Studio owns the workflow board product surface. The authoritative facts
@@ -268,6 +296,8 @@ message ScopeWorkflowCatalogueRowDocument {
   string deployment_id = 34;
   string deployment_status = 35;
   string published_service_id = 36;
+  string service_app_id = 37;
+  string service_namespace = 38;
 }
 
 // ─── UserConfig Current State ReadModel ───
@@ -288,6 +318,22 @@ message UserConfigCurrentStateDocument {
   int32 max_tool_rounds = 15;
   string github_username = 16;
   aevatar.ai.LLMSelection llm_selection = 17;
+}
+
+// Actor-scoped current-state replica for LLMModelCatalogPolicyGAgent.
+// The committed actor version is the sole state_version authority.
+message LLMModelCatalogPolicyCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  aevatar.gagents.user_config.LLMModelCatalogPolicyOwnerType owner_type = 20;
+  string scope_id = 21;
+  aevatar.gagents.user_config.LLMModelCatalogPolicyMode mode = 22;
+  repeated aevatar.gagents.user_config.LLMModelCatalogPolicySource sources = 23;
+  string last_mutation_id = 24;
 }
 
 // ─── GAgentRegistry Current State ReadModel ───
@@ -422,6 +468,7 @@ message NyxIdChatConversationToolStepSourceDocument {
   string service_id = 3;
   optional string readiness_capability_id = 4;
   string provider_resource_id = 5;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 6;
 }
 
 message NyxIdChatConversationBrowserActionStepSourceDocument {
@@ -1041,6 +1088,9 @@ message StudioMemberBindingRunCurrentStateDocument {
   string status = 24;
   string platform_binding_command_id = 25;
   int32 attempt_count = 26;
+  string platform_execution_stage = 27;
+  int32 platform_execution_attempt = 28;
+  string last_readiness_status = 29;
 
   string failure_code = 30;
   string failure_message = 31;

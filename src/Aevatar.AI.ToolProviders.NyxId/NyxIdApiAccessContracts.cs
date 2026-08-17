@@ -114,6 +114,7 @@ public sealed record NyxIdUserServiceKey(
     string? NodeId,
     NyxIdUserServiceNodeStatus NodeStatus,
     NyxIdUserServiceCredentialSource CredentialSource,
+    string? CatalogServiceId,
     string? CatalogServiceSlug,
     bool Connected);
 
@@ -297,7 +298,7 @@ public static class NyxIdApiAccessResponseParser
     public static NyxIdApiAccessResult<NyxIdUserServices> ParseUserServices(string response) =>
         Parse(response, UserServicesFailurePrefix, ParseUserServicesDocument);
 
-    public static NyxIdApiAccessResult<NyxIdUserServices> ParseCodeExecutionUserServices(
+    public static NyxIdApiAccessResult<NyxIdUserServices> ParseUserServiceRoutes(
         string response) =>
         Parse(
             response,
@@ -419,6 +420,7 @@ public static class NyxIdApiAccessResponseParser
                     serviceElement,
                     "credential_source",
                     JsonValueKind.Object)),
+                ReadOptionalNormalizedString(serviceElement, "catalog_service_id"),
                 ReadOptionalNormalizedString(serviceElement, "catalog_service_slug"),
                 RequireBoolean(serviceElement, "connected")));
         }

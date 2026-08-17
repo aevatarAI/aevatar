@@ -1172,9 +1172,38 @@ public sealed class ScheduledDispatchGAgentTests
         serviceRequest.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("run daily");
         serviceRequest.CommandId.Should().Be(idempotencyKey);
         serviceRequest.CorrelationId.Should().Be(idempotencyKey);
+        serviceInvocationDispatch.FireContexts.Should().ContainSingle().Which.Should().Be(
+            new ScheduledDispatchFireContext(firstFireAt, "UTC"));
         agent.State.FireRecords[idempotencyKey].TargetActorId.Should().Be("service-run-actor");
         agent.State.FireRecords[idempotencyKey].CommandId.Should().Be(idempotencyKey);
         agent.State.FireRecords[idempotencyKey].CorrelationId.Should().Be(idempotencyKey);
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_ShouldRejectUnknownScheduledPromptPlaceholderBeforePersisting()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var target = CreateWorkflowServiceInvocationTarget(payload: new ChatRequestEvent
+        {
+            Prompt = "{\"run_date\":\"{{@schedule.unknown}}\"}",
+        });
+
+        var act = () => agent.HandleConfigureAsync(CreateConfigureCommand(
+            targetActorId: ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+            triggerEnvelope: CreateTriggerEnvelope(
+                ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+                new ServiceInvocationRequest
+                {
+                    Payload = target.ServiceInvocation!.Payload.Clone(),
+                }),
+            target: target,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Unsupported scheduled prompt placeholder '@schedule.unknown'.*");
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
     }
 
     [Fact]
@@ -5981,6 +6010,7 @@ public sealed class ScheduledDispatchGAgentTests
         public List<ServiceInvocationRequest> Requests { get; } = [];
         public List<ScheduledServiceInvocationAuth?> Auths { get; } = [];
         public List<IReadOnlyDictionary<string, string>?> Headers { get; } = [];
+        public List<ScheduledDispatchFireContext?> FireContexts { get; } = [];
         public List<bool> ProjectNyxIdAccessTokenToWorkflowCallerCredentials { get; } = [];
         public List<ScheduledInvocationAuthorizationFact?> AuthorizationFacts { get; } = [];
 
@@ -6003,6 +6033,7 @@ public sealed class ScheduledDispatchGAgentTests
             ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Add(
                 dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
             AuthorizationFacts.Add(dispatch.AuthorizationFact);
+            FireContexts.Add(dispatch.FireContext);
             Headers.Add(dispatch.Headers == null
                 ? null
                 : new Dictionary<string, string>(dispatch.Headers, StringComparer.Ordinal));

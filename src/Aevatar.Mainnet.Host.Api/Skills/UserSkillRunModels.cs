@@ -64,15 +64,23 @@ internal sealed record SkillScheduleOutcome(
     SkillScheduleReceipt? Receipt = null,
     SkillScheduleConfirmationReceipt? Confirmation = null,
     string? ErrorCode = null,
-    string? ErrorMessage = null)
+    string? ErrorMessage = null,
+    IReadOnlyList<string>? RequiredUserServiceIds = null)
 {
     public static SkillScheduleOutcome Ok(SkillScheduleReceipt receipt) => new(true, receipt);
 
     public static SkillScheduleOutcome ConfirmationRequired(SkillScheduleConfirmationReceipt confirmation) =>
         new(false, Confirmation: confirmation);
 
-    public static SkillScheduleOutcome Failed(string code, string message) =>
-        new(false, ErrorCode: code, ErrorMessage: message);
+    public static SkillScheduleOutcome Failed(
+        string code,
+        string message,
+        IReadOnlyList<string>? requiredUserServiceIds = null) =>
+        new(
+            false,
+            ErrorCode: code,
+            ErrorMessage: message,
+            RequiredUserServiceIds: requiredUserServiceIds);
 }
 
 // Invokes a visible ornn skill once as an observable workflow run, or provisions a recurring schedule for it.

@@ -818,9 +818,14 @@ public abstract class ScopeServiceEndpointTestKit
 
         public FakeServiceRunQueryPort? LinkedQueryPort { get; set; }
 
+        public Exception? RegisterFailure { get; set; }
+
         public Task<ServiceRunRegistrationResult> RegisterAsync(ServiceRunRecord record, CancellationToken ct = default)
         {
             RegisterCalls.Add(record.Clone());
+            if (RegisterFailure != null)
+                return Task.FromException<ServiceRunRegistrationResult>(RegisterFailure);
+
             LinkedQueryPort?.Upsert(BuildSnapshot(record));
             return Task.FromResult(new ServiceRunRegistrationResult($"service-run:{record.ScopeId}:{record.ServiceId}:{record.RunId}", record.RunId));
         }

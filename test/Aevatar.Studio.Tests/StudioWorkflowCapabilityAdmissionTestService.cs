@@ -24,9 +24,13 @@ internal sealed class StudioWorkflowCapabilityAdmissionTestService :
 
     public List<PersistedWorkflowCapabilityAdmissionRequest> PersistedRequests { get; } = [];
 
+    public List<RefreshPersistedWorkflowCapabilityAdmissionRequest> RefreshRequests { get; } = [];
+
     public Action<WorkflowExternalCapabilityAdmissionRequest>? OnAdmit { get; init; }
 
     public Action<PersistedWorkflowCapabilityAdmissionRequest>? OnRevalidate { get; init; }
+
+    public Action<RefreshPersistedWorkflowCapabilityAdmissionRequest>? OnRefresh { get; init; }
 
     public WorkflowCapabilityAdmissionPlan? AdmissionPlan { get; init; }
 
@@ -66,5 +70,20 @@ internal sealed class StudioWorkflowCapabilityAdmissionTestService :
             return _inner.RevalidatePersistedAsync(request, cancellationToken);
 
         return Task.FromResult(request.Plan.Clone());
+    }
+
+    public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+        RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        RefreshRequests.Add(request);
+        OnRefresh?.Invoke(request);
+        if (_failure is not null)
+            return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
+
+        if (_inner is not null)
+            return _inner.RefreshPersistedAsync(request, cancellationToken);
+
+        return Task.FromResult(request.Persisted.Plan.Clone());
     }
 }

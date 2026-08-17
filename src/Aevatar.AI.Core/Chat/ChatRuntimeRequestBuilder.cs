@@ -69,6 +69,7 @@ internal static class ChatRuntimeRequestBuilder
             ToolContext = effectiveToolContext,
             RoutingContext = effectiveLlmControl?.ToRoutingContext(baseRequest.RoutingContext) ?? baseRequest.RoutingContext,
             LlmControl = effectiveLlmControl,
+            RouteTarget = baseRequest.RouteTarget?.Clone(),
             Tools = FilterVisibleTools(
                 MergeExactTools(baseRequest.Tools, turnCatalog?.RouteOwnedTools.Values),
                 effectiveToolContext.ToolVisibility),
@@ -215,6 +216,7 @@ internal static class ChatRuntimeRequestBuilder
                 ToolContext = toolContext with { ToolVisibility = visibility },
                 RoutingContext = request.RoutingContext,
                 LlmControl = request.LlmControl,
+                RouteTarget = request.RouteTarget?.Clone(),
                 Tools = tools is { Count: > 0 } ? tools : null,
                 Model = request.Model,
                 Temperature = request.Temperature,

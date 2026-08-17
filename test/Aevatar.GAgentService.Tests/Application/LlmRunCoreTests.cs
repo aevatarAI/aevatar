@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -44,6 +45,68 @@ public sealed class LlmRunCoreTests
         completed.Usage!.TotalTokens.Should().Be(5);
         provider.Requests.Should().ContainSingle()
             .Which.CallerContext!.ResponseId.Should().Be("resp_1");
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldPreserveCatalogServiceRouteTargetForProvider()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "ok", IsLast = true }],
+        ]);
+        var command = BuildRunRequest("resp_catalog");
+        command.RouteTarget = new LLMRouteTarget
+        {
+            CatalogServiceId = "catalog-alpha",
+            ServiceSlugSnapshot = "route-alpha",
+        };
+        var core = new LlmRunCore(
+            provider,
+            [],
+            TestToolSetRegistry.Empty,
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(command, "run_catalog", "ApiKey"),
+            new RecordingLlmRunSink());
+
+        var recordedTarget = provider.Requests.Should().ContainSingle().Subject.RouteTarget;
+        recordedTarget.Should().NotBeNull().And.NotBeSameAs(command.RouteTarget);
+        recordedTarget!.SourceIdentityCase.Should().Be(
+            LLMRouteTarget.SourceIdentityOneofCase.CatalogServiceId);
+        recordedTarget.CatalogServiceId.Should().Be("catalog-alpha");
+        recordedTarget.ServiceSlugSnapshot.Should().Be("route-alpha");
+    }
+
+    [Fact]
+    public async Task RunAsync_ShouldPreserveUserServiceRouteTargetForProvider()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "ok", IsLast = true }],
+        ]);
+        var command = BuildRunRequest("resp_user");
+        command.RouteTarget = new LLMRouteTarget
+        {
+            UserServiceId = "us-alpha",
+            ServiceSlugSnapshot = "route-alpha",
+        };
+        var core = new LlmRunCore(
+            provider,
+            [],
+            TestToolSetRegistry.Empty,
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(command, "run_user", "ApiKey"),
+            new RecordingLlmRunSink());
+
+        var recordedTarget = provider.Requests.Should().ContainSingle().Subject.RouteTarget;
+        recordedTarget.Should().NotBeNull().And.NotBeSameAs(command.RouteTarget);
+        recordedTarget!.SourceIdentityCase.Should().Be(
+            LLMRouteTarget.SourceIdentityOneofCase.UserServiceId);
+        recordedTarget.UserServiceId.Should().Be("us-alpha");
+        recordedTarget.ServiceSlugSnapshot.Should().Be("route-alpha");
     }
 
     [Fact]

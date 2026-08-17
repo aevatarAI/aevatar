@@ -77,6 +77,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             ? ScopeWorkflowCapabilityConventions.BuildDefaultServiceIdentity(_options, normalizedScopeId, request.AppId)
             : ScopeWorkflowCapabilityConventions.BuildServiceIdentity(_options, normalizedScopeId, request.ServiceId.Trim(), request.AppId);
         var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
+        var activationAttemptId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.ActivationAttemptId);
         var explicitRequestConfirmations = request.CapabilityAdmission?.ExplicitRequestConfirmations;
         var desiredBinding = await ResolveDesiredBindingAsync(
             request,
@@ -139,13 +140,17 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             Identity = identity.Clone(),
             RevisionId = revisionId,
+            ActivationAttemptId = activationAttemptId,
         }, ct);
         await DispatchExternalExposureIntentAsync(request, identity, desiredBinding.ServiceDefinition, existingService, ct);
 
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
         // TODO(iter2/cluster-006): If callers need "invoke safe now", add an explicit read/projection
         // observation path in a separate PR rather than blocking this command path on readmodels.
-        return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
+        return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId) with
+        {
+            ActivationAttemptId = activationAttemptId,
+        };
     }
 
     private static void ApplyExternalExposureIntent(
@@ -196,7 +201,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var existingRevision = revisions?.Revisions.FirstOrDefault(x =>
             string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
         if (existingRevision == null)
-            return true;
+            return !MatchesAcceptedRevisionCreation(request, identity, revisionId);
 
         if (!string.Equals(existingRevision.ImplementationKind, revisionSpec.ImplementationKind.ToString(), StringComparison.OrdinalIgnoreCase))
         {
@@ -248,6 +253,19 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         }
 
         return false;
+    }
+
+    private static bool MatchesAcceptedRevisionCreation(
+        ScopeBindingUpsertRequest request,
+        ServiceIdentity identity,
+        string revisionId)
+    {
+        var accepted = request.AcceptedRevisionCreation;
+        return accepted != null &&
+               request.AllowExistingRevisionReplay &&
+               string.Equals(request.ReplayRevisionId, revisionId, StringComparison.Ordinal) &&
+               string.Equals(accepted.RevisionId, revisionId, StringComparison.Ordinal) &&
+               string.Equals(accepted.ServiceKey, ServiceKeys.Build(identity), StringComparison.Ordinal);
     }
 
     private async Task<string> ComputeNonScriptingArtifactHashAsync(
@@ -328,8 +346,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
         var capabilityAdmissionPlan = workflowSpec.CapabilityAdmissionPlan
             ?? throw new InvalidOperationException("workflow capability admission plan is required.");
+        var artifactRevisionSpec = revisionSpec.Clone();
+        artifactRevisionSpec.WorkflowSpec!.WorkflowId = string.IsNullOrWhiteSpace(workflowSpec.WorkflowId)
+            ? revisionSpec.RevisionId
+            : workflowSpec.WorkflowId;
         return WorkflowServiceRevisionArtifactBuilder.Build(
-            revisionSpec,
+            artifactRevisionSpec,
             resolvedWorkflowName,
             authorizationDependencies,
             capabilityAdmissionPlan);
@@ -405,25 +427,40 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             : ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(suppliedWorkflowId);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAccess = new ExternalWorkflowCapabilityAccessContext(
+            normalizedScopeId,
+            admissionContext?.CallerId ?? string.Empty,
+            admissionContext?.NyxIdCallerCredential,
+            admissionContext?.NyxIdOrganizationBearerToken);
         var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
-            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
-                new PersistedWorkflowCapabilityAdmissionRequest(
-                    existingPlan,
-                    workflowBundle.EntryWorkflowYaml,
-                    workflowBundle.SubWorkflowYamls,
-                    "scope_binding_upsert",
-                    executionMode,
-                    workflowId,
-                    revisionId),
-                ct)
+            ? admissionContext.NyxIdCallerCredential is not null
+                ? await _capabilityAdmissionService.RefreshPersistedAsync(
+                    new RefreshPersistedWorkflowCapabilityAdmissionRequest(
+                        new PersistedWorkflowCapabilityAdmissionRequest(
+                            existingPlan,
+                            workflowBundle.EntryWorkflowYaml,
+                            workflowBundle.SubWorkflowYamls,
+                            "scope_binding_upsert",
+                            executionMode,
+                            workflowId,
+                            revisionId),
+                        capabilityAccess,
+                        explicitRequestConfirmations),
+                    ct)
+                : await _capabilityAdmissionService.RevalidatePersistedAsync(
+                    new PersistedWorkflowCapabilityAdmissionRequest(
+                        existingPlan,
+                        workflowBundle.EntryWorkflowYaml,
+                        workflowBundle.SubWorkflowYamls,
+                        "scope_binding_upsert",
+                        executionMode,
+                        workflowId,
+                        revisionId),
+                    ct)
             : await _capabilityAdmissionService.AdmitAsync(
                 new WorkflowExternalCapabilityAdmissionRequest(
-                new ExternalWorkflowCapabilityAccessContext(
-                    normalizedScopeId,
-                    admissionContext?.CallerId ?? string.Empty,
-                    admissionContext?.NyxIdCallerCredential,
-                    admissionContext?.NyxIdOrganizationBearerToken),
-                workflowBundle.EntryWorkflowYaml,
+                    capabilityAccess,
+                    workflowBundle.EntryWorkflowYaml,
                 workflowBundle.SubWorkflowYamls,
                 "scope_binding_upsert",
                 executionMode,

@@ -3,6 +3,8 @@ using Aevatar.Audit.Core.Stores;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -13,6 +15,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
+using Aevatar.GAgents.Channel.Identity.ProjectionRecovery;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.Device;
@@ -46,6 +49,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, InMemoryProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, InMemoryProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
+        Assert.Null(provider.GetService<IAevatarOAuthClientVersionRegressionRepairService>());
         AssertProviderStore<ManagedCodexCredentialDocument, InMemoryProjectionDocumentStore<ManagedCodexCredentialDocument, string>>(provider);
         AssertProviderStore<ChatRoutePolicyCurrentStateDocument, InMemoryProjectionDocumentStore<ChatRoutePolicyCurrentStateDocument, string>>(provider);
         AssertProviderStore<DeviceRegistrationDocument, InMemoryProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
@@ -78,6 +82,11 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<ProjectionScopeStatusDocument, ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<ExternalIdentityBindingDocument, ElasticsearchProjectionDocumentStore<ExternalIdentityBindingDocument, string>>(provider);
         AssertProviderStore<AevatarOAuthClientDocument, ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(provider);
+        Assert.Null(provider.GetService<IAevatarOAuthClientVersionRegressionRepairService>());
+        Assert.NotNull(provider.GetRequiredService<
+            IAevatarOAuthClientVersionRegressionStorePort>());
+        Assert.NotNull(provider.GetRequiredService<
+            IElasticsearchProjectionDocumentRepairStore<AevatarOAuthClientDocument, string>>());
         AssertProviderStore<ManagedCodexCredentialDocument, ElasticsearchProjectionDocumentStore<ManagedCodexCredentialDocument, string>>(provider);
         AssertProviderStore<ChatRoutePolicyCurrentStateDocument, ElasticsearchProjectionDocumentStore<ChatRoutePolicyCurrentStateDocument, string>>(provider);
         AssertProviderStore<DeviceRegistrationDocument, ElasticsearchProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
@@ -249,6 +258,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         var services = new ServiceCollection();
 
         services.AddSingleton<ISecretVault, InMemorySecretVault>();
+        services.AddSingleton<IEventStore, InMemoryEventStore>();
         services.AddChannelRuntime(configuration);
         services.AddChannelIdentity(configuration);
         services.AddChatRoutingAgents(configuration);

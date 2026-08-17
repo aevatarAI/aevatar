@@ -113,7 +113,13 @@ public static class ServiceCollectionExtensions
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
         services.TryAddSingleton<IAgentRunToolApprovalDecisionDispatcher, AgentRunToolApprovalDecisionDispatcher>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>());
+        // The two-generic overload keeps the concrete implementation type visible to
+        // TryAddEnumerable; a Func<IServiceProvider, IChannelSlashCommandHandler> factory
+        // would be indistinguishable from every other handler registered for this service.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>(sp =>
+                new ChannelWorkflowDraftRunSlashCommandHandler(
+                    sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>())));
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
         services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();
         services.TryAddSingleton<ChannelWorkflowDraftRunAdmission>(sp =>
@@ -159,6 +165,9 @@ public static class ServiceCollectionExtensions
                     // the reply activity's TransportExtras) instead of the process-wide default, so a DM
                     // to one bot is answered by that bot's app and not a sibling under the same account.
                     sp.GetService<ILarkOutboundClientFactory>(),
+                    // Inbound turns bind the card through their single-use channel reply authority.
+                    // Proactive turns still use the scoped Lark proxy client above.
+                    sp.GetRequiredService<NyxIdApiClient>(),
                     sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
             }));
         }

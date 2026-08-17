@@ -27,6 +27,7 @@ using NSubstitute;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
+[Collection(ChannelRuntimeTestCollections.NyxIdInventoryRequestContext)]
 public sealed class NyxIdChatDurableRetryCapabilityTests
 {
     private static readonly Timestamp Now = Timestamp.FromDateTimeOffset(
@@ -47,6 +48,8 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
               "endpoint_id": "instance-endpoint-alpha",
               "endpoint_url": "https://lark.test",
               "is_active": true,
+              "connected": true,
+              "status": "active",
               "credential_source": { "type": "personal" }
             }
           ]

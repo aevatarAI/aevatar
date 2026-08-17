@@ -182,6 +182,7 @@ public sealed class WorkflowExecutionReadModelMapper
                 .ToList(),
             Steps = source.Steps.Select(MapStepTrace).ToList(),
             RoleReplies = source.RoleReplies.Select(MapRoleReply).ToList(),
+            Operations = source.Operations.Select(MapOperation).ToList(),
             Timeline = source.Timeline.Select(MapTimelineEvent).ToList(),
             Usage = MapUsage(source.Usage),
             Summary = MapSummary(source.Summary),
@@ -288,6 +289,7 @@ public sealed class WorkflowExecutionReadModelMapper
         {
             "running" => WorkflowRunCompletionStatus.Running,
             "completed" => WorkflowRunCompletionStatus.Completed,
+            "timed_out" => WorkflowRunCompletionStatus.TimedOut,
             "failed" => WorkflowRunCompletionStatus.Failed,
             "stopped" => WorkflowRunCompletionStatus.Stopped,
             "not_found" => WorkflowRunCompletionStatus.NotFound,
@@ -326,7 +328,7 @@ public sealed class WorkflowExecutionReadModelMapper
                 Tenant = source.Tenant,
                 ExternalUserId = source.ExternalUserId,
                 Scope = source.Scope,
-                BindingId = source.BindingId,
+                BindingId = string.Empty,
                 DisplayValue = string.IsNullOrWhiteSpace(source.DisplayValue) ? "Unknown" : source.DisplayValue,
                 Availability = string.IsNullOrWhiteSpace(source.Availability) ? "unavailable" : source.Availability,
             };
@@ -372,6 +374,7 @@ public sealed class WorkflowExecutionReadModelMapper
         {
             WorkflowExecutionCompletionStatus.Running => WorkflowRunCompletionStatus.Running,
             WorkflowExecutionCompletionStatus.Completed => WorkflowRunCompletionStatus.Completed,
+            WorkflowExecutionCompletionStatus.TimedOut => WorkflowRunCompletionStatus.TimedOut,
             WorkflowExecutionCompletionStatus.Failed => WorkflowRunCompletionStatus.Failed,
             WorkflowExecutionCompletionStatus.Stopped => WorkflowRunCompletionStatus.Stopped,
             WorkflowExecutionCompletionStatus.NotFound => WorkflowRunCompletionStatus.NotFound,
@@ -465,6 +468,33 @@ public sealed class WorkflowExecutionReadModelMapper
             SessionId = source.SessionId,
             Content = source.Content,
             ContentLength = source.ContentLength,
+        };
+
+    private static WorkflowRunOperation MapOperation(WorkflowRuntimeOperationReadModel source) =>
+        new()
+        {
+            SessionId = source.SessionId,
+            OperationId = source.OperationId,
+            ProgressSequence = source.ProgressSequence,
+            Round = source.Round,
+            Kind = source.Kind,
+            StartedAt = source.StartedAt,
+            CompletedAt = source.CompletedAt,
+            RoleActorId = source.RoleActorId,
+            Model = source.Model,
+            Provider = source.Provider,
+            InputSummary = source.InputSummary,
+            AvailableToolNames = source.AvailableToolNames.ToList(),
+            Output = source.Output,
+            ReasoningContent = source.ReasoningContent,
+            FinishReason = source.FinishReason,
+            Usage = MapUsage(source.Usage),
+            Success = source.Success,
+            Error = source.Error,
+            ToolCallId = source.ToolCallId,
+            ToolName = source.ToolName,
+            ArgumentsJson = source.ArgumentsJson,
+            ResultJson = source.ResultJson,
         };
 
     private static WorkflowRunTimelineEvent MapTimelineEvent(WorkflowExecutionTimelineEvent source) =>

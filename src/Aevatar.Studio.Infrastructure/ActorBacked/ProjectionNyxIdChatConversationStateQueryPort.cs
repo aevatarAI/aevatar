@@ -417,7 +417,8 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                         source.Tool.HasReadinessCapabilityId
                             ? NullIfEmpty(source.Tool.ReadinessCapabilityId)
                             : null,
-                        NullIfEmpty(source.Tool.ProviderResourceId))),
+                        NullIfEmpty(source.Tool.ProviderResourceId),
+                        source.Tool.Presentation?.Clone())),
             NyxIdChatConversationStepSourceDocument.SourceOneofCase.BrowserAction =>
                 new NyxIdChatConversationStepSourceSnapshot(
                     BrowserAction: new NyxIdChatBrowserActionStepSourceSnapshot(

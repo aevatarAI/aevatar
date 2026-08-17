@@ -655,6 +655,9 @@ public static class NyxIdChatTaskLifecycle
                 IdempotencyKey = toolStep.Operation.IdempotencyKey,
                 OperationAdmission = toolCall.OperationAdmission?.Clone(),
                 Intent = next.ActiveTurn.Intent,
+                Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                    toolCall.Presentation,
+                    toolCall.ToolName),
             },
         };
         FinalizeDerivedState(next, now);
@@ -1176,6 +1179,9 @@ public static class NyxIdChatTaskLifecycle
                     Idempotent = !toolCall.Safety.MayChangeExternalState,
                     IdempotencyKey = materialized.Operation.IdempotencyKey,
                     OperationAdmission = toolCall.OperationAdmission?.Clone(),
+                    Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                        toolCall.Presentation,
+                        toolCall.ToolName),
                 },
             });
     }
@@ -1197,6 +1203,9 @@ public static class NyxIdChatTaskLifecycle
         {
             ToolName = call.ToolName,
             OperationAdmission = call.OperationAdmission?.Clone(),
+            Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                call.Presentation,
+                call.ToolName),
         };
         if (call.OperationAdmission is { } admission)
         {
@@ -1253,6 +1262,9 @@ public static class NyxIdChatTaskLifecycle
                 ToolName = call.ToolName,
                 Arguments = arguments,
                 OperationAdmission = call.OperationAdmission.Clone(),
+                Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                    call.Presentation,
+                    call.ToolName),
             };
         }
         step.UpdatedAt = now.Clone();
@@ -1566,6 +1578,9 @@ public static class NyxIdChatTaskLifecycle
         {
             ToolName = call.ToolName,
             OperationAdmission = call.OperationAdmission?.Clone(),
+            Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                call.Presentation,
+                call.ToolName),
         };
         if (call.OperationAdmission is { } admission)
         {
@@ -1631,6 +1646,9 @@ public static class NyxIdChatTaskLifecycle
                 ToolName = call.ToolName,
                 Arguments = arguments,
                 OperationAdmission = call.OperationAdmission?.Clone(),
+                Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                    call.Presentation,
+                    call.ToolName),
             };
         }
         step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);

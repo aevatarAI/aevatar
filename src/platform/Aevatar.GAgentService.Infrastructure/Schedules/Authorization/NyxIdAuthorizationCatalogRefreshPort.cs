@@ -338,17 +338,23 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
                 }
                 catch
                 {
-                    var observation = ObserveLosingProviderTask(providerTask, providerCancellation);
+                    var observation = new LosingProviderTaskObservation(
+                        providerTask,
+                        providerCancellation,
+                        _logger);
                     providerCancellationTransferred = true;
-                    CancelProviderWithoutThrowing(observation);
+                    observation.CancelWithoutThrowing();
                     throw;
                 }
 
                 if (terminal.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
                 {
-                    var observation = ObserveLosingProviderTask(providerTask, providerCancellation);
+                    var observation = new LosingProviderTaskObservation(
+                        providerTask,
+                        providerCancellation,
+                        _logger);
                     providerCancellationTransferred = true;
-                    CancelProviderWithoutThrowing(observation);
+                    observation.CancelWithoutThrowing();
                     return terminal;
                 }
 
@@ -950,67 +956,6 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
     }
 
-    private LosingProviderTaskObservation ObserveLosingProviderTask(
-        Task providerTask,
-        CancellationTokenSource providerCancellation)
-    {
-        var observation = new LosingProviderTaskObservation(providerCancellation, _logger);
-        _ = providerTask.ContinueWith(
-            static (completed, state) =>
-            {
-                var observation = (LosingProviderTaskObservation)state!;
-                try
-                {
-                    if (completed.IsCanceled)
-                    {
-                        LogWithoutThrowing(
-                            observation.Logger,
-                            LogLevel.Debug,
-                            "Canceled the losing NyxID catalog refresh provider task after terminal observation.");
-                    }
-                    else if (completed.IsFaulted)
-                    {
-                        _ = completed.Exception;
-                        LogWithoutThrowing(
-                            observation.Logger,
-                            LogLevel.Warning,
-                            "The losing NyxID catalog refresh provider task failed after terminal observation.");
-                    }
-                }
-                catch
-                {
-                    _ = completed.Exception;
-                }
-                finally
-                {
-                    observation.MarkProviderCompletion();
-                }
-            },
-            observation,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-        return observation;
-    }
-
-    private void CancelProviderWithoutThrowing(LosingProviderTaskObservation observation)
-    {
-        try
-        {
-            observation.Cancellation.Cancel();
-        }
-        catch
-        {
-            LogWithoutThrowing(
-                LogLevel.Warning,
-                "A NyxID catalog refresh provider cancellation callback failed after terminal observation.");
-        }
-        finally
-        {
-            observation.MarkCancellationAttemptCompletion();
-        }
-    }
-
     private void LogWithoutThrowing(LogLevel logLevel, string message, params object?[] args) =>
         LogWithoutThrowing(_logger, logLevel, message, args);
 
@@ -1031,22 +976,83 @@ internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
         }
     }
 
-    private sealed class LosingProviderTaskObservation(
-        CancellationTokenSource cancellation,
-        ILogger<NyxIdAuthorizationCatalogRefreshPort> logger)
+    internal sealed class LosingProviderTaskObservation
     {
         private int _providerCompletionMarked;
         private int _cancellationAttemptCompletionMarked;
         private int _remainingLifetimeOwners = 2;
 
-        public CancellationTokenSource Cancellation { get; } = cancellation;
+        private CancellationTokenSource Cancellation { get; }
 
-        public ILogger<NyxIdAuthorizationCatalogRefreshPort> Logger { get; } = logger;
+        private ILogger<NyxIdAuthorizationCatalogRefreshPort> Logger { get; }
 
-        public void MarkProviderCompletion() =>
+        public LosingProviderTaskObservation(
+            Task providerTask,
+            CancellationTokenSource cancellation,
+            ILogger<NyxIdAuthorizationCatalogRefreshPort> logger)
+        {
+            Cancellation = cancellation;
+            Logger = logger;
+            _ = providerTask.ContinueWith(
+                static (completed, state) =>
+                {
+                    var observation = (LosingProviderTaskObservation)state!;
+                    try
+                    {
+                        if (completed.IsCanceled)
+                        {
+                            LogWithoutThrowing(
+                                observation.Logger,
+                                LogLevel.Debug,
+                                "Canceled the losing NyxID catalog refresh provider task after terminal observation.");
+                        }
+                        else if (completed.IsFaulted)
+                        {
+                            _ = completed.Exception;
+                            LogWithoutThrowing(
+                                observation.Logger,
+                                LogLevel.Warning,
+                                "The losing NyxID catalog refresh provider task failed after terminal observation.");
+                        }
+                    }
+                    catch
+                    {
+                        _ = completed.Exception;
+                    }
+                    finally
+                    {
+                        observation.MarkProviderCompletion();
+                    }
+                },
+                this,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        public void CancelWithoutThrowing()
+        {
+            try
+            {
+                Cancellation.Cancel();
+            }
+            catch
+            {
+                LogWithoutThrowing(
+                    Logger,
+                    LogLevel.Warning,
+                    "A NyxID catalog refresh provider cancellation callback failed after terminal observation.");
+            }
+            finally
+            {
+                MarkCancellationAttemptCompletion();
+            }
+        }
+
+        private void MarkProviderCompletion() =>
             ReleaseLifetimeOwner(ref _providerCompletionMarked);
 
-        public void MarkCancellationAttemptCompletion() =>
+        private void MarkCancellationAttemptCompletion() =>
             ReleaseLifetimeOwner(ref _cancellationAttemptCompletionMarked);
 
         private void ReleaseLifetimeOwner(ref int completionMarker)

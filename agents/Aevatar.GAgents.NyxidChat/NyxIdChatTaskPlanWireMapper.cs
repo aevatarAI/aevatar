@@ -381,6 +381,7 @@ internal static class NyxIdChatTaskPlanWireMapper
                 ServiceSlug = source.Tool.ServiceSlug ?? string.Empty,
                 ServiceId = source.Tool.ServiceId ?? string.Empty,
                 ProviderResourceId = source.Tool.ProviderResourceId ?? string.Empty,
+                Presentation = source.Tool.Presentation?.Clone(),
             };
             if (source.Tool.ReadinessCapabilityId is not null)
                 tool.ReadinessCapabilityId = source.Tool.ReadinessCapabilityId;

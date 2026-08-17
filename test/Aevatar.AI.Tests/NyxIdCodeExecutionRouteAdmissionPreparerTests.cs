@@ -19,9 +19,14 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         const string yaml = "name: code-workflow\nsteps: []\n";
         var handler = new SequenceHandler(
             Inventory("personal", false, true, "proxy:*"),
+            KeysInventory("personal"),
+            Inventory("personal", false, true, "proxy:*"),
+            KeysInventory("personal"),
             "{}",
             Inventory("personal", false, true, "proxy:* sandbox:execute"),
-            Inventory("personal", false, true, "proxy:* sandbox:execute"));
+            KeysInventory("personal"),
+            Inventory("personal", false, true, "proxy:* sandbox:execute"),
+            KeysInventory("personal"));
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
         var client = new NyxIdApiClient(options, new HttpClient(handler));
         var factory = new TestClientFactory(client);
@@ -58,7 +63,16 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             revisionId: "rev-alpha"));
 
         handler.Requests.Select(static request => request.Method)
-            .Should().Equal(HttpMethod.Get, HttpMethod.Put, HttpMethod.Get, HttpMethod.Get);
+            .Should().Equal(
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Put,
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Get);
         var proof = plan.InvocationAdmissions.Should().ContainSingle().Which.Capability.CodeExecution;
         proof.UserServiceId.Should().Be("us-code-alpha");
         proof.CatalogServiceId.Should().Be("catalog-chrono-sandbox");
@@ -70,8 +84,10 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
     {
         var handler = new SequenceHandler(
             Inventory("personal", false, true, "proxy:*"),
+            KeysInventory("personal"),
             "{}",
-            Inventory("personal", false, true, "proxy:* sandbox:execute"));
+            Inventory("personal", false, true, "proxy:* sandbox:execute"),
+            KeysInventory("personal"));
         var preparer = CreatePreparer(handler);
 
         await preparer.PrepareAsync(
@@ -79,14 +95,19 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             Selector(),
             ExternalCapabilityExecutionMode.Interactive);
 
-        handler.Requests.Should().HaveCount(3);
+        handler.Requests.Should().HaveCount(5);
         handler.Requests.Select(static request => request.Method)
-            .Should().Equal(HttpMethod.Get, HttpMethod.Put, HttpMethod.Get);
+            .Should().Equal(
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Put,
+                HttpMethod.Get,
+                HttpMethod.Get);
         handler.Requests.Should().OnlyContain(static request =>
             request.Authorization == "Bearer source-readable-alpha");
-        handler.Requests[1].Uri.Should()
+        handler.Requests[2].Uri.Should()
             .Be("https://nyx.example/api/v1/user-services/us-code-alpha");
-        using var body = JsonDocument.Parse(handler.Requests[1].Body!);
+        using var body = JsonDocument.Parse(handler.Requests[2].Body!);
         body.RootElement.GetProperty("forward_access_token").GetBoolean().Should().BeFalse();
         body.RootElement.GetProperty("inject_delegation_token").GetBoolean().Should().BeTrue();
         body.RootElement.GetProperty("delegation_token_scope").GetString().Should()
@@ -97,7 +118,8 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
     public async Task PrepareAsync_CanonicalRoute_IsReadOnly()
     {
         var handler = new SequenceHandler(
-            Inventory("personal", false, true, "proxy:* sandbox:execute"));
+            Inventory("personal", false, true, "proxy:* sandbox:execute"),
+            KeysInventory("personal"));
         var preparer = CreatePreparer(handler);
 
         await preparer.PrepareAsync(
@@ -105,14 +127,16 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             Selector(),
             ExternalCapabilityExecutionMode.Interactive);
 
-        handler.Requests.Should().ContainSingle().Which.Method.Should().Be(HttpMethod.Get);
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().OnlyContain(static request => request.Method == HttpMethod.Get);
     }
 
     [Fact]
     public async Task PrepareAsync_AlreadyUsableForwardingRoute_RemainsReadOnly()
     {
         var handler = new SequenceHandler(
-            Inventory("personal", true, true, "proxy:* sandbox:execute"));
+            Inventory("personal", true, true, "proxy:* sandbox:execute"),
+            KeysInventory("personal"));
         var preparer = CreatePreparer(handler);
 
         await preparer.PrepareAsync(
@@ -120,7 +144,8 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             Selector(),
             ExternalCapabilityExecutionMode.Interactive);
 
-        handler.Requests.Should().ContainSingle().Which.Method.Should().Be(HttpMethod.Get);
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().OnlyContain(static request => request.Method == HttpMethod.Get);
     }
 
     [Fact]
@@ -128,8 +153,10 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
     {
         var handler = new SequenceHandler(
             Inventory("personal", false, true, "proxy:*"),
+            KeysInventory("personal"),
             "{}",
-            Inventory("personal", false, true, "sandbox:execute"));
+            Inventory("personal", false, true, "sandbox:execute"),
+            KeysInventory("personal"));
         var preparer = CreatePreparer(handler);
 
         var act = () => preparer.PrepareAsync(
@@ -142,14 +169,23 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
             .Be("CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED");
         handler.Requests.Select(static request => request.Method)
-            .Should().Equal(HttpMethod.Get, HttpMethod.Put, HttpMethod.Get);
+            .Should().Equal(
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Put,
+                HttpMethod.Get,
+                HttpMethod.Get);
     }
 
-    [Fact]
-    public async Task PrepareAsync_SharedOrganizationRoute_DoesNotMutateCallerVisibleState()
+    [Theory]
+    [InlineData("member")]
+    [InlineData("viewer")]
+    public async Task PrepareAsync_ReadOnlyOrganizationRoute_DoesNotMutateCallerVisibleState(
+        string organizationRole)
     {
         var handler = new SequenceHandler(
-            Inventory("org", false, true, "proxy:*"));
+            Inventory("org", false, true, "proxy:*", organizationRole),
+            KeysInventory("org", organizationRole));
         var preparer = CreatePreparer(handler);
 
         await preparer.PrepareAsync(
@@ -157,16 +193,19 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             Selector(),
             ExternalCapabilityExecutionMode.Interactive);
 
-        handler.Requests.Should().ContainSingle().Which.Method.Should().Be(HttpMethod.Get);
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().OnlyContain(static request => request.Method == HttpMethod.Get);
     }
 
     [Fact]
-    public async Task PrepareAsync_MixedInventory_RepairsOnlyUniquePersonalRoute()
+    public async Task PrepareAsync_AllowedOrganizationAdminRoute_ReconcilesAndVerifiesExactRoute()
     {
         var handler = new SequenceHandler(
-            MixedInventory(personalScope: "proxy:*"),
+            Inventory("org", false, true, "proxy:*", "admin"),
+            KeysInventory("org", "admin"),
             "{}",
-            MixedInventory(personalScope: "proxy:* sandbox:execute"));
+            Inventory("org", false, true, "proxy:* sandbox:execute", "admin"),
+            KeysInventory("org", "admin"));
         var preparer = CreatePreparer(handler);
 
         await preparer.PrepareAsync(
@@ -175,8 +214,40 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             ExternalCapabilityExecutionMode.Interactive);
 
         handler.Requests.Select(static request => request.Method)
-            .Should().Equal(HttpMethod.Get, HttpMethod.Put, HttpMethod.Get);
-        handler.Requests[1].Uri.Should()
+            .Should().Equal(
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Put,
+                HttpMethod.Get,
+                HttpMethod.Get);
+        handler.Requests[2].Uri.Should()
+            .Be("https://nyx.example/api/v1/user-services/us-code-alpha");
+    }
+
+    [Fact]
+    public async Task PrepareAsync_MixedInventory_RepairsOnlyUniquePersonalRoute()
+    {
+        var handler = new SequenceHandler(
+            MixedInventory(personalScope: "proxy:*"),
+            MixedKeysInventory(),
+            "{}",
+            MixedInventory(personalScope: "proxy:* sandbox:execute"),
+            MixedKeysInventory());
+        var preparer = CreatePreparer(handler);
+
+        await preparer.PrepareAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        handler.Requests.Select(static request => request.Method)
+            .Should().Equal(
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Put,
+                HttpMethod.Get,
+                HttpMethod.Get);
+        handler.Requests[2].Uri.Should()
             .Be("https://nyx.example/api/v1/user-services/us-code-alpha");
     }
 
@@ -184,30 +255,119 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
     public async Task PrepareAsync_MultiplePersonalCandidates_DoesNotGuessMutationTarget()
     {
         var handler = new SequenceHandler(
+            MultiplePersonalInventory("proxy:*"),
+            MultiplePersonalKeysInventory());
+        var preparer = CreatePreparer(handler);
+
+        await preparer.PrepareAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().OnlyContain(static request => request.Method == HttpMethod.Get);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_ExactUserServiceId_UpdatesOnlyThatJoinedAuthority()
+    {
+        var handler = new SequenceHandler(
+            MultiplePersonalInventory("proxy:*"),
+            MultiplePersonalKeysInventory(),
+            "{}",
+            MultiplePersonalInventory("proxy:* sandbox:execute"),
+            MultiplePersonalKeysInventory());
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var reconciler = new NyxIdCodeExecutionRoutePolicyReconciler(
+            new TestClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+        NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                NyxIdCallerCredentialSelection.DirectUserBearer("source-readable-alpha"),
+                out var mutationAuthority)
+            .Should().BeTrue();
+
+        var result = await reconciler.ReconcileAsync(
+            mutationAuthority!,
+            exactUserServiceId: "us-code-beta");
+
+        result.Attempted.Should().BeTrue();
+        result.Verified.Should().BeTrue();
+        result.Resolution.Service!.Id.Should().Be("us-code-beta");
+        handler.Requests[2].Uri.Should()
+            .Be("https://nyx.example/api/v1/user-services/us-code-beta");
+    }
+
+    [Theory]
+    [InlineData("forward_access_token")]
+    [InlineData("inject_delegation_token")]
+    [InlineData("delegation_token_scope")]
+    public async Task ConvergeAsync_FreshReadBackChangesContractUndeclaredValue_FailsClosed(
+        string changedValue)
+    {
+        var beforeForward = true;
+        var beforeInject = changedValue != "forward_access_token";
+        var afterForward = false;
+        var afterInject = changedValue == "inject_delegation_token" ? false : true;
+        var afterScope = changedValue == "delegation_token_scope"
+            ? "proxy:* sandbox:execute account:admin"
+            : "proxy:* sandbox:execute";
+        var contract = changedValue switch
+        {
+            "forward_access_token" => new NyxIdUserServiceRouteContract(
+                NyxIdUserServiceBooleanRequirement.Unspecified,
+                NyxIdUserServiceBooleanRequirement.Enabled,
+                ["sandbox:execute"]),
+            "inject_delegation_token" => new NyxIdUserServiceRouteContract(
+                NyxIdUserServiceBooleanRequirement.Disabled,
+                NyxIdUserServiceBooleanRequirement.Unspecified,
+                ["sandbox:execute"]),
+            "delegation_token_scope" => new NyxIdUserServiceRouteContract(
+                NyxIdUserServiceBooleanRequirement.Disabled,
+                NyxIdUserServiceBooleanRequirement.Enabled,
+                ["sandbox:execute"]),
+            _ => throw new ArgumentOutOfRangeException(nameof(changedValue)),
+        };
+        var handler = new SequenceHandler(
+            Inventory("personal", beforeForward, beforeInject, "proxy:*"),
+            KeysInventory("personal"),
+            "{}",
+            Inventory("personal", afterForward, afterInject, afterScope),
+            KeysInventory("personal"));
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var converger = new NyxIdUserServiceRouteConverger(
+            new TestClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+        NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                NyxIdCallerCredentialSelection.DirectUserBearer("source-readable-alpha"),
+                out var mutationAuthority)
+            .Should().BeTrue();
+
+        var result = await converger.ConvergeAsync(
+            mutationAuthority!,
+            "us-code-alpha",
+            contract);
+
+        result.Attempted.Should().BeTrue();
+        result.Verified.Should().BeFalse();
+        result.FailureKind.Should()
+            .Be(NyxIdUserServiceRouteConvergenceFailureKind.PostconditionMismatch);
+    }
+
+    [Fact]
+    public async Task PrepareAsync_RouteWithoutReadyExecutionAuthority_DoesNotMutate()
+    {
+        var handler = new SequenceHandler(
+            Inventory("personal", false, true, "proxy:*"),
             """
             {
-              "services": [
-                {
-                  "id": "us-code-alpha",
-                  "slug": "chrono-sandbox",
-                  "catalog_service_id": "catalog-chrono-sandbox",
-                  "is_active": true,
-                  "forward_access_token": false,
-                  "inject_delegation_token": true,
-                  "delegation_token_scope": "proxy:*",
-                  "credential_source": { "type": "personal" }
-                },
-                {
-                  "id": "us-code-beta",
-                  "slug": "chrono-sandbox",
-                  "catalog_service_id": "catalog-chrono-sandbox",
-                  "is_active": true,
-                  "forward_access_token": false,
-                  "inject_delegation_token": true,
-                  "delegation_token_scope": "proxy:*",
-                  "credential_source": { "type": "personal" }
-                }
-              ]
+              "keys": [{
+                "id": "us-code-alpha",
+                "slug": "chrono-sandbox",
+                "catalog_service_id": "catalog-chrono-sandbox",
+                "catalog_service_slug": "chrono-sandbox",
+                "is_active": true,
+                "status": "expired",
+                "connected": true,
+                "credential_source": { "type": "personal" }
+              }]
             }
             """);
         var preparer = CreatePreparer(handler);
@@ -217,7 +377,75 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             Selector(),
             ExternalCapabilityExecutionMode.Interactive);
 
-        handler.Requests.Should().ContainSingle().Which.Method.Should().Be(HttpMethod.Get);
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().OnlyContain(static request => request.Method == HttpMethod.Get);
+    }
+
+    [Fact]
+    public void CanConverge_OnlyAcceptsExactCodeRoutePolicyMismatch()
+    {
+        var preparer = CreatePreparer(new SequenceHandler());
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = readiness.Status,
+            Code = "CODE_EXECUTION_ROUTE_POLICY_MISMATCH",
+        });
+        readiness.Sources.Add(new ExternalCapabilitySourceStamp
+        {
+            SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+            SourceId = "nyxid-user-services:caller:caller-alpha",
+        });
+
+        preparer.CanConverge(readiness).Should().BeTrue();
+
+        readiness.Sources.Clear();
+        preparer.CanConverge(readiness).Should().BeFalse();
+        readiness.Sources.Add(new ExternalCapabilitySourceStamp
+        {
+            SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+            SourceId = "nyxid-user-services:caller:caller-alpha",
+        });
+        readiness.Blockers[0].Code = "CODE_EXECUTION_ROUTE_INACTIVE";
+        preparer.CanConverge(readiness).Should().BeFalse();
+        readiness.Blockers[0].Code = "CODE_EXECUTION_ROUTE_POLICY_MISMATCH";
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = readiness.Status,
+            Code = "ANOTHER_BLOCKER",
+        });
+        preparer.CanConverge(readiness).Should().BeFalse();
+    }
+
+    [Fact]
+    public void RouteMutationAuthority_OnlyAcceptsDirectHumanCredential()
+    {
+        NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                NyxIdCallerCredentialSelection.DirectUserBearer("direct-user-alpha"),
+                out var direct)
+            .Should().BeTrue();
+        direct.Should().NotBeNull();
+        direct!.ToString().Should().NotContain("direct-user-alpha");
+
+        NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                NyxIdCallerCredentialSelection.SourceReadableUserBearer("broker-user-alpha"),
+                out var broker)
+            .Should().BeFalse();
+        broker.Should().BeNull();
+        NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                NyxIdCallerCredentialSelection.ProxyDelegation("delegation-alpha"),
+                out var delegation)
+            .Should().BeFalse();
+        delegation.Should().BeNull();
+
+        typeof(NyxIdUserServiceRouteConverger).GetMethods()
+            .Where(static method => method.Name == nameof(NyxIdUserServiceRouteConverger.ConvergeAsync))
+            .Should().ContainSingle()
+            .Which.GetParameters()[0].ParameterType.Should()
+            .Be<NyxIdUserServiceRouteMutationAuthority>();
     }
 
     [Fact]
@@ -289,7 +517,8 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         string credentialSourceType,
         bool forwardAccessToken,
         bool injectDelegationToken,
-        string scope)
+        string scope,
+        string organizationRole = "member")
     {
         object credentialSource = credentialSourceType == "personal"
             ? new { type = "personal" }
@@ -298,7 +527,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                 type = "org",
                 org_id = "org-alpha",
                 org_name = "Organization Alpha",
-                role = "member",
+                role = organizationRole,
                 allowed = true,
             };
         return JsonSerializer.Serialize(new
@@ -314,6 +543,39 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     forward_access_token = forwardAccessToken,
                     inject_delegation_token = injectDelegationToken,
                     delegation_token_scope = scope,
+                    credential_source = credentialSource,
+                },
+            },
+        });
+    }
+
+    private static string KeysInventory(
+        string credentialSourceType,
+        string organizationRole = "member")
+    {
+        object credentialSource = credentialSourceType == "personal"
+            ? new { type = "personal" }
+            : new
+            {
+                type = "org",
+                org_id = "org-alpha",
+                org_name = "Organization Alpha",
+                role = organizationRole,
+                allowed = true,
+            };
+        return JsonSerializer.Serialize(new
+        {
+            keys = new[]
+            {
+                new
+                {
+                    id = "us-code-alpha",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    catalog_service_slug = "chrono-sandbox",
+                    is_active = true,
+                    status = "active",
+                    connected = true,
                     credential_source = credentialSource,
                 },
             },
@@ -353,6 +615,103 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                         role = "member",
                         allowed = true,
                     },
+                },
+            },
+        });
+
+    private static string MixedKeysInventory() =>
+        JsonSerializer.Serialize(new
+        {
+            keys = new object[]
+            {
+                new
+                {
+                    id = "us-code-alpha",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    catalog_service_slug = "chrono-sandbox",
+                    is_active = true,
+                    status = "active",
+                    connected = true,
+                    credential_source = new { type = "personal" },
+                },
+                new
+                {
+                    id = "us-code-org",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    catalog_service_slug = "chrono-sandbox",
+                    is_active = true,
+                    status = "active",
+                    connected = true,
+                    credential_source = new
+                    {
+                        type = "org",
+                        org_id = "org-alpha",
+                        org_name = "Organization Alpha",
+                        role = "member",
+                        allowed = true,
+                    },
+                },
+            },
+        });
+
+    private static string MultiplePersonalKeysInventory() =>
+        JsonSerializer.Serialize(new
+        {
+            keys = new[]
+            {
+                new
+                {
+                    id = "us-code-alpha",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    catalog_service_slug = "chrono-sandbox",
+                    is_active = true,
+                    status = "active",
+                    connected = true,
+                    credential_source = new { type = "personal" },
+                },
+                new
+                {
+                    id = "us-code-beta",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    catalog_service_slug = "chrono-sandbox",
+                    is_active = true,
+                    status = "active",
+                    connected = true,
+                    credential_source = new { type = "personal" },
+                },
+            },
+        });
+
+    private static string MultiplePersonalInventory(string betaScope) =>
+        JsonSerializer.Serialize(new
+        {
+            services = new[]
+            {
+                new
+                {
+                    id = "us-code-alpha",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    is_active = true,
+                    forward_access_token = false,
+                    inject_delegation_token = true,
+                    delegation_token_scope = "proxy:*",
+                    credential_source = new { type = "personal" },
+                },
+                new
+                {
+                    id = "us-code-beta",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    is_active = true,
+                    forward_access_token = false,
+                    inject_delegation_token = true,
+                    delegation_token_scope = betaScope,
+                    credential_source = new { type = "personal" },
                 },
             },
         });

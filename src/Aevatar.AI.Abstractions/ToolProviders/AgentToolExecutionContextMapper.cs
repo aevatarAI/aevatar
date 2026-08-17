@@ -227,6 +227,7 @@ public static class AgentToolExecutionContextMapper
                 ModelOverride = context.Routing.ModelOverride ?? string.Empty,
                 NyxIdRoutePreference = context.Routing.NyxIdRoutePreference ?? string.Empty,
                 UserMemoryPrompt = context.Routing.UserMemoryPrompt ?? string.Empty,
+                RouteTarget = context.Routing.RouteTarget?.Clone(),
             },
             ConnectedServices = new AgentToolConnectedServicesContextPayload
             {
@@ -286,6 +287,7 @@ public static class AgentToolExecutionContextMapper
                 ModelOverride = context.Routing.ModelOverride ?? string.Empty,
                 NyxIdRoutePreference = context.Routing.NyxIdRoutePreference ?? string.Empty,
                 UserMemoryPrompt = context.Routing.UserMemoryPrompt ?? string.Empty,
+                RouteTarget = context.Routing.RouteTarget?.Clone(),
             },
             SkillRecovery = ToSkillRecoveryCheckpointPayload(context.SkillRecovery),
             WorkflowRuntime = ToWorkflowRuntimePayload(context.WorkflowRuntime),
@@ -447,7 +449,10 @@ public static class AgentToolExecutionContextMapper
             AgentToolExecutionContext.Normalize(payload?.ModelOverride),
             AgentToolExecutionContext.Normalize(payload?.NyxIdRoutePreference),
             payload?.HasMaxToolRoundsOverride == true ? payload.MaxToolRoundsOverride : null,
-            AgentToolExecutionContext.Normalize(payload?.UserMemoryPrompt));
+            AgentToolExecutionContext.Normalize(payload?.UserMemoryPrompt))
+        {
+            RouteTarget = payload?.RouteTarget?.Clone(),
+        };
 
     private static AgentToolChannelContextPayload ToChannelPayload(AgentToolChannelContext context)
     {

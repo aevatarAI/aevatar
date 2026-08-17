@@ -20,6 +20,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WorkflowRunCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
+using WorkflowRunCallerNyxIdAuthority = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
@@ -485,6 +486,25 @@ public sealed class AevatarInvocationDispatcher
         var scope = workflowScope.Value!;
 
         var backgroundDelivery = ResolveWorkflowBackgroundDelivery(AgentToolRequestContext.Current);
+        if (wait == InvocationWaitMode.Complete)
+        {
+            // wait=complete is the caller's explicit promise to observe the run
+            // to its terminal state in-turn (via the observe tools) and compose
+            // the user-facing reply itself. Registering the background channel
+            // relay here would post the run's raw final output as a second,
+            // unformatted message — the exact behavior wait=complete opts out
+            // of. Skip the relay entirely; delivery-credential problems are
+            // then also irrelevant to this start.
+            if (backgroundDelivery.ShouldRegister)
+            {
+                _logger.LogInformation(
+                    "Channel workflow background delivery skipped: reason=wait_complete_caller_observes platform={Platform}",
+                    AgentToolRequestContext.Current?.Channel.Platform ?? string.Empty);
+            }
+
+            backgroundDelivery = WorkflowBackgroundDeliveryResolution.Disabled();
+        }
+
         if (backgroundDelivery.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(backgroundDelivery.Error), backgroundDelivery.Error);
         if (backgroundDelivery.ShouldRegister && _workflowRunDeliveryRegistrationPort is null)
@@ -602,10 +622,10 @@ public sealed class AevatarInvocationDispatcher
         CancellationToken ct)
     {
         WorkflowBackgroundDeliveryReservationContext? deliveryReservation = null;
+        var workflowCommandIdSeed = ResolveCommandId();
         string? workflowCorrelationIdSeed = null;
         if (backgroundDelivery.ShouldRegister)
         {
-            var workflowCommandIdSeed = ResolveCommandId();
             workflowCorrelationIdSeed = ResolveWorkflowCorrelationId(workflowCommandIdSeed);
             var reservation = await ReserveWorkflowRunBackgroundDeliveryAsync(
                     workflowCommandIdSeed,
@@ -625,7 +645,7 @@ public sealed class AevatarInvocationDispatcher
 
         command = command with
         {
-            CommandIdSeed = deliveryReservation?.Reservation.ExpectedWorkflowCommandId,
+            CommandIdSeed = workflowCommandIdSeed,
             CorrelationIdSeed = workflowCorrelationIdSeed,
             CompletionNotificationTarget = ToWorkflowCompletionNotificationTarget(deliveryReservation),
         };
@@ -2069,12 +2089,29 @@ public sealed class AevatarInvocationDispatcher
         if (parsed.IsMissing)
             return WorkflowCallerCredentialResolution.Success(null);
 
+        var supportsProxyDelegation = credentialKind is
+            NyxIdCallerCredentialKind.SourceReadableUserBearer or
+            NyxIdCallerCredentialKind.ProxyDelegation;
+        var authority = supportsProxyDelegation && context?.NyxIdAuthority.IsComplete == true
+            ? new WorkflowRunCallerNyxIdAuthority(
+                context.NyxIdAuthority.Platform!.Trim(),
+                context.NyxIdAuthority.Tenant?.Trim() ?? string.Empty,
+                context.NyxIdAuthority.ExternalUserId!.Trim(),
+                string.IsNullOrWhiteSpace(context.NyxIdAuthority.Scope)
+                    ? "proxy"
+                    : context.NyxIdAuthority.Scope.Trim(),
+                Normalize(context.SenderBinding.BindingId))
+            : null;
+        if (credentialKind == NyxIdCallerCredentialKind.SourceReadableUserBearer && authority != null)
+            credentialKind = NyxIdCallerCredentialKind.ProxyDelegation;
+
         var sourceReadableUserBearerToken = credentialKind == NyxIdCallerCredentialKind.ProxyDelegation
             ? AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials)
             : null;
         return WorkflowCallerCredentialResolution.Success(
             new WorkflowRunCallerCredential(
                 parsed.NormalizedBearerToken,
+                NyxIdAuthority: authority,
                 Kind: credentialKind,
                 SourceReadableUserBearerToken: sourceReadableUserBearerToken));
     }

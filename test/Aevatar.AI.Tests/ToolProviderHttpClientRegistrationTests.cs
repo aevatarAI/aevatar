@@ -41,6 +41,22 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
+    public void AddNyxIdTools_DisablesAutomaticRedirectsOnThePrimaryHandler()
+    {
+        var services = new ServiceCollection();
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+
+        using var provider = services.BuildServiceProvider();
+        var handler = provider.GetRequiredService<IHttpMessageHandlerFactory>()
+            .CreateHandler(nameof(NyxIdApiClient));
+        while (handler is DelegatingHandler { InnerHandler: { } innerHandler })
+            handler = innerHandler;
+
+        handler.Should().BeOfType<HttpClientHandler>()
+            .Which.AllowAutoRedirect.Should().BeFalse();
+    }
+
+    [Fact]
     public void AddNyxIdTools_GivesTheNyxIdClientRoomForTheLongestCodexRun()
     {
         // The 100s HttpClient default aborts long codex_exec runs before their own deadline

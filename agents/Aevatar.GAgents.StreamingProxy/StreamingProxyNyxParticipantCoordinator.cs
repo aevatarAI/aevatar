@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Configuration;
 using Aevatar.GAgents.StreamingProxy.Application.Rooms;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -18,7 +19,6 @@ namespace Aevatar.GAgents.StreamingProxy;
 internal sealed class StreamingProxyNyxParticipantCoordinator
 {
     private const string NyxIdProviderName = "nyxid";
-    private const string GatewaySuffix = "/api/v1/llm/gateway/v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly ILLMProviderFactory _llmProviderFactory;
@@ -144,19 +144,19 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         if (string.IsNullOrWhiteSpace(accessToken))
             return [];
 
-        var authorityBase = ResolveNyxIdAuthorityBase();
-        if (string.IsNullOrWhiteSpace(authorityBase))
+        var apiBaseUrl = ResolveNyxIdApiBaseUrl();
+        if (string.IsNullOrWhiteSpace(apiBaseUrl))
             return [];
 
         var preferencesTask = GetPreferencesAsync(ct);
-        var readyProviders = await FetchReadyProvidersAsync(authorityBase, accessToken, ct);
+        var readyProviders = await FetchReadyProvidersAsync(apiBaseUrl, accessToken, ct);
         if (readyProviders.Count == 0)
             return [];
 
         var candidates = readyProviders
             .Select(provider =>
             {
-                var routePreference = ResolveParticipantRoutePreference(provider, authorityBase);
+                var routePreference = ResolveParticipantRoutePreference(provider, apiBaseUrl);
                 var participantId = ResolveParticipantIdentity(provider, routePreference);
                 return new StreamingProxyNyxParticipantCandidate(provider, participantId, routePreference);
             })
@@ -201,17 +201,17 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     }
 
     private async Task<List<StreamingProxyNyxProviderStatus>> FetchReadyProvidersAsync(
-        string authorityBase,
+        string apiBaseUrl,
         string accessToken,
         CancellationToken ct)
     {
-        using var response = await SendNyxIdLlmCatalogRequestAsync(authorityBase, accessToken, "/api/v1/llm/services", ct);
+        using var response = await SendNyxIdLlmCatalogRequestAsync(apiBaseUrl, accessToken, "/api/v1/llm/services", ct);
         if (!response.IsSuccessStatusCode &&
             response.StatusCode != HttpStatusCode.NotFound)
             return [];
 
         var body = response.StatusCode == HttpStatusCode.NotFound
-            ? await FetchLegacyLlmStatusAsync(authorityBase, accessToken, ct)
+            ? await FetchLegacyLlmStatusAsync(apiBaseUrl, accessToken, ct)
             : await response.Content.ReadAsStringAsync(ct);
         if (string.IsNullOrWhiteSpace(body))
             return [];
@@ -227,23 +227,23 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
     }
 
     private async Task<string?> FetchLegacyLlmStatusAsync(
-        string authorityBase,
+        string apiBaseUrl,
         string accessToken,
         CancellationToken ct)
     {
-        using var response = await SendNyxIdLlmCatalogRequestAsync(authorityBase, accessToken, "/api/v1/llm/status", ct);
+        using var response = await SendNyxIdLlmCatalogRequestAsync(apiBaseUrl, accessToken, "/api/v1/llm/status", ct);
         return response.IsSuccessStatusCode
             ? await response.Content.ReadAsStringAsync(ct)
             : null;
     }
 
     private async Task<HttpResponseMessage> SendNyxIdLlmCatalogRequestAsync(
-        string authorityBase,
+        string apiBaseUrl,
         string accessToken,
         string path,
         CancellationToken ct)
     {
-        var statusUrl = $"{authorityBase}{path}";
+        var statusUrl = $"{apiBaseUrl}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Get, statusUrl);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         return await _httpClientFactory.CreateClient().SendAsync(request, ct).ConfigureAwait(false);
@@ -466,9 +466,9 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
 
     private static string ResolveParticipantRoutePreference(
         StreamingProxyNyxProviderStatus provider,
-        string authorityBase)
+        string apiBaseUrl)
     {
-        var route = NormalizeRoutePreference(provider.ProxyUrl, authorityBase);
+        var route = NormalizeRoutePreference(provider.ProxyUrl, apiBaseUrl);
         if (!string.IsNullOrWhiteSpace(route))
             return route!;
 
@@ -531,7 +531,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         return result;
     }
 
-    private static string? NormalizeRoutePreference(string? value, string authorityBase)
+    private static string? NormalizeRoutePreference(string? value, string apiBaseUrl)
     {
         var normalized = value?.Trim();
         if (string.IsNullOrWhiteSpace(normalized))
@@ -539,10 +539,10 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
 
         if (Uri.TryCreate(normalized, UriKind.Absolute, out var absolute))
         {
-            if (Uri.TryCreate(authorityBase, UriKind.Absolute, out var authority) &&
-                string.Equals(absolute.Scheme, authority.Scheme, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(absolute.Host, authority.Host, StringComparison.OrdinalIgnoreCase) &&
-                absolute.Port == authority.Port)
+            if (Uri.TryCreate(apiBaseUrl, UriKind.Absolute, out var apiBaseUri) &&
+                string.Equals(absolute.Scheme, apiBaseUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(absolute.Host, apiBaseUri.Host, StringComparison.OrdinalIgnoreCase) &&
+                absolute.Port == apiBaseUri.Port)
             {
                 return absolute.PathAndQuery.TrimEnd('/');
             }
@@ -644,23 +644,8 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         };
     }
 
-    private string? ResolveNyxIdAuthorityBase()
-    {
-        var authority = _configuration["Cli:App:NyxId:Authority"]
-            ?? _configuration["Aevatar:NyxId:Authority"]
-            ?? _configuration["Aevatar:Authentication:Authority"];
-
-        if (string.IsNullOrWhiteSpace(authority))
-            return null;
-
-        var trimmed = authority.Trim().TrimEnd('/');
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out _))
-            return null;
-
-        return trimmed.EndsWith(GatewaySuffix, StringComparison.OrdinalIgnoreCase)
-            ? trimmed[..^GatewaySuffix.Length]
-            : trimmed;
-    }
+    private string? ResolveNyxIdApiBaseUrl() =>
+        NyxIdEndpointResolver.ResolvePublicApiBaseUrl(_configuration);
 
     private static LLMRequest BuildParticipantRequest(
         StreamingProxyNyxParticipantDefinition participant,

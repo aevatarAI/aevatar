@@ -3921,6 +3921,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
                                 },
                             },
                         },
+                        Presentation = ToolPresentationDescriptors.Skill(
+                            "repository_update",
+                            "Repository maintenance",
+                            "Update the exact repository.",
+                            "repository-maintenance",
+                            "remote"),
                     },
                 },
             },
@@ -3941,6 +3947,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
         committedCall.NyxIdProvenance.CatalogServiceSlug.Should().Be("catalog-slug-alpha");
         committedCall.NyxIdProvenance.ReadinessCapabilityId.Should()
             .Be("readiness-capability-alpha");
+        committedCall.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
+        committedCall.Presentation.Skill.SkillName.Should().Be("repository-maintenance");
 
         dispatch.OperationCalls.Should().HaveCount(2);
         var successor = dispatch.OperationCalls[^1].Envelope.Payload
@@ -3960,6 +3968,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             step.Kind == NyxIdChatStepKind.Tool).Operation.Phase.Should().Be(
             NyxIdChatOperationPhase.Requested);
         toolStep.Source.Tool.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+        toolStep.Source.Tool.Presentation.Skill.SkillName.Should()
+            .Be("repository-maintenance");
         successor.InputCase.Should().Be(
             NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
         successor.Tool.ArgumentsJson.Should().Be("{\"repositoryId\":\"repo-alpha\"}");
@@ -3967,6 +3977,8 @@ public sealed partial class NyxIdChatConversationGAgentTests
             AgentToolOperationRiskPayload.Write);
         successor.Tool.OperationAdmission.ExecutionPolicy.Approval.Should().Be(
             AgentToolOperationApprovalPayload.Required);
+        successor.Tool.Presentation.Skill.SkillName.Should()
+            .Be("repository-maintenance");
         eventsObservedAtSuccessorDispatch.Should().HaveCount(afterLlmResult.Count - 1,
             "the reconciliation waterline commits before the direct tool dispatch");
         afterLlmResult[^1].EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor)
@@ -3982,6 +3994,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         reactivatedSource.ServiceId.Should().Be("connected-service-alpha");
         reactivatedSource.ServiceSlug.Should().Be("service-slug-alpha");
         reactivatedSource.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+        reactivatedSource.Presentation.Skill.SkillName.Should().Be("repository-maintenance");
     }
 
     [Fact]

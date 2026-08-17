@@ -1,10 +1,72 @@
 using Aevatar.GAgents.StatusDashboard.Configuration;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 
 namespace Aevatar.GAgents.StatusDashboard.Tests;
 
 public sealed class StatusDashboardManifestTests
 {
+    [Fact]
+    public void FromOptions_UsesPublicApiForHealthWhenEndpointRolesDiffer()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test/",
+                ["Aevatar:NyxId:Authority"] = "https://nyx-issuer.example.test",
+            })
+            .Build();
+
+        var manifest = StatusDashboardManifest.FromOptions(
+            new StatusDashboardOptions(),
+            configuration);
+
+        manifest.Descriptors
+            .Single(descriptor => descriptor.Slug == "nyxid-http-health")
+            .Parameters["Url"]
+            .Should().Be("https://nyx-api.example.test/health");
+    }
+
+    [Fact]
+    public void FromOptions_UsesAuthorityForLegacySingleEndpointConfiguration()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:Authority"] = "https://nyx-legacy.example.test/",
+            })
+            .Build();
+
+        var manifest = StatusDashboardManifest.FromOptions(
+            new StatusDashboardOptions(),
+            configuration);
+
+        manifest.Descriptors
+            .Single(descriptor => descriptor.Slug == "nyxid-http-health")
+            .Parameters["Url"]
+            .Should().Be("https://nyx-legacy.example.test/health");
+    }
+
+    [Fact]
+    public void FromOptions_FailsClosedWhenInternalExistsWithoutPublicApi()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:Authority"] = "https://nyx-issuer.example.test",
+            })
+            .Build();
+
+        var manifest = StatusDashboardManifest.FromOptions(
+            new StatusDashboardOptions(),
+            configuration);
+
+        manifest.Descriptors.Select(descriptor => descriptor.Slug)
+            .Should().NotContain("nyxid-http-health");
+    }
+
     [Fact]
     public void FromOptions_UsesBuiltInTargets_WhenTargetsAreEmpty()
     {
@@ -36,7 +98,7 @@ public sealed class StatusDashboardManifestTests
         nyxIdHealth.Category.Should().Be("upstream");
         nyxIdHealth.Severity.Should().Be("standard");
         nyxIdHealth.ProbeKind.Should().Be("http_status");
-        nyxIdHealth.Parameters["Url"].Should().Be("${configuration:Aevatar:NyxId:Authority}/health");
+        nyxIdHealth.Parameters["Url"].Should().Be("${configuration:Aevatar:NyxId:ApiBaseUrl}/health");
         nyxIdHealth.Parameters["ExpectedStatuses"].Should().Be("200");
         // Canon §9/§9.1: critical surfaces carry the "critical" weight; default set has no
         // credentialed canary targets until a canary bearer is configured.

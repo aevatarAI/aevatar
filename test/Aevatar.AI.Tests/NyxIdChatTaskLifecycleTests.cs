@@ -49,6 +49,12 @@ public sealed class NyxIdChatTaskLifecycleTests
                             ReadinessCapabilityId = "readiness-capability-alpha",
                         },
                         OperationAdmission = ExactWriteAdmission(),
+                        Presentation = ToolPresentationDescriptors.Skill(
+                            "repository_update",
+                            "Repository maintenance",
+                            "Update the exact repository.",
+                            "repository-maintenance",
+                            "remote"),
                     },
                 },
             },
@@ -73,6 +79,11 @@ public sealed class NyxIdChatTaskLifecycleTests
         toolStep.Source.Tool.ServiceId.Should().Be("connected-service-alpha");
         toolStep.Source.Tool.ServiceSlug.Should().Be("service-slug-alpha");
         toolStep.Source.Tool.ReadinessCapabilityId.Should().Be("readiness-capability-alpha");
+        toolStep.Source.Tool.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
+        toolStep.Source.Tool.Presentation.Skill.SkillName.Should()
+            .Be("repository-maintenance");
+        toolStep.RetryToolInput.Presentation.Skill.SkillName.Should()
+            .Be("repository-maintenance");
         signal.Llm.ToolCalls.Single().NyxIdProvenance.CatalogServiceSlug.Should()
             .Be("catalog-slug-alpha");
         toolStep.MayChangeExternalState.Should().BeTrue();
@@ -110,6 +121,8 @@ public sealed class NyxIdChatTaskLifecycleTests
             decision.NextCommand.Key.OperationId);
         decision.NextCommand.Tool.OperationAdmission.Should().BeEquivalentTo(
             ExactWriteAdmission());
+        decision.NextCommand.Tool.Presentation.Skill.SkillName.Should()
+            .Be("repository-maintenance");
     }
 
     [Fact]

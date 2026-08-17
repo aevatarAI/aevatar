@@ -1,3 +1,4 @@
+using Aevatar.Configuration;
 using Aevatar.Configuration.BackendConsole;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,8 +47,8 @@ public static class BackendConsoleHostingServiceCollectionExtensions
             EnableStudioWireInspector = section.GetValue<bool>(
                 nameof(BackendConsoleOptions.EnableStudioWireInspector)),
         };
-        ApplyFallbacks(configuration, options);
         ApplyHostEnvironmentOverrides(options);
+        ApplyFallbacks(configuration, options);
         NormalizeOidcScope(options);
         NormalizeOidcResources(configuration, options);
         return options;
@@ -66,14 +67,16 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         if (string.IsNullOrWhiteSpace(options.NyxApiBaseUrl))
         {
             options.NyxApiBaseUrl =
-                configuration["Aevatar:NyxId:Authority"]
+                NyxIdEndpointResolver.ResolvePublicApiBaseUrl(configuration)
                 ?? string.Empty;
         }
 
         if (string.IsNullOrWhiteSpace(options.NyxWebBaseUrl))
         {
             options.NyxWebBaseUrl =
-                configuration["Aevatar:NyxId:Authority"]
+                (!string.IsNullOrWhiteSpace(options.NyxApiBaseUrl)
+                    ? options.NyxApiBaseUrl
+                    : NyxIdEndpointResolver.ResolvePublicApiBaseUrl(configuration))
                 ?? string.Empty;
         }
     }

@@ -64,6 +64,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     [Theory]
     [InlineData(WorkflowExecutionCompletionStatus.Running, WorkflowRunCompletionStatus.Running)]
     [InlineData(WorkflowExecutionCompletionStatus.Completed, WorkflowRunCompletionStatus.Completed)]
+    [InlineData(WorkflowExecutionCompletionStatus.TimedOut, WorkflowRunCompletionStatus.TimedOut)]
     [InlineData(WorkflowExecutionCompletionStatus.Failed, WorkflowRunCompletionStatus.Failed)]
     [InlineData(WorkflowExecutionCompletionStatus.Stopped, WorkflowRunCompletionStatus.Stopped)]
     [InlineData(WorkflowExecutionCompletionStatus.NotFound, WorkflowRunCompletionStatus.NotFound)]

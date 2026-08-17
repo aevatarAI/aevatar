@@ -41,6 +41,9 @@ public sealed class WorkflowFileSubmitToolSource(
 
         public string Name => "workflow_file_submit";
 
+        public WorkflowToolRecoverySafety RecoverySafety =>
+            WorkflowToolRecoverySafety.EffectfulNonReplayable;
+
         public async Task<WorkflowToolExecutionResult> ExecuteAsync(
             WorkflowToolExecutionRequest request,
             CancellationToken ct = default)

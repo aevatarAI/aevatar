@@ -137,17 +137,26 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
         var sourceReadable = WorkflowCallerCredentialTokens.ParseOptional(
             source?.SourceReadableUserBearerToken);
+        var durable = source?.DurableCallerCredential;
+        var hasDurable = durable != null && !string.IsNullOrWhiteSpace(durable.Ref);
         if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
                 source?.BearerToken,
                 source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
                 source?.SourceReadableUserBearerToken))
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
+        if (hasDurable && (parsed.IsValid || sourceReadable.IsValid))
+            throw new ArgumentException("Workflow caller credential cannot combine a durable handle with bearer material.", nameof(source));
 
         var authority = source?.NyxIdAuthority;
-        if (authority != null && !parsed.IsValid)
+        var authorityOnly = authority != null &&
+                            parsed.IsMissing &&
+                            sourceReadable.IsMissing &&
+                            source?.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
+                            source.UnattendedEffectAuthorization is not null;
+        if (authority != null && !parsed.IsValid && !authorityOnly && !hasDurable)
         {
             throw new ArgumentException(
-                "Workflow caller NyxID authority requires a valid caller credential.",
+                "Workflow caller NyxID authority requires a valid proxy delegation credential or authority-only delegation.",
                 nameof(source));
         }
 
@@ -157,6 +166,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Kind = source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
             SourceReadableUserBearerToken = sourceReadable.NormalizedBearerToken ?? string.Empty,
         };
+        if (hasDurable)
+            credential.DurableCallerCredential = durable!.Clone();
         if (authority != null)
         {
             var platform = Normalize(authority.Platform);
@@ -164,7 +175,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             var scope = Normalize(authority.Scope);
             if (string.IsNullOrWhiteSpace(platform) ||
                 string.IsNullOrWhiteSpace(externalUserId) ||
-                string.IsNullOrWhiteSpace(scope))
+                string.IsNullOrWhiteSpace(scope) ||
+                authorityOnly && string.IsNullOrWhiteSpace(authority.BindingId))
             {
                 throw new ArgumentException(
                     "Workflow caller NyxID authority is incomplete.",
@@ -179,6 +191,17 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 Scope = scope,
                 BindingId = Normalize(authority.BindingId),
             };
+        }
+        if (source?.UnattendedEffectAuthorization != null)
+        {
+            if (!authorityOnly && !hasDurable)
+            {
+                throw new ArgumentException(
+                    "Workflow unattended effect authorization requires authority-only proxy delegation.",
+                    nameof(source));
+            }
+            credential.UnattendedEffectAuthorization =
+                source.UnattendedEffectAuthorization.Clone();
         }
 
         return credential;

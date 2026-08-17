@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -55,6 +56,7 @@ public sealed class ServiceServingProjectorAndQueryTests
             FailureCode = ServiceDeploymentActivationFailureCode.PreparedArtifactMissing,
             FailureReason = "projection deadline exceeded",
             OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-15T02:30:00+00:00")),
+            ActivationAttemptId = "attempt-projection",
         };
         await projector.ProjectAsync(
             context,
@@ -88,6 +90,8 @@ public sealed class ServiceServingProjectorAndQueryTests
         snapshot.ActivationFailures[0].FailureReason.Should().Be("projection deadline exceeded");
         snapshot.ActivationFailures[0].OccurredAt
             .Should().Be(DateTimeOffset.Parse("2026-03-15T02:30:00+00:00"));
+        snapshot.ActivationFailures[0].ActivationAttemptId.Should().Be("attempt-projection");
+        JsonSerializer.Serialize(snapshot).Should().NotContain("attempt-projection");
     }
 
     [Fact]
@@ -221,6 +225,74 @@ public sealed class ServiceServingProjectorAndQueryTests
             ProjectionKind = "service-serving",
         };
         (await reader.GetAsync(GAgentServiceTestKit.CreateIdentity())).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ServingSetProjector_ShouldAcceptExactReplay_AndSurfaceConflictingVersion()
+    {
+        var store = new RecordingDocumentStore<ServiceServingSetReadModel>(x => x.Id)
+        {
+            EnforceMonotonicWrites = true,
+        };
+        var projector = new ServiceServingSetProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var context = new ServiceServingSetProjectionContext
+        {
+            RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-serving",
+        };
+        var observedAt = DateTimeOffset.Parse("2026-03-15T08:00:00+00:00");
+        var committed = BuildCommittedEnvelope(
+            new ServiceServingSetUpdatedEvent
+            {
+                Identity = identity.Clone(),
+                Generation = 10,
+                RolloutId = "rollout-a",
+                Targets = { CreateTarget("dep-a", "r1", "actor-a", 100, "run") },
+            },
+            new StringValue { Value = "state" },
+            eventId: "evt-serving-10",
+            stateVersion: 10,
+            observedAt: observedAt);
+
+        await projector.ProjectAsync(context, committed);
+        await projector.ProjectAsync(context, committed.Clone());
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                new ServiceServingSetUpdatedEvent
+                {
+                    Identity = identity.Clone(),
+                    Generation = 9,
+                    RolloutId = "rollout-stale",
+                    Targets = { CreateTarget("dep-stale", "r0", "actor-stale", 100, "run") },
+                },
+                new StringValue { Value = "state" },
+                eventId: "evt-serving-9",
+                stateVersion: 9,
+                observedAt: observedAt.AddMinutes(-1)));
+
+        var conflicting = BuildCommittedEnvelope(
+            new ServiceServingSetUpdatedEvent
+            {
+                Identity = identity.Clone(),
+                Generation = 10,
+                RolloutId = "rollout-conflict",
+                Targets = { CreateTarget("dep-b", "r2", "actor-b", 100, "run") },
+            },
+            new StringValue { Value = "state" },
+            eventId: "evt-serving-10",
+            stateVersion: 10,
+            observedAt: observedAt);
+
+        Func<Task> act = async () => await projector.ProjectAsync(context, conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*serving-set projection*state version 10: Conflict*");
+        var snapshot = await store.GetAsync(ServiceKeys.Build(identity));
+        snapshot!.LastEventId.Should().Be("evt-serving-10");
+        snapshot.ActiveRolloutId.Should().Be("rollout-a");
     }
 
     [Fact]
@@ -687,6 +759,74 @@ public sealed class ServiceServingProjectorAndQueryTests
             ProjectionKind = "service-traffic",
         };
         (await reader.GetAsync(GAgentServiceTestKit.CreateIdentity())).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TrafficViewProjector_ShouldAcceptExactReplay_AndSurfaceConflictingVersion()
+    {
+        var store = new RecordingDocumentStore<ServiceTrafficViewReadModel>(x => x.Id)
+        {
+            EnforceMonotonicWrites = true,
+        };
+        var projector = new ServiceTrafficViewProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var context = new ServiceTrafficViewProjectionContext
+        {
+            RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-traffic",
+        };
+        var observedAt = DateTimeOffset.Parse("2026-03-15T08:00:00+00:00");
+        var committed = BuildCommittedEnvelope(
+            new ServiceServingSetUpdatedEvent
+            {
+                Identity = identity.Clone(),
+                Generation = 10,
+                RolloutId = "rollout-a",
+                Targets = { CreateTarget("dep-a", "r1", "actor-a", 100, "run") },
+            },
+            new StringValue { Value = "state" },
+            eventId: "evt-serving-10",
+            stateVersion: 10,
+            observedAt: observedAt);
+
+        await projector.ProjectAsync(context, committed);
+        await projector.ProjectAsync(context, committed.Clone());
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                new ServiceServingSetUpdatedEvent
+                {
+                    Identity = identity.Clone(),
+                    Generation = 9,
+                    RolloutId = "rollout-stale",
+                    Targets = { CreateTarget("dep-stale", "r0", "actor-stale", 100, "run") },
+                },
+                new StringValue { Value = "state" },
+                eventId: "evt-serving-9",
+                stateVersion: 9,
+                observedAt: observedAt.AddMinutes(-1)));
+
+        var conflicting = BuildCommittedEnvelope(
+            new ServiceServingSetUpdatedEvent
+            {
+                Identity = identity.Clone(),
+                Generation = 10,
+                RolloutId = "rollout-conflict",
+                Targets = { CreateTarget("dep-b", "r2", "actor-b", 100, "run") },
+            },
+            new StringValue { Value = "state" },
+            eventId: "evt-serving-10",
+            stateVersion: 10,
+            observedAt: observedAt);
+
+        Func<Task> act = async () => await projector.ProjectAsync(context, conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*traffic-view projection*state version 10: Conflict*");
+        var snapshot = await store.GetAsync(ServiceKeys.Build(identity));
+        snapshot!.LastEventId.Should().Be("evt-serving-10");
+        snapshot.ActiveRolloutId.Should().Be("rollout-a");
     }
 
     private static EventEnvelope BuildEnvelope<T>(T evt)
