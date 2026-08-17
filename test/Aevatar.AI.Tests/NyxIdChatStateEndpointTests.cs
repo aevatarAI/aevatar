@@ -720,6 +720,76 @@ public sealed class NyxIdChatStateEndpointTests
     }
 
     [Fact]
+    public async Task GetState_KeyResourceProof_ShouldOmitNullSiblingIdentities()
+    {
+        var resource = new NyxIdChatResourceSnapshot(
+            UserServiceId: null,
+            KeyId: "key-alpha",
+            NodeId: null,
+            ServiceAccountId: null,
+            ClientId: null,
+            DeviceId: null);
+        var action = new NyxIdChatActionSnapshot(
+            4,
+            "action-key-create",
+            "turn-alpha",
+            "task-alpha",
+            "step-key-create",
+            "key.create",
+            DateTimeOffset.Parse("2026-08-12T04:00:00Z"),
+            [
+                new NyxIdChatActionReportSnapshot(
+                    "action-key-create",
+                    "turn-alpha",
+                    "completed",
+                    resource,
+                    SafeMessage: null,
+                    ReportedAt: DateTimeOffset.Parse("2026-08-12T04:01:00Z")),
+            ],
+            new NyxIdChatActionPostconditionSnapshot(
+                "action-key-create",
+                "completed",
+                Verified: true,
+                resource,
+                FailureCode: null,
+                SafeMessage: null));
+        var queryPort = new RecordingQueryPort
+        {
+            Result = NyxIdChatConversationStateQueryResult.Current(
+                new NyxIdChatConversationStateSnapshot(
+                    ActorId: "conversation-alpha",
+                    ScopeId: "scope-alpha",
+                    StateVersion: 13,
+                    ProgressSequence: 42,
+                    UpdatedAt: DateTimeOffset.Parse("2026-08-12T04:02:00Z"),
+                    ActiveTurn: null,
+                    LatestTurn: null,
+                    RecentTerminalTurns: [],
+                    ActiveTask: null,
+                    PendingApproval: null,
+                    PendingActions: [],
+                    ControlFence: null,
+                    LatestControlResult: null,
+                    ContinuationAdmission: null,
+                    RecentActions: [action])),
+        };
+
+        var response = await ExecuteAsync(queryPort, string.Empty);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(response.Body);
+        var recentAction = json.RootElement.GetProperty("snapshot").GetProperty("recentActions")[0];
+        var reportResource = recentAction.GetProperty("reports")[0].GetProperty("resource");
+        var proofResource = recentAction.GetProperty("postconditionResult").GetProperty("resource");
+        reportResource.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("keyId");
+        proofResource.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("keyId");
+        reportResource.GetProperty("keyId").GetString().Should().Be("key-alpha");
+        proofResource.GetProperty("keyId").GetString().Should().Be("key-alpha");
+    }
+
+    [Fact]
     public async Task GetState_ServiceConnectRequest_ShouldOmitUnsetOptionalTypedParameters()
     {
         var serviceConnect = new NyxIdChatActionSnapshot(

@@ -1409,19 +1409,9 @@ function conversationStateVersion(entry) {
   return Math.max(projectionVersion, metaVersion);
 }
 
-function ensureConversationProjectionVersion(entry) {
+function ensureConversationProjection(entry) {
   if (!entry) return null;
-  const projection = entry.actorProjection || createActorProjection(entry.actorId || null);
-  const projectionVersion = Number.isSafeInteger(projection.stateVersion) && projection.stateVersion > 0
-    ? projection.stateVersion
-    : 0;
-  const metaVersion = Number.isSafeInteger(entry.meta?.stateVersion) && entry.meta.stateVersion > 0
-    ? entry.meta.stateVersion
-    : 0;
-  const nextVersion = Math.max(projectionVersion, metaVersion);
-  if (nextVersion > projectionVersion) projection.stateVersion = nextVersion;
-  entry.actorProjection = projection;
-  return projection;
+  return actorProjectionFor(entry, entry.actorId);
 }
 
 function reliableConversationStateVersion(entry) {
@@ -2249,13 +2239,25 @@ export class KeyActionCardError extends Error {
 
 function keyActionResourceId(resource) {
   if (!resource || typeof resource !== "object" || Array.isArray(resource)) return "";
-  const hasNestedKey = Object.prototype.hasOwnProperty.call(resource, "key");
-  const hasFlatKey = Object.prototype.hasOwnProperty.call(resource, "keyId");
-  const hasUserService = Object.prototype.hasOwnProperty.call(resource, "userService") ||
-    Object.prototype.hasOwnProperty.call(resource, "userServiceId");
-  if (hasUserService || hasNestedKey === hasFlatKey) return "";
-  const keyId = hasNestedKey ? resource.key?.keyId : resource.keyId;
-  return typeof keyId === "string" ? keyId : "";
+  const nestedKeyId = typeof resource.key?.keyId === "string" ? resource.key.keyId : "";
+  const flatKeyId = typeof resource.keyId === "string" ? resource.keyId : "";
+  const keyIds = [nestedKeyId, flatKeyId].filter(Boolean);
+  if (keyIds.length !== 1) return "";
+  const siblingResourceIds = [
+    resource.userService?.userServiceId,
+    resource.userServiceId,
+    resource.node?.nodeId,
+    resource.nodeId,
+    resource.serviceAccount?.serviceAccountId,
+    resource.serviceAccountId,
+    resource.developerApp?.clientId,
+    resource.clientId,
+    resource.device?.deviceId,
+    resource.deviceId,
+  ];
+  return siblingResourceIds.some((value) => typeof value === "string" && value.length > 0)
+    ? ""
+    : keyIds[0];
 }
 
 export function buildKeyActionCompletedResource(request, effect, state) {
@@ -4101,7 +4103,7 @@ async function loadConversations({ silent = false } = {}) {
       const entry = findConversationState(conversation.id);
       if (!entry) continue;
       entry.meta = conversation;
-      if (conversation.stateVersion > 0) ensureConversationProjectionVersion(entry);
+      if (conversation.stateVersion > 0) ensureConversationProjection(entry);
       if (!entry.controller) entry.title = conversation.title;
       if (entry === state.activeConversation) renderActorProjection(entry);
     }
@@ -4217,7 +4219,7 @@ async function loadConversation(conversation) {
   if (cached) {
     cached.meta = conversation;
     cached.title = conversation.title;
-    if (conversation.stateVersion > 0) ensureConversationProjectionVersion(cached);
+    if (conversation.stateVersion > 0) ensureConversationProjection(cached);
     activateConversationState(cached);
     renderActorProjection(cached);
     renderActiveConversationState();
@@ -4248,7 +4250,7 @@ async function loadConversation(conversation) {
       meta: conversation,
       title: conversation.title,
     });
-    if (conversation.stateVersion > 0) ensureConversationProjectionVersion(entry);
+    if (conversation.stateVersion > 0) ensureConversationProjection(entry);
     activateConversationState(entry);
     renderActorProjection(entry);
     state.run.context = {
@@ -4346,7 +4348,7 @@ async function refreshActorStateFor(entry, actorId, { uncursored = false } = {})
   const request = (async () => {
     const params = new URLSearchParams();
     const projection = isConversationActor
-      ? ensureConversationProjectionVersion(entry) || createActorProjection(actorId)
+      ? ensureConversationProjection(entry) || createActorProjection(actorId)
       : actorProjectionFor(entry, actorId);
     const turnId = actorStateTurnId(projection);
     if (!uncursored && projection.stateVersion > 0 && turnId) {
@@ -4419,7 +4421,7 @@ function setActorStateNotice(entry, actorId, message) {
 function entryActorProjection(entry = state.activeConversation) {
   if (!entry) return null;
   actorProjectionFor(entry, entry.actorId);
-  ensureConversationProjectionVersion(entry);
+  ensureConversationProjection(entry);
   return entry.actorProjection;
 }
 

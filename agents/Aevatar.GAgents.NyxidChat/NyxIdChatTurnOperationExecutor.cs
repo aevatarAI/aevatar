@@ -312,6 +312,10 @@ public sealed class NyxIdChatTurnOperationExecutor
         "NYXID_CHAT_EXACT_SERVICE_APPROVAL_FAILED";
     internal const string AuthorizationContinuationCapabilityUnavailableCode =
         NyxIdChatTaskLifecycle.AuthorizationContinuationCapabilityUnavailable;
+    internal const string AuthorizationContinuationInvalidCode =
+        "NYXID_AUTHORIZATION_CONTINUATION_INVALID";
+    internal const string AuthorizationContinuationRequirementUnsupportedCode =
+        "NYXID_AUTHORIZATION_CONTINUATION_REQUIREMENT_UNSUPPORTED";
     private const string InvalidExecutionResultCode = "NYXID_CHAT_INVALID_EXECUTION_RESULT";
     private const string UnsupportedOperationCode = "NYXID_CHAT_OPERATION_NOT_SUPPORTED";
     private const string ToolCapabilityLostMessage =
@@ -334,6 +338,10 @@ public sealed class NyxIdChatTurnOperationExecutor
         "The action postcondition input was invalid.";
     internal const string AuthorizationContinuationCapabilityUnavailableMessage =
         NyxIdChatTaskLifecycle.AuthorizationContinuationCapabilityUnavailableMessage;
+    internal const string AuthorizationContinuationInvalidMessage =
+        "The verified NyxID action continuation was incomplete or inconsistent.";
+    internal const string AuthorizationContinuationRequirementUnsupportedMessage =
+        "The verified NyxID action continuation requirement is not supported.";
     private const string PrepareOperationSubstepId = "prepare-operation";
     private const string ExecuteOperationSubstepId = "execute-operation";
     private const string WebSearchToolName = "web_search";
@@ -698,21 +706,99 @@ public sealed class NyxIdChatTurnOperationExecutor
         var request = isContinuation
             ? session.Request!.Clone()
             : BuildReplyRequest(command);
+        var verifiedAuthorization = command.Llm.VerifiedAuthorizationContinuation;
+        if (verifiedAuthorization is not null)
+        {
+            if (!isContinuation)
+            {
+                ClearAuthorization(session);
+                return Failure(
+                    command.Key,
+                    AuthorizationContinuationInvalidCode,
+                    AuthorizationContinuationInvalidMessage,
+                    NyxIdChatEffectEvidence.NotStarted);
+            }
+
+            switch (verifiedAuthorization.ResumeRequirement)
+            {
+                case NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest:
+                    var hasExactVerifiedUserService =
+                        verifiedAuthorization.VerifiedResource?.ResourceCase ==
+                        NyxIdChatSafeResourceRef.ResourceOneofCase.UserService &&
+                        !string.IsNullOrWhiteSpace(
+                            verifiedAuthorization.VerifiedResource.UserService.UserServiceId) &&
+                        !string.IsNullOrWhiteSpace(verifiedAuthorization.ServiceSlug);
+                    if (!hasExactVerifiedUserService)
+                    {
+                        ClearAuthorization(session);
+                        return Failure(
+                            command.Key,
+                            AuthorizationContinuationInvalidCode,
+                            AuthorizationContinuationInvalidMessage,
+                            NyxIdChatEffectEvidence.NotStarted);
+                    }
+
+                    break;
+                case NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion:
+                    if (verifiedAuthorization.Action ==
+                        NyxIdAssistantActionKind.Unspecified ||
+                        !NyxIdChatBrowserActions.IsValidCompletedResource(
+                            verifiedAuthorization.VerifiedResource) ||
+                        !NyxIdChatBrowserActions.ResourceMatchesAction(
+                            verifiedAuthorization.Action,
+                            NyxIdChatActionDisposition.Completed,
+                            verifiedAuthorization.VerifiedResource) ||
+                        BuildAuthorizationCompletionContent(verifiedAuthorization) is not
+                        { } completionContent)
+                    {
+                        ClearAuthorization(session);
+                        return Failure(
+                            command.Key,
+                            AuthorizationContinuationInvalidCode,
+                            AuthorizationContinuationInvalidMessage,
+                            NyxIdChatEffectEvidence.NotStarted);
+                    }
+
+                    session.TurnCatalog = RestrictedEmptyCatalog();
+                    ClearAuthorization(session);
+                    return AuthorizationCompletion(
+                        command.Key,
+                        completionContent);
+                default:
+                    ClearAuthorization(session);
+                    return Failure(
+                        command.Key,
+                        AuthorizationContinuationRequirementUnsupportedCode,
+                        AuthorizationContinuationRequirementUnsupportedMessage,
+                        NyxIdChatEffectEvidence.NotStarted);
+            }
+        }
         if (await EnsureDelegationCredentialAsync(command.Key, session, request, ct).ConfigureAwait(false) is
             { } credentialFailure)
         {
             return credentialFailure;
         }
-        var verifiedAuthorization = command.Llm.VerifiedAuthorizationContinuation;
         if (verifiedAuthorization is not null)
         {
-            var hasExactVerifiedUserService =
-                verifiedAuthorization.VerifiedResource?.ResourceCase ==
-                NyxIdChatSafeResourceRef.ResourceOneofCase.UserService &&
-                !string.IsNullOrWhiteSpace(
-                    verifiedAuthorization.VerifiedResource.UserService.UserServiceId) &&
-                !string.IsNullOrWhiteSpace(verifiedAuthorization.ServiceSlug);
-            if (!isContinuation || !hasExactVerifiedUserService)
+            var catalogToolContext = ResolveCatalogToolContext(request);
+            var materializedCatalog = _turnCatalogMaterializer is null
+                ? RestrictedEmptyCatalog()
+                : await _turnCatalogMaterializer
+                    .MaterializeVerifiedAuthorizationContinuationAsync(
+                        command.Llm.AgentProfile,
+                        command.Llm.AgentProfileTurnAuthority,
+                        catalogToolContext,
+                        ct)
+                    .ConfigureAwait(false);
+            LogVerifiedAuthorizationCatalogDiagnostic(
+                catalogToolContext,
+                materializedCatalog,
+                verifiedAuthorization);
+            session.TurnCatalog = AgentProfileTurnCatalogMaterializer
+                .NarrowToVerifiedUserService(
+                    materializedCatalog,
+                    verifiedAuthorization);
+            if (session.TurnCatalog.FinalAllowedToolNames.Count == 0)
             {
                 ClearAuthorization(session);
                 return Failure(
@@ -720,50 +806,6 @@ public sealed class NyxIdChatTurnOperationExecutor
                     AuthorizationContinuationCapabilityUnavailableCode,
                     AuthorizationContinuationCapabilityUnavailableMessage,
                     NyxIdChatEffectEvidence.NotStarted);
-            }
-
-            switch (verifiedAuthorization.ResumeRequirement)
-            {
-                case NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest:
-                    var catalogToolContext = ResolveCatalogToolContext(request);
-                    var materializedCatalog = _turnCatalogMaterializer is null
-                        ? RestrictedEmptyCatalog()
-                        : await _turnCatalogMaterializer
-                            .MaterializeVerifiedAuthorizationContinuationAsync(
-                                command.Llm.AgentProfile,
-                                command.Llm.AgentProfileTurnAuthority,
-                                catalogToolContext,
-                                ct)
-                            .ConfigureAwait(false);
-                    LogVerifiedAuthorizationCatalogDiagnostic(
-                        catalogToolContext,
-                        materializedCatalog,
-                        verifiedAuthorization);
-                    session.TurnCatalog = AgentProfileTurnCatalogMaterializer
-                        .NarrowToVerifiedUserService(
-                            materializedCatalog,
-                            verifiedAuthorization);
-                    if (session.TurnCatalog.FinalAllowedToolNames.Count == 0)
-                    {
-                        ClearAuthorization(session);
-                        return Failure(
-                            command.Key,
-                            AuthorizationContinuationCapabilityUnavailableCode,
-                            AuthorizationContinuationCapabilityUnavailableMessage,
-                            NyxIdChatEffectEvidence.NotStarted);
-                    }
-
-                    break;
-                case NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion:
-                    session.TurnCatalog = RestrictedEmptyCatalog();
-                    break;
-                default:
-                    ClearAuthorization(session);
-                    return Failure(
-                        command.Key,
-                        AuthorizationContinuationCapabilityUnavailableCode,
-                        AuthorizationContinuationCapabilityUnavailableMessage,
-                        NyxIdChatEffectEvidence.NotStarted);
             }
         }
         else if (isContinuation && command.Llm.RematerializeTurnCatalog)
@@ -2672,6 +2714,41 @@ public sealed class NyxIdChatTurnOperationExecutor
             selectedIntentId: null,
             candidateIntentId: null);
 
+    private static NyxIdChatTurnOperationExecution AuthorizationCompletion(
+        NyxIdChatOperationKey key,
+        string content) =>
+        new(new NyxIdChatOperationResultSignal
+        {
+            Key = key.Clone(),
+            Llm = new NyxIdChatLLMOperationResult
+            {
+                Content = content,
+                FinishReason = "stop",
+            },
+        });
+
+    private static string? BuildAuthorizationCompletionContent(
+        NyxIdChatVerifiedAuthorizationContinuation continuation) =>
+        continuation.Action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect =>
+                "NyxID service connection completed successfully. " +
+                $"User service ID: {continuation.VerifiedResource.UserService.UserServiceId}.",
+            NyxIdAssistantActionKind.ServiceReauthorize =>
+                "NyxID service reauthorization completed successfully. " +
+                $"User service ID: {continuation.VerifiedResource.UserService.UserServiceId}.",
+            NyxIdAssistantActionKind.ServiceAccessReview =>
+                "NyxID service access review completed successfully. " +
+                $"User service ID: {continuation.VerifiedResource.UserService.UserServiceId}.",
+            NyxIdAssistantActionKind.KeyCreate =>
+                "NyxID API key was created successfully. " +
+                $"Key ID: {continuation.VerifiedResource.Key.KeyId}.",
+            NyxIdAssistantActionKind.KeyRotate =>
+                "NyxID API key was rotated successfully. " +
+                $"Key ID: {continuation.VerifiedResource.Key.KeyId}.",
+            _ => null,
+        };
+
     private static void AppendVerifiedAuthorizationInstruction(
         AgentRunReplyStepState stepState,
         NyxIdChatVerifiedAuthorizationContinuation continuation)
@@ -2710,10 +2787,6 @@ public sealed class NyxIdChatTurnOperationExecutor
                 $"NyxID authorization has been verified{verifiedSubject}. " +
                 "Continue the original request now using only an available operation from this " +
                 "exact verified service. Do not stop after merely reporting that authorization succeeded.",
-            NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion =>
-                $"NyxID authorization has been verified{verifiedSubject}. " +
-                "Communicate that authorization is complete without inventing or performing an " +
-                "unrelated service operation.",
             _ => string.Empty,
         };
     }

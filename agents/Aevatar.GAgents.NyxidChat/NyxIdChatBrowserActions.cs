@@ -752,6 +752,9 @@ public static class NyxIdChatBrowserActions
                 "1"),
             OperationGeneration = 1,
         };
+        var resumeRequirement = ResolveAuthorizationResumeRequirement(
+            state.ActiveTurn,
+            request);
         var step = new NyxIdChatTaskStepState
         {
             StepId = stepId,
@@ -759,15 +762,16 @@ public static class NyxIdChatBrowserActions
             Kind = NyxIdChatStepKind.Llm,
             Status = NyxIdChatStepStatus.Planned,
             Required = true,
-            Description = "Continue the original request after verified NyxID authorization.",
+            Description = resumeRequirement ==
+                          NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest
+                ? "Continue the original request after verified NyxID authorization."
+                : "Communicate the verified NyxID action result.",
             Source = new NyxIdChatStepSource
             {
                 Llm = new NyxIdChatLLMStepSource
                 {
                     ActionRequestId = request.ActionRequestId,
-                    ResumeRequirement = ResolveAuthorizationResumeRequirement(
-                        state.ActiveTurn,
-                        request),
+                    ResumeRequirement = resumeRequirement,
                 },
             },
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
@@ -1416,6 +1420,11 @@ public static class NyxIdChatBrowserActions
             NyxIdChatSafeResourceRef.ResourceOneofCase.Device => ValidId(resource.Device.DeviceId),
             _ => false,
         };
+
+    internal static bool IsValidCompletedResource(NyxIdChatSafeResourceRef? resource) =>
+        resource is not null &&
+        resource.ResourceCase != NyxIdChatSafeResourceRef.ResourceOneofCase.None &&
+        ValidResource(resource);
 
     internal static bool ResourceMatchesAction(
         NyxIdAssistantActionKind action,

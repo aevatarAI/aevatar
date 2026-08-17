@@ -531,7 +531,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
-    public async Task WorkflowStudio_ConversationStateVersion_ShouldPreferTheLoadedConversationMetadata()
+    public async Task WorkflowStudio_ConversationStateVersion_ShouldKeepLoadedProjectionSeparateFromKnownHead()
     {
         var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
         const string script = """
@@ -567,20 +567,101 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(context.conversationStateVersion(createEntry(39, 17)), 39);
             assert.equal(context.conversationStateVersion(createEntry(0, 17)), 17);
             assert.equal(context.conversationStateVersion(createEntry(0, 0)), 0);
-            assert.equal(context.ensureConversationProjectionVersion(createEntry(39, 0)).stateVersion, 39);
-            assert.equal(context.ensureConversationProjectionVersion(createEntry(39, 17)).stateVersion, 39);
-            assert.equal(context.ensureConversationProjectionVersion(createEntry(0, 17)).stateVersion, 17);
-            assert.equal(context.ensureConversationProjectionVersion(createEntry(0, 0)).stateVersion, 0);
+            assert.equal(context.ensureConversationProjection(createEntry(39, 0)).stateVersion, 0);
+            assert.equal(context.ensureConversationProjection(createEntry(39, 17)).stateVersion, 17);
+            assert.equal(context.ensureConversationProjection(createEntry(0, 17)).stateVersion, 17);
+            assert.equal(context.ensureConversationProjection(createEntry(0, 0)).stateVersion, 0);
             """;
 
         var result = await RunNodeAsync(script, app);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
         app.Should().Contain("function conversationStateVersion(entry)");
-        app.Should().Contain("function ensureConversationProjectionVersion(entry)");
+        app.Should().Contain("function ensureConversationProjection(entry)");
         app.Should().Contain("const reliableVersion = reliableConversationStateVersion(entry);");
         app.Should().Contain("expectedStateVersion: reliableVersion,");
         app.Should().Contain("dom.sendButton.disabled = !state.auth.authenticated || locked || reliableVersion <= 0 || !hasAnswer;");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ActorStateRefresh_ShouldCursorOnlyFromLoadedProjection()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            (async () => {
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const versionStart = source.indexOf('function conversationStateVersion(entry) {');
+            const versionEnd = source.indexOf('\ninitializeConversationStates();', versionStart);
+            const refreshStart = source.indexOf('async function refreshActorStateFor(');
+            const refreshEnd = source.indexOf('\nfunction actorStateNotice(', refreshStart);
+            assert.notEqual(versionStart, -1, 'conversation version helpers must exist');
+            assert.notEqual(versionEnd, -1, 'conversation version helper boundary must exist');
+            assert.notEqual(refreshStart, -1, 'refreshActorStateFor must exist');
+            assert.notEqual(refreshEnd, -1, 'refreshActorStateFor boundary must exist');
+
+            const urls = [];
+            const context = {
+              Map,
+              URLSearchParams,
+              state:{activeConversation:null},
+              createActorProjection:(actorId) => ({
+                actorId,stateVersion:0,activeTurn:null,latestTurn:null,task:null,
+                actions:new Map(),steps:new Map(),conflicts:[]
+              }),
+              actorStateTurnId:(projection) => projection?.activeTurn?.turnId || '',
+              actorStateWithActionHistory:(envelope) => envelope,
+              restoreCurrentStateActionRequests:() => {},
+              applyCurrentStateResult:(projection, envelope) => ({
+                projection:{...projection,stateVersion:envelope.stateVersion},
+                reloadWithoutCursor:false
+              }),
+              setActorStateNotice:() => {},
+              restoreProjectionActionCaches:() => {},
+              renderActorProjection:() => {},
+              renderActionCards:() => {},
+              renderActiveConversationState:() => {},
+              demoHeaders:() => ({}),
+              responseError:async () => new Error('request failed'),
+              fetch:async (url) => {
+                urls.push(url);
+                return {ok:true,json:async () => ({status:'current',stateVersion:39})};
+              },
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(versionStart, versionEnd), context);
+            vm.runInContext(source.slice(refreshStart, refreshEnd), context);
+
+            const createEntry = (projectionVersion) => ({
+              actorId:'conversation-alpha',
+              meta:{stateVersion:39},
+              actorProjection:{
+                actorId:'conversation-alpha',
+                stateVersion:projectionVersion,
+                activeTurn:{turnId:'turn-alpha'},
+                task:null,
+                actions:new Map(),
+                steps:new Map(),
+                conflicts:[],
+              },
+              actionActorProjections:new Map(),
+              actionStateReloads:new Map(),
+              stateReloadInFlight:null,
+            });
+
+            await context.refreshActorStateFor(createEntry(0), 'conversation-alpha');
+            await context.refreshActorStateFor(createEntry(17), 'conversation-alpha');
+
+            assert.equal(urls[0], '/api/demo/conversations/conversation-alpha/state');
+            assert.match(urls[1], /afterStateVersion=17/);
+            assert.doesNotMatch(urls[1], /afterStateVersion=39/);
+            })().catch((error) => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]

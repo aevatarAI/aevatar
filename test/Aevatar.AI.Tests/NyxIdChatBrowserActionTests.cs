@@ -108,7 +108,7 @@ public sealed class NyxIdChatBrowserActionTests
     [Fact]
     public void KeyCreateAuthorizationRequired_ShouldCommitExactLeastScopeActionRequest()
     {
-        var state = AuthorizationWaitingState();
+        var state = AuthorizationWaitingStateWithPlannedContinuation();
         var original = state.Clone();
         var signal = AuthorizationRequiredSignal(state);
         signal.Tool.Receipt.ToolName = "nyxid_request_key_create";
@@ -137,6 +137,12 @@ public sealed class NyxIdChatBrowserActionTests
         decision.Request.Params.KeyCreate.Platform.Should().Be("codex");
         decision.Request.Params.KeyCreate.AllowedServiceIds.Should()
             .Equal("us-github-alpha");
+        var continuationStep = decision.State.ActiveTask.Steps.Single(step =>
+            step.Source?.Llm?.ActionRequestId == decision.Request.ActionRequestId);
+        continuationStep.Source.Llm.ResumeRequirement.Should().Be(
+            NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion);
+        continuationStep.Description.Should().Be(
+            "Communicate the verified NyxID action result.");
         state.Should().BeEquivalentTo(original);
     }
 
@@ -554,6 +560,62 @@ public sealed class NyxIdChatBrowserActionTests
             NyxIdChatActionDisposition.Completed);
         recovery.ActionPostcondition.ResourceHint.Key.KeyId.Should().Be("key-alpha");
         recovery.ActionPostcondition.ToolContext.Should().BeNull();
+    }
+
+    [Fact]
+    public void VerifiedKeyPostcondition_ShouldCarryExactActionIntoCompletionContinuation()
+    {
+        var state = AuthorizationWaitingStateWithPlannedContinuation();
+        var signal = AuthorizationRequiredSignal(state);
+        signal.Tool.Receipt.ToolName = "nyxid_request_key_create";
+        signal.Tool.Receipt.AuthorizationRequired.ServiceSlug = string.Empty;
+        signal.Tool.Receipt.AuthorizationRequired.RequestedScopes.Clear();
+        signal.Tool.Receipt.AuthorizationRequired.KeyCreate =
+            new NyxIdKeyCreateActionRequirement
+            {
+                Name = "agent-alpha",
+                Platform = "codex",
+                AllowedServiceIds = { "us-github-alpha" },
+            };
+        var requested = NyxIdChatBrowserActions.RequestAuthorization(
+            state,
+            signal,
+            LeastScopeRegistry(),
+            Now);
+        var request = requested.Request;
+        var command = ContinueCommand(
+            request.ActionRequestId,
+            NyxIdChatActionDisposition.Completed);
+        command.Actions[0].Resource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        var admitted = NyxIdChatBrowserActions.Continue(requested.State, command, Now);
+
+        var reconciled = NyxIdChatBrowserActions.ReconcilePostcondition(
+            admitted.State,
+            new NyxIdChatOperationResultSignal
+            {
+                Key = admitted.NextCommand!.Key.Clone(),
+                ActionPostcondition = new NyxIdChatActionPostconditionResult
+                {
+                    ActionRequestId = request.ActionRequestId,
+                    Disposition = NyxIdChatActionDisposition.Completed,
+                    Verified = true,
+                    Resource = new NyxIdChatSafeResourceRef
+                    {
+                        Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+                    },
+                },
+            },
+            Now);
+
+        reconciled.ShouldDispatch.Should().BeTrue();
+        var continuation = reconciled.NextCommand!.Llm.VerifiedAuthorizationContinuation;
+        continuation.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
+        continuation.ResumeRequirement.Should().Be(
+            NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion);
+        continuation.VerifiedResource.Key.KeyId.Should().Be("key-alpha");
     }
 
     [Fact]

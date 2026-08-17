@@ -280,7 +280,8 @@ public sealed class NyxIdChatTaskContractTests
                 "service_slug",
                 "verified_at",
                 "resume_requirement",
-                "authorization_readiness");
+                "authorization_readiness",
+                "action");
         continuationField.MessageType.Fields.InFieldNumberOrder()
             .Select(static field => field.Name)
             .Should().NotContain(name =>

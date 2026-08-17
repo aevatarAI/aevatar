@@ -740,6 +740,10 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(context.keyActionResourceId({key:{keyId:'key-created'}}), 'key-created');
             assert.equal(context.keyActionResourceId({keyId:'key-created'}), 'key-created');
             assert.equal(context.keyActionResourceId({
+              userServiceId:null,keyId:'key-created',nodeId:null,serviceAccountId:null,
+              clientId:null,deviceId:null
+            }), 'key-created');
+            assert.equal(context.keyActionResourceId({
               key:{keyId:'key-created'},userService:{userServiceId:'service-alpha'}
             }), '');
             assert.equal(context.keyActionResourceId({

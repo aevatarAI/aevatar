@@ -1101,9 +1101,11 @@ message NyxIdChatSafeResourceRef {
 }
 
 // Credential-free, transient fact supplied only when a browser-owned NyxID
-// authorization action has passed its exact typed postcondition. The turn
-// executor may use it to narrow request-local tools and orient the resumed LLM;
-// it never carries a bearer, credential, or generic extension bag.
+// action has passed its exact typed postcondition. The turn executor narrows
+// request-local tools only when the frozen requirement must complete an
+// original service request; completion-only continuations bypass model
+// generation and emit a deterministic receipt from the typed action/resource.
+// It never carries a bearer, credential, or generic extension bag.
 message NyxIdChatVerifiedAuthorizationContinuation {
   string action_request_id = 1;
   string origin_turn_id = 2;
@@ -1114,6 +1116,7 @@ message NyxIdChatVerifiedAuthorizationContinuation {
   google.protobuf.Timestamp verified_at = 7;
   NyxIdChatAuthorizationResumeRequirement resume_requirement = 8;
   NyxIdChatAuthorizationReadinessInput authorization_readiness = 9;
+  NyxIdAssistantActionKind action = 10;
 }
 
 message NyxIdChatActionRequestState {

@@ -3125,7 +3125,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
     }
 
     [Fact]
-    public async Task OperationExecutor_AuthorizationCompletionCommunication_ShouldExposeNoOperationTools()
+    public async Task OperationExecutor_AuthorizationCompletionCommunication_ShouldReturnDeterministicServiceReceiptWithoutLlm()
     {
         IAgentTool[] tools =
         [
@@ -3160,12 +3160,215 @@ public sealed partial class NyxIdChatTurnGAgentTests
         execution.Result.ResultCase.Should().Be(
             NyxIdChatOperationResultSignal.ResultOneofCase.Llm,
             $"failure code was {execution.Result.Failure?.FailureCode}");
-        harness.GenerationExecutor.LlmStepRequests.Should().HaveCount(2);
-        harness.GenerationExecutor.LlmStepRequests[1].TurnCatalog.Should().NotBeNull();
-        harness.GenerationExecutor.LlmStepRequests[1].TurnCatalog!.FinalAllowedToolNames.Should()
-            .BeEmpty();
-        harness.GenerationExecutor.LlmStepRequests[1].TurnCatalog!.RouteOwnedTools.Should()
-            .BeEmpty();
+        execution.Result.Llm.Content.Should().Be(
+            "NyxID service connection completed successfully. User service ID: us-alpha.");
+        execution.Result.Llm.ReasoningContent.Should().BeEmpty();
+        execution.Result.Llm.FinishReason.Should().Be("stop");
+        execution.Result.Llm.ContentParts.Should().BeEmpty();
+        execution.Result.Llm.ToolCalls.Should().BeEmpty();
+        execution.Result.Llm.Usage.Should().BeNull();
+        harness.GenerationExecutor.LlmStepRequests.Should().ContainSingle();
+        harness.Session.TurnCatalog.Should().NotBeNull();
+        harness.Session.TurnCatalog!.FinalAllowedToolNames.Should().BeEmpty();
+        harness.Session.TurnCatalog.RouteOwnedTools.Should().BeEmpty();
+        harness.Registry.RequestedNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OperationExecutor_KeyActionCompletionCommunication_ShouldAcceptVerifiedKeyWithoutServiceOperation()
+    {
+        IAgentTool[] tools =
+        [
+            new NamedProfileTool("operation-source"),
+            new AdmittedProfileTool(
+                "operation-alpha-read",
+                CreateReadAdmission("us-alpha", "service-alpha", "endpoint-alpha")),
+        ];
+        var harness = await PrepareProfiledAuthorizationContinuationAsync(tools);
+        harness.Registry.RequestedNames.Clear();
+        var continuation = VerifiedAuthorization("us-alpha", "service-alpha");
+        continuation.VerifiedResource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        continuation.Action = NyxIdAssistantActionKind.KeyCreate;
+        continuation.ServiceSlug = string.Empty;
+        continuation.ResumeRequirement =
+            NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion;
+
+        var execution = await harness.Executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-action-continuation", "operation-action-continuation", 1),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    ContinueSession = true,
+                    RematerializeTurnCatalog = true,
+                    AgentProfile = harness.Profile,
+                    AgentProfileTurnAuthority = harness.Authority,
+                    VerifiedAuthorizationContinuation = continuation,
+                },
+            },
+            harness.Session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Llm,
+            $"failure code was {execution.Result.Failure?.FailureCode}");
+        execution.Result.Llm.Content.Should().Be(
+            "NyxID API key was created successfully. Key ID: key-alpha.");
+        execution.Result.Llm.ReasoningContent.Should().BeEmpty();
+        execution.Result.Llm.FinishReason.Should().Be("stop");
+        execution.Result.Llm.ContentParts.Should().BeEmpty();
+        execution.Result.Llm.ToolCalls.Should().BeEmpty();
+        execution.Result.Llm.Usage.Should().BeNull();
+        execution.Result.Llm.Content.Should().NotContain(
+            NyxIdChatTurnOperationExecutor.AuthorizationContinuationCapabilityUnavailableCode);
+        execution.Result.Llm.Content.Contains("secret", StringComparison.OrdinalIgnoreCase).Should()
+            .BeFalse();
+        execution.Result.Llm.Content.Contains("token", StringComparison.OrdinalIgnoreCase).Should()
+            .BeFalse();
+        harness.GenerationExecutor.LlmStepRequests.Should().ContainSingle();
+        harness.Session.TurnCatalog.Should().NotBeNull();
+        harness.Session.TurnCatalog!.FinalAllowedToolNames.Should().BeEmpty();
+        harness.Session.TurnCatalog.RouteOwnedTools.Should().BeEmpty();
+        harness.Registry.RequestedNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OperationExecutor_ActionCompletionCommunication_ShouldNotResolveDelegationCredential()
+    {
+        IAgentTool[] tools =
+        [
+            new NamedProfileTool("operation-source"),
+        ];
+        var credentialLifecycle = new RejectingDelegationCredentialLifecycle();
+        var harness = await PrepareProfiledAuthorizationContinuationAsync(
+            tools,
+            credentialLifecycle);
+        harness.Session.Request!.ToolContext ??= new AgentToolExecutionContextPayload();
+        harness.Session.Request.ToolContext.Credentials = new AgentToolCredentialsPayload
+        {
+            NyxIdAccessToken = "expired-delegation-token",
+            NyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+        };
+        var continuation = VerifiedAuthorization("us-alpha", "service-alpha");
+        continuation.VerifiedResource = new NyxIdChatSafeResourceRef
+        {
+            Key = new NyxIdChatKeyRef { KeyId = "key-alpha" },
+        };
+        continuation.Action = NyxIdAssistantActionKind.KeyCreate;
+        continuation.ServiceSlug = string.Empty;
+        continuation.ResumeRequirement =
+            NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion;
+
+        var execution = await harness.Executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-action-continuation", "operation-action-continuation", 1),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    ContinueSession = true,
+                    RematerializeTurnCatalog = true,
+                    AgentProfile = harness.Profile,
+                    AgentProfileTurnAuthority = harness.Authority,
+                    VerifiedAuthorizationContinuation = continuation,
+                },
+            },
+            harness.Session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Llm,
+            $"failure code was {execution.Result.Failure?.FailureCode}");
+        execution.Result.Llm.Content.Should().Be(
+            "NyxID API key was created successfully. Key ID: key-alpha.");
+        credentialLifecycle.DelegationTokens.Should().BeEmpty();
+        harness.GenerationExecutor.LlmStepRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task OperationExecutor_ActionCompletionCommunicationWithMismatchedResource_ShouldFailBeforeLlm()
+    {
+        IAgentTool[] tools =
+        [
+            new NamedProfileTool("operation-source"),
+        ];
+        var harness = await PrepareProfiledAuthorizationContinuationAsync(tools);
+        harness.Registry.RequestedNames.Clear();
+        var continuation = VerifiedAuthorization("us-alpha", "service-alpha");
+        continuation.Action = NyxIdAssistantActionKind.KeyCreate;
+        continuation.ResumeRequirement =
+            NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion;
+
+        var execution = await harness.Executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-action-continuation", "operation-action-continuation", 1),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    ContinueSession = true,
+                    RematerializeTurnCatalog = true,
+                    AgentProfile = harness.Profile,
+                    AgentProfileTurnAuthority = harness.Authority,
+                    VerifiedAuthorizationContinuation = continuation,
+                },
+            },
+            harness.Session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.AuthorizationContinuationInvalidCode);
+        execution.Result.Failure.SafeMessage.Should().Be(
+            NyxIdChatTurnOperationExecutor.AuthorizationContinuationInvalidMessage);
+        harness.GenerationExecutor.LlmStepRequests.Should().ContainSingle();
+        harness.Registry.RequestedNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OperationExecutor_ActionCompletionCommunicationWithoutTypedResource_ShouldFailAsInvalidContinuation()
+    {
+        IAgentTool[] tools =
+        [
+            new NamedProfileTool("operation-source"),
+        ];
+        var harness = await PrepareProfiledAuthorizationContinuationAsync(tools);
+        harness.Registry.RequestedNames.Clear();
+        var continuation = VerifiedAuthorization("us-alpha", "service-alpha");
+        continuation.VerifiedResource = new NyxIdChatSafeResourceRef();
+        continuation.ServiceSlug = string.Empty;
+        continuation.ResumeRequirement =
+            NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion;
+
+        var execution = await harness.Executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-action-continuation", "operation-action-continuation", 1),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    ContinueSession = true,
+                    RematerializeTurnCatalog = true,
+                    AgentProfile = harness.Profile,
+                    AgentProfileTurnAuthority = harness.Authority,
+                    VerifiedAuthorizationContinuation = continuation,
+                },
+            },
+            harness.Session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        execution.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
+        execution.Result.Failure.FailureCode.Should().Be(
+            NyxIdChatTurnOperationExecutor.AuthorizationContinuationInvalidCode);
+        execution.Result.Failure.SafeMessage.Should().Be(
+            NyxIdChatTurnOperationExecutor.AuthorizationContinuationInvalidMessage);
+        harness.GenerationExecutor.LlmStepRequests.Should().ContainSingle();
         harness.Registry.RequestedNames.Should().BeEmpty();
     }
 
@@ -3204,7 +3407,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         execution.Result.ResultCase.Should().Be(
             NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
         execution.Result.Failure.FailureCode.Should().Be(
-            NyxIdChatTurnOperationExecutor.AuthorizationContinuationCapabilityUnavailableCode);
+            NyxIdChatTurnOperationExecutor.AuthorizationContinuationInvalidCode);
         harness.GenerationExecutor.LlmStepRequests.Should().ContainSingle();
         harness.Registry.RequestedNames.Should().BeEmpty();
     }
@@ -3286,7 +3489,9 @@ public sealed partial class NyxIdChatTurnGAgentTests
         execution.Result.ResultCase.Should().Be(
             NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
         execution.Result.Failure.FailureCode.Should().Be(
-            NyxIdChatTurnOperationExecutor.AuthorizationContinuationCapabilityUnavailableCode);
+            NyxIdChatTurnOperationExecutor.AuthorizationContinuationRequirementUnsupportedCode);
+        execution.Result.Failure.SafeMessage.Should().Be(
+            NyxIdChatTurnOperationExecutor.AuthorizationContinuationRequirementUnsupportedMessage);
         harness.GenerationExecutor.LlmStepRequests.Should().ContainSingle();
         harness.Registry.RequestedNames.Should().BeEmpty();
     }
@@ -5578,6 +5783,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 new DateTimeOffset(2026, 8, 14, 8, 0, 0, TimeSpan.Zero)),
             ResumeRequirement =
                 NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest,
+            Action = NyxIdAssistantActionKind.ServiceConnect,
         };
 
     private static async Task<(
@@ -5587,7 +5793,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
         AgentProfileSnapshot Profile,
         AgentProfileTurnAuthorityState Authority,
         BuiltInIntentToolSetRegistry Registry)> PrepareProfiledAuthorizationContinuationAsync(
-        IReadOnlyList<IAgentTool> tools)
+        IReadOnlyList<IAgentTool> tools,
+        INyxIdChatDelegationCredentialLifecyclePort? delegationCredentialLifecycle = null)
     {
         var (profile, authority) = ContinuationProfile(tools);
         var registry = new BuiltInIntentToolSetRegistry(tools);
@@ -5598,7 +5805,9 @@ public sealed partial class NyxIdChatTurnGAgentTests
             new UnavailableNyxIdActionPostconditionPort(),
             new AgentProfileTurnCatalogMaterializer(
                 registry,
-                new NoMatchProfileClassifier()));
+                new NoMatchProfileClassifier()),
+            delegationCredentialLifecycle ??
+            new NyxIdChatDelegationCredentialLifecyclePort(TimeProvider.System));
         var session = new NyxIdChatTransientExecutionSession();
         await executor.ExecuteAsync(
             new NyxIdChatOperationDispatchCommand
@@ -5690,6 +5899,21 @@ public sealed partial class NyxIdChatTurnGAgentTests
             return Task.FromResult(new NyxIdChatDelegationCredentialResolution(
                 true,
                 delegationToken));
+        }
+    }
+
+    private sealed class RejectingDelegationCredentialLifecycle
+        : INyxIdChatDelegationCredentialLifecyclePort
+    {
+        public List<string> DelegationTokens { get; } = [];
+
+        public Task<NyxIdChatDelegationCredentialResolution> ResolveAsync(
+            string delegationToken,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            DelegationTokens.Add(delegationToken);
+            return Task.FromResult(new NyxIdChatDelegationCredentialResolution(false));
         }
     }
 

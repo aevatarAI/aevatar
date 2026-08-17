@@ -151,6 +151,7 @@ internal static class NyxIdChatActionContinuationCorrelation
             VerifiedAt = match.PostconditionStep.Operation?.CompletedAt?.Clone() ?? now.Clone(),
             ResumeRequirement = match.OperationStep.Source?.Llm?.ResumeRequirement ??
                 NyxIdChatAuthorizationResumeRequirement.Unspecified,
+            Action = match.ActionRequest.Action,
         };
         if (match.ActionRequest.PostconditionResult?.Resource is not null)
         {
