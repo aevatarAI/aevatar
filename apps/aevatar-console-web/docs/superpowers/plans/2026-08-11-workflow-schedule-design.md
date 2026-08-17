@@ -22,8 +22,8 @@ CSS, vanilla JavaScript, repository documentation lint.
 
 - Create: `apps/aevatar-console-web/docs/superpowers/specs/2026-08-11-workflow-schedule-design.md`
 - Create: `apps/aevatar-console-web/docs/superpowers/plans/2026-08-11-workflow-schedule-design.md`
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-activity-vnext.gen.py`
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-activity-vnext.excalidraw`
+- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.gen.py`
+- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.excalidraw`
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py`
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/README.md`
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype.html`
@@ -67,13 +67,13 @@ Also document the generic `/api/schedules` scheduled dispatch capability as a
 lower-level implementation detail. Explicitly prohibit global ownerless
 schedule list reads plus browser-side filtering.
 
-### Task 2: Correct The Excalidraw Product Model
+### Task 2: Rebuild The Schedule-Only Excalidraw
 
 **Files:**
 
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-activity-vnext.gen.py`
+- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.gen.py`
 
-- [ ] **Step 1: Remove Schedule graph nodes**
+- [ ] **Step 1: Keep the graph free of Schedule nodes**
 
 Replace creation-path step arrays such as:
 
@@ -88,28 +88,26 @@ example:
 [("Collect recent feedback", "Lark messages"), ("Group feedback themes", "AI task")]
 ```
 
-Remove the `Schedule` node appearance branch when no graph node uses it.
+No Schedule node, Schedule node-library item, or draft Schedule property is
+drawn anywhere in the schedule board.
 
-- [ ] **Step 2: Add the stable editor action**
+- [ ] **Step 2: Draw the configure-to-observe flow**
 
-Extend `workflow_editor_frame` with a publish-state argument and render the
-fixed action order:
+Generate nine schedule-only frames from the attachment's schedule sections:
 
 ```python
-button(..., "Run", ...)
-button(..., "Schedule", color=MUTED if not published else INK, ...)
-button(..., "Add node", ...)
-button(..., "Edit YAML", ...)
-button(..., "Save", ...)
-button(..., "Publish", ...)
+01 Workflows entry -> 02 Configure cadence -> 03 Authorization review
+04 Activity schedule list -> 05 Schedule detail -> 06 Change cadence
+SPEC cadence control -> SPEC row states -> REF lifecycle
 ```
 
-Use `Publish this workflow before scheduling it.` as visible explanatory text
-in draft frames; keep published frames actionable.
+Keep the existing Operational Automation Ledger visual language and show
+owner, published target, cron, timezone, preview, credential state, and
+observed recovery actions where each screen needs them.
 
-- [ ] **Step 3: Draw frame 18**
+- [ ] **Step 3: Draw the schedule configuration panel**
 
-Add `18 Schedule - published workflow configuration` with the editor canvas
+Add the `02 · Schedule — configure recurring work` frame with the editor canvas
 still visible and a right panel showing:
 
 ```text
@@ -121,14 +119,13 @@ Credential active / Next run / Last run / Server preview
 Run now / Pause / Review and reauthorize / Save changes
 ```
 
-Include a compact failed-dispatch state inside the same frame without claiming
-that authorization is missing unless a returned error states it.
+Keep failed dispatch and expired credential recovery in the detail and row
+states frames, where the observed reason is visible next to its action.
 
-- [ ] **Step 4: Update activity and catalogue reference facts**
+- [ ] **Step 4: Keep the lifecycle boundary explicit**
 
-Show a compact `Scheduled` secondary Workflow summary, preserve generic
-Schedule-origin Activity evidence, and make any named schedule detail visibly
-conditional on server-returned facts.
+Show the published Workflow entry, generic Scheduled Activity evidence,
+owner-aware Team Automation identity, and the `202 Accepted` reread boundary.
 
 ### Task 3: Make The Standalone Prototype Match The Baseline
 
@@ -147,7 +144,7 @@ schedule: makeStep("Schedule", "Schedule", ...)
 
 No prototype Workflow document may use `kind: "Schedule"` after the change.
 
-- [ ] **Step 2: Add an editor-level Schedule trigger**
+- [ ] **Step 2: Add the editor-level Schedule action**
 
 Place an `#editor-schedule` action next to `#editor-run`. Its handler must
 open a `.studio-schedule-panel`, not a Run dialog or a node-library modal.
@@ -172,7 +169,8 @@ as production API behavior.
 
 **Files:**
 
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-activity-vnext.excalidraw`
+- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.excalidraw`
+- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.gen.py`
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py`
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/README.md`
 
@@ -181,24 +179,24 @@ as production API behavior.
 Run:
 
 ```bash
-python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-activity-vnext.gen.py
+python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.gen.py
 ```
 
-Expected: a regenerated board with exactly 18 named frames and no escaped
-elements.
+Expected: a regenerated schedule board with exactly 9 named frames and no
+unsupported entry terminology.
 
 - [ ] **Step 2: Update the verifier**
 
-Replace the expected frame inventory with the frame-18 entry and replace the
-stored SHA with the generated board's SHA. Add assertions for `Schedule`,
-`Publish this workflow before scheduling it.`, and the new schedule-panel
-title.
+Replace the expected Schedule frame inventory and stored SHA with the
+generated board's values. Assert that every schedule frame has owner, cadence,
+authorization, Activity, and observed lifecycle copy, and that unsupported
+entry terminology is absent.
 
 - [ ] **Step 3: Update the README**
 
-Add the schedule design supplement to the normative source order, replace
-every `17`-frame statement with `18`, add frame 18 to the reading order, and
-refine `Run` to mean manual execution only.
+Add the schedule generator and schedule-only board to the normative source
+order, document the nine-frame reading order, and keep `Run` scoped to manual
+execution only.
 
 - [ ] **Step 4: Review the interaction reference**
 

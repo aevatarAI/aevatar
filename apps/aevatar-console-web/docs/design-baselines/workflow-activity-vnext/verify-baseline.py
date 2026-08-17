@@ -15,9 +15,10 @@ BASELINE_DIR = Path(__file__).resolve().parent
 BOARD_NAME = "aevatar-workflow-activity-vnext.excalidraw"
 SCHEDULE_BOARD_NAME = "aevatar-workflow-schedule-design.excalidraw"
 GENERATOR_NAME = "aevatar-workflow-activity-vnext.gen.py"
+SCHEDULE_GENERATOR_NAME = "aevatar-workflow-schedule-design.gen.py"
 PROTOTYPE_NAME = "prototype.html"
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "69634a3503d4f21a3eac21d404d0ab4d965888f07c85f696cb6b29e09a119520"
+EXPECTED_SCHEDULE_SHA256 = "c9735e39ede65a7cb265c07c66e7530bbb186139fcff38327ee6f8f221224f6d"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -38,7 +39,15 @@ EXPECTED_FRAMES = (
     "17 Settings - Advanced and responsive",
 )
 EXPECTED_SCHEDULE_FRAMES = (
-    "18 Schedule - published workflow configuration",
+    "01 · Workflows — schedule entry",
+    "02 · Schedule — configure recurring work",
+    "03 · Schedule — review authorization",
+    "04 · Activities — schedules that run without you",
+    "05 · Schedule — opened",
+    "06 · Schedule — change cadence",
+    "SPEC · cadence control",
+    "SPEC · schedule row states",
+    "REF · schedule lifecycle",
 )
 
 
@@ -46,6 +55,7 @@ def main() -> None:
     board_path = BASELINE_DIR / BOARD_NAME
     schedule_board_path = BASELINE_DIR / SCHEDULE_BOARD_NAME
     generator_path = BASELINE_DIR / GENERATOR_NAME
+    schedule_generator_path = BASELINE_DIR / SCHEDULE_GENERATOR_NAME
     prototype_path = BASELINE_DIR / PROTOTYPE_NAME
     board_bytes = board_path.read_bytes()
     schedule_board_bytes = schedule_board_path.read_bytes()
@@ -71,20 +81,21 @@ def main() -> None:
         if element.get("type") == "text"
     )
     schedule_visible_text_casefolded = schedule_visible_text.casefold()
-    if "View scheduled runs" not in schedule_visible_text:
-        raise SystemExit("scheduled Activity entry point is missing from the schedule design board")
-    if "Member automations" not in schedule_visible_text:
-        raise SystemExit("schedule frame does not use the Team Automation owner model")
-    if "Dedicated Agent Key" not in schedule_visible_text:
-        raise SystemExit("schedule frame is missing Team Automation authorization review")
+    if "Schedule" not in schedule_visible_text:
+        raise SystemExit("schedule entry point is missing from the schedule design board")
+    for required in ("Team member automation", "Published target", "Activities",
+                     "Dedicated Agent Key", "Cron expression", "Time zone",
+                     "NEXT FIVE FIRES", "Review and create", "Pause", "Delete"):
+        if required.casefold() not in schedule_visible_text_casefolded:
+            raise SystemExit(f"schedule frame is missing required copy: {required}")
     if "prompt (optional)" not in schedule_visible_text_casefolded:
         raise SystemExit("schedule frame incorrectly hides optional recurring prompt semantics")
-    if "Credential active" not in schedule_visible_text:
+    if "Credential ready" not in schedule_visible_text:
         raise SystemExit("schedule frame is missing observed credential state")
-    if "Schedule every Monday" in schedule_visible_text or "Schedule every weekday" in schedule_visible_text:
-        raise SystemExit("schedule remains modeled as a workflow graph node")
-    if "Created from Published" in schedule_visible_text:
-        raise SystemExit("published status is incorrectly modeled as a workflow creation source")
+    if "a schedule graph node" not in schedule_visible_text_casefolded:
+        raise SystemExit("schedule board does not state that graph nodes are out of scope")
+    if "trigger" in schedule_visible_text_casefolded:
+        raise SystemExit("schedule board still contains unsupported trigger terminology")
     schedule_frame_names = tuple(
         element["name"]
         for element in schedule_document["elements"]
@@ -96,32 +107,8 @@ def main() -> None:
             f"expected {EXPECTED_SCHEDULE_FRAMES!r}\n"
             f"got      {schedule_frame_names!r}"
         )
-    schedule_frame_id = next(
-        element["id"]
-        for element in schedule_document["elements"]
-        if element.get("type") == "frame"
-        and element.get("name") == "18 Schedule - published workflow configuration"
-    )
-    schedule_nodes = [
-        element
-        for element in schedule_document["elements"]
-        if element.get("frameId") == schedule_frame_id
-        and element.get("type") == "rectangle"
-        and element.get("width") == 214
-        and element.get("height") == 126
-    ]
-    if len(schedule_nodes) != 4:
-        raise SystemExit("schedule configuration frame is missing compact workflow nodes")
-    for index, left in enumerate(schedule_nodes):
-        for right in schedule_nodes[index + 1:]:
-            overlaps = (
-                left["x"] < right["x"] + right["width"]
-                and left["x"] + left["width"] > right["x"]
-                and left["y"] < right["y"] + right["height"]
-                and left["y"] + left["height"] > right["y"]
-            )
-            if overlaps:
-                raise SystemExit("schedule configuration frame has overlapping workflow nodes")
+    if len(schedule_frame_names) != len(EXPECTED_SCHEDULE_FRAMES):
+        raise SystemExit("schedule board must contain the complete configure-to-observe flow")
 
     prototype_text = prototype_path.read_text(encoding="utf-8")
     if 'id="editor-schedule"' not in prototype_text:
@@ -200,15 +187,21 @@ def main() -> None:
         shutil.copyfile(generator_path, generated_script)
         subprocess.run(["python3", str(generated_script)], check=True, capture_output=True)
         generated_bytes = (generated_dir / BOARD_NAME).read_bytes()
+        generated_schedule_script = generated_dir / SCHEDULE_GENERATOR_NAME
+        shutil.copyfile(schedule_generator_path, generated_schedule_script)
+        subprocess.run(["python3", str(generated_schedule_script)], check=True, capture_output=True)
+        generated_schedule_bytes = (generated_dir / SCHEDULE_BOARD_NAME).read_bytes()
 
     if generated_bytes != board_bytes:
         raise SystemExit("generator output does not match the committed Excalidraw")
+    if generated_schedule_bytes != schedule_board_bytes:
+        raise SystemExit("schedule generator output does not match the committed Excalidraw")
 
     print(f"design SHA-256: {actual_sha256}")
     print(f"frames: {len(frame_names)}/{len(EXPECTED_FRAMES)}")
     print(f"schedule design SHA-256: {actual_schedule_sha256}")
     print(f"schedule frames: {len(schedule_frame_names)}/{len(EXPECTED_SCHEDULE_FRAMES)}")
-    print("generator output: byte-identical")
+    print("generators output: byte-identical")
     print("workflow activity vNext baseline: PASS")
 
 

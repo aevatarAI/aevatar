@@ -30,7 +30,7 @@ automation capability.
 
 ## Semantic Decision
 
-Schedule is a contextual execution trigger owned by an existing Team member
+Schedule is a contextual execution source owned by an existing Team member
 automation and backed by `ScheduledDispatch`. The Workflow editor may provide
 an inline configuration surface for the current member workflow, while the Team
 Automations tab remains the full management surface and Activity remains the
@@ -49,7 +49,7 @@ flowchart LR
 ```
 
 `Run` remains the sole manual execution action. `Schedule` is a separate
-background trigger configuration, not a mode inside the Run dialog.
+background schedule entry configuration, not a mode inside the Run dialog.
 
 ### Identity Boundaries
 
@@ -244,20 +244,14 @@ The baseline change keeps the existing Operational Automation Ledger visual
 language: dark rail, white work surface, neutral borders, compact rows,
 four-to-six-pixel radii, blue actions, and status color used only for state.
 
-- Frame 01 gains a compact schedule summary in a published Workflow's
-  secondary line, not a new column.
-- Frames 03 through 06 remove Schedule graph nodes and add the disabled
-  editor-level Schedule action.
-- Frames 07 and 08 show the same stable editor action row without conflating
-  Schedule and the manual Run dialog.
-- Frames 09 through 13 retain Schedule origin as execution evidence and make
-  any schedule-specific detail conditional on authoritative response fields.
-- Frame 18 is added as `18 Schedule - published workflow configuration`. It
-  demonstrates the Workflow editor as a compact entry into existing Team
-  Automation: member owner, published service target, cadence, timezone,
-  optional prompt, pinned revision, Dedicated Agent Key review, credential
-  state, server preview, enabled state, next run, and failure recovery without
-  implying a global list or client-owned scheduler.
+- The schedule-only board follows the supplied wireframe's readable sequence:
+  Workflow entry, recurring cadence configuration, authorization review,
+  Activity list, schedule detail, cadence editing, cadence control states,
+  schedule row states, and a lifecycle reference.
+- Every screen keeps the Workflow canvas or Activity list visible where that
+  context matters; the schedule is never drawn as a graph node.
+- The board uses the same dark rail, white work surface, compact rows, neutral
+  borders, blue actions, and state-only status colors as the existing baseline.
 - The standalone prototype removes the Schedule node-library item and uses a
   right-side Schedule panel as an interaction demonstration only.
 
@@ -265,7 +259,9 @@ four-to-six-pixel radii, blue actions, and status color used only for state.
 
 - Regenerate the Excalidraw board from the generator and run the baseline
   verifier so SHA, exact frame inventory, and deterministic output agree.
-- Inspect the new rendered schedule reference at desktop and mobile widths.
+- Inspect the new rendered schedule reference at desktop and mobile widths when
+  a browser-accessible target is available; the committed board remains the
+  durable visual reference for this design-only PR.
 - Run documentation lint and `git diff --check`.
 - Do not run a full frontend suite, full typecheck, or production build for
   this design-only PR. GitHub CI owns complete validation when runtime code is

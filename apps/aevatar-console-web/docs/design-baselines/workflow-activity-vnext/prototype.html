@@ -350,6 +350,14 @@
     .schedule-alert strong { display: block; margin-bottom: 4px; }
     .schedule-pending { margin: 16px 0 0; padding: 10px 12px; color: #175cd3; border: 1px solid #84adff; border-radius: 6px; background: var(--blue-bg); font-size: 12px; line-height: 1.45; }
     .schedule-pending strong { display: block; margin-bottom: 3px; }
+    .schedule-flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 16px; }
+    .schedule-flow-step { padding: 8px 9px; border: 1px solid #e5e7eb; border-radius: 5px; color: var(--muted); background: #fbfcfe; font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .schedule-flow-step.current { color: var(--blue); border-color: #84adff; background: var(--blue-bg); }
+    .schedule-flow-step strong { display: block; margin-bottom: 3px; color: inherit; font-size: 11px; }
+    .schedule-cadence { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 16px; }
+    .schedule-cadence span { padding: 7px 5px; border: 1px solid #e5e7eb; border-radius: 5px; color: var(--muted); background: #fff; font-size: 11px; text-align: center; }
+    .schedule-cadence span.selected { color: var(--blue); border-color: #84adff; background: var(--blue-bg); font-weight: 700; }
+    .schedule-observation { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 5px; color: var(--muted); background: #fbfcfe; font-size: 11px; line-height: 1.45; }
     .inspector-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
     .inspector-summary div { min-width: 0; padding: 10px 11px; border: 1px solid #e5e7eb; border-radius: 6px; background: #f8fafc; }
     .inspector-summary span { display: block; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
@@ -1513,6 +1521,7 @@ steps:
         const rows = schedules.map(scheduleListRow).join("");
         panel.innerHTML = `<header class="studio-panel-header"><div><h2>Member automations</h2><p>Recurring work for this Team member workflow.</p></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close automations" title="Close">×</button></header>
           <div class="studio-panel-body">
+            <div class="schedule-flow" aria-label="Schedule lifecycle"><div class="schedule-flow-step current"><strong>1 · Configure</strong>cadence and inputs</div><div class="schedule-flow-step"><strong>2 · Authorize</strong>review access</div><div class="schedule-flow-step"><strong>3 · Observe</strong>watch Activity</div></div>
             <div class="section-heading" style="margin:0 0 10px"><div><h2>${schedules.length ? "Automations" : "No automations yet"}</h2><p>${schedules.length ? "Select an automation to review its configuration." : "Create recurring work for this published member."}</p></div><button type="button" class="button small primary" id="schedule-new">New automation</button></div>
             ${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : ""}
             <button type="button" class="button small" id="schedule-all">View all automations</button>
@@ -1565,9 +1574,10 @@ steps:
       const previewLabel = schedule.enabled ? "Next five runs" : "Upcoming runs";
       panel.innerHTML = `<header class="studio-panel-header"><div><h2>${isNew ? "New automation" : escapeHtml(schedule.name)}</h2><p>${isNew ? "Configure recurring work for this Team member." : "Recurring work for this Team member workflow."}</p></div><div><button type="button" class="icon-button" id="schedule-back" aria-label="Back to automations" title="Back">←</button><button type="button" class="icon-button" id="close-schedule" aria-label="Close automations" title="Close">×</button></div></header>
         <div class="studio-panel-body">
+          <div class="schedule-flow" aria-label="Schedule lifecycle"><div class="schedule-flow-step current"><strong>1 · Configure</strong>cadence and inputs</div><div class="schedule-flow-step${isNew ? "" : " current"}"><strong>2 · Authorize</strong>${isNew ? "review before create" : "credential state observed"}</div><div class="schedule-flow-step"><strong>3 · Observe</strong>next fire and Activity</div></div>
           <section class="schedule-summary"><div class="schedule-summary-top"><strong>Team member automation</strong><span class="schedule-state${scheduleStateClass(schedule)}">${state}</span></div><p>${escapeHtml(currentWorkflow.memberId)} · ${escapeHtml(schedule.publishedServiceId)} · ${escapeHtml(schedule.revisionId)}</p></section>
           <label class="form-row"><span class="field-label">Automation name</span><input class="input" value="${escapeHtml(schedule.name)}" ${pending ? "disabled" : ""}></label>
-          <label class="form-row"><span class="field-label">Cadence</span><input class="input" value="${escapeHtml(schedule.cadence)}" ${pending ? "disabled" : ""}></label>
+          <div class="form-row"><span class="field-label">When should it run?</span><div class="schedule-cadence" role="group" aria-label="Cadence"><span class="selected">Over and over</span><span>Every week</span><span>Custom cron</span></div><input class="input" aria-label="Cadence" value="${escapeHtml(schedule.cadence)}" ${pending ? "disabled" : ""}></div>
           <label class="form-row"><span class="field-label">Cron expression</span><input class="input" value="${escapeHtml(schedule.cronExpression)}" ${pending ? "disabled" : ""}></label>
           <label class="form-row"><span class="field-label">Time zone</span><input class="input" value="${escapeHtml(schedule.timeZone)}" ${pending ? "disabled" : ""}></label>
           <label class="form-row"><span class="field-label">Prompt (optional)</span><textarea class="textarea" ${pending ? "disabled" : ""}>${escapeHtml(schedule.prompt)}</textarea><small>Sent with each scheduled run only when provided.</small></label>
@@ -1577,7 +1587,7 @@ steps:
           <div class="form-row"><span class="field-label">${previewLabel}</span><ul class="schedule-preview">${schedulePreview(schedule).map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>
           <div class="form-row"><span class="field-label">Last run</span><p class="muted" style="margin:4px 0 0">${escapeHtml(schedule.lastRun)}</p></div>
           ${schedule.lastError ? `<div class="schedule-alert"><strong>Last run</strong>${escapeHtml(schedule.lastError)}</div>` : ""}
-          ${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Waiting for the latest automation status.</div>` : "<p class=\"muted\" style=\"margin-top:14px\">Prototype data only. Production waits for Team Automation or Activity before it reports a changed automation or a new Run.</p>"}
+          ${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Waiting for the latest automation status.</div>` : "<div class=\"schedule-observation\"><strong>Observed state only.</strong><br>Prototype data is illustrative; production rereads Team Automation and Activity after each accepted command.</div>"}
         </div>
         <footer class="studio-panel-footer">${isNew ? "" : `<button type="button" class="button small danger" id="schedule-delete" ${pending ? "disabled" : ""}>Delete</button><button type="button" class="button small" id="schedule-run-now" ${pending ? "disabled" : ""}>Run now</button><button type="button" class="button small" id="schedule-reauthorize" ${pending ? "disabled" : ""}>Review</button>`}<button type="button" class="button small primary" id="schedule-save" ${pending ? "disabled" : ""}>${isNew ? "Review authorization" : "Save changes"}</button></footer>`;
 

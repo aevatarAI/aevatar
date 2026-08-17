@@ -21,17 +21,18 @@ Use the sources in this order:
    Activity, and Settings.
 2. The design specification is the normative product, route, identity, API,
    state, and backend-compatibility contract.
-3. `aevatar-workflow-schedule-design.excalidraw` and the published-workflow
-   schedule supplement are normative whenever a Schedule entry, panel,
-   resource, or Activity origin is changed. They define Schedule as a Team
-   member automation backed by `ScheduledDispatch`, not a standalone schedule
-   collection, graph node, draft property, or Run property.
+3. `aevatar-workflow-schedule-design.excalidraw`, its generator, and the
+   published-workflow schedule supplement are normative whenever a Schedule
+   entry, panel, resource, or Activity origin is changed. They define Schedule
+   as a Team member automation backed by `ScheduledDispatch`, not a standalone
+   schedule collection, graph node, draft property, or Run property.
 4. The user-path specification is the normative end-to-end journey, decision,
    recovery, and completion-evidence contract.
 5. The PNG files are viewport references for individual states.
 6. `prototype.html` is an interaction demonstration only.
-7. `aevatar-workflow-activity-vnext.gen.py` is the source generator for these
-   reference artifacts; it is not application runtime code.
+7. `aevatar-workflow-activity-vnext.gen.py` and
+   `aevatar-workflow-schedule-design.gen.py` are source generators for these
+   reference artifacts; they are not application runtime code.
 
 If the Excalidraw or prototype conflicts with a real API contract, follow the
 design specification's backend-honest behavior. Do not change the backend and
@@ -115,7 +116,7 @@ Contract specification:
 Schedule design, when Schedule is in scope:
   aevatar-workflow-schedule-design.excalidraw
 Schedule design SHA-256:
-  69634a3503d4f21a3eac21d404d0ab4d965888f07c85f696cb6b29e09a119520
+  c9735e39ede65a7cb265c07c66e7530bbb186139fcff38327ee6f8f221224f6d
 Schedule supplement, when Schedule is in scope:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-11-workflow-schedule-design.md
@@ -142,9 +143,10 @@ failures rather than undocumented implementation choices.
 ## 文件
 
 - `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity 与 Settings，共 17 个 frame。
-- `aevatar-workflow-schedule-design.excalidraw`：单独拆出的 Schedule Excalidraw，包含已发布 Team member Workflow 的 Member automations 配置，共 1 个 frame。
+- `aevatar-workflow-schedule-design.excalidraw`：根据用户提供的 schedule wireframe 重绘的独立 Excalidraw，只包含从 Workflows 进入排程、配置周期、授权、Activity 观察、详情恢复、修改和组件状态，共 9 个 frame。
+- `aevatar-workflow-schedule-design.gen.py`：上述 Schedule 画板的确定性生成器。
 - `aevatar-workflow-activity-vnext.gen.py`：画板生成器，内含画框边界、ID 唯一性和废弃术语检查。
-- `verify-baseline.py`：仓库内校验器，验证主画板 SHA-256、生成器确定性输出、17 个主画板 frame 的精确清单，以及独立 Schedule 画板的完整性。
+- `verify-baseline.py`：仓库内校验器，验证主画板和 Schedule 画板 SHA-256、两个生成器的确定性输出、17 个主画板 frame 和 9 个 Schedule frame 的精确清单。
 - `prototype.html`：可直接在浏览器打开的交互原型，不需要安装依赖或启动服务。
 - `prototype-workflows.png`：Workflows 桌面视图截图。
 - `prototype-activity.png`：Activity 桌面视图截图。
@@ -219,7 +221,18 @@ Production Data Truth Rule，也不覆盖设计规范中的
 15. `15 Settings - save and recovery states`：dirty save bar、accepted observation、fallback、catalog unavailable 和保存失败恢复。
 16. `16 Settings - Account`：Profile、claims、Authentication、Sign out 与 Manage service access。
 17. `17 Settings - Advanced and responsive`：单份只读 effective request values 与完整移动端操作布局。
-Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidraw`。该文件只保留 `18 Schedule - published workflow configuration`：已发布 Team member Workflow 的右侧 Schedule 管理面；它复用现有 Team Automation 语义，显示 member owner、published service、pinned revision、周期、时区、可选 prompt、Dedicated Agent Key 审查、服务端预览、credential 状态和调度状态，不把 Schedule 画成图节点。
+
+Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidraw`，按下面顺序检查：
+
+1. `01 · Workflows — schedule entry`：从已发布 Workflow 进入 Schedule。
+2. `02 · Schedule — configure recurring work`：在画布旁配置周期、时区、cron、可选 prompt 和服务端预览。
+3. `03 · Schedule — review authorization`：确认 Team member 权限与 Dedicated Agent Key。
+4. `04 · Activities — schedules that run without you`：观察 active、paused、late 和 needs attention 行。
+5. `05 · Schedule — opened`：查看单个排程详情、每次 fire 和恢复动作。
+6. `06 · Schedule — change cadence`：修改周期；目标和 pinned revision 仍是只读事实。
+7. `SPEC · cadence control`：周期控件和不可表达 cron 的保真规则。
+8. `SPEC · schedule row states`：创建中、active、paused、needs attention 等行状态。
+9. `REF · schedule lifecycle`：现有 API / ScheduledDispatch 能力与本期边界。
 
 重点不是逐个查看控件，而是沿着这条主路径检查语义是否连贯：
 
