@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Delivery;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
@@ -105,6 +106,27 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         failed.ContinuationClaimantId.Should().Be("worker-alpha");
         failed.ErrorMessage.Should().Be("Workflow provisioning failed.");
         failed.ErrorMessage.Should().NotContain("token-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCatalogProjectionIsPending_ShouldLeaveAcceptedInstallationForRetry()
+    {
+        var provisioning = new RecordingProvisioningService
+        {
+            Failure = new StudioMemberAutomationProjectionPendingException(31),
+        };
+        var commands = new RecordingCommandPort();
+        var executor = NewExecutor(provisioning, commands, new RecordingAccessTokenProvider());
+
+        var execute = () => executor.ExecuteAsync(
+            Delivery(WorkflowInstallationStatus.Accepted),
+            "worker-alpha");
+
+        var pending = await execute.Should()
+            .ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(31);
+        commands.ProvisioningAccepted.Should().BeEmpty();
+        commands.Failed.Should().BeEmpty();
     }
 
     [Fact]

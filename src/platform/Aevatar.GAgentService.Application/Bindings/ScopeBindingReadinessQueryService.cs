@@ -48,16 +48,22 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
             normalizedServiceId,
             request.AppId);
         var observedAtUtc = DateTimeOffset.UtcNow;
+        Task<ServiceDeploymentCatalogSnapshot?>? deploymentCatalogTask = null;
+
+        Task<ServiceDeploymentCatalogSnapshot?> GetDeploymentCatalogAsync() =>
+            deploymentCatalogTask ??= _serviceLifecycleQueryPort
+                .GetServiceDeploymentsAsync(identity, ct);
 
         async Task<ScopeBindingReadinessSnapshot> WithTerminalActivationFailureAsync(
             ScopeBindingReadinessSnapshot pendingSnapshot)
         {
-            var failureCode = await GetTerminalActivationFailureCodeAsync(
-                    identity,
+            var failureCode = string.IsNullOrWhiteSpace(expectedRevisionId) ||
+                              string.IsNullOrWhiteSpace(request.ExpectedActivationAttemptId)
+                ? null
+                : FindTerminalActivationFailureCode(
+                    await GetDeploymentCatalogAsync().ConfigureAwait(false),
                     expectedRevisionId,
-                    request.ExpectedActivationAttemptId,
-                    ct)
-                .ConfigureAwait(false);
+                    request.ExpectedActivationAttemptId);
             return pendingSnapshot with
             {
                 TerminalActivationFailureCode = failureCode,
@@ -109,7 +115,10 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: observedAtUtc)).ConfigureAwait(false);
         }
 
-        if (!IsServiceCatalogTargetVisible(service, expectedEndpointIds))
+        if (!IsServiceCatalogTargetVisible(
+                service,
+                expectedEndpointIds,
+                expectedRevisionId))
         {
             return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
                 normalizedScopeId,
@@ -141,7 +150,7 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
         }
 
         var revisionCatalog = await _revisionCatalogQueryReader.GetAsync(identity, ct).ConfigureAwait(false);
-        var artifact = FindPreparedArtifact(revisionCatalog, eligibleTarget.RevisionId);
+        var artifact = FindPublishedPreparedArtifact(revisionCatalog, eligibleTarget.RevisionId);
         if (!DoesArtifactExposeEndpoints(artifact, serviceEndpointIds))
         {
             return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
@@ -155,6 +164,25 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 RevisionId: eligibleTarget.RevisionId,
                 DeploymentId: eligibleTarget.DeploymentId,
                 ObservedAtUtc: observedAtUtc)).ConfigureAwait(false);
+        }
+
+        var deploymentCatalog = await GetDeploymentCatalogAsync().ConfigureAwait(false);
+        if (!IsDeploymentArtifactReady(
+                deploymentCatalog,
+                eligibleTarget,
+                artifact!.ArtifactHash))
+        {
+            return await WithTerminalActivationFailureAsync(new ScopeBindingReadinessSnapshot(
+                normalizedScopeId,
+                normalizedServiceId,
+                ScopeBindingReadinessStatus.PreparedArtifactMissing,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: false,
+                RevisionId: eligibleTarget.RevisionId,
+                DeploymentId: eligibleTarget.DeploymentId,
+                ObservedAtUtc: deploymentCatalog?.UpdatedAt ?? observedAtUtc)).ConfigureAwait(false);
         }
 
         if (WorkflowServiceArtifactReadiness.RequiresCapabilityAdmissionRebind(artifact!))
@@ -188,7 +216,7 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
                 ObservedAtUtc: invocationCatalog?.ObservedAt ?? observedAtUtc)).ConfigureAwait(false);
         }
 
-        return new ScopeBindingReadinessSnapshot(
+        var ready = new ScopeBindingReadinessSnapshot(
             normalizedScopeId,
             normalizedServiceId,
             ScopeBindingReadinessStatus.Ready,
@@ -199,21 +227,25 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
             RevisionId: eligibleTarget.RevisionId,
             DeploymentId: eligibleTarget.DeploymentId,
             ObservedAtUtc: observedAtUtc);
+        var observed = await WithTerminalActivationFailureAsync(ready).ConfigureAwait(false);
+        return observed.TerminalActivationFailureCode == null
+            ? observed
+            : observed with
+            {
+                Status = ScopeBindingReadinessStatus.InvocationCatalogNotReady,
+                InvokeReady = false,
+            };
     }
 
-    private async Task<ServiceDeploymentActivationFailureCode?> GetTerminalActivationFailureCodeAsync(
-        ServiceIdentity identity,
+    private static ServiceDeploymentActivationFailureCode? FindTerminalActivationFailureCode(
+        ServiceDeploymentCatalogSnapshot? deploymentCatalog,
         string? expectedRevisionId,
-        string? expectedActivationAttemptId,
-        CancellationToken ct)
+        string? expectedActivationAttemptId)
     {
         if (string.IsNullOrWhiteSpace(expectedRevisionId) ||
             string.IsNullOrWhiteSpace(expectedActivationAttemptId))
             return null;
 
-        var deploymentCatalog = await _serviceLifecycleQueryPort
-            .GetServiceDeploymentsAsync(identity, ct)
-            .ConfigureAwait(false);
         var failure = deploymentCatalog?.ActivationFailures
             .Where(candidate => string.Equals(
                 candidate.RevisionId,
@@ -260,8 +292,15 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
 
     private static bool IsServiceCatalogTargetVisible(
         ServiceCatalogSnapshot service,
-        IReadOnlyList<string> expectedEndpointIds)
+        IReadOnlyList<string> expectedEndpointIds,
+        string? expectedRevisionId)
     {
+        if (!string.IsNullOrWhiteSpace(expectedRevisionId) &&
+            !string.Equals(service.DefaultServingRevisionId, expectedRevisionId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         if (expectedEndpointIds.Count == 0)
             return true;
 
@@ -318,11 +357,27 @@ public sealed class ScopeBindingReadinessQueryService : IScopeBindingReadinessQu
             IsEligibleTrafficTarget(target, expectedRevisionId, expectedDeploymentId)));
     }
 
-    private static PreparedServiceRevisionArtifact? FindPreparedArtifact(
+    private static PreparedServiceRevisionArtifact? FindPublishedPreparedArtifact(
         ServiceRevisionCatalogSnapshot? catalog,
         string revisionId) =>
-        catalog?.Revisions.FirstOrDefault(revision =>
-            string.Equals(revision.RevisionId, revisionId, StringComparison.Ordinal))?.PreparedArtifact;
+        catalog.TryGetPublishedPreparedArtifact(revisionId, expectedArtifactHash: null, out var artifact)
+            ? artifact
+            : null;
+
+    private static bool IsDeploymentArtifactReady(
+        ServiceDeploymentCatalogSnapshot? catalog,
+        ServiceServingTargetSnapshot target,
+        string artifactHash) =>
+        catalog?.Deployments.Any(deployment =>
+            string.Equals(deployment.DeploymentId, target.DeploymentId, StringComparison.Ordinal) &&
+            string.Equals(deployment.RevisionId, target.RevisionId, StringComparison.Ordinal) &&
+            string.Equals(deployment.PrimaryActorId, target.PrimaryActorId, StringComparison.Ordinal) &&
+            string.Equals(
+                deployment.Status,
+                ServiceDeploymentStatus.Active.ToString(),
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(deployment.ArtifactHash) &&
+            string.Equals(deployment.ArtifactHash, artifactHash, StringComparison.Ordinal)) == true;
 
     private static bool DoesArtifactExposeEndpoints(
         PreparedServiceRevisionArtifact? artifact,

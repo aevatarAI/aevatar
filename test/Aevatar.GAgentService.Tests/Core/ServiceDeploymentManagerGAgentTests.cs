@@ -28,10 +28,11 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var eventStore = new InMemoryEventStore();
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
         var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
         await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r1",
-            GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+            artifact);
         var activator = new RecordingRuntimeActivator();
         activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
         var actorId = ServiceActorIds.Deployment(identity);
@@ -47,6 +48,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         agent.State.Deployments.Should().ContainKey("dep-r1");
         agent.State.Deployments["dep-r1"].RevisionId.Should().Be("r1");
         agent.State.Deployments["dep-r1"].PrimaryActorId.Should().Be("actor-r1");
+        agent.State.Deployments["dep-r1"].ArtifactHash.Should().Be(artifact.ArtifactHash);
 
         await agent.DeactivateAsync();
 
@@ -54,6 +56,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         await replayed.ActivateAsync();
         replayed.State.Deployments.Should().ContainKey("dep-r1");
         replayed.State.Deployments["dep-r1"].PrimaryActorId.Should().Be("actor-r1");
+        replayed.State.Deployments["dep-r1"].ArtifactHash.Should().Be(artifact.ArtifactHash);
     }
 
     [Fact]
@@ -120,6 +123,137 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
         activator.ActivationRequests.Should().ContainSingle();
         dispatchPort.Commands.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldRevalidateRuntimeAndReplayArtifactHash_WhenActiveDeploymentPredatesHashFence()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.Deployment(identity);
+        var activatedAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1));
+        await eventStore.AppendAsync(
+            actorId,
+            [
+                new StateEvent
+                {
+                    EventId = "legacy-activated-without-artifact-hash",
+                    Version = 1,
+                    Timestamp = activatedAt.Clone(),
+                    EventData = Any.Pack(ParseLegacyActivatedWire(
+                        identity,
+                        "dep-r1",
+                        "r1",
+                        "actor-r1",
+                        activatedAt)),
+                },
+            ],
+            expectedVersion: 0);
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
+            identity,
+            "r1",
+            GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat"));
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            artifact);
+        var dispatchPort = new RecordingDispatchPort();
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var agent = CreateAgent(
+            eventStore,
+            revisionCatalog,
+            activator,
+            actorId,
+            dispatchPort);
+        await agent.ActivateAsync();
+
+        agent.State.Deployments["dep-r1"].ArtifactHash.Should().BeEmpty();
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-bind-legacy-hash",
+            ExpectedArtifactHash = artifact.ArtifactHash,
+        });
+
+        activator.ActivationRequests.Should().ContainSingle();
+        activator.ActivationRequests[0].Artifact.ArtifactHash.Should().Be(artifact.ArtifactHash);
+        agent.State.Deployments["dep-r1"].ArtifactHash.Should().Be(artifact.ArtifactHash);
+        dispatchPort.Commands.Should().ContainSingle();
+        (await eventStore.GetEventsAsync(actorId)).Should().Contain(evt =>
+            evt.EventData.Is(ServiceDeploymentActivatedEvent.Descriptor) &&
+            string.Equals(
+                evt.EventData.Unpack<ServiceDeploymentActivatedEvent>().ArtifactHash,
+                artifact.ArtifactHash,
+                StringComparison.Ordinal));
+        await agent.DeactivateAsync();
+
+        var replayed = CreateAgent(
+            eventStore,
+            revisionCatalog,
+            new RecordingRuntimeActivator(),
+            actorId,
+            new RecordingDispatchPort());
+        await replayed.ActivateAsync();
+
+        replayed.State.Deployments["dep-r1"].ArtifactHash.Should().Be(artifact.ArtifactHash);
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldRejectActiveDeploymentReuse_WhenArtifactHashDiffers()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        var originalArtifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            originalArtifact);
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-original",
+            ExpectedArtifactHash = originalArtifact.ArtifactHash,
+        });
+        await AcknowledgeLatestServingDispatchAsync(agent, identity, dispatchPort);
+
+        var changedArtifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
+            identity,
+            "r1",
+            GAgentServiceTestKit.CreateEndpointDescriptor(
+                requestTypeUrl: "type.googleapis.com/test.changed-command"));
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            changedArtifact);
+        var act = () => agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-changed",
+            ExpectedArtifactHash = changedArtifact.ArtifactHash,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*artifact hash does not match*");
+        activator.ActivationRequests.Should().ContainSingle();
+        dispatchPort.Commands.Should().ContainSingle();
+        agent.State.Deployments["dep-r1"].ArtifactHash.Should().Be(originalArtifact.ArtifactHash);
     }
 
     [Fact]
@@ -449,6 +583,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var firstScheduler = new RecordingCallbackScheduler();
         var actorId = ServiceActorIds.Deployment(identity);
         const string activationAttemptId = "attempt-recovered-pending";
+        const string expectedArtifactHash = "HASH-RECOVERED";
         var agent = CreateAgent(
             eventStore,
             new FakeServiceRevisionCatalogQueryReader(),
@@ -462,10 +597,12 @@ public sealed class ServiceDeploymentManagerGAgentTests
             Identity = identity.Clone(),
             RevisionId = "r1",
             ActivationAttemptId = activationAttemptId,
+            ExpectedArtifactHash = expectedArtifactHash,
         });
 
         var originalDeadline = agent.State.PendingActivations["r1"].DeadlineAt.Clone();
         agent.State.PendingActivations["r1"].ActivationAttemptId.Should().Be(activationAttemptId);
+        agent.State.PendingActivations["r1"].ExpectedArtifactHash.Should().Be(expectedArtifactHash);
         var committedVersion = agent.State.LastAppliedEventVersion;
         await agent.DeactivateAsync();
 
@@ -479,6 +616,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         await replayed.ActivateAsync();
         replayed.State.PendingActivations["r1"].DeadlineAt.Should().Be(originalDeadline);
         replayed.State.PendingActivations["r1"].ActivationAttemptId.Should().Be(activationAttemptId);
+        replayed.State.PendingActivations["r1"].ExpectedArtifactHash.Should().Be(expectedArtifactHash);
 
         await replayed.HandleActivateAsync(new ActivateServiceRevisionCommand
         {
@@ -486,6 +624,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             RevisionId = "r1",
             ActivationDeadlineAt = Timestamp.FromDateTime(DateTime.UtcNow.AddHours(1)),
             ActivationAttemptId = activationAttemptId,
+            ExpectedArtifactHash = expectedArtifactHash,
         });
 
         replayed.State.LastAppliedEventVersion.Should().Be(committedVersion, "a continuation must not replace actor-owned pending state");
@@ -499,7 +638,425 @@ public sealed class ServiceDeploymentManagerGAgentTests
             {
                 callback.ActivationDeadlineAt.Should().Be(originalDeadline);
                 callback.ActivationAttemptId.Should().Be(activationAttemptId);
+                callback.ExpectedArtifactHash.Should().Be(expectedArtifactHash);
             });
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldPersistArtifactHashUpgradeForSamePendingAttempt()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler);
+        await agent.ActivateAsync();
+        var command = new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-hash-fence",
+            ExpectedArtifactHash = string.Empty,
+        };
+        await agent.HandleActivateAsync(command);
+        var committedVersion = agent.State.LastAppliedEventVersion;
+
+        command.ExpectedArtifactHash = "HASH-NEXT";
+        await agent.HandleActivateAsync(command);
+
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion + 1);
+        agent.State.PendingActivations["r1"].ExpectedArtifactHash.Should().Be("HASH-NEXT");
+        scheduler.ScheduledTimeouts[^1].Payload.Unpack<ActivateServiceRevisionCommand>()
+            .ExpectedArtifactHash.Should().Be("HASH-NEXT");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldRejectArtifactHashUpgradeAfterServingDispatchAdvanced()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        var command = new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-late-hash-fence",
+        };
+        await agent.HandleActivateAsync(command);
+        var servingCommand = dispatchPort.Commands.Should().ContainSingle().Which.command;
+        await agent.HandleServingTargetsAppliedAsync(CreateAppliedAck(
+            identity,
+            servingCommand.Targets.Single(),
+            servingCommand));
+        agent.State.PendingActivations["r1"].Phase.Should()
+            .Be(ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending);
+
+        command.ExpectedArtifactHash = artifact.ArtifactHash;
+        var act = () => agent.HandleActivateAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot add an expected artifact hash after artifact validation has completed*");
+        agent.State.PendingActivations["r1"].ExpectedArtifactHash.Should().BeEmpty();
+        dispatchPort.DefaultCommands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldRejectArtifactHashDriftForSamePendingAttempt()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity));
+        await agent.ActivateAsync();
+        var command = new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-hash-fence",
+            ExpectedArtifactHash = "HASH-A",
+        };
+        await agent.HandleActivateAsync(command);
+        var committedVersion = agent.State.LastAppliedEventVersion;
+
+        command.ExpectedArtifactHash = "HASH-B";
+        var act = () => agent.HandleActivateAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to a different expected artifact hash*");
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        agent.State.PendingActivations["r1"].ExpectedArtifactHash.Should().Be("HASH-A");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldKeepMatchingArtifactHashReplayIdempotent()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler);
+        await agent.ActivateAsync();
+        var command = new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-hash-idempotent",
+            ExpectedArtifactHash = "HASH-STABLE",
+        };
+        await agent.HandleActivateAsync(command);
+        var committedVersion = agent.State.LastAppliedEventVersion;
+
+        await agent.HandleActivateAsync(command.Clone());
+
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        agent.State.PendingActivations["r1"].ExpectedArtifactHash.Should().Be("HASH-STABLE");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldRejectArtifactHashDriftForCompletedAttempt()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        var command = new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-completed-hash",
+            ExpectedArtifactHash = artifact.ArtifactHash,
+        };
+        await agent.HandleActivateAsync(command);
+        await AcknowledgeLatestServingDispatchAsync(agent, identity, dispatchPort);
+        var completion = agent.State.ActivationCompletions.Values.Should().ContainSingle().Subject;
+        completion.ExpectedArtifactHash.Should().Be(artifact.ArtifactHash);
+        var committedVersion = agent.State.LastAppliedEventVersion;
+
+        command.ExpectedArtifactHash = "DIFFERENT-HASH";
+        var act = () => agent.HandleActivateAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to a different expected artifact hash*");
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldFailClosed_WhenCompletedLegacyAttemptIsReplayedWithArtifactHash()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        var command = new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-completed-legacy",
+        };
+        await agent.HandleActivateAsync(command);
+        await AcknowledgeLatestServingDispatchAsync(agent, identity, dispatchPort);
+        agent.State.ActivationCompletions.Values.Should().ContainSingle()
+            .Which.ExpectedArtifactHash.Should().BeEmpty();
+
+        command.ExpectedArtifactHash = artifact.ArtifactHash;
+        var act = () => agent.HandleActivateAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to a different expected artifact hash*");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldKeepMatchingCompletedArtifactHashReplayIdempotent()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        var command = new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-completed-stable",
+            ExpectedArtifactHash = artifact.ArtifactHash,
+        };
+        await agent.HandleActivateAsync(command);
+        await AcknowledgeLatestServingDispatchAsync(agent, identity, dispatchPort);
+        var committedVersion = agent.State.LastAppliedEventVersion;
+
+        await agent.HandleActivateAsync(command.Clone());
+
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        activator.ActivationRequests.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(ServiceRevisionStatus.Created)]
+    [InlineData(ServiceRevisionStatus.Prepared)]
+    public async Task HandleActivateAsync_ShouldWaitForPublishedRevision(
+        ServiceRevisionStatus status)
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        artifact.ArtifactHash = "HASH-PENDING-PUBLISH";
+        var activator = new RecordingRuntimeActivator();
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new SnapshotRevisionCatalogQueryReader(CreateRevisionSnapshot(
+                artifact,
+                status,
+                artifact.ArtifactHash)),
+            activator,
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler);
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = $"attempt-{status}",
+            ExpectedArtifactHash = artifact.ArtifactHash,
+        });
+
+        activator.ActivationRequests.Should().BeEmpty();
+        var pending = agent.State.PendingActivations.Should().ContainKey("r1").WhoseValue;
+        pending.LastRetryFailureCode.Should().Be(
+            ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
+        pending.ExpectedArtifactHash.Should().Be(artifact.ArtifactHash);
+        scheduler.ScheduledTimeouts.Should().ContainSingle();
+        scheduler.ScheduledTimeouts.Single().Payload.Unpack<ActivateServiceRevisionCommand>()
+            .ExpectedArtifactHash.Should().Be(artifact.ArtifactHash);
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldNotActivatePublishedRevision_WhenExpectedArtifactHashDiffers()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var activator = new RecordingRuntimeActivator();
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new SnapshotRevisionCatalogQueryReader(CreateRevisionSnapshot(
+                artifact,
+                ServiceRevisionStatus.Published,
+                artifact.ArtifactHash)),
+            activator,
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler);
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-hash-mismatch",
+            ExpectedArtifactHash = "HASH-EXPECTED",
+        });
+
+        activator.ActivationRequests.Should().BeEmpty();
+        agent.State.Deployments.Should().BeEmpty();
+        agent.State.PendingActivations.Should().NotContainKey("r1");
+        agent.State.ActivationFailures["r1"].FailureCode.Should().Be(
+            ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
+        scheduler.ScheduledTimeouts.Single().Payload.Unpack<ActivateServiceRevisionCommand>()
+            .ExpectedArtifactHash.Should().Be("HASH-EXPECTED");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldNotActivatePublishedRevision_WhenSnapshotArtifactHashDiffers()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var activator = new RecordingRuntimeActivator();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new SnapshotRevisionCatalogQueryReader(CreateRevisionSnapshot(
+                artifact,
+                ServiceRevisionStatus.Published,
+                "HASH-SNAPSHOT")),
+            activator,
+            ServiceActorIds.Deployment(identity));
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-snapshot-hash-mismatch",
+        });
+
+        activator.ActivationRequests.Should().BeEmpty();
+        agent.State.Deployments.Should().BeEmpty();
+        agent.State.PendingActivations.Should().NotContainKey("r1");
+        agent.State.ActivationFailures["r1"].FailureCode.Should().Be(
+            ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldFailImmediately_WhenPublishedArtifactIsMissing()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var publishedWithoutArtifact = CreateRevisionSnapshot(
+            artifact,
+            ServiceRevisionStatus.Published,
+            artifact.ArtifactHash) with
+        {
+            PreparedArtifact = null,
+        };
+        var activator = new RecordingRuntimeActivator();
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new SnapshotRevisionCatalogQueryReader(publishedWithoutArtifact),
+            activator,
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler);
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-published-artifact-missing",
+            ExpectedArtifactHash = artifact.ArtifactHash,
+        });
+
+        activator.ActivationRequests.Should().BeEmpty();
+        agent.State.PendingActivations.Should().NotContainKey("r1");
+        agent.State.ActivationFailures["r1"].FailureCode.Should().Be(
+            ServiceDeploymentActivationFailureCode.PreparedArtifactMissing);
+        agent.State.ActivationFailures["r1"].FailureReason.Should().Contain("integrity");
+        scheduler.ScheduledTimeouts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldPreserveMatchingArtifactFenceThroughServingCheckpoint()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new SnapshotRevisionCatalogQueryReader(CreateRevisionSnapshot(
+                artifact,
+                ServiceRevisionStatus.Published,
+                artifact.ArtifactHash)),
+            activator,
+            ServiceActorIds.Deployment(identity),
+            scheduler: scheduler);
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-matching-hash",
+            ExpectedArtifactHash = artifact.ArtifactHash,
+        });
+
+        activator.ActivationRequests.Should().ContainSingle();
+        agent.State.PendingActivations["r1"].ExpectedArtifactHash.Should().Be(artifact.ArtifactHash);
+        scheduler.ScheduledTimeouts.Single().Payload.Unpack<ActivateServiceRevisionCommand>()
+            .ExpectedArtifactHash.Should().Be(artifact.ArtifactHash);
     }
 
     [Fact]
@@ -1157,13 +1714,14 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var eventStore = new InMemoryEventStore();
         var identity = GAgentServiceTestKit.CreateIdentity();
         var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
+            identity,
+            "r1",
+            GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat"));
         await revisionCatalog.UpsertRevisionAsync(
             ServiceKeys.Build(identity),
             "r1",
-            GAgentServiceTestKit.CreatePreparedStaticArtifact(
-                identity,
-                "r1",
-                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+            artifact);
         var firstActivator = new RecordingRuntimeActivator();
         firstActivator.ActivationResults.Enqueue(
             new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
@@ -1187,6 +1745,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             Identity = identity.Clone(),
             RevisionId = "r1",
             ActivationAttemptId = "attempt-serving-delivery",
+            ExpectedArtifactHash = artifact.ArtifactHash,
         });
 
         agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
@@ -1196,6 +1755,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
         pending.PrimaryActorId.Should().Be("actor-r1");
         pending.LastRetryFailureCode.Should().Be(
             ServiceDeploymentActivationFailureCode.ServingTargetDeliveryFailed);
+        pending.ExpectedArtifactHash.Should().Be(artifact.ArtifactHash);
         agent.State.ActivationFailures.Should().BeEmpty();
         firstActivator.ActivationRequests.Should().ContainSingle();
         failedDispatch.Commands.Should().ContainSingle();
@@ -1220,6 +1780,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
         var callback = recoveredScheduler.ScheduledTimeouts.Should().ContainSingle().Subject.Payload
             .Unpack<ActivateServiceRevisionCommand>();
         callback.ActivationAttemptId.Should().Be("attempt-serving-delivery");
+        callback.ExpectedArtifactHash.Should().Be(artifact.ArtifactHash);
+        replayed.State.PendingActivations["r1"].ExpectedArtifactHash.Should().Be(artifact.ArtifactHash);
         await replayed.HandleActivateAsync(callback);
 
         recoveredActivator.ActivationRequests.Should().BeEmpty();
@@ -1389,6 +1951,142 @@ public sealed class ServiceDeploymentManagerGAgentTests
         completion.ServingGeneration.Should().Be(7);
     }
 
+    [Fact]
+    public async Task DefaultServingDispatchAdmission_ShouldRemainPendingAndRecoverStableCommandUntilCommitAck()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(
+            eventStore,
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity),
+            dispatchPort,
+            scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-default-after-serving",
+        });
+        var servingCommand = dispatchPort.Commands.Single().command;
+        var servingTarget = servingCommand.Targets.Single();
+
+        await agent.HandleServingTargetsAppliedAsync(
+            CreateAppliedAck(identity, servingTarget, servingCommand));
+
+        dispatchPort.DefaultCommands.Should().ContainSingle();
+        dispatchPort.DefaultCommands.Single().actorId.Should().Be(ServiceActorIds.Definition(identity));
+        var defaultCommand = dispatchPort.DefaultCommands.Single().command;
+        defaultCommand.RevisionId.Should().Be("r1");
+        defaultCommand.OperationId.Should().Be(servingCommand.OperationId);
+        defaultCommand.CommandId.Should().NotBeEmpty();
+        defaultCommand.ReplyActorId.Should().Be(ServiceActorIds.Deployment(identity));
+        defaultCommand.ActivationAttemptId.Should().Be("attempt-default-after-serving");
+        defaultCommand.DeploymentId.Should().Be("dep-r1");
+        var defaultEnvelopeId = dispatchPort.Envelopes
+            .Single(x => x.Payload.Is(SetDefaultServingRevisionCommand.Descriptor))
+            .Id;
+        defaultEnvelopeId.Should().Be(defaultCommand.CommandId);
+        agent.State.ActivationCompletions.Should().BeEmpty();
+        var pending = agent.State.PendingActivations.Should().ContainKey("r1").WhoseValue;
+        pending.Phase.Should().Be(
+            ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending);
+        pending.DefaultServingOperationId.Should().Be(defaultCommand.OperationId);
+        pending.DefaultServingCommandId.Should().Be(defaultCommand.CommandId);
+        pending.DefaultServingDispatchAcceptedAt.Should().NotBeNull();
+        pending.ServingGeneration.Should().Be(defaultCommand.ServingGeneration);
+
+        await agent.DeactivateAsync();
+
+        var recoveredDispatch = new RecordingDispatchPort();
+        var recoveredScheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(
+            eventStore,
+            revisionCatalog,
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity),
+            recoveredDispatch,
+            recoveredScheduler);
+        await recovered.ActivateAsync();
+        var callback = recoveredScheduler.ScheduledTimeouts.Single().Payload
+            .Unpack<ActivateServiceRevisionCommand>();
+        await recovered.HandleActivateAsync(callback);
+
+        recoveredDispatch.Commands.Should().BeEmpty("recovery resumes the committed default-serving phase");
+        var recoveredDefault = recoveredDispatch.DefaultCommands.Should().ContainSingle().Subject.command;
+        recoveredDefault.OperationId.Should().Be(defaultCommand.OperationId);
+        recoveredDefault.CommandId.Should().Be(defaultCommand.CommandId);
+        recoveredDispatch.Envelopes.Single().Id.Should().Be(defaultEnvelopeId);
+        recovered.State.ActivationCompletions.Should().BeEmpty(
+            "dispatch admission is not definition commit");
+
+        await AcknowledgeLatestDefaultServingRevisionAsync(recovered, identity, recoveredDispatch);
+
+        recovered.State.PendingActivations.Should().NotContainKey("r1");
+        var completion = recovered.State.ActivationCompletions.Values.Should().ContainSingle().Subject;
+        completion.DefaultServingOperationId.Should().Be(defaultCommand.OperationId);
+        completion.DefaultServingCommandId.Should().Be(defaultCommand.CommandId);
+        completion.DefaultServingCommittedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task DefaultServingSupersededAck_ShouldFailPendingActivationImmediately()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1"));
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-superseded",
+        });
+        var servingCommand = dispatchPort.Commands.Single().command;
+        await agent.HandleServingTargetsAppliedAsync(
+            CreateAppliedAck(identity, servingCommand.Targets.Single(), servingCommand));
+        var defaultCommand = dispatchPort.DefaultCommands.Should().ContainSingle().Subject.command;
+        var supersededAck = CreateDefaultServingCommittedAck(identity, defaultCommand);
+        supersededAck.Disposition = DefaultServingRevisionCommitDisposition.Superseded;
+        supersededAck.SupersededByGeneration = defaultCommand.ServingGeneration + 1;
+
+        await agent.HandleDefaultServingRevisionCommittedAsync(supersededAck);
+
+        agent.State.PendingActivations.Should().NotContainKey("r1");
+        agent.State.ActivationCompletions.Should().BeEmpty();
+        var failure = agent.State.ActivationFailures.Should().ContainKey("r1").WhoseValue;
+        failure.ActivationAttemptId.Should().Be("attempt-superseded");
+        failure.FailureCode.Should().Be(
+            ServiceDeploymentActivationFailureCode.DefaultServingRevisionSuperseded);
+        failure.FailureReason.Should().Be(
+            "Default serving revision was superseded by a newer serving generation.");
+    }
+
     [Theory]
     [InlineData(-1, true)]
     [InlineData(0, false)]
@@ -1436,6 +2134,11 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
         if (expectedSuccess)
         {
+            var defaultCommand = dispatchPort.DefaultCommands.Should().ContainSingle().Subject.command;
+            await agent.HandleEventAsync(CreateDefaultServingCommittedAckEnvelope(
+                agent.Id,
+                ServiceActorIds.Definition(identity),
+                CreateDefaultServingCommittedAck(identity, defaultCommand)));
             agent.State.ActivationCompletions.Should().ContainSingle();
             agent.State.ActivationFailures.Should().BeEmpty();
         }
@@ -1725,10 +2428,65 @@ public sealed class ServiceDeploymentManagerGAgentTests
             ServiceActorIds.ServingSet(identity),
             ack));
 
+        agent.State.PendingActivations["r1"].Phase.Should().Be(
+            ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending);
+        var defaultCommand = dispatchPort.DefaultCommands.Should().ContainSingle().Subject.command;
+        var defaultAck = CreateDefaultServingCommittedAck(identity, defaultCommand);
+        var defaultPendingVersion = agent.State.LastAppliedEventVersion;
+        foreach (var staleAck in new[]
+                 {
+                     CreateDefaultServingCommittedAck(
+                         identity,
+                         defaultCommand,
+                         activationAttemptId: "stale-attempt"),
+                     CreateDefaultServingCommittedAck(
+                         identity,
+                         defaultCommand,
+                         operationId: "stale-operation"),
+                     CreateDefaultServingCommittedAck(
+                         identity,
+                         defaultCommand,
+                         commandId: "stale-command"),
+                     CreateDefaultServingCommittedAck(
+                         identity,
+                         defaultCommand,
+                         deploymentId: "stale-deployment"),
+                     CreateDefaultServingCommittedAck(
+                         identity,
+                         defaultCommand,
+                         servingGeneration: defaultCommand.ServingGeneration + 1),
+                     CreateDefaultServingCommittedAck(
+                         identity,
+                         defaultCommand,
+                         disposition: DefaultServingRevisionCommitDisposition.Unspecified),
+                 })
+        {
+            await agent.HandleDefaultServingRevisionCommittedAsync(staleAck);
+        }
+        await agent.HandleEventAsync(CreateDefaultServingCommittedAckEnvelope(
+            agent.Id,
+            "foreign-definition",
+            defaultAck));
+        agent.State.LastAppliedEventVersion.Should().Be(defaultPendingVersion);
+
+        await agent.HandleEventAsync(CreateDefaultServingCommittedAckEnvelope(
+            agent.Id,
+            ServiceActorIds.Definition(identity),
+            defaultAck));
+
         agent.State.PendingActivations.Should().NotContainKey("r1");
         var completion = agent.State.ActivationCompletions.Values.Should().ContainSingle().Subject;
         completion.ActivationAttemptId.Should().Be("attempt-canonical-ack");
         completion.ServingTargetOperationId.Should().Be(command.OperationId);
+        var completedVersion = agent.State.LastAppliedEventVersion;
+
+        await agent.HandleEventAsync(CreateDefaultServingCommittedAckEnvelope(
+            agent.Id,
+            ServiceActorIds.Definition(identity),
+            defaultAck));
+
+        agent.State.LastAppliedEventVersion.Should().Be(completedVersion);
+        agent.State.ActivationCompletions.Should().ContainSingle();
     }
 
     [Fact]
@@ -1916,8 +2674,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
     [Fact]
     public void GetRequiredPreparedArtifact_ShouldThrow_WhenRevisionMissing()
     {
-        // The terminal "missing prepared artifact" failure now lives in the snapshot extension that other
-        // (non-activation) callers still use; activation itself tolerates the same gap as projection lag.
+        // Non-activation callers still require a materialized prepared artifact immediately.
         var identity = GAgentServiceTestKit.CreateIdentity();
         var catalog = new ServiceRevisionCatalogSnapshot(
             ServiceKeys.Build(identity),
@@ -2057,6 +2814,25 @@ public sealed class ServiceDeploymentManagerGAgentTests
             .WithMessage("*is bound to*");
     }
 
+    private static ServiceRevisionSnapshot CreateRevisionSnapshot(
+        PreparedServiceRevisionArtifact artifact,
+        ServiceRevisionStatus status,
+        string snapshotArtifactHash) =>
+        new(
+            artifact.RevisionId,
+            artifact.ImplementationKind.ToString(),
+            status.ToString(),
+            snapshotArtifactHash,
+            string.Empty,
+            [],
+            DateTimeOffset.UtcNow,
+            status is ServiceRevisionStatus.Prepared or ServiceRevisionStatus.Published
+                ? DateTimeOffset.UtcNow
+                : null,
+            status == ServiceRevisionStatus.Published ? DateTimeOffset.UtcNow : null,
+            null,
+            PreparedArtifact: artifact.Clone());
+
     private static ActivateServiceRevisionCommand ExpirePendingActivation(
         ServiceDeploymentManagerGAgent agent,
         RecordingCallbackScheduler scheduler,
@@ -2128,7 +2904,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             Propagation = new EnvelopePropagation(),
         };
 
-    private static Task AcknowledgeLatestServingDispatchAsync(
+    private static async Task AcknowledgeLatestServingDispatchAsync(
         ServiceDeploymentManagerGAgent agent,
         ServiceIdentity identity,
         RecordingDispatchPort dispatchPort,
@@ -2136,7 +2912,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
     {
         var command = dispatchPort.Commands[^1].command;
         var target = command.Targets.Single();
-        return agent.HandleServingTargetsAppliedAsync(new ServiceServingTargetsAppliedAck
+        await agent.HandleServingTargetsAppliedAsync(new ServiceServingTargetsAppliedAck
         {
             Identity = identity.Clone(),
             RevisionId = target.RevisionId,
@@ -2146,7 +2922,54 @@ public sealed class ServiceDeploymentManagerGAgentTests
             ServingGeneration = servingGeneration,
             AppliedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await AcknowledgeLatestDefaultServingRevisionAsync(agent, identity, dispatchPort);
     }
+
+    private static Task AcknowledgeLatestDefaultServingRevisionAsync(
+        ServiceDeploymentManagerGAgent agent,
+        ServiceIdentity identity,
+        RecordingDispatchPort dispatchPort)
+    {
+        var command = dispatchPort.DefaultCommands[^1].command;
+        return agent.HandleDefaultServingRevisionCommittedAsync(
+            CreateDefaultServingCommittedAck(identity, command));
+    }
+
+    private static DefaultServingRevisionCommittedAck CreateDefaultServingCommittedAck(
+        ServiceIdentity identity,
+        SetDefaultServingRevisionCommand command,
+        string? activationAttemptId = null,
+        string? operationId = null,
+        string? commandId = null,
+        string? deploymentId = null,
+        long? servingGeneration = null,
+        DefaultServingRevisionCommitDisposition disposition =
+            DefaultServingRevisionCommitDisposition.Applied) =>
+        new()
+        {
+            Identity = identity.Clone(),
+            RevisionId = command.RevisionId,
+            ActivationAttemptId = activationAttemptId ?? command.ActivationAttemptId,
+            OperationId = operationId ?? command.OperationId,
+            CommandId = commandId ?? command.CommandId,
+            DeploymentId = deploymentId ?? command.DeploymentId,
+            ServingGeneration = servingGeneration ?? command.ServingGeneration,
+            CommittedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            Disposition = disposition,
+        };
+
+    private static EventEnvelope CreateDefaultServingCommittedAckEnvelope(
+        string subscriberActorId,
+        string publisherActorId,
+        DefaultServingRevisionCommittedAck ack) =>
+        new()
+        {
+            Id = $"default-serving-committed:{ack.OperationId}",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(ack),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, subscriberActorId),
+            Propagation = new EnvelopePropagation(),
+        };
 
     private static ServiceDeploymentManagerGAgent CreateAgent(
         InMemoryEventStore eventStore,
@@ -2182,12 +3005,17 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
         public List<(string actorId, ReplaceResolvedServiceServingTargetsCommand command)> Commands { get; } = [];
 
+        public List<(string actorId, SetDefaultServingRevisionCommand command)> DefaultCommands { get; } = [];
+
         public List<EventEnvelope> Envelopes { get; } = [];
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Envelopes.Add(envelope.Clone());
-            Commands.Add((actorId, envelope.Payload.Unpack<ReplaceResolvedServiceServingTargetsCommand>()));
+            if (envelope.Payload.Is(ReplaceResolvedServiceServingTargetsCommand.Descriptor))
+                Commands.Add((actorId, envelope.Payload.Unpack<ReplaceResolvedServiceServingTargetsCommand>()));
+            else if (envelope.Payload.Is(SetDefaultServingRevisionCommand.Descriptor))
+                DefaultCommands.Add((actorId, envelope.Payload.Unpack<SetDefaultServingRevisionCommand>()));
             if (DispatchException != null)
                 throw DispatchException;
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope) with
@@ -2455,5 +3283,17 @@ public sealed class ServiceDeploymentManagerGAgentTests
                 [revision],
                 DateTimeOffset.UtcNow));
         }
+    }
+
+    private sealed class SnapshotRevisionCatalogQueryReader(ServiceRevisionSnapshot revision)
+        : IServiceRevisionCatalogQueryReader
+    {
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRevisionCatalogSnapshot?>(new ServiceRevisionCatalogSnapshot(
+                ServiceKeys.Build(identity),
+                [revision],
+                DateTimeOffset.UtcNow));
     }
 }

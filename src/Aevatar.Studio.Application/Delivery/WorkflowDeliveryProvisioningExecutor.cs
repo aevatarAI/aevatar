@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
@@ -156,6 +157,10 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
                 ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (StudioMemberAutomationProjectionPendingException)
         {
             throw;
         }
