@@ -186,7 +186,7 @@ public static class ScheduledDispatchEndpoints
             if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
                 return denied;
             var receipt = owner == null
-                ? await schedules.EnableAsync(scheduleId, input?.Reason ?? string.Empty, ct)
+                ? await schedules.EnableAsync(scheduleId, input?.Reason ?? string.Empty, ct: ct)
                 : await schedules.EnableTeamAutomationAsync(scheduleId, owner, input?.Reason ?? string.Empty, ct);
             return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
@@ -209,7 +209,7 @@ public static class ScheduledDispatchEndpoints
             if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
                 return denied;
             var receipt = owner == null
-                ? await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct)
+                ? await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct: ct)
                 : await schedules.DisableTeamAutomationAsync(scheduleId, owner, input?.Reason ?? string.Empty, ct);
             return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
@@ -258,7 +258,7 @@ public static class ScheduledDispatchEndpoints
                     ? await schedules.DeleteAsync(
                         scheduleId,
                         deleteReason,
-                        ct)
+                        ct: ct)
                     : await schedules.DeleteTeamAutomationAsync(
                         scheduleId,
                         owner,
@@ -491,7 +491,7 @@ public static class ScheduledDispatchEndpoints
             if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
                 return denied;
             var receipt = owner == null
-                ? await schedules.RunNowAsync(scheduleId, ct)
+                ? await schedules.RunNowAsync(scheduleId, ct: ct)
                 : await schedules.RunTeamAutomationNowAsync(scheduleId, owner, ct);
             return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }

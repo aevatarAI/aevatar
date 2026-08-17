@@ -103,12 +103,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedContext = NormalizeMutationContext(context ?? ScheduledDispatchMutationContext.None);
         var normalized = await NormalizeAndAdmitMutationAsync(
             configuration with { ScheduleId = normalizedScheduleId },
-            context,
+            normalizedContext,
             requireScheduleId: true,
             ct);
         var existing = await GetMutableScheduleAsync(normalized.ScheduleId, normalized.TeamAutomationOwner, ct);
+        EnsureExpectedServiceTarget(normalized.ScheduleId, existing?.Schedule, normalizedContext.ExpectedServiceTarget);
         if (existing?.Schedule is
             {
                 TeamOwned: true,
@@ -138,11 +140,12 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     public async Task<ScheduledDispatchMutationReceipt> EnableAsync(
         string scheduleId,
         string reason,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        await EnsureMutableAsync(normalizedScheduleId, ct);
-        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        var existing = await EnsureMutableAsync(normalizedScheduleId, context, ct);
+        var actorId = await ResolveScheduleActorAsync(existing.Schedule.ScheduleId, ct);
         var admission = await _actorPort.DispatchEnableAsync(actorId, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
@@ -150,11 +153,12 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     public async Task<ScheduledDispatchMutationReceipt> DisableAsync(
         string scheduleId,
         string reason,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        await EnsureMutableAsync(normalizedScheduleId, ct);
-        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        var existing = await EnsureMutableAsync(normalizedScheduleId, context, ct);
+        var actorId = await ResolveScheduleActorAsync(existing.Schedule.ScheduleId, ct);
         var admission = await _actorPort.DispatchDisableAsync(actorId, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
@@ -162,11 +166,12 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     public async Task<ScheduledDispatchMutationReceipt> DeleteAsync(
         string scheduleId,
         string reason,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        await EnsureMutableAsync(normalizedScheduleId, ct);
-        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        var existing = await EnsureMutableAsync(normalizedScheduleId, context, ct);
+        var actorId = await ResolveScheduleActorAsync(existing.Schedule.ScheduleId, ct);
         var admission = await _actorPort.DispatchDeleteAsync(actorId, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
@@ -263,12 +268,15 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
 
     public async Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
         string scheduleId,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedContext = NormalizeMutationContext(context ?? ScheduledDispatchMutationContext.None);
         var detail = await GetMutableScheduleAsync(normalizedScheduleId, owner: null, ct);
         if (detail == null)
             throw new ScheduledDispatchNotFoundException(normalizedScheduleId);
+        EnsureExpectedServiceTarget(normalizedScheduleId, detail.Schedule, normalizedContext.ExpectedServiceTarget);
 
         AdmitRunNowCredentialRequirement(detail.Schedule);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
@@ -891,7 +899,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 : NormalizeSubject(context.AuthenticatedNyxIdOwnerSubject),
             context.TeamAutomationOwner == null
                 ? null
-                : NormalizeTeamOwner(context.TeamAutomationOwner));
+                : NormalizeTeamOwner(context.TeamAutomationOwner),
+            NormalizeExpectedServiceTarget(context.ExpectedServiceTarget));
 
     private static bool SubjectEquals(
         ScheduledServiceInvocationNyxIdSubjectRef left,
@@ -907,6 +916,20 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeRequired(owner.ScopeId, nameof(owner.ScopeId)),
             NormalizeRequired(owner.MemberId, nameof(owner.MemberId)),
             NormalizeRequired(owner.TeamId, nameof(owner.TeamId)));
+    }
+
+    private static ScheduledDispatchExpectedServiceTarget? NormalizeExpectedServiceTarget(
+        ScheduledDispatchExpectedServiceTarget? target)
+    {
+        if (target == null)
+            return null;
+
+        return new ScheduledDispatchExpectedServiceTarget(
+            target.ScheduleKind,
+            target.TargetKind,
+            NormalizeRequired(target.ServiceEndpointId, nameof(target.ServiceEndpointId)),
+            NormalizeRequired(target.ServiceId, nameof(target.ServiceId)),
+            NormalizeNullable(target.ServiceKey));
     }
 
     private static ScheduledInvocationAuthorizationOwner NormalizeAuthorizationOwner(
@@ -1267,11 +1290,37 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return normalized;
     }
 
-    private async Task EnsureMutableAsync(string scheduleId, CancellationToken ct)
+    private async Task<ScheduledDispatchDetail> EnsureMutableAsync(
+        string scheduleId,
+        ScheduledDispatchMutationContext? context,
+        CancellationToken ct)
     {
+        var normalizedContext = NormalizeMutationContext(context ?? ScheduledDispatchMutationContext.None);
         var existing = await GetMutableScheduleAsync(scheduleId, owner: null, ct);
-        if (existing?.Schedule.Deleted == true)
+        if (existing?.Schedule.Deleted == true || existing == null)
             throw new ScheduledDispatchNotFoundException(scheduleId);
+        EnsureExpectedServiceTarget(scheduleId, existing.Schedule, normalizedContext.ExpectedServiceTarget);
+        return existing;
+    }
+
+    private static void EnsureExpectedServiceTarget(
+        string scheduleId,
+        ScheduledDispatchSummary? schedule,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget)
+    {
+        if (expectedTarget == null)
+            return;
+
+        if (schedule == null ||
+            schedule.ScheduleKind != expectedTarget.ScheduleKind ||
+            schedule.TargetKind != expectedTarget.TargetKind ||
+            !string.Equals(schedule.ServiceEndpointId, expectedTarget.ServiceEndpointId, StringComparison.Ordinal) ||
+            !string.Equals(schedule.ServiceId, expectedTarget.ServiceId, StringComparison.Ordinal) ||
+            (expectedTarget.ServiceKey != null &&
+             !string.Equals(schedule.ServiceKey, expectedTarget.ServiceKey, StringComparison.Ordinal)))
+        {
+            throw new ScheduledDispatchNotFoundException(scheduleId);
+        }
     }
 
     private async Task<ScheduledDispatchDetail?> GetMutableScheduleAsync(

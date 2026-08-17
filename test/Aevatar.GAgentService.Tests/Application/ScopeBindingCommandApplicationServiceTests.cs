@@ -363,6 +363,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     public async Task UpsertAsync_ShouldDispatchExposureIntentAfterAlreadyActiveReplay()
     {
         const string revisionId = "rev-platform-bind-1";
+        const string workflowId = "workflow-main";
         const string workflowYaml = "name: main\nsteps:\n  - run: echo hello";
         var commandPort = new RecordingServiceCommandPort();
         var externalExposureIntentPort = new RecordingExternalExposureIntentPort(commandPort);
@@ -380,6 +381,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             revisionId,
             "main",
             workflowYaml,
+            workflowId: workflowId,
             dependencies: dependencies,
             capabilityAdmissionPlan: capabilityAdmissionPlan);
         var existingService = new ServiceCatalogSnapshot(
@@ -443,9 +445,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            Workflow: new ScopeBindingWorkflowSpec([
-                workflowYaml,
-            ]),
+            Workflow: new ScopeBindingWorkflowSpec(
+                workflowId,
+                [workflowYaml]),
             RevisionId: revisionId,
             AllowExistingRevisionReplay: true,
             ReplayRevisionId: revisionId,
@@ -1374,6 +1376,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     public async Task UpsertAsync_ShouldReuseExistingWorkflowRevision_WhenReplayRevisionMatchesAndArtifactHashMatches()
     {
         const string revisionId = "rev-platform-bind-1";
+        const string workflowId = "workflow-main";
         const string workflowYaml = "name: main\nsteps:\n  - run: echo hello";
         var commandPort = new RecordingServiceCommandPort();
         var dependencies = new WorkflowAuthorizationDependencies
@@ -1391,6 +1394,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             revisionId,
             "main",
             workflowYaml,
+            workflowId: workflowId,
             dependencies: dependencies,
             capabilityAdmissionPlan: capabilityAdmissionPlan);
         var lifecyclePort = new FakeServiceLifecycleQueryPort(
@@ -1447,9 +1451,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            Workflow: new ScopeBindingWorkflowSpec([
-                workflowYaml,
-            ]),
+            Workflow: new ScopeBindingWorkflowSpec(
+                workflowId,
+                [workflowYaml]),
             RevisionId: revisionId,
             AllowExistingRevisionReplay: true,
             ReplayRevisionId: revisionId));
@@ -1895,6 +1899,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         string expectedMessage)
     {
         const string revisionId = "rev-platform-bind-1";
+        const string workflowId = "workflow-main";
         const string existingWorkflowYaml = "name: main\nsteps:\n  - run: echo old";
         var commandPort = new RecordingServiceCommandPort();
         var existingPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
@@ -1958,9 +1963,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            Workflow: new ScopeBindingWorkflowSpec([
-                "name: main\nsteps:\n  - run: echo hello",
-            ]),
+            Workflow: new ScopeBindingWorkflowSpec(
+                workflowId,
+                ["name: main\nsteps:\n  - run: echo hello"]),
             RevisionId: revisionId,
             AllowExistingRevisionReplay: true,
             ReplayRevisionId: revisionId));
@@ -2573,6 +2578,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         string workflowYaml,
         string endpointDescription = "Workflow chat endpoint.",
         string? serviceId = null,
+        string? workflowId = null,
         WorkflowAuthorizationDependencies? dependencies = null,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null)
         => CreateWorkflowArtifact(
@@ -2581,6 +2587,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             workflowYaml,
             endpointDescription,
             serviceId,
+            workflowId,
             dependencies,
             capabilityAdmissionPlan).ArtifactHash;
 
@@ -2590,6 +2597,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         string workflowYaml,
         string endpointDescription = "Workflow chat endpoint.",
         string? serviceId = null,
+        string? workflowId = null,
         WorkflowAuthorizationDependencies? dependencies = null,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null)
     {
@@ -2637,13 +2645,13 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
-                    WorkflowId = revisionId,
-                    RevisionId = revisionId,
                     WorkflowName = workflowName,
                     WorkflowYaml = workflowYaml,
+                    WorkflowId = workflowId ?? revisionId,
+                    RevisionId = revisionId,
                     DefinitionActorId = DefaultOptions.BuildDefinitionActorIdPrefix(
                         ScopeId,
-                        DefaultOptions.DefaultServiceId),
+                        workflowId ?? DefaultOptions.DefaultServiceId),
                     AuthorizationEvidence = authorizationEvidence,
                     CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
                     ExecutionMode = capabilityAdmissionPlan?.ExecutionMode ??

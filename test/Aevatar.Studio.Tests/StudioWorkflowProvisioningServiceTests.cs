@@ -2838,15 +2838,15 @@ public sealed class StudioWorkflowProvisioningServiceTests
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(
-            string scheduleId, string reason, CancellationToken ct = default) =>
+            string scheduleId, string reason, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> DisableAsync(
-            string scheduleId, string reason, CancellationToken ct = default) =>
+            string scheduleId, string reason, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> DeleteAsync(
-            string scheduleId, string reason, CancellationToken ct = default) =>
+            string scheduleId, string reason, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchDetail?> GetAsync(
@@ -2866,7 +2866,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
-            string scheduleId, CancellationToken ct = default) =>
+            string scheduleId, ScheduledDispatchMutationContext? context = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

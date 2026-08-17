@@ -62,6 +62,7 @@ public static class ScopeWorkflowEndpoints
             .Produces<ScopeWorkflowDetail>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
+        group.MapScopeWorkflowScheduleEndpoints();
         return app;
     }
 
@@ -916,7 +917,7 @@ public static class ScopeWorkflowEndpoints
     private static string BuildWorkflowActorNotFoundMessage(string scopeId) =>
         $"Workflow actor was not found for scope '{scopeId}'.";
 
-    private static (int StatusCode, string Code, string Message) MapWorkflowLookupError(
+    internal static (int StatusCode, string Code, string Message) MapWorkflowLookupError(
         string scopeId,
         string workflowId,
         ScopeWorkflowLookupResult lookup) =>
