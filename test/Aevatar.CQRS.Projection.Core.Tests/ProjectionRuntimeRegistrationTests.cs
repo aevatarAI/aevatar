@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
@@ -13,6 +14,53 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 
 public sealed class ProjectionRuntimeRegistrationTests
 {
+    [Fact]
+    public void ProjectionRuntimeRegistrations_ShouldRegisterOneRedactionHook_WhenRepeatedOrComposed()
+    {
+        Action<IServiceCollection>[] registrationPaths =
+        [
+            services => services.AddProjectionMaterializationRuntimeCore<
+                TestMaterializationContext,
+                TestMaterializationLease,
+                ProjectionMaterializationScopeGAgent<TestMaterializationContext>>(
+                scopeKey => new TestMaterializationContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                },
+                context => new TestMaterializationLease(context)),
+            services => services.AddEventSinkProjectionRuntimeCore<
+                TestSessionContext,
+                TestSessionLease,
+                StringValue,
+                ProjectionSessionScopeGAgent<TestSessionContext>>(
+                scopeKey => new TestSessionContext
+                {
+                    RootActorId = scopeKey.RootActorId,
+                    ProjectionKind = scopeKey.ProjectionKind,
+                    SessionId = scopeKey.SessionId,
+                },
+                context => new TestSessionLease(context)),
+            services => services.AddProjectionScopeStatusRuntimeCore(),
+        ];
+
+        foreach (var register in registrationPaths)
+        {
+            var services = new ServiceCollection();
+            register(services);
+            register(services);
+            AssertSingleRedactionHook(services);
+        }
+
+        var composed = new ServiceCollection();
+        foreach (var register in registrationPaths)
+        {
+            register(composed);
+            register(composed);
+        }
+        AssertSingleRedactionHook(composed);
+    }
+
     [Fact]
     public async Task AddProjectionMaterializationRuntimeCore_ShouldRegisterLifecycleAndAdministrationServices()
     {
@@ -65,6 +113,13 @@ public sealed class ProjectionRuntimeRegistrationTests
         dispatchPort.Dispatched[0].command.Payload!.Unpack<EnsureProjectionScopeCommand>().ProjectionKind.Should().Be("projection-a");
         dispatchPort.Dispatched[1].command.Payload!.Unpack<ReleaseProjectionScopeCommand>().ProjectionKind.Should().Be("projection-a");
     }
+
+    private static void AssertSingleRedactionHook(IServiceCollection services) =>
+        services.Where(descriptor =>
+                descriptor.ServiceType == typeof(ICommittedStatePublicationHook) &&
+                descriptor.ImplementationType == typeof(ProjectionScopeCommittedStateRedactionHook))
+            .Should()
+            .ContainSingle();
 
     [Fact]
     public async Task AddProjectionMaterializationRuntimeCore_ShouldReleaseSessionScopedMaterialization()
@@ -491,6 +546,7 @@ public sealed class ProjectionRuntimeRegistrationTests
         dispatchPort.Dispatched.Should().ContainSingle();
         var replay = dispatchPort.Dispatched[0].command.Payload!.Unpack<ReplayProjectionFailuresCommand>();
         replay.MaxItems.Should().Be(1);
+        replay.AutomaticRecovery.Should().BeFalse();
     }
 
     [Fact]

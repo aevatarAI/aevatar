@@ -158,6 +158,42 @@ public sealed class ProjectionScopeStatusProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldPreferTypedFailureSummaryOverCompatibilityFailures()
+    {
+        var dispatcher = new RecordingStatusDispatcher();
+        var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var oldest = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 8, 17, 14, 47, 56, TimeSpan.Zero));
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "workflow-execution-materialization",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+            FailureSummary = new ProjectionScopeFailureSummary
+            {
+                UnresolvedFailureCount = 73,
+                RetryExhaustedFailureCount = 19,
+                OldestUnresolvedFailureAtUtc = oldest,
+            },
+        };
+        state.Failures.Add(new ProjectionScopeFailure
+        {
+            RetryExhausted = false,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(oldest.ToDateTimeOffset().AddDays(1)),
+        });
+
+        await sut.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
+            CreateCommittedEnvelope(state, version: 6, eventId: "state-event-6"));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Which;
+        document.UnresolvedFailureCount.Should().Be(73);
+        document.RetryExhaustedFailureCount.Should().Be(19);
+        document.OldestUnresolvedFailureAtUtc.Should().Be(oldest);
+    }
+
+    [Fact]
     public async Task ProjectAsync_IgnoresNonProjectionScopeState()
     {
         var dispatcher = new RecordingStatusDispatcher();

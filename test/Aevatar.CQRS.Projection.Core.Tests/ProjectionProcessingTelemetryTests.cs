@@ -24,6 +24,8 @@ public sealed class ProjectionProcessingTelemetryTests
         state.SuccessfulMaterializationTotal.Should().Be(1);
         state.FailedAttemptTotal.Should().Be(1);
         state.Failures.Should().ContainSingle().Which.FailureId.Should().Be("failure-1");
+        state.FailureSummary.UnresolvedFailureCount.Should().Be(1);
+        state.FailureSummary.RetryExhaustedFailureCount.Should().Be(0);
     }
 
     [Fact]
@@ -67,6 +69,7 @@ public sealed class ProjectionProcessingTelemetryTests
         }
 
         state.Failures.Should().HaveCount(65, "the operator repair backlog is durable and untrimmed");
+        state.FailureSummary.UnresolvedFailureCount.Should().Be(65);
         state.RetainedFailureDiagnostics.Should().HaveCount(64);
         state.RetainedFailureDiagnostics[0].EventId.Should().Be("event-2");
         state.Failures.Should().OnlyContain(failure => failure.SourceActorId == "actor-alpha");
@@ -105,6 +108,51 @@ public sealed class ProjectionProcessingTelemetryTests
         state.FailedAttemptTotal.Should().Be(5);
         state.RetryExhaustedTotal.Should().Be(1);
         state.Failures.Should().ContainSingle().Which.RetryExhausted.Should().BeTrue();
+        state.FailureSummary.UnresolvedFailureCount.Should().Be(1);
+        state.FailureSummary.RetryExhaustedFailureCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void SuccessfulReplay_RecomputesSummaryAfterOldestFailureIsRemoved()
+    {
+        var oldestAt = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 8, 17, 14, 47, 56, TimeSpan.Zero));
+        var newerAt = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 8, 17, 14, 52, 56, TimeSpan.Zero));
+        var oldestFailure = Failure("failure-oldest", 1);
+        oldestFailure.OccurredAtUtc = oldestAt;
+        var newerFailure = Failure("failure-newer", 2);
+        newerFailure.OccurredAtUtc = newerAt;
+        var state = ProjectionScopeStateApplier.ApplyDispatchFailed(
+            new ProjectionScopeState(),
+            oldestFailure);
+        state = ProjectionScopeStateApplier.ApplyDispatchFailed(state, newerFailure);
+        for (var attempt = 0; attempt < ProjectionFailureRetentionPolicy.DefaultMaxReplayAttempts; attempt++)
+        {
+            state = ProjectionScopeStateApplier.ApplyFailureReplayed(
+                state,
+                new ProjectionScopeFailureReplayedEvent
+                {
+                    FailureId = "failure-newer",
+                    Succeeded = false,
+                    Reason = "still failing",
+                    OccurredAtUtc = newerAt,
+                });
+        }
+
+        state = ProjectionScopeStateApplier.ApplyFailureReplayed(
+            state,
+            new ProjectionScopeFailureReplayedEvent
+            {
+                FailureId = "failure-oldest",
+                Succeeded = true,
+                OccurredAtUtc = newerAt,
+            });
+
+        state.Failures.Should().ContainSingle().Which.FailureId.Should().Be("failure-newer");
+        state.FailureSummary.UnresolvedFailureCount.Should().Be(1);
+        state.FailureSummary.RetryExhaustedFailureCount.Should().Be(1);
+        state.FailureSummary.OldestUnresolvedFailureAtUtc.Should().Be(newerAt);
     }
 
     [Fact]

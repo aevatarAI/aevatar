@@ -36,6 +36,9 @@ message ProjectionScopeState {
   repeated ProjectionFailureDiagnostic retained_failure_diagnostics = 20;
   int64 failure_diagnostic_dropped_total = 21;
   int64 activation_generation = 22;
+  // Exact query-facing failure status. The publication hook populates this before
+  // replacing repair payloads with an equal-count, payload-free rolling-upgrade view.
+  ProjectionScopeFailureSummary failure_summary = 23;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -69,6 +72,12 @@ message ProjectionFailureDiagnostic {
   string source_actor_id = 7;
 }
 
+message ProjectionScopeFailureSummary {
+  int32 unresolved_failure_count = 1;
+  int32 retry_exhausted_failure_count = 2;
+  google.protobuf.Timestamp oldest_unresolved_failure_at_utc = 3;
+}
+
 message EnsureProjectionScopeCommand {
   string root_actor_id = 1;
   string projection_kind = 2;
@@ -85,6 +94,7 @@ message ReleaseProjectionScopeCommand {
 
 message ReplayProjectionFailuresCommand {
   int32 max_items = 1;
+  bool automatic_recovery = 2;
 }
 
 message ProjectionScopeStartedEvent {

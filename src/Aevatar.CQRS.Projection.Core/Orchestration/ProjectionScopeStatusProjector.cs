@@ -50,6 +50,7 @@ public sealed class ProjectionScopeStatusProjector
             state.SessionId);
         var scopeActorId = ProjectionScopeActorId.Build(scopeKey);
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
+        var failureSummary = state.FailureSummary ?? ProjectionScopeFailureLog.BuildSummary(state.Failures);
 
         var document = new ProjectionScopeStatusDocument
         {
@@ -67,20 +68,16 @@ public sealed class ProjectionScopeStatusProjector
             Released = state.Released,
             HighestSeenVersion = state.HighestSeenVersion,
             LastSuccessfulVersion = state.LastSuccessfulVersion,
-            UnresolvedFailureCount = state.Failures.Count,
+            UnresolvedFailureCount = failureSummary.UnresolvedFailureCount,
             ReceivedEnvelopeTotal = state.ReceivedEnvelopeTotal,
             AttemptedEnvelopeTotal = state.AttemptedEnvelopeTotal,
             SuccessfulMaterializationTotal = state.SuccessfulMaterializationTotal,
             FailedAttemptTotal = state.FailedAttemptTotal,
             RetryExhaustedTotal = state.RetryExhaustedTotal,
-            RetryExhaustedFailureCount = state.Failures.Count(failure => failure.RetryExhausted),
+            RetryExhaustedFailureCount = failureSummary.RetryExhaustedFailureCount,
             FailureDiagnosticDroppedTotal = state.FailureDiagnosticDroppedTotal,
         };
-        var oldestFailure = state.Failures
-            .Where(failure => failure.OccurredAtUtc != null)
-            .OrderBy(failure => failure.OccurredAtUtc)
-            .FirstOrDefault();
-        document.OldestUnresolvedFailureAtUtc = oldestFailure?.OccurredAtUtc?.Clone();
+        document.OldestUnresolvedFailureAtUtc = failureSummary.OldestUnresolvedFailureAtUtc?.Clone();
         document.RecentObservedEnvelopes.Add(state.RecentObservedEnvelopes);
         foreach (var sourceActorId in state.HighestSeenVersionsByActor.Keys
                      .Union(state.LastSuccessfulVersionsByActor.Keys, StringComparer.Ordinal)

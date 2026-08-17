@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +22,9 @@ public static class ProjectionScopeStatusRuntimeRegistration
         services.AddAevatarAgentKindRegistry(builder =>
             builder.Register(ProjectionScopeAgentRegistration
                 .Create<ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            ProjectionScopeCommittedStateRedactionHook>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>,
             ProjectionScopeStatusDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, ProjectionScopeStatusQueryPort>();

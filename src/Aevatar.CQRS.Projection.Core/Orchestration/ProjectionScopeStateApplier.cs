@@ -119,6 +119,7 @@ internal static class ProjectionScopeStateApplier
             OccurredAtUtc = evt.OccurredAtUtc?.Clone(),
             SourceActorId = evt.SourceActorId,
         });
+        next.FailureSummary = ProjectionScopeFailureLog.BuildSummary(next.Failures);
         next.RetainedFailureDiagnostics.Add(new ProjectionFailureDiagnostic
         {
             FailureId = evt.FailureId,
@@ -161,6 +162,8 @@ internal static class ProjectionScopeStateApplier
                 next.RetryExhaustedTotal += 1;
             }
         }
+
+        next.FailureSummary = ProjectionScopeFailureLog.BuildSummary(next.Failures);
 
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
