@@ -956,7 +956,11 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             Audit.AuditTrailDocument existing,
             Audit.AuditTrailDocument incoming)
         {
-            return string.Equals(existing.ContentHash, incoming.ContentHash, StringComparison.Ordinal)
+            var isDuplicate = string.Equals(existing.ContentHash, incoming.ContentHash, StringComparison.Ordinal) ||
+                              existing.Record is not null &&
+                              incoming.Record is not null &&
+                              AuditRecordSemanticComparer.AreEquivalent(existing.Record, incoming.Record);
+            return isDuplicate
                 ? AuditTrailArtifactWriteResult.Duplicate()
                 : AuditTrailArtifactWriteResult.Conflict();
         }

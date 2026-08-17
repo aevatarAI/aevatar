@@ -6,9 +6,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Infrastructure.ChronoSandbox;
 
-internal sealed class NyxIdCodeExecutionPort(
+internal sealed partial class NyxIdCodeExecutionPort(
     INyxIdApiClientFactory clientFactory,
-    ILogger<NyxIdCodeExecutionPort> logger) : ICodeExecutionPort
+    ILogger<NyxIdCodeExecutionPort> logger) : ICodeExecutionPort, IDurableCodeExecutionPort
 {
     private const long MaxResponseBytes = 1_048_576;
     private const string ExecutionPath = "/execute";
@@ -44,6 +44,7 @@ internal sealed class NyxIdCodeExecutionPort(
             !Enum.IsDefined(request.Language) ||
             request.Language == CodeExecutionLanguage.Unspecified ||
             string.IsNullOrWhiteSpace(request.Source) ||
+            !CodeExecutionContract.IsValidTimeoutSeconds(request.TimeoutSeconds) ||
             request.Route is null ||
             !string.Equals(request.Route.ServiceSlug, RequiredServiceSlug, StringComparison.Ordinal))
         {
@@ -153,6 +154,7 @@ internal sealed class NyxIdCodeExecutionPort(
         {
             language = SerializeLanguage(request.Language),
             script = request.Source,
+            timeout_secs = request.TimeoutSeconds,
         });
 
         var client = _clientFactory.CreateClient();

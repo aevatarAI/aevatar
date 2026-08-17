@@ -598,6 +598,11 @@ message WorkflowToolCallCompletionOutboxEntry
   // Cleanup ownership moves here before pending execution is removed. The handle is retained
   // until revocation (or confirmed absence) is durably checkpointed.
   aevatar.credentials.RuntimeSecretReference protected_material_reference = 11;
+  // A terminal durable operation retains the exact poll provenance that observed its outcome.
+  // Only a trusted redelivery of that poll may use this outbox entry as a recovery trigger.
+  string operation_id = 12;
+  int32 operation_poll_attempt = 13;
+  string operation_poll_callback_id = 14;
 }
 
 message WorkflowToolCallCompletionTombstone
@@ -633,6 +638,68 @@ message WorkflowToolCallTerminalCleanupRetryFiredEvent
   string run_id = 1;
 }
 
+enum WorkflowToolPendingOperationStatus
+{
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_SUBMISSION_UNCERTAIN = 1;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_QUEUED = 2;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_PROVISIONING = 3;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_PREPARING = 4;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_RUNNING = 5;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_COLLECTING = 6;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_SUCCEEDED = 7;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_FAILED = 8;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_CANCELLED = 9;
+  WORKFLOW_TOOL_PENDING_OPERATION_STATUS_OUTCOME_UNCERTAIN = 10;
+}
+
+enum WorkflowToolPendingOperationRouteIdentitySource
+{
+  WORKFLOW_TOOL_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_CODE_EXECUTION_CONTRACT = 1;
+  WORKFLOW_TOOL_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_NYX_ID_USER_SERVICE_CATALOG = 2;
+  WORKFLOW_TOOL_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_WORKFLOW_CAPABILITY_ADMISSION = 3;
+}
+
+enum WorkflowToolStopKind
+{
+  WORKFLOW_TOOL_STOP_KIND_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_STOP_KIND_WORKFLOW_STOPPED = 1;
+  WORKFLOW_TOOL_STOP_KIND_WORKFLOW_RUN_STOPPED = 2;
+}
+
+enum WorkflowToolStopCancellationPhase
+{
+  WORKFLOW_TOOL_STOP_CANCELLATION_PHASE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_STOP_CANCELLATION_PHASE_REQUESTED = 1;
+  WORKFLOW_TOOL_STOP_CANCELLATION_PHASE_FINALIZING_AUDIT = 2;
+}
+
+message PendingWorkflowToolStopCancellation
+{
+  WorkflowToolStopKind stop_kind = 1;
+  string run_id = 2;
+  string workflow_name = 3;
+  string reason = 4;
+  google.protobuf.Timestamp completed_at_utc = 5;
+  int64 expires_at_unix_ms = 6;
+}
+
+message WorkflowToolCancellationTerminalIntent
+{
+  string result_json = 1;
+  bool has_failure = 2;
+  string failure_code = 3;
+  string safe_message = 4;
+  bool terminal_invoked = 5;
+  bool retryable = 6;
+  // The tool adapter owns this typed payload. Workflow state persists and returns it
+  // without interpreting provider- or audit-specific fields.
+  google.protobuf.Any tool_owned_audit_intent = 7;
+  WorkflowStepFailureOutcome failure_outcome = 8;
+  string arguments_sha256 = 9;
+}
+
 message PendingToolCallExecutionState
 {
   string run_id = 1;
@@ -662,12 +729,77 @@ message PendingToolCallExecutionState
   WorkflowToolCallExecutionPhase execution_phase = 25;
 }
 
+message PendingToolCallOperationState
+{
+  reserved 6, 7, 8, 9, 11;
+  reserved "arguments_json", "input_file_refs", "idempotency_key", "external_invocation", "display_name";
+
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string tool_name = 4;
+  string tool_call_id = 5;
+  int64 issued_at_unix_ms = 10;
+  string operation_id = 12;
+  string status_path = 13;
+  string result_path = 14;
+  string cancel_path = 15;
+  WorkflowToolPendingOperationStatus status = 16;
+  string etag = 17;
+  int64 retry_after_ms = 18;
+  int64 expires_at_unix_ms = 19;
+  int32 poll_attempt = 20;
+  int64 next_poll_unix_ms = 21;
+  string poll_callback_id = 22;
+  string approval_request_id = 23;
+  WorkflowToolCallTerminalDecision terminal_decision = 24;
+  string provider_operation_id = 25;
+  string service_slug = 26;
+  string user_service_id = 27;
+  WorkflowToolPendingOperationRouteIdentitySource route_identity_source = 28;
+  WorkflowToolStopCancellationPhase stop_cancellation_phase = 29;
+  int32 stop_cancellation_attempt = 30;
+  int64 next_stop_cancellation_unix_ms = 31;
+  string stop_cancellation_callback_id = 32;
+  WorkflowToolCancellationTerminalIntent stop_cancellation_terminal_intent = 33;
+  aevatar.credentials.RuntimeSecretReference protected_material_reference = 34;
+  string protected_material_digest_sha256 = 35;
+  bool stop_cancellation_settled = 36;
+  // Frozen at initial admission so a definitive protected-material loss can still
+  // converge the terminal cancellation audit after the stop deadline.
+  WorkflowToolCancellationTerminalIntent stop_cancellation_recovery_intent = 37;
+}
+
+message WorkflowToolCallOperationPollFiredEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string call_id = 4;
+  string operation_id = 5;
+  int32 poll_attempt = 6;
+  string callback_id = 7;
+}
+
+message WorkflowToolCallStopCancellationFiredEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string execution_id = 3;
+  string call_id = 4;
+  string operation_id = 5;
+  int32 attempt = 6;
+  string callback_id = 7;
+}
+
 message ToolCallModuleState
 {
   map<string, PendingToolCallApprovalState> pending_approvals = 1;
   repeated WorkflowToolCallCompletionOutboxEntry completions = 2;
   map<string, WorkflowToolCallCompletionTombstone> completion_tombstones = 3;
   map<string, PendingToolCallExecutionState> pending_executions = 4;
+  map<string, PendingToolCallOperationState> pending_operations = 5;
+  PendingWorkflowToolStopCancellation stop_cancellation = 6;
 }
 
 message PendingApprovalState

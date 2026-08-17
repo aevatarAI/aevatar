@@ -147,7 +147,8 @@ internal static class NyxIdProxyReceiptFactory
         string? userServiceId,
         string errorCode,
         string errorMessage,
-        string resultJson)
+        string resultJson,
+        AgentToolFailureOutcome failureOutcome = AgentToolFailureOutcome.CalleeConfirmed)
     {
         var receipt = new AgentToolReceipt
         {
@@ -157,6 +158,7 @@ internal static class NyxIdProxyReceiptFactory
             ErrorCode = errorCode ?? string.Empty,
             ErrorMessage = errorMessage ?? string.Empty,
             ResultJson = resultJson ?? string.Empty,
+            FailureOutcome = failureOutcome,
         };
         AttachUserServiceSubject(receipt, NormalizeUserServiceId(userServiceId));
         return receipt;

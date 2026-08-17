@@ -1,4 +1,5 @@
 using Aevatar.Workflow.Abstractions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Core.Modules;
 
@@ -23,11 +24,35 @@ public interface IWorkflowTool
     Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default);
 }
 
+public interface IWorkflowDurableOperationTool : IWorkflowTool
+{
+    Task<WorkflowToolExecutionResult> ReconcileAsync(
+        WorkflowToolExecutionRequest request,
+        WorkflowToolPendingOperation pendingOperation,
+        CancellationToken ct = default);
+
+    Task<WorkflowToolCancellationResult> CancelAsync(
+        WorkflowToolCancellationRequest request,
+        CancellationToken ct = default) =>
+        Task.FromResult(WorkflowToolCancellationResult.Failed(
+            "tool_cancellation_not_supported",
+            "This workflow tool does not support durable cancellation.",
+            retryable: true));
+}
+
+public enum WorkflowToolOperationCancellationReason
+{
+    Unspecified = 0,
+    WorkflowStopped = 1,
+}
+
 public sealed record WorkflowToolExecutionResult(
     string ResultJson,
     WorkflowManagedHandoffOutcome? ManagedHandoff = null,
     WorkflowToolApprovalPendingOutcome? PendingApproval = null,
-    WorkflowToolExecutionFailure? Failure = null)
+    WorkflowToolExecutionFailure? Failure = null,
+    WorkflowToolPendingOperation? PendingOperation = null,
+    WorkflowToolCancellationTerminalAuditIntent? CancellationRecoveryIntent = null)
 {
     public static WorkflowToolExecutionResult Success(
         string resultJson,
@@ -39,21 +64,90 @@ public sealed record WorkflowToolExecutionResult(
         string errorCode,
         string errorMessage,
         bool terminalInvoked = false,
-        bool retryable = false) =>
+        bool retryable = false,
+        WorkflowStepFailureOutcome failureOutcome = WorkflowStepFailureOutcome.CalleeConfirmed) =>
         new(
             resultJson ?? string.Empty,
             Failure: new WorkflowToolExecutionFailure(
                 errorCode ?? string.Empty,
                 errorMessage ?? string.Empty,
                 terminalInvoked,
-                retryable));
+                retryable,
+                failureOutcome));
+}
+
+public sealed record WorkflowToolPendingOperation(
+    string OperationId,
+    string ProviderOperationId,
+    string StatusPath,
+    string ResultPath,
+    string CancelPath,
+    WorkflowToolPendingOperationStatus Status,
+    string? ETag,
+    long RetryAfterMilliseconds,
+    long ExpiresAtUnixMs,
+    string ServiceSlug,
+    string? UserServiceId,
+    WorkflowToolPendingOperationRouteIdentitySource RouteIdentitySource);
+
+public sealed record WorkflowToolCancellationRequest(
+    WorkflowToolExecutionRequest ExecutionRequest,
+    WorkflowToolPendingOperation PendingOperation,
+    long DeadlineUnixMs,
+    WorkflowToolCancellationTerminalAuditIntent? TerminalIntent = null,
+    WorkflowToolOperationCancellationReason Reason = WorkflowToolOperationCancellationReason.WorkflowStopped);
+
+public sealed record WorkflowToolCancellationTerminalAuditIntent(
+    WorkflowToolExecutionResult Result,
+    Any? ToolOwnedAuditIntent = null,
+    string ArgumentsSha256 = "");
+
+public enum WorkflowToolCancellationDisposition
+{
+    Completed = 1,
+    Pending = 2,
+    Failed = 3,
+}
+
+public sealed record WorkflowToolCancellationResult(
+    WorkflowToolCancellationDisposition Disposition,
+    WorkflowToolExecutionResult? CompletedResult = null,
+    WorkflowToolPendingOperation? PendingOperation = null,
+    WorkflowToolExecutionFailure? Failure = null,
+    WorkflowToolCancellationTerminalAuditIntent? PendingTerminalIntent = null)
+{
+    public static WorkflowToolCancellationResult Completed(WorkflowToolExecutionResult result) =>
+        new(WorkflowToolCancellationDisposition.Completed, CompletedResult: result);
+
+    public static WorkflowToolCancellationResult Pending(
+        WorkflowToolPendingOperation operation,
+        WorkflowToolExecutionFailure? failure = null,
+        WorkflowToolCancellationTerminalAuditIntent? terminalIntent = null) =>
+        new(
+            WorkflowToolCancellationDisposition.Pending,
+            PendingOperation: operation,
+            Failure: failure,
+            PendingTerminalIntent: terminalIntent);
+
+    public static WorkflowToolCancellationResult Failed(
+        string errorCode,
+        string errorMessage,
+        bool retryable = false) =>
+        new(
+            WorkflowToolCancellationDisposition.Failed,
+            Failure: new WorkflowToolExecutionFailure(
+                errorCode ?? string.Empty,
+                errorMessage ?? string.Empty,
+                TerminalInvoked: false,
+                Retryable: retryable));
 }
 
 public sealed record WorkflowToolExecutionFailure(
     string ErrorCode,
     string ErrorMessage,
     bool TerminalInvoked = false,
-    bool Retryable = false);
+    bool Retryable = false,
+    WorkflowStepFailureOutcome FailureOutcome = WorkflowStepFailureOutcome.CalleeConfirmed);
 
 public sealed record WorkflowToolApprovalPendingOutcome(
     string ApprovalRequestId,

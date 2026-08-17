@@ -917,12 +917,7 @@ public sealed partial class ToolCallModule
     {
         var resolved = await ResolvePendingExecutionRequestAsync(pending, ctx, ct);
         var failure = outcomeMayBeUnknown
-            ? WorkflowToolExecutionResult.Failed(
-                string.Empty,
-                ToolOutcomeUnknownCode,
-                ToolOutcomeUnknownMessage,
-                terminalInvoked: true,
-                retryable: false)
+            ? UnknownToolOutcomeFailure(ToolOutcomeUnknownMessage)
             : WorkflowToolExecutionResult.Failed(
                 string.Empty,
                 "tool_retry_deadline_exceeded",
@@ -979,46 +974,78 @@ public sealed partial class ToolCallModule
         var expectedContinuationId = pending.ContinuationId;
         try
         {
-            var materialResolution = await ResolveAndVerifyProtectedMaterialAsync(
-                pending.ProtectedMaterialReference,
-                pending.ProtectedMaterialDigestSha256,
-                pending.RunId,
-                pending.StepId,
-                pending.ExecutionId,
-                pending.CallId,
-                ctx,
-                ct);
-            if (!materialResolution.Resolved)
+            var approvalRequired =
+                completed.OutcomeCase == WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.ApprovalRequired;
+            var decodedResult = ToExecutionResult(
+                completed,
+                retryableOverride: completed.OutcomeCase == WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.Failure &&
+                                   completed.Failure is { TerminalInvoked: false, Retryable: true }
+                    ? false
+                    : null);
+            var pendingOperationAccepted =
+                completed.OutcomeCase == WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.PendingOperation &&
+                decodedResult.PendingOperation != null;
+
+            ToolCallProtectedMaterial? material = null;
+            if (!pendingOperationAccepted || !IsValidPendingOperationResult(decodedResult))
             {
-                await CompletePendingExecutionFailureAsync(
-                    pending,
-                    WorkflowToolExecutionResult.Failed(
-                        string.Empty,
-                        materialResolution.ErrorCode,
-                        "The tool result was rejected because its protected execution material is unavailable.",
-                        terminalInvoked: false,
-                        retryable: false),
-                    material: null,
+                var materialResolution = await ResolveAndVerifyProtectedMaterialAsync(
+                    pending.ProtectedMaterialReference,
+                    pending.ProtectedMaterialDigestSha256,
+                    pending.RunId,
+                    pending.StepId,
+                    pending.ExecutionId,
+                    pending.CallId,
                     ctx,
                     ct);
-                return;
+                if (!materialResolution.Resolved)
+                {
+                    if (materialResolution.IsTransientFailure)
+                    {
+                        throw new WorkflowToolProtectedMaterialResolutionPendingException(
+                            materialResolution.ErrorCode);
+                    }
+
+                    await CompletePendingExecutionFailureAsync(
+                        pending,
+                        WorkflowToolExecutionResult.Failed(
+                            string.Empty,
+                            materialResolution.ErrorCode,
+                            "The tool result was rejected because its protected execution material is unavailable.",
+                            terminalInvoked: false,
+                            retryable: false,
+                            failureOutcome: WorkflowStepFailureOutcome.OutcomeUncertain),
+                        material: null,
+                        ctx,
+                        ct);
+                    return;
+                }
+
+                material = materialResolution.Material!;
             }
 
-            var material = materialResolution.Material!;
             if (completed.OutcomeCase == WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.Failure &&
                 completed.Failure is { TerminalInvoked: false, Retryable: true } &&
                 pending.Attempt < MaxToolExecutionAttempts)
             {
-                await ScheduleToolRetryAsync(state, pending, material, ctx, ct);
+                await ScheduleToolRetryAsync(state, pending, material!, ctx, ct);
                 return;
             }
 
-            state.PendingExecutions.Remove(pendingKey);
-            var request = ToStepRequest(pending, material);
-            var approvalRequired =
-                completed.OutcomeCase == WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.ApprovalRequired;
-            if (approvalRequired)
+            if (pendingOperationAccepted)
             {
+                await PersistPendingOperationAsync(
+                    state,
+                    ctx,
+                    pending,
+                    material,
+                    decodedResult,
+                    ct);
+            }
+            else if (approvalRequired)
+            {
+                state.PendingExecutions.Remove(pendingKey);
+                var request = ToStepRequest(pending, material);
                 var approval = completed.ApprovalRequired;
                 await SuspendForApprovalAsync(
                     state,
@@ -1037,7 +1064,7 @@ public sealed partial class ToolCallModule
                         approval.ApprovalRequestId,
                         approval.ToolName,
                         approval.ToolCallId,
-                        material.ArgumentsJson,
+                        material!.ArgumentsJson,
                         approval.ApprovalMode,
                         approval.IsReadOnly,
                         approval.IsDestructive),
@@ -1047,18 +1074,15 @@ public sealed partial class ToolCallModule
             }
             else
             {
+                state.PendingExecutions.Remove(pendingKey);
+                var request = ToStepRequest(pending, material);
                 await PersistAndPublishToolOutcomeAsync(
                     state,
                     ctx,
                     request,
                     pending.ToolName,
                     pending.CallId,
-                    ToExecutionResult(
-                        completed,
-                        retryableOverride: completed.OutcomeCase == WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.Failure &&
-                                           completed.Failure is { TerminalInvoked: false, Retryable: true }
-                            ? false
-                            : null),
+                    decodedResult,
                     pending.ApprovalRequestId,
                     pending.TerminalDecision,
                     pending.ProtectedMaterialReference,
@@ -1182,6 +1206,7 @@ public sealed partial class ToolCallModule
             WorkflowToolCallTerminalDecision.NoApproval,
             terminalInvoked: false,
             retryable: false,
+            WorkflowStepFailureOutcome.CalleeConfirmed,
             pending.ProtectedMaterialReference,
             ct);
     }
@@ -1515,12 +1540,8 @@ public sealed partial class ToolCallModule
         {
             await CompletePendingExecutionFailureAsync(
                 pending,
-                WorkflowToolExecutionResult.Failed(
-                    string.Empty,
-                    ToolOutcomeUnknownCode,
-                    "The tool execution could not be reconciled because its protected material is unavailable.",
-                    terminalInvoked: true,
-                    retryable: false),
+                UnknownToolOutcomeFailure(
+                    "The tool execution could not be reconciled because its protected material is unavailable."),
                 material: null,
                 ctx,
                 ct);
@@ -1534,12 +1555,8 @@ public sealed partial class ToolCallModule
         {
             await CompletePendingExecutionFailureAsync(
                 pending,
-                WorkflowToolExecutionResult.Failed(
-                    string.Empty,
-                    ToolOutcomeUnknownCode,
-                    "The tool execution could not be reconciled because the tool is unavailable.",
-                    terminalInvoked: true,
-                    retryable: false),
+                UnknownToolOutcomeFailure(
+                    "The tool execution could not be reconciled because the tool is unavailable."),
                 material,
                 ctx,
                 ct);
@@ -1552,12 +1569,8 @@ public sealed partial class ToolCallModule
         {
             await CompletePendingExecutionFailureAsync(
                 pending,
-                WorkflowToolExecutionResult.Failed(
-                    string.Empty,
-                    ToolOutcomeUnknownCode,
-                    "The tool execution outcome is unknown and this tool does not permit uncertain recovery redispatch.",
-                    terminalInvoked: true,
-                    retryable: false),
+                UnknownToolOutcomeFailure(
+                    "The tool execution outcome is unknown and this tool does not permit uncertain recovery redispatch."),
                 material,
                 ctx,
                 ct);
@@ -1569,12 +1582,8 @@ public sealed partial class ToolCallModule
         {
             await CompletePendingExecutionFailureAsync(
                 pending,
-                WorkflowToolExecutionResult.Failed(
-                    string.Empty,
-                    ToolOutcomeUnknownCode,
-                    "The tool execution could not be reconciled because admission is unavailable.",
-                    terminalInvoked: true,
-                    retryable: false),
+                UnknownToolOutcomeFailure(
+                    "The tool execution could not be reconciled because admission is unavailable."),
                 material,
                 ctx,
                 ct);
@@ -1604,12 +1613,8 @@ public sealed partial class ToolCallModule
         {
             await CompletePendingExecutionFailureAsync(
                 pending,
-                WorkflowToolExecutionResult.Failed(
-                    string.Empty,
-                    ToolOutcomeUnknownCode,
-                    "The tool execution could not be reconciled after actor recovery.",
-                    terminalInvoked: true,
-                    retryable: false),
+                UnknownToolOutcomeFailure(
+                    "The tool execution could not be reconciled after actor recovery."),
                 material,
                 ctx,
                 ct);
@@ -1649,7 +1654,21 @@ public sealed partial class ToolCallModule
             Attempt = attempt,
             ContinuationId = continuationId,
         };
-        if (result.PendingApproval is { } approval)
+        if (result.PendingOperation is { } pendingOperation)
+        {
+            if (TryBuildAttemptPendingOperationOutcome(
+                    result,
+                    pendingOperation,
+                    out var pendingOutcome))
+            {
+                completed.PendingOperation = pendingOutcome;
+            }
+            else
+            {
+                completed.Failure = BuildInvalidPendingOperationAttemptFailure();
+            }
+        }
+        else if (result.PendingApproval is { } approval)
         {
             completed.ApprovalRequired = new WorkflowToolCallAttemptApprovalRequiredOutcome
             {
@@ -1670,6 +1689,7 @@ public sealed partial class ToolCallModule
                 ErrorMessage = failure.ErrorMessage,
                 TerminalInvoked = failure.TerminalInvoked,
                 Retryable = failure.Retryable,
+                FailureOutcome = failure.FailureOutcome,
             };
         }
         else
@@ -1699,7 +1719,12 @@ public sealed partial class ToolCallModule
                     completed.Failure.ErrorCode,
                     completed.Failure.ErrorMessage,
                     completed.Failure.TerminalInvoked,
-                    retryableOverride ?? completed.Failure.Retryable),
+                    retryableOverride ?? completed.Failure.Retryable,
+                    NormalizeFailureOutcome(
+                        completed.Failure.FailureOutcome,
+                        completed.Failure.ErrorCode)),
+            WorkflowToolCallAttemptCompletedEvent.OutcomeOneofCase.PendingOperation =>
+                DecodeAttemptPendingOperationOutcome(completed.PendingOperation),
             _ => WorkflowToolExecutionResult.Failed(
                 string.Empty,
                 "tool_completion_invalid",
@@ -1707,6 +1732,300 @@ public sealed partial class ToolCallModule
                 terminalInvoked: true,
                 retryable: false),
         };
+
+    private static WorkflowStepFailureOutcome NormalizeFailureOutcome(
+        WorkflowStepFailureOutcome failureOutcome,
+        string? errorCode) =>
+        failureOutcome switch
+        {
+            WorkflowStepFailureOutcome.CalleeConfirmed => WorkflowStepFailureOutcome.CalleeConfirmed,
+            WorkflowStepFailureOutcome.OutcomeUncertain => WorkflowStepFailureOutcome.OutcomeUncertain,
+            _ when string.Equals(errorCode, ToolOutcomeUnknownCode, StringComparison.Ordinal) =>
+                WorkflowStepFailureOutcome.OutcomeUncertain,
+            _ => WorkflowStepFailureOutcome.CalleeConfirmed,
+        };
+
+    private static WorkflowToolExecutionResult UnknownToolOutcomeFailure(string message) =>
+        WorkflowToolExecutionResult.Failed(
+            string.Empty,
+            ToolOutcomeUnknownCode,
+            message,
+            terminalInvoked: true,
+            retryable: false,
+            WorkflowStepFailureOutcome.OutcomeUncertain);
+
+    private static bool TryBuildAttemptPendingOperationOutcome(
+        WorkflowToolExecutionResult result,
+        WorkflowToolPendingOperation operation,
+        out WorkflowToolCallAttemptPendingOperationOutcome outcome)
+    {
+        outcome = new WorkflowToolCallAttemptPendingOperationOutcome();
+        if (!IsPurePendingOperationResult(result, operation) ||
+            !TryMapAttemptPendingOperationStatus(operation.Status, out var status) ||
+            !TryMapAttemptPendingOperationRouteIdentitySource(
+                operation.RouteIdentitySource,
+                out var routeIdentitySource))
+        {
+            return false;
+        }
+
+        outcome = new WorkflowToolCallAttemptPendingOperationOutcome
+        {
+            OperationId = operation.OperationId,
+            ProviderOperationId = operation.ProviderOperationId,
+            StatusPath = operation.StatusPath,
+            ResultPath = operation.ResultPath,
+            CancelPath = operation.CancelPath,
+            Status = status,
+            Etag = operation.ETag ?? string.Empty,
+            RetryAfterMilliseconds = operation.RetryAfterMilliseconds,
+            ExpiresAtUnixMs = operation.ExpiresAtUnixMs,
+            ServiceSlug = operation.ServiceSlug,
+            UserServiceId = operation.UserServiceId ?? string.Empty,
+            RouteIdentitySource = routeIdentitySource,
+        };
+        if (result.CancellationRecoveryIntent is { } recoveryIntent)
+        {
+            if (!IsValidCancellationTerminalIntent(recoveryIntent))
+                return false;
+
+            outcome.CancellationRecoveryIntent =
+                ToAttemptCancellationRecoveryIntent(recoveryIntent);
+        }
+        return true;
+    }
+
+    private static WorkflowToolExecutionResult DecodeAttemptPendingOperationOutcome(
+        WorkflowToolCallAttemptPendingOperationOutcome outcome)
+    {
+        if (!TryMapPendingOperationStatus(outcome.Status, out var status) ||
+            !TryMapPendingOperationRouteIdentitySource(
+                outcome.RouteIdentitySource,
+                out var routeIdentitySource))
+        {
+            return InvalidPendingOperationResult();
+        }
+
+        var operation = new WorkflowToolPendingOperation(
+            outcome.OperationId,
+            outcome.ProviderOperationId,
+            outcome.StatusPath,
+            outcome.ResultPath,
+            outcome.CancelPath,
+            status,
+            string.IsNullOrEmpty(outcome.Etag) ? null : outcome.Etag,
+            outcome.RetryAfterMilliseconds,
+            outcome.ExpiresAtUnixMs,
+            outcome.ServiceSlug,
+            string.IsNullOrEmpty(outcome.UserServiceId) ? null : outcome.UserServiceId,
+            routeIdentitySource);
+        var result = new WorkflowToolExecutionResult(
+            string.Empty,
+            PendingOperation: operation,
+            CancellationRecoveryIntent: FromAttemptCancellationRecoveryIntent(
+                outcome.CancellationRecoveryIntent));
+        return IsPurePendingOperationResult(result, operation)
+            ? result
+            : InvalidPendingOperationResult();
+    }
+
+    private static WorkflowToolCallAttemptCancellationRecoveryIntent ToAttemptCancellationRecoveryIntent(
+        WorkflowToolCancellationTerminalAuditIntent intent)
+    {
+        var result = intent.Result;
+        var failure = result.Failure;
+        var transported = new WorkflowToolCallAttemptCancellationRecoveryIntent
+        {
+            ResultJson = result.ResultJson ?? string.Empty,
+            HasFailure = failure != null,
+            FailureCode = failure?.ErrorCode ?? string.Empty,
+            SafeMessage = failure?.ErrorMessage ?? string.Empty,
+            TerminalInvoked = failure?.TerminalInvoked ?? true,
+            Retryable = failure?.Retryable ?? false,
+            FailureOutcome = failure?.FailureOutcome ?? WorkflowStepFailureOutcome.Unspecified,
+            ArgumentsSha256 = intent.ArgumentsSha256,
+        };
+        if (intent.ToolOwnedAuditIntent != null)
+            transported.ToolOwnedAuditIntent = intent.ToolOwnedAuditIntent.Clone();
+        return transported;
+    }
+
+    private static WorkflowToolCancellationTerminalAuditIntent? FromAttemptCancellationRecoveryIntent(
+        WorkflowToolCallAttemptCancellationRecoveryIntent? intent)
+    {
+        if (intent == null)
+            return null;
+
+        var result = intent.HasFailure
+            ? WorkflowToolExecutionResult.Failed(
+                intent.ResultJson,
+                intent.FailureCode,
+                intent.SafeMessage,
+                intent.TerminalInvoked,
+                intent.Retryable,
+                NormalizeFailureOutcome(intent.FailureOutcome, intent.FailureCode))
+            : WorkflowToolExecutionResult.Success(intent.ResultJson);
+        return new WorkflowToolCancellationTerminalAuditIntent(
+            result,
+            intent.ToolOwnedAuditIntent?.Clone(),
+            intent.ArgumentsSha256);
+    }
+
+    private static bool IsPurePendingOperationResult(
+        WorkflowToolExecutionResult result,
+        WorkflowToolPendingOperation operation)
+    {
+        if (result.PendingOperation == null ||
+            result.PendingApproval != null ||
+            result.Failure != null ||
+            result.ManagedHandoff != null ||
+            !string.IsNullOrEmpty(result.ResultJson) ||
+            result.CancellationRecoveryIntent is { } recoveryIntent &&
+            !IsValidCancellationTerminalIntent(recoveryIntent) ||
+            string.IsNullOrWhiteSpace(operation.OperationId) ||
+            string.IsNullOrWhiteSpace(operation.ServiceSlug) ||
+            operation.RetryAfterMilliseconds < 0)
+        {
+            return false;
+        }
+
+        var hasProviderReceipt =
+            !string.IsNullOrWhiteSpace(operation.ProviderOperationId) &&
+            !string.IsNullOrWhiteSpace(operation.StatusPath) &&
+            !string.IsNullOrWhiteSpace(operation.ResultPath) &&
+            !string.IsNullOrWhiteSpace(operation.CancelPath);
+        if (hasProviderReceipt)
+            return true;
+
+        return string.IsNullOrWhiteSpace(operation.ProviderOperationId) &&
+               string.IsNullOrWhiteSpace(operation.StatusPath) &&
+               string.IsNullOrWhiteSpace(operation.ResultPath) &&
+               string.IsNullOrWhiteSpace(operation.CancelPath) &&
+               operation.Status == WorkflowToolPendingOperationStatus.SubmissionUncertain;
+    }
+
+    private static WorkflowToolCallAttemptFailureOutcome BuildInvalidPendingOperationAttemptFailure() =>
+        new()
+        {
+            ErrorCode = "workflow_tool_pending_operation_invalid",
+            ErrorMessage = "The tool returned an invalid durable pending-operation receipt.",
+            TerminalInvoked = true,
+            Retryable = false,
+            FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+        };
+
+    private static WorkflowToolExecutionResult InvalidPendingOperationResult() =>
+        WorkflowToolExecutionResult.Failed(
+            string.Empty,
+            "workflow_tool_pending_operation_invalid",
+            "The tool returned an invalid durable pending-operation receipt.",
+            terminalInvoked: true,
+            retryable: false,
+            WorkflowStepFailureOutcome.OutcomeUncertain);
+
+    private static bool TryMapAttemptPendingOperationStatus(
+        WorkflowToolPendingOperationStatus status,
+        out WorkflowToolCallAttemptPendingOperationStatus mapped)
+    {
+        mapped = status switch
+        {
+            WorkflowToolPendingOperationStatus.Unspecified =>
+                WorkflowToolCallAttemptPendingOperationStatus.Unspecified,
+            WorkflowToolPendingOperationStatus.SubmissionUncertain =>
+                WorkflowToolCallAttemptPendingOperationStatus.SubmissionUncertain,
+            WorkflowToolPendingOperationStatus.Queued =>
+                WorkflowToolCallAttemptPendingOperationStatus.Queued,
+            WorkflowToolPendingOperationStatus.Provisioning =>
+                WorkflowToolCallAttemptPendingOperationStatus.Provisioning,
+            WorkflowToolPendingOperationStatus.Preparing =>
+                WorkflowToolCallAttemptPendingOperationStatus.Preparing,
+            WorkflowToolPendingOperationStatus.Running =>
+                WorkflowToolCallAttemptPendingOperationStatus.Running,
+            WorkflowToolPendingOperationStatus.Collecting =>
+                WorkflowToolCallAttemptPendingOperationStatus.Collecting,
+            WorkflowToolPendingOperationStatus.Succeeded =>
+                WorkflowToolCallAttemptPendingOperationStatus.Succeeded,
+            WorkflowToolPendingOperationStatus.Failed =>
+                WorkflowToolCallAttemptPendingOperationStatus.Failed,
+            WorkflowToolPendingOperationStatus.Cancelled =>
+                WorkflowToolCallAttemptPendingOperationStatus.Cancelled,
+            WorkflowToolPendingOperationStatus.OutcomeUncertain =>
+                WorkflowToolCallAttemptPendingOperationStatus.OutcomeUncertain,
+            _ => (WorkflowToolCallAttemptPendingOperationStatus)(-1),
+        };
+        return (int)mapped >= 0;
+    }
+
+    private static bool TryMapPendingOperationStatus(
+        WorkflowToolCallAttemptPendingOperationStatus status,
+        out WorkflowToolPendingOperationStatus mapped)
+    {
+        mapped = status switch
+        {
+            WorkflowToolCallAttemptPendingOperationStatus.Unspecified =>
+                WorkflowToolPendingOperationStatus.Unspecified,
+            WorkflowToolCallAttemptPendingOperationStatus.SubmissionUncertain =>
+                WorkflowToolPendingOperationStatus.SubmissionUncertain,
+            WorkflowToolCallAttemptPendingOperationStatus.Queued =>
+                WorkflowToolPendingOperationStatus.Queued,
+            WorkflowToolCallAttemptPendingOperationStatus.Provisioning =>
+                WorkflowToolPendingOperationStatus.Provisioning,
+            WorkflowToolCallAttemptPendingOperationStatus.Preparing =>
+                WorkflowToolPendingOperationStatus.Preparing,
+            WorkflowToolCallAttemptPendingOperationStatus.Running =>
+                WorkflowToolPendingOperationStatus.Running,
+            WorkflowToolCallAttemptPendingOperationStatus.Collecting =>
+                WorkflowToolPendingOperationStatus.Collecting,
+            WorkflowToolCallAttemptPendingOperationStatus.Succeeded =>
+                WorkflowToolPendingOperationStatus.Succeeded,
+            WorkflowToolCallAttemptPendingOperationStatus.Failed =>
+                WorkflowToolPendingOperationStatus.Failed,
+            WorkflowToolCallAttemptPendingOperationStatus.Cancelled =>
+                WorkflowToolPendingOperationStatus.Cancelled,
+            WorkflowToolCallAttemptPendingOperationStatus.OutcomeUncertain =>
+                WorkflowToolPendingOperationStatus.OutcomeUncertain,
+            _ => (WorkflowToolPendingOperationStatus)(-1),
+        };
+        return (int)mapped >= 0;
+    }
+
+    private static bool TryMapAttemptPendingOperationRouteIdentitySource(
+        WorkflowToolPendingOperationRouteIdentitySource source,
+        out WorkflowToolCallAttemptPendingOperationRouteIdentitySource mapped)
+    {
+        mapped = source switch
+        {
+            WorkflowToolPendingOperationRouteIdentitySource.Unspecified =>
+                WorkflowToolCallAttemptPendingOperationRouteIdentitySource.Unspecified,
+            WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract =>
+                WorkflowToolCallAttemptPendingOperationRouteIdentitySource.CodeExecutionContract,
+            WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog =>
+                WorkflowToolCallAttemptPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog,
+            WorkflowToolPendingOperationRouteIdentitySource.WorkflowCapabilityAdmission =>
+                WorkflowToolCallAttemptPendingOperationRouteIdentitySource.WorkflowCapabilityAdmission,
+            _ => (WorkflowToolCallAttemptPendingOperationRouteIdentitySource)(-1),
+        };
+        return (int)mapped >= 0;
+    }
+
+    private static bool TryMapPendingOperationRouteIdentitySource(
+        WorkflowToolCallAttemptPendingOperationRouteIdentitySource source,
+        out WorkflowToolPendingOperationRouteIdentitySource mapped)
+    {
+        mapped = source switch
+        {
+            WorkflowToolCallAttemptPendingOperationRouteIdentitySource.Unspecified =>
+                WorkflowToolPendingOperationRouteIdentitySource.Unspecified,
+            WorkflowToolCallAttemptPendingOperationRouteIdentitySource.CodeExecutionContract =>
+                WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract,
+            WorkflowToolCallAttemptPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog =>
+                WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog,
+            WorkflowToolCallAttemptPendingOperationRouteIdentitySource.WorkflowCapabilityAdmission =>
+                WorkflowToolPendingOperationRouteIdentitySource.WorkflowCapabilityAdmission,
+            _ => (WorkflowToolPendingOperationRouteIdentitySource)(-1),
+        };
+        return (int)mapped >= 0;
+    }
 
     private static StepRequestEvent ToStepRequest(
         PendingToolCallExecutionState pending,

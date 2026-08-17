@@ -618,38 +618,30 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                 command.Key.OperationId);
             result = ExecutionFailure(command);
         }
-
-        try
+        finally
         {
-            if (canaryEffectFaultEligible &&
-                IsCanaryEffectFaultBoundaryResult(command, result))
+            releaseLease(executionLease);
+        }
+
+        if (canaryEffectFaultEligible &&
+            IsCanaryEffectFaultBoundaryResult(command, result))
+        {
+            try
             {
-                try
-                {
-                    await DispatchCanaryEffectFaultAsync(
-                            turnActorId,
-                            command.Tool.CanaryEffectFault,
-                            result,
-                            correlationId)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception exception)
-                {
-                    _logger.LogWarning(
-                        exception,
-                        "NyxIdChat canary result-boundary dispatch failed; falling back to the normal denied completion: turnActor={TurnActorId} operation={OperationId}",
+                await DispatchCanaryEffectFaultAsync(
                         turnActorId,
-                        command.Key.OperationId);
-                    await DispatchCompletionAsync(
-                            turnActorId,
-                            result,
-                            NyxIdChatTurnOperationCompletionSource.Execution,
-                            correlationId)
-                        .ConfigureAwait(false);
-                }
+                        command.Tool.CanaryEffectFault,
+                        result,
+                        correlationId)
+                    .ConfigureAwait(false);
             }
-            else
+            catch (Exception exception)
             {
+                _logger.LogWarning(
+                    exception,
+                    "NyxIdChat canary result-boundary dispatch failed; falling back to the normal denied completion: turnActor={TurnActorId} operation={OperationId}",
+                    turnActorId,
+                    command.Key.OperationId);
                 await DispatchCompletionAsync(
                         turnActorId,
                         result,
@@ -658,9 +650,14 @@ public sealed class NyxIdChatTurnOperationDispatchPort
                     .ConfigureAwait(false);
             }
         }
-        finally
+        else
         {
-            releaseLease(executionLease);
+            await DispatchCompletionAsync(
+                    turnActorId,
+                    result,
+                    NyxIdChatTurnOperationCompletionSource.Execution,
+                    correlationId)
+                .ConfigureAwait(false);
         }
     }
 

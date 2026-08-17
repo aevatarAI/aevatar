@@ -1393,6 +1393,220 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             .Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Activation_ShouldPrepareAndSchedulePersistedPendingOperationWithoutExecutingTool()
+    {
+        const string actorId = "run-tool-operation-recovery";
+        const string executionId = "exec-1";
+        var callId = $"workflow:{actorId}:tool-step:{executionId}";
+        var pending = CreatePendingOperation(actorId, executionId, callId);
+        var seededState = new ToolCallModuleState();
+        seededState.PendingOperations[
+            RuntimeCallbackKeyComposer.BuildKey('|', callId, executionId)] = pending;
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(seededState));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out _);
+        await recovered.ActivateAsync();
+
+        var scheduled = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
+        var poll = scheduled.TriggerEnvelope.Payload!
+            .Unpack<WorkflowToolCallOperationPollFiredEvent>();
+        poll.OperationId.Should().Be(pending.OperationId);
+        poll.PollAttempt.Should().Be(1);
+        poll.CallbackId.Should().StartWith("workflow-tool-operation-poll:");
+        tool.ExecuteCalls.Should().Be(0);
+        var recoveredPending = recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        recoveredPending.PollCallbackId.Should().Be(poll.CallbackId);
+        recoveredPending.NextPollUnixMs.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task Activation_ShouldPublishTypedOperationContinuation_WhenPollSchedulingFails()
+    {
+        const string actorId = "run-tool-operation-scheduler-failure";
+        const string executionId = "exec-1";
+        var callId = $"workflow:{actorId}:tool-step:{executionId}";
+        var pending = CreatePendingOperation(actorId, executionId, callId);
+        var seededState = new ToolCallModuleState();
+        seededState.PendingOperations[
+            RuntimeCallbackKeyComposer.BuildKey('|', callId, executionId)] = pending;
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(seededState));
+
+        var scheduler = new RecordingCallbackScheduler(failSchedule: true);
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out var publisher);
+        await recovered.ActivateAsync();
+
+        scheduler.ScheduleAttempts.Should().Be(1);
+        var continuation = publisher.Published
+            .Where(publication => publication.Audience == TopologyAudience.Self)
+            .Select(publication => publication.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Subject;
+        continuation.OperationId.Should().Be(pending.OperationId);
+        continuation.CallbackId.Should().StartWith("workflow-tool-operation-poll:");
+        tool.ExecuteCalls.Should().Be(0);
+        recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingOperations.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Activation_ShouldRecoverStopCancellationInsteadOfOrdinaryOperationPoll()
+    {
+        const string actorId = "run-tool-stop-cancellation-recovery";
+        const string executionId = "exec-1";
+        var callId = $"workflow:{actorId}:tool-step:{executionId}";
+        var pending = CreatePendingOperation(actorId, executionId, callId);
+        var seededState = new ToolCallModuleState
+        {
+            StopCancellation = new PendingWorkflowToolStopCancellation
+            {
+                StopKind = WorkflowToolStopKind.WorkflowRunStopped,
+                RunId = actorId,
+                Reason = "requested by caller",
+                CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(2).ToUnixTimeMilliseconds(),
+            },
+        };
+        seededState.PendingOperations[
+            RuntimeCallbackKeyComposer.BuildKey('|', callId, executionId)] = pending;
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(seededState));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out _);
+        await recovered.ActivateAsync();
+
+        var scheduled = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
+        var cancellation = scheduled.TriggerEnvelope.Payload!
+            .Unpack<WorkflowToolCallStopCancellationFiredEvent>();
+        cancellation.OperationId.Should().Be(pending.OperationId);
+        cancellation.Attempt.Should().Be(1);
+        cancellation.CallbackId.Should().StartWith("workflow-tool-stop-cancellation:");
+        scheduled.TriggerEnvelope.Payload.Is(WorkflowToolCallOperationPollFiredEvent.Descriptor)
+            .Should().BeFalse();
+        tool.ExecuteCalls.Should().Be(0);
+        var recoveredPending = recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        recoveredPending.StopCancellationPhase.Should().Be(WorkflowToolStopCancellationPhase.Requested);
+        recoveredPending.StopCancellationCallbackId.Should().Be(cancellation.CallbackId);
+    }
+
+    [Fact]
+    public async Task Activation_WhenStopCancellationHasSettled_ShouldRepublishOriginalStop()
+    {
+        const string actorId = "run-tool-stop-release-recovery";
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(new ToolCallModuleState
+            {
+                StopCancellation = new PendingWorkflowToolStopCancellation
+                {
+                    StopKind = WorkflowToolStopKind.WorkflowStopped,
+                    RunId = actorId,
+                    WorkflowName = "tool_recovery",
+                    Reason = "requested by caller",
+                    CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(2).ToUnixTimeMilliseconds(),
+                },
+            }));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out var publisher);
+        await recovered.ActivateAsync();
+
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        publisher.Published
+            .Where(publication => publication.Audience == TopologyAudience.Self)
+            .Select(publication => publication.Event)
+            .OfType<WorkflowStoppedEvent>()
+            .Should().ContainSingle()
+            .Which.Reason.Should().Be("requested by caller");
+        tool.ExecuteCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Activation_WhenPersistedStopKindIsUnknown_ShouldExposeRetryableRecoveryFailure()
+    {
+        const string actorId = "run-tool-stop-release-unknown-kind";
+        const int unknownStopKind = 99;
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(actorId, store, new RecordingCallbackScheduler(), out _, out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        await ((IWorkflowExecutionStateHost)seed).UpsertExecutionStateAsync(
+            ToolCallModule.ModuleStateKey,
+            Any.Pack(new ToolCallModuleState
+            {
+                StopCancellation = new PendingWorkflowToolStopCancellation
+                {
+                    StopKind = (WorkflowToolStopKind)unknownStopKind,
+                    RunId = actorId,
+                    Reason = "requested by caller",
+                    CompletedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(2).ToUnixTimeMilliseconds(),
+                },
+            }));
+
+        var scheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(actorId, store, scheduler, out var tool, out var publisher);
+
+        var failure = await FluentActions.Awaiting(() => recovered.ActivateAsync())
+            .Should().ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        failure.Which.Message.Should().Contain($"unsupported stop kind '{unknownStopKind}'");
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        var publishedEvents = publisher.Published.Select(static publication => publication.Event).ToArray();
+        publishedEvents.OfType<WorkflowStoppedEvent>().Should().BeEmpty();
+        publishedEvents.OfType<WorkflowRunStoppedEvent>().Should().BeEmpty();
+        tool.ExecuteCalls.Should().Be(0);
+        recovered.State.ExecutionStates[ToolCallModule.ModuleStateKey]
+            .Unpack<ToolCallModuleState>()
+            .StopCancellation!.StopKind.Should().Be((WorkflowToolStopKind)unknownStopKind);
+    }
+
+    [Fact]
+    public void TypedStopHandlers_ShouldRunAfterWorkflowExecutionBridgeGate()
+    {
+        var stopped = typeof(WorkflowRunGAgent)
+            .GetMethod(nameof(WorkflowRunGAgent.HandleWorkflowStopped))!
+            .GetCustomAttribute<Aevatar.Foundation.Abstractions.Attributes.EventHandlerAttribute>();
+        var runStopped = typeof(WorkflowRunGAgent)
+            .GetMethod(nameof(WorkflowRunGAgent.HandleWorkflowRunStoppedAsync))!
+            .GetCustomAttribute<Aevatar.Foundation.Abstractions.Attributes.EventHandlerAttribute>();
+
+        stopped.Should().NotBeNull();
+        stopped!.Priority.Should().BeGreaterThan(0);
+        runStopped.Should().NotBeNull();
+        runStopped!.Priority.Should().BeGreaterThan(0);
+    }
+
     private static ToolCallModuleState CreateRecoverableToolState(string runId)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -1628,6 +1842,34 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
             .Invoke(agent, [evt, CancellationToken.None])!;
         await task;
     }
+
+    private static PendingToolCallOperationState CreatePendingOperation(
+        string actorId,
+        string executionId,
+        string callId) =>
+        new()
+        {
+            RunId = actorId,
+            StepId = "tool-step",
+            ExecutionId = executionId,
+            ToolName = "counting_tool",
+            ToolCallId = callId,
+            OperationId = "tool:v1:operation:" + new string('b', 64),
+            ProviderOperationId = "provider-operation-1",
+            StatusPath = "/executions/provider-operation-1",
+            ResultPath = "/executions/provider-operation-1/result",
+            CancelPath = "/executions/provider-operation-1/cancel",
+            Status = WorkflowToolPendingOperationStatus.Running,
+            RetryAfterMs = 100,
+            ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            ServiceSlug = "chrono-sandbox",
+            TerminalDecision = WorkflowToolCallTerminalDecision.NoApproval,
+            ProtectedMaterialReference = CreateProtectedReference(
+                $"material-{executionId}",
+                actorId,
+                1),
+            ProtectedMaterialDigestSha256 = new string('a', 64),
+        };
 
     private static WorkflowRunGAgent CreateAgent(
         string actorId,

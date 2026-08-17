@@ -32,15 +32,18 @@ public sealed partial class ToolCallModule
 
     internal sealed record ToolCallProtectedMaterialResolution(
         ToolCallProtectedMaterial? Material,
-        string ErrorCode)
+        string ErrorCode,
+        bool IsTransientFailure)
     {
         internal bool Resolved => Material != null && string.IsNullOrEmpty(ErrorCode);
 
         internal static ToolCallProtectedMaterialResolution Success(ToolCallProtectedMaterial material) =>
-            new(material, string.Empty);
+            new(material, string.Empty, IsTransientFailure: false);
 
-        internal static ToolCallProtectedMaterialResolution Failed(string errorCode) =>
-            new(null, errorCode);
+        internal static ToolCallProtectedMaterialResolution Failed(
+            string errorCode,
+            bool isTransientFailure = false) =>
+            new(null, errorCode, isTransientFailure);
     }
 
 #pragma warning disable CS0612 // Legacy fields remain readable only so every new actor-state write can scrub them.
@@ -191,7 +194,8 @@ public sealed partial class ToolCallModule
         if (runtimeSecretStore == null)
         {
             return ToolCallProtectedMaterialResolution.Failed(
-                ToolCallProtectedMaterialErrorCodes.StoreUnavailable);
+                ToolCallProtectedMaterialErrorCodes.StoreUnavailable,
+                isTransientFailure: true);
         }
 
         ResolveRuntimeSecretResult resolved;
@@ -213,7 +217,8 @@ public sealed partial class ToolCallModule
         catch
         {
             return ToolCallProtectedMaterialResolution.Failed(
-                ToolCallProtectedMaterialErrorCodes.ResolveFailed);
+                ToolCallProtectedMaterialErrorCodes.ResolveFailed,
+                isTransientFailure: true);
         }
 
         if (!resolved.Resolved ||
@@ -401,6 +406,8 @@ public sealed partial class ToolCallModule
         state.PendingApprovals.Values.Any(pending =>
             MatchesProtectedMaterialReference(expected, pending.ProtectedMaterialReference)) ||
         state.PendingExecutions.Values.Any(pending =>
+            MatchesProtectedMaterialReference(expected, pending.ProtectedMaterialReference)) ||
+        state.PendingOperations.Values.Any(pending =>
             MatchesProtectedMaterialReference(expected, pending.ProtectedMaterialReference)) ||
         state.Completions.Any(completion =>
             MatchesProtectedMaterialReference(expected, completion.ProtectedMaterialReference));

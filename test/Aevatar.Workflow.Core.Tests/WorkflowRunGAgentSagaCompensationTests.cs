@@ -85,6 +85,39 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
+    public async Task OutcomeUncertainFailureAfterProvisionalDispatch_ShouldKeepLedgerAndCompensate()
+    {
+        var harness = await CreateStartedRunAsync(InFlightCompensationWorkflowYaml());
+        var request = StepRequests(harness.Publisher, "create_order").Single();
+        harness.Agent.State.CompensableLedger.Should().ContainSingle()
+            .Which.LedgerStatus.Should().Be(CompensableLedgerEntryStatus.Provisional);
+        harness.Publisher.Published.Clear();
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, new StepCompletedEvent
+        {
+            RunId = harness.RunId,
+            StepId = "create_order",
+            Success = false,
+            Error = "provider outcome uncertain",
+            ExecutionId = request.ExecutionId,
+            FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+        }));
+
+        harness.Agent.State.CompensableLedger.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new CompletedStepLedgerEntry
+            {
+                StepId = "create_order",
+                CompensationStepId = "cancel_order",
+                IdempotencyKey = request.IdempotencyKey,
+                CapturedOutput = string.Empty,
+                LedgerStatus = CompensableLedgerEntryStatus.Provisional,
+            });
+        var compensation = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        compensation.CompensationStepId.Should().Be("cancel_order");
+        compensation.IdempotencyKey.Should().Be(request.IdempotencyKey);
+    }
+
+    [Fact]
     public async Task SuccessfulCompletionAfterProvisionalDispatch_ShouldConfirmSingleLedgerEntry()
     {
         var harness = await CreateStartedRunAsync(InFlightCompensationWorkflowYaml());

@@ -130,6 +130,112 @@ before network access. Existing v4 plans did not contain code-execution proofs; 
 supported for source-readable interactive runtime resolution, but delegation-only and scheduled
 execution require an exact proof. New live admissions write v6 proofs; v5 requires rebind.
 
+### Durable workflow execution
+
+Workflow `code_execute` uses Chrono Sandbox's asynchronous `/executions` contract so a program can
+run longer than the public edge's request timeout without keeping any Aevatar-to-NyxID exchange
+open. This changes the workflow transport, not the admitted logical capability: existing call-site
+proofs continue to identify the platform-owned `code_execute` operation, while direct chat and
+human-session invocations retain the legacy synchronous `/execute` path and remain non-replayable.
+
+The workflow lifecycle is actor-owned:
+
+1. The admitted tool executor creates an opaque `tool:v1:operation:<sha256>` identity. Aevatar sends
+   a short `POST /executions` and uses that exact identity as `Idempotency-Key`.
+2. Before registering any callback, the workflow actor persists the receipt, provider operation ID,
+   exact route identity, ETag, expiry, retry time, callback identity, and a verified protected-material
+   reference plus digest. Source, idempotency key, file references, and external invocation details
+   stay in the runtime secret store rather than actor state. Bearer and delegation tokens are never
+   persisted.
+3. A typed durable self-callback performs one bounded status request. It sends `If-None-Match` when
+   an ETag is known, saves the next callback identity before scheduling it, and never polls with
+   `Task.Delay` inside an actor turn.
+4. Once status is `succeeded` or `failed`, the actor fetches the result and atomically replaces the
+   pending operation with the existing completion outbox entry before publishing workflow
+   completion. `cancelled`, `outcome_uncertain`, and definitive non-retryable failures map directly
+   to typed terminal outcomes without a result fetch.
+
+Each outbound durable HTTP exchange has a 15-second upper bound. Retry delays are persisted and
+capped at 30 seconds, so neither a slow provider nor an unbounded `Retry-After` can turn one actor
+callback into another edge-length request.
+
+The typed `code_execute` request always carries `timeout_secs`. Its default is 180 seconds and its
+accepted range is 1 through 600 seconds; invalid values fail before network dispatch. Consequently,
+the greater-than-125-second canary does not depend on Chrono Sandbox's own omitted-field default.
+
+Every durable exchange goes through the public NyxID proxy rooted at
+`Aevatar:NyxId:ApiBaseUrl`. This path never reads `InternalApiBaseUrl` and never uses Aevatar's
+internal-to-public fallback. Receipt URL fields are treated as provider metadata: Aevatar builds
+status, result, and cancel paths from the validated provider operation ID and the already admitted
+NyxID proxy route instead of resolving a provider URL against the NyxID origin.
+
+The reconciliation rules are deliberately narrow:
+
+- `202` persists the receipt; `304` and active statuses reschedule a status read.
+- `429` and retryable `503` reschedule the same operation after the bounded retry delay.
+- A lost submit response may repeat `POST /executions` only with the same admitted operation key.
+  The legacy `/execute` request is never retried.
+- `409 IDEMPOTENCY_KEY_REUSE`, `410`, `cancelled`, and `outcome_uncertain` become typed terminal
+  outcomes. A result-side `409 OPERATION_NOT_TERMINAL` remains pending.
+- Once a provider operation ID is known, `404` is a terminal ownership/unknown-operation failure;
+  Aevatar does not submit a replacement execution.
+
+#### Stop cancellation and terminal audit recovery
+
+The first matching external `WorkflowStoppedEvent` or `WorkflowRunStoppedEvent` persists a
+two-minute absolute stop-cancellation deadline from the actor's UTC clock. Redelivery for the same
+run reuses that `expires_at_unix_ms`; it never restarts or extends the window. Every cancellation
+request carries the same absolute `DeadlineUnixMs`, not an ephemeral "already timed out" flag.
+
+The executor rechecks that deadline around the admission ledger, running audit, and provider
+boundaries. Once the deadline has elapsed it starts no new admission-ledger or provider operation
+and freezes `code_execution_cancel_outcome_uncertain` for audit convergence. If a provider cancel
+that was already in flight crosses the deadline and returns a real terminal outcome, that provider
+truth wins and is not replaced with uncertainty.
+
+When the provider outcome is terminal but the running or terminal audit cannot yet be written, the
+actor keeps the operation and stop intent, freezes a terminal audit intent, and enters the persisted
+`FinalizingAudit` phase. Activation and callback redelivery preserve that phase. They replay only
+the stable audit append from the frozen intent; they do not call the admission ledger, provider
+cancellation, tool classification, or tool receipt factory again.
+
+The frozen intent includes the generic terminal result plus an opaque typed tool-owned `Any`
+payload. That payload preserves the normalized full `AgentToolReceipt`, including subject and
+provider-resource evidence, together with outcome kind, failure stage, mutation and safety facts,
+failure fields, and terminal/retry flags. A frozen intent cannot be replaced by a different intent.
+The adapter validates the generic result against the tool-owned payload, and a later completed
+result that conflicts with either leaves the operation pending and the stop gated. Only a matching
+completed result with `AuditCompleted=true` settles cancellation; an ordinary non-retryable failed
+result is not audit proof.
+
+Before the deadline, the next callback is shortened to that absolute boundary. After the deadline,
+audit recovery continues with bounded backoff instead of hot-looping or silently abandoning the
+intent. A due or overdue cancellation callback uses a minimum positive 1 ms delay because the
+durable scheduler rejects zero; an actual scheduler failure falls back to a typed self-continuation.
+
+Audit idempotency compares the durable business fact rather than callback delivery tracing.
+`trace_id`, `span_id`, `traceparent`, and `tracestate`, like occurrence and recording timestamps, do
+not participate in semantic duplicate comparison. The persisted content hash retains its existing
+timestamp-insensitive algorithm for rolling-upgrade compatibility. Request, call, workflow,
+approval, correlation, and causation identities still participate in duplicate comparison: a
+trace-only retry is a duplicate, while changed business correlation remains a conflict.
+
+Durable provider adapter logs may contain bounded status categories and local diagnostic IDs, but
+never source code, bearer tokens, raw idempotency keys, route identities, or UserService IDs.
+
+Production enablement is gated on all four async routes being live through the public NyxID proxy,
+the Chrono Sandbox async execution backend being enabled, and NyxID preserving status plus
+`Location`, `ETag`, and `Retry-After`. The public canary must prove a program running longer than 125
+seconds completes through short submit/status/result exchanges without a `524`, including same-key
+submit convergence and cancel behavior.
+
+The current deployment uses Chrono Sandbox's single-replica ephemeral operation store. This is
+sufficient to decouple a running execution from the public request timeout, but it is explicitly a
+temporary backend: a sandbox process restart loses operations and retained results, and another
+replica cannot serve an operation it does not own. Until a persistent shared backend is deployed and
+the same canary is repeated across restart and replicas, this integration must not claim provider
+crash durability, retained-result durability, or cross-node owner isolation.
+
 The selector and accepted credential contract are private to the platform `code_execute` route.
 They do not filter connected services, `nyxid_proxy`, explicit external-capability selections, LLM
 routes, or managed `codex_exec`. Other capabilities may use the same generic convergence mechanism

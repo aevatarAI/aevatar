@@ -118,6 +118,7 @@ check_code_execution_nyxid_route_boundary() {
   local parser_files
 
   expected_files="$(printf '%s\n' \
+    'src/Aevatar.AI.Infrastructure.ChronoSandbox/NyxIdCodeExecutionPort.Durable.cs' \
     'src/Aevatar.AI.Infrastructure.ChronoSandbox/NyxIdCodeExecutionPort.cs' \
     'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRoutePolicyReconciler.cs' \
     'src/Aevatar.AI.ToolProviders.NyxId/NyxIdCodeExecutionRouteResolver.cs' \

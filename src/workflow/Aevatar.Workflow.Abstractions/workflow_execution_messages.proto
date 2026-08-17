@@ -1337,6 +1337,60 @@ message WorkflowToolCallAttemptFailureOutcome
   string error_message = 3;
   bool terminal_invoked = 4;
   bool retryable = 5;
+  WorkflowStepFailureOutcome failure_outcome = 6;
+}
+
+enum WorkflowToolCallAttemptPendingOperationStatus
+{
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_SUBMISSION_UNCERTAIN = 1;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_QUEUED = 2;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_PROVISIONING = 3;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_PREPARING = 4;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_RUNNING = 5;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_COLLECTING = 6;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_SUCCEEDED = 7;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_FAILED = 8;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_CANCELLED = 9;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_STATUS_OUTCOME_UNCERTAIN = 10;
+}
+
+enum WorkflowToolCallAttemptPendingOperationRouteIdentitySource
+{
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_CODE_EXECUTION_CONTRACT = 1;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_NYX_ID_USER_SERVICE_CATALOG = 2;
+  WORKFLOW_TOOL_CALL_ATTEMPT_PENDING_OPERATION_ROUTE_IDENTITY_SOURCE_WORKFLOW_CAPABILITY_ADMISSION = 3;
+}
+
+message WorkflowToolCallAttemptPendingOperationOutcome
+{
+  string operation_id = 1;
+  string provider_operation_id = 2;
+  string status_path = 3;
+  string result_path = 4;
+  string cancel_path = 5;
+  WorkflowToolCallAttemptPendingOperationStatus status = 6;
+  string etag = 7;
+  int64 retry_after_milliseconds = 8;
+  int64 expires_at_unix_ms = 9;
+  string service_slug = 10;
+  string user_service_id = 11;
+  WorkflowToolCallAttemptPendingOperationRouteIdentitySource route_identity_source = 12;
+  WorkflowToolCallAttemptCancellationRecoveryIntent cancellation_recovery_intent = 13;
+}
+
+message WorkflowToolCallAttemptCancellationRecoveryIntent
+{
+  string result_json = 1;
+  bool has_failure = 2;
+  string failure_code = 3;
+  string safe_message = 4;
+  bool terminal_invoked = 5;
+  bool retryable = 6;
+  google.protobuf.Any tool_owned_audit_intent = 7;
+  WorkflowStepFailureOutcome failure_outcome = 8;
+  string arguments_sha256 = 9;
 }
 
 // Internal self-signal emitted only after the provider response has crossed its
@@ -1353,6 +1407,7 @@ message WorkflowToolCallAttemptCompletedEvent
     WorkflowToolCallAttemptSuccessOutcome success = 6;
     WorkflowToolCallAttemptApprovalRequiredOutcome approval_required = 7;
     WorkflowToolCallAttemptFailureOutcome failure = 8;
+    WorkflowToolCallAttemptPendingOperationOutcome pending_operation = 10;
   }
   string continuation_id = 9;
 }

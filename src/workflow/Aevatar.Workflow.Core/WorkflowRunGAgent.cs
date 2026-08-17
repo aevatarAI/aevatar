@@ -544,10 +544,7 @@ public sealed partial class WorkflowRunGAgent
             {
                 Logger.LogWarning(
                     scheduleException,
-                    "Workflow tool publication recovery scheduling failed; falling back to a typed self continuation. actor={ActorId} run={RunId} step={StepId} kind={PublicationKind}",
-                    Id,
-                    retry.RunId,
-                    retry.StepId,
+                    "Workflow tool publication recovery scheduling failed; falling back to a typed self continuation. kind={PublicationKind}",
                     retry.PublicationKind);
                 try
                 {
@@ -568,6 +565,152 @@ public sealed partial class WorkflowRunGAgent
                         continuationException);
                 }
             }
+        }
+
+        if (state.StopCancellation != null)
+        {
+            var pendingCancellations = ToolCallModule.PreparePendingStopCancellationRecoveries(
+                state,
+                _timeProvider.GetUtcNow(),
+                out var cancellationStateChanged);
+            if (cancellationStateChanged)
+            {
+                await UpsertExecutionStateAsync(
+                    ToolCallModule.ModuleStateKey,
+                    Any.Pack(state),
+                    ct);
+            }
+
+            if (pendingCancellations.Count == 0)
+            {
+                await PublishPendingToolStopReleaseAsync(state, ct);
+                return;
+            }
+
+            foreach (var pending in pendingCancellations)
+            {
+                try
+                {
+                    await ScheduleSelfDurableTimeoutAsync(
+                        pending.StopCancellationCallbackId,
+                        ToolCallModule.BuildStopCancellationDelay(
+                            pending,
+                            _timeProvider.GetUtcNow(),
+                            state.StopCancellation.ExpiresAtUnixMs),
+                        ToolCallModule.BuildStopCancellationEvent(pending),
+                        ToolCallModule.BuildStopCancellationOptions(pending),
+                        ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception scheduleException)
+                {
+                    Logger.LogWarning(
+                        "Durable workflow tool stop cancellation recovery scheduling failed; falling back to a typed self continuation. exceptionType={ExceptionType}",
+                        scheduleException.GetType().Name);
+                    try
+                    {
+                        await PublishAsync(
+                            ToolCallModule.BuildStopCancellationEvent(pending),
+                            TopologyAudience.Self,
+                            ct,
+                            ToolCallModule.BuildStopCancellationOptions(pending));
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception continuationException)
+                    {
+                        throw new WorkflowDurablePublicationPendingException(
+                            "Durable workflow tool stop cancellation remains pending during activation.",
+                            continuationException);
+                    }
+                }
+            }
+
+            return;
+        }
+
+        if (IsTerminalStatus(State.Status))
+            return;
+
+        var pendingOperations = ToolCallModule.PreparePendingOperationPollRecoveries(
+            state,
+            _timeProvider.GetUtcNow(),
+            out var stateChanged);
+        if (stateChanged)
+        {
+            await UpsertExecutionStateAsync(
+                ToolCallModule.ModuleStateKey,
+                Any.Pack(state),
+                ct);
+        }
+
+        foreach (var pending in pendingOperations)
+        {
+            try
+            {
+                await ScheduleSelfDurableTimeoutAsync(
+                    pending.PollCallbackId,
+                    ToolCallModule.BuildOperationPollDelay(pending, _timeProvider.GetUtcNow()),
+                    ToolCallModule.BuildOperationPollEvent(pending),
+                    ToolCallModule.BuildOperationPollOptions(pending),
+                    ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception scheduleException)
+            {
+                Logger.LogWarning(
+                    "Durable workflow tool poll recovery scheduling failed; falling back to a typed self continuation. exceptionType={ExceptionType}",
+                    scheduleException.GetType().Name);
+                try
+                {
+                    await PublishAsync(
+                        ToolCallModule.BuildOperationPollEvent(pending),
+                        TopologyAudience.Self,
+                        ct,
+                        ToolCallModule.BuildOperationPollOptions(pending));
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception continuationException)
+                {
+                    throw new WorkflowDurablePublicationPendingException(
+                        "Durable workflow tool poll recovery remains pending during activation.",
+                        continuationException);
+                }
+            }
+        }
+    }
+
+    private async Task PublishPendingToolStopReleaseAsync(
+        ToolCallModuleState state,
+        CancellationToken ct)
+    {
+        switch (ToolCallModule.BuildPendingStopReleaseEvent(state))
+        {
+            case WorkflowStoppedEvent workflowStopped:
+                await PublishAsync(workflowStopped, TopologyAudience.Self, ct);
+                break;
+            case WorkflowRunStoppedEvent workflowRunStopped:
+                await PublishAsync(workflowRunStopped, TopologyAudience.Self, ct);
+                break;
+            default:
+                var stopKind = state.StopCancellation == null
+                    ? "missing"
+                    : ((int)state.StopCancellation.StopKind).ToString(CultureInfo.InvariantCulture);
+                throw new WorkflowDurablePublicationPendingException(
+                    $"Persisted workflow tool stop release has unsupported stop kind '{stopKind}' during activation.",
+                    new InvalidOperationException(
+                        "Persisted workflow tool stop cancellation has no releasable stop event."));
         }
     }
 
@@ -842,6 +985,7 @@ public sealed partial class WorkflowRunGAgent
         var references = toolState.PendingApprovals.Values
             .Select(static pending => pending.ProtectedMaterialReference)
             .Concat(toolState.PendingExecutions.Values.Select(static pending => pending.ProtectedMaterialReference))
+            .Concat(toolState.PendingOperations.Values.Select(static pending => pending.ProtectedMaterialReference))
             .Concat(toolState.Completions.Select(static completion => completion.ProtectedMaterialReference))
             .Where(static reference => reference != null && !string.IsNullOrWhiteSpace(reference.Ref))
             .GroupBy(static reference => reference!.Ref, StringComparer.Ordinal)
@@ -887,6 +1031,16 @@ public sealed partial class WorkflowRunGAgent
         }
 
         foreach (var pending in toolState.PendingExecutions.Values)
+        {
+            if (pending.ProtectedMaterialReference != null &&
+                revokedReferences.Contains(pending.ProtectedMaterialReference.Ref))
+            {
+                pending.ProtectedMaterialReference = null;
+                pending.ProtectedMaterialDigestSha256 = string.Empty;
+            }
+        }
+
+        foreach (var pending in toolState.PendingOperations.Values)
         {
             if (pending.ProtectedMaterialReference != null &&
                 revokedReferences.Contains(pending.ProtectedMaterialReference.Ref))
@@ -2510,7 +2664,7 @@ public sealed partial class WorkflowRunGAgent
             ct);
     }
 
-    [EventHandler]
+    [EventHandler(Priority = 50)]
     public async Task HandleWorkflowStopped(WorkflowStoppedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -2538,7 +2692,7 @@ public sealed partial class WorkflowRunGAgent
             CancellationToken.None);
     }
 
-    [EventHandler]
+    [EventHandler(Priority = 50)]
     public async Task HandleWorkflowRunStoppedAsync(WorkflowRunStoppedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
@@ -4178,7 +4332,9 @@ public sealed partial class WorkflowRunGAgent
         var toolState = packed.Unpack<ToolCallModuleState>();
         return toolState.PendingApprovals.Count > 0 ||
                toolState.PendingExecutions.Count > 0 ||
-               toolState.Completions.Count > 0;
+               toolState.PendingOperations.Count > 0 ||
+               toolState.Completions.Count > 0 ||
+               toolState.StopCancellation != null;
     }
 
     private string ResolveRequestedBindRunId(WorkflowRunState state, string? requestedRunId)
