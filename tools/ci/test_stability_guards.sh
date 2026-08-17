@@ -6,12 +6,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-export PATH="/opt/homebrew/opt/python@3.12/bin:${PATH}"
-
 allowlist_file="tools/ci/test_polling_allowlist.txt"
 
 run_guard_meta_tests() {
   bash "${SCRIPT_DIR}/test_coverage_file_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_python_entrypoint_portability.sh"
   bash "${SCRIPT_DIR}/tests/test_project_reference_layer_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_architecture_guards_enforces_layer_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_projection_document_reader_list_async_guard.sh"
@@ -22,7 +21,7 @@ run_guard_meta_tests() {
   bash "${SCRIPT_DIR}/tests/test_gagent_registry_kind_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_query_projection_priming_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_nyxid_chat_semantics_guard.sh"
-  python3.12 -m unittest tools/ci/tests/test_nyxid_semantic_evaluation.py
+  python3 -m unittest tools/ci/tests/test_nyxid_semantic_evaluation.py
 }
 
 if [[ ! -f "${allowlist_file}" ]]; then

@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import csv
-import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 import sys
+import xml.etree.ElementTree as ET
 
 
 RULE_ABSTRACTIONS_CONTRACTS_PURITY = "abstractions-contracts-purity"
@@ -84,17 +84,19 @@ def classify_project(name: str) -> str:
     return "Concrete"
 
 
-PROJECT_NAME_PATTERN = re.compile(r"<AssemblyName>(.*?)</AssemblyName>", re.IGNORECASE | re.DOTALL)
-PROJECT_REFERENCE_PATTERN = re.compile(r'<ProjectReference\b[^>]*\bInclude="([^"]+)"[^>]*/?>', re.IGNORECASE | re.DOTALL)
+def strip_xml_namespace(root: ET.Element) -> None:
+    for element in root.iter():
+        if "}" in element.tag:
+            element.tag = element.tag.rsplit("}", 1)[1]
 
 
 def read_project_name(path: Path) -> str:
-    text = path.read_text(encoding="utf-8")
-    match = PROJECT_NAME_PATTERN.search(text)
-    if match:
-        assembly_name = match.group(1).strip()
-        if assembly_name:
-            return assembly_name
+    tree = ET.parse(path)
+    root = tree.getroot()
+    strip_xml_namespace(root)
+    assembly_name = root.findtext(".//AssemblyName")
+    if assembly_name and assembly_name.strip():
+        return assembly_name.strip()
     return path.stem
 
 
@@ -126,10 +128,12 @@ def load_projects(root: Path) -> dict[Path, Project]:
 
 
 def iter_project_references(project_path: Path) -> list[Path]:
-    text = project_path.read_text(encoding="utf-8")
+    tree = ET.parse(project_path)
+    root = tree.getroot()
+    strip_xml_namespace(root)
     references: list[Path] = []
-    for match in PROJECT_REFERENCE_PATTERN.finditer(text):
-        include = match.group(1).strip()
+    for item in root.findall(".//ProjectReference"):
+        include = item.attrib.get("Include")
         if not include:
             continue
         include = include.replace("\\", "/")

@@ -67,13 +67,13 @@ write_allowlist "${expired_allowlist}" \
 write_allowlist "${forbidden_allowlist}" \
   $'Aevatar.GAgents.Channel.Abstractions\tAevatar.CQRS.Projection.Core\tabstractions-contracts-purity\t#9999\t2099-12-31\tmust not hide acceptance edge'
 
-python3.12 "${GUARD}" --root "${FIXTURES}/compliant" --allowlist "${empty_allowlist}"
+python3 "${GUARD}" --root "${FIXTURES}/compliant" --allowlist "${empty_allowlist}"
 
 assert_fails_with \
   "abstractions-contracts-purity" \
-  python3.12 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${empty_allowlist}"
+  python3 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${empty_allowlist}"
 
-python3.12 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${empty_allowlist}" --mode report > "${report_output}" 2>&1
+python3 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${empty_allowlist}" --mode report > "${report_output}" 2>&1
 if ! rg -q "WARNING report-only" "${report_output}"; then
   echo "Expected report-mode run to print report-only warnings."
   cat "${report_output}"
@@ -87,21 +87,21 @@ fi
 
 assert_fails_with \
   "expected 6 tab-separated fields" \
-  python3.12 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${missing_field_allowlist}"
+  python3 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${missing_field_allowlist}"
 
 assert_fails_with \
   "duplicate allowlist entry" \
-  python3.12 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${duplicate_allowlist}"
+  python3 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${duplicate_allowlist}"
 
 assert_fails_with \
   "allowlist entry is expired" \
-  python3.12 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${expired_allowlist}"
+  python3 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${expired_allowlist}"
 
 assert_fails_with \
   "must not be allowlisted" \
-  python3.12 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${forbidden_allowlist}"
+  python3 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${forbidden_allowlist}"
 
-python3.12 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${valid_allowlist}" > "${warning_output}" 2>&1
+python3 "${GUARD}" --root "${FIXTURES}/violating" --allowlist "${valid_allowlist}" > "${warning_output}" 2>&1
 if ! rg -q "WARNING allowlisted" "${warning_output}"; then
   echo "Expected complete allowlist run to print warnings."
   cat "${warning_output}"
