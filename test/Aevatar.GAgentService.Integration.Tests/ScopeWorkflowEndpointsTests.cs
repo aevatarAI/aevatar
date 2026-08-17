@@ -829,6 +829,29 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleQueryWorkflowCatalogueAsync_ShouldParseDefaultAndArchivedViews()
+    {
+        var http = CreateHttpContext();
+        var catalogueService = new RecordingWorkflowCatalogueService();
+
+        var result = await ScopeWorkflowEndpoints.HandleQueryWorkflowCatalogueAsync(
+            http,
+            "user-1",
+            view: "archived",
+            query: null,
+            cursor: null,
+            take: null,
+            catalogueService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        catalogueService.Query.Should().NotBeNull();
+        catalogueService.Query!.View.Should().Be(ScopeWorkflowCatalogueView.Archived);
+    }
+
+    [Fact]
     public async Task HandleQueryWorkflowCatalogueAsync_ShouldUseDefaultTakeWhenQueryOmitsTake()
     {
         var http = CreateHttpContext();
@@ -848,7 +871,32 @@ public sealed class ScopeWorkflowEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         catalogueService.Query.Should().NotBeNull();
+        catalogueService.Query!.View.Should().Be(ScopeWorkflowCatalogueView.All);
         catalogueService.Query!.Take.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleQueryWorkflowCatalogueAsync_ShouldRejectInvalidViewWithArchivedHint()
+    {
+        var http = CreateHttpContext();
+        var catalogueService = new RecordingWorkflowCatalogueService();
+
+        var result = await ScopeWorkflowEndpoints.HandleQueryWorkflowCatalogueAsync(
+            http,
+            "user-1",
+            view: "historic",
+            query: null,
+            cursor: null,
+            take: null,
+            catalogueService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("view must be either 'all', 'drafts', or 'archived'.");
+        catalogueService.Query.Should().BeNull();
     }
 
     [Fact]

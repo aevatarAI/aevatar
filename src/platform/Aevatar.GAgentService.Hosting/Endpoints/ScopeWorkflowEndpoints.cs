@@ -514,7 +514,7 @@ public static class ScopeWorkflowEndpoints
                 return Results.BadRequest(new
                 {
                     code = "INVALID_WORKFLOW_CATALOGUE_REQUEST",
-                    message = "view must be either 'all' or 'drafts'.",
+                    message = "view must be either 'all', 'drafts', or 'archived'.",
                 });
             }
 
@@ -949,6 +949,12 @@ public static class ScopeWorkflowEndpoints
         if (string.Equals(rawValue, "drafts", StringComparison.OrdinalIgnoreCase))
         {
             view = ScopeWorkflowCatalogueView.Drafts;
+            return true;
+        }
+
+        if (string.Equals(rawValue, "archived", StringComparison.OrdinalIgnoreCase))
+        {
+            view = ScopeWorkflowCatalogueView.Archived;
             return true;
         }
 

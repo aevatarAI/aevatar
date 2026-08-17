@@ -18,6 +18,7 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
 {
     private readonly IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> _revisionCatalogReader;
     private readonly IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> _deploymentCatalogReader;
+    private readonly IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> _catalogueSourceReader;
     private readonly IProjectionWriteDispatcher<ScopeWorkflowCatalogueSourceDocument> _catalogueWriteDispatcher;
     private readonly ScopeWorkflowCatalogueRowMaterializer _catalogueRowMaterializer;
     private readonly IProjectionClock _clock;
@@ -25,12 +26,14 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
     public ScopeWorkflowCatalogueServiceSourceProjector(
         IProjectionDocumentReader<ServiceRevisionCatalogReadModel, string> revisionCatalogReader,
         IProjectionDocumentReader<ServiceDeploymentCatalogReadModel, string> deploymentCatalogReader,
+        IProjectionDocumentReader<ScopeWorkflowCatalogueSourceDocument, string> catalogueSourceReader,
         IProjectionWriteDispatcher<ScopeWorkflowCatalogueSourceDocument> catalogueWriteDispatcher,
         ScopeWorkflowCatalogueRowMaterializer catalogueRowMaterializer,
         IProjectionClock clock)
     {
         _revisionCatalogReader = revisionCatalogReader ?? throw new ArgumentNullException(nameof(revisionCatalogReader));
         _deploymentCatalogReader = deploymentCatalogReader ?? throw new ArgumentNullException(nameof(deploymentCatalogReader));
+        _catalogueSourceReader = catalogueSourceReader ?? throw new ArgumentNullException(nameof(catalogueSourceReader));
         _catalogueWriteDispatcher = catalogueWriteDispatcher ?? throw new ArgumentNullException(nameof(catalogueWriteDispatcher));
         _catalogueRowMaterializer = catalogueRowMaterializer ?? throw new ArgumentNullException(nameof(catalogueRowMaterializer));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
@@ -63,8 +66,8 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         }
 
         var revisionCatalog = await _revisionCatalogReader.GetAsync(serviceKey, ct);
-        var activeDeployment = ResolveActiveDeployment(state.Deployments.Values);
-        await MaterializeAsync(state.Identity, serviceKey, revisionCatalog, activeDeployment, eventId, observedAt, ct);
+        var catalogueVisibleDeployment = ResolveCatalogueVisibleDeployment(state.Deployments.Values);
+        await MaterializeAsync(state.Identity, serviceKey, revisionCatalog, catalogueVisibleDeployment, eventId, observedAt, ct);
     }
 
     public async ValueTask ProjectRevisionCatalogAsync(
@@ -92,7 +95,7 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
             return;
 
         var deploymentCatalog = await _deploymentCatalogReader.GetAsync(serviceKey, ct);
-        var activeDeployment = ResolveActiveDeployment(deploymentCatalog?.Deployments);
+        var catalogueVisibleDeployment = ResolveCatalogueVisibleDeployment(deploymentCatalog?.Deployments);
         var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         var revisionCatalog = ToRevisionCatalogReadModel(
             context,
@@ -105,7 +108,7 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
             state.Identity,
             serviceKey,
             revisionCatalog,
-            activeDeployment,
+            catalogueVisibleDeployment,
             stateEvent.EventId ?? string.Empty,
             observedAt,
             ct);
@@ -115,33 +118,38 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         ServiceIdentity identity,
         string serviceKey,
         ServiceRevisionCatalogReadModel? revisionCatalog,
-        ServiceDeploymentRecord? activeDeployment,
+        ServiceDeploymentRecord? catalogueVisibleDeployment,
         string eventId,
         DateTimeOffset observedAt,
         CancellationToken ct)
     {
-        if (activeDeployment == null)
+        if (catalogueVisibleDeployment == null)
         {
-            await DeleteInactiveWorkflowSourcesAsync(identity, revisionCatalog, null, eventId, observedAt, ct);
+            await DeleteNonVisibleWorkflowSourcesAsync(identity, revisionCatalog, null, eventId, observedAt, ct);
             return;
         }
 
-        if (!TryResolveWorkflowRevision(revisionCatalog, activeDeployment.RevisionId, identity.ServiceId, out var revision, out var workflowId))
+        if (!TryResolveWorkflowRevision(revisionCatalog, catalogueVisibleDeployment.RevisionId, identity.ServiceId, out var revision, out var workflowId))
         {
-            await DeleteInactiveWorkflowSourcesAsync(identity, revisionCatalog, null, eventId, observedAt, ct);
+            await DeleteNonVisibleWorkflowSourcesAsync(identity, revisionCatalog, null, eventId, observedAt, ct);
             return;
         }
 
-        await _catalogueWriteDispatcher.UpsertAsync(
-            ToCatalogueServiceSource(identity, serviceKey, workflowId, revision, activeDeployment, eventId, observedAt),
+        var serviceSource = await PrepareServiceSourceAsync(
+            ToCatalogueServiceSource(identity, serviceKey, workflowId, revision, catalogueVisibleDeployment, eventId, observedAt),
             ct);
-        await _catalogueRowMaterializer.RefreshAsync(
-            identity.TenantId,
-            workflowId,
-            eventId,
-            observedAt,
-            ct);
-        await DeleteInactiveWorkflowSourcesAsync(identity, revisionCatalog, workflowId, eventId, observedAt, ct);
+        var shouldUpsert = !await ShouldSkipDeactivatedServiceSourceAsync(serviceSource, ct);
+        if (shouldUpsert)
+        {
+            await _catalogueWriteDispatcher.UpsertAsync(serviceSource, ct);
+            await _catalogueRowMaterializer.RefreshAsync(
+                identity.TenantId,
+                workflowId,
+                eventId,
+                observedAt,
+                ct);
+        }
+        await DeleteNonVisibleWorkflowSourcesAsync(identity, revisionCatalog, workflowId, eventId, observedAt, ct);
     }
 
     private bool TryGetObservedState(
@@ -171,27 +179,92 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
         return true;
     }
 
-    private static ServiceDeploymentRecord? ResolveActiveDeployment(IEnumerable<ServiceDeploymentRecord>? deployments) =>
-        deployments?
-            .Where(static deployment => deployment.Status == ServiceDeploymentStatus.Active)
+    private static ServiceDeploymentRecord? ResolveCatalogueVisibleDeployment(IEnumerable<ServiceDeploymentRecord>? deployments)
+    {
+        if (deployments == null)
+            return null;
+
+        var eligibleDeployments = deployments
+            .Where(static deployment =>
+                deployment.Status is ServiceDeploymentStatus.Active or ServiceDeploymentStatus.Deactivated)
+            .ToArray();
+
+        return ResolveLatestDeployment(eligibleDeployments, ServiceDeploymentStatus.Active) ??
+               ResolveLatestDeployment(eligibleDeployments, ServiceDeploymentStatus.Deactivated);
+    }
+
+    private static ServiceDeploymentRecord? ResolveCatalogueVisibleDeployment(IEnumerable<ServiceDeploymentReadModel>? deployments)
+    {
+        if (deployments == null)
+            return null;
+
+        var eligibleDeployments = deployments
+            .Where(static deployment =>
+                string.Equals(deployment.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal) ||
+                string.Equals(deployment.Status, ServiceDeploymentStatus.Deactivated.ToString(), StringComparison.Ordinal))
+            .ToArray();
+
+        return ResolveLatestDeployment(eligibleDeployments, ServiceDeploymentStatus.Active) ??
+               ResolveLatestDeployment(eligibleDeployments, ServiceDeploymentStatus.Deactivated);
+    }
+
+    private static ServiceDeploymentRecord? ResolveLatestDeployment(
+        IEnumerable<ServiceDeploymentRecord> deployments,
+        ServiceDeploymentStatus status) =>
+        deployments
+            .Where(deployment => deployment.Status == status)
             .OrderByDescending(static deployment => deployment.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch)
             .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
             .FirstOrDefault();
 
-    private static ServiceDeploymentRecord? ResolveActiveDeployment(IEnumerable<ServiceDeploymentReadModel>? deployments) =>
-        deployments?
-            .Where(static deployment => string.Equals(deployment.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal))
+    private static ServiceDeploymentRecord? ResolveLatestDeployment(
+        IEnumerable<ServiceDeploymentReadModel> deployments,
+        ServiceDeploymentStatus status) =>
+        deployments
+            .Where(deployment => string.Equals(deployment.Status, status.ToString(), StringComparison.Ordinal))
             .OrderByDescending(static deployment => deployment.UpdatedAt)
             .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
-            .Select(static deployment => new ServiceDeploymentRecord
+            .Select(deployment => new ServiceDeploymentRecord
             {
                 DeploymentId = deployment.DeploymentId,
                 RevisionId = deployment.RevisionId,
                 PrimaryActorId = deployment.PrimaryActorId,
-                Status = ServiceDeploymentStatus.Active,
+                Status = status,
                 UpdatedAt = Timestamp.FromDateTimeOffset(deployment.UpdatedAt),
             })
             .FirstOrDefault();
+
+    private async Task<bool> ShouldSkipDeactivatedServiceSourceAsync(
+        ScopeWorkflowCatalogueSourceDocument serviceSource,
+        CancellationToken ct)
+    {
+        if (!string.Equals(serviceSource.DeploymentStatus, ServiceDeploymentStatus.Deactivated.ToString(), StringComparison.Ordinal))
+            return false;
+
+        var existingSource = await _catalogueSourceReader.GetAsync(serviceSource.Id, ct);
+        return existingSource != null &&
+               string.Equals(existingSource.DeploymentStatus, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal) &&
+               !string.Equals(existingSource.PublishedServiceId, serviceSource.PublishedServiceId, StringComparison.Ordinal);
+    }
+
+    private async Task<ScopeWorkflowCatalogueSourceDocument> PrepareServiceSourceAsync(
+        ScopeWorkflowCatalogueSourceDocument serviceSource,
+        CancellationToken ct)
+    {
+        if (!string.Equals(serviceSource.DeploymentStatus, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal))
+            return serviceSource;
+
+        var existingSource = await _catalogueSourceReader.GetAsync(serviceSource.Id, ct);
+        if (existingSource == null ||
+            !string.Equals(existingSource.DeploymentStatus, ServiceDeploymentStatus.Deactivated.ToString(), StringComparison.Ordinal) ||
+            string.Equals(existingSource.PublishedServiceId, serviceSource.PublishedServiceId, StringComparison.Ordinal))
+        {
+            return serviceSource;
+        }
+
+        serviceSource.StateVersion = Math.Max(serviceSource.StateVersion, NextStateVersion(existingSource.StateVersion));
+        return serviceSource;
+    }
 
     private static ServiceRevisionCatalogReadModel ToRevisionCatalogReadModel(
         ServiceRevisionCatalogProjectionContext context,
@@ -218,24 +291,29 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
                 .ToList(),
         };
 
-    private async Task DeleteInactiveWorkflowSourcesAsync(
+    private async Task DeleteNonVisibleWorkflowSourcesAsync(
         ServiceIdentity identity,
         ServiceRevisionCatalogReadModel? revisionCatalog,
-        string? activeWorkflowId,
+        string? catalogueVisibleWorkflowId,
         string eventId,
         DateTimeOffset observedAt,
         CancellationToken ct)
     {
         foreach (var workflowId in ResolveWorkflowIds(revisionCatalog, identity.ServiceId))
         {
-            if (string.Equals(workflowId, activeWorkflowId, StringComparison.Ordinal))
+            if (string.Equals(workflowId, catalogueVisibleWorkflowId, StringComparison.Ordinal))
+                continue;
+
+            var sourceId = ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceDocumentId(identity.TenantId, workflowId);
+            var existingSource = await _catalogueSourceReader.GetAsync(sourceId, ct);
+            if (ShouldSkipServiceSourceDelete(existingSource, identity.ServiceId))
                 continue;
 
             await _catalogueWriteDispatcher.DeleteAsync(
                 new ProjectionDocumentDeleteMarker(
-                    ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceDocumentId(identity.TenantId, workflowId),
+                    sourceId,
                     ScopeWorkflowCatalogueRowMaterializer.BuildServiceSourceActorId(identity.TenantId, workflowId),
-                    ScopeWorkflowCatalogueRowMaterializer.BuildSourceDeleteStateVersion(observedAt),
+                    ResolveSourceDeleteStateVersion(existingSource, observedAt),
                     eventId,
                     observedAt),
                 ct);
@@ -247,6 +325,23 @@ internal sealed class ScopeWorkflowCatalogueServiceSourceProjector
                 ct);
         }
     }
+
+    private static bool ShouldSkipServiceSourceDelete(
+        ScopeWorkflowCatalogueSourceDocument? existingSource,
+        string publishedServiceId) =>
+        existingSource != null &&
+        string.Equals(existingSource.DeploymentStatus, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal) &&
+        !string.Equals(existingSource.PublishedServiceId, publishedServiceId, StringComparison.Ordinal);
+
+    private static long ResolveSourceDeleteStateVersion(
+        ScopeWorkflowCatalogueSourceDocument? existingSource,
+        DateTimeOffset observedAt) =>
+        Math.Max(
+            existingSource == null ? 0 : NextStateVersion(existingSource.StateVersion),
+            ScopeWorkflowCatalogueRowMaterializer.BuildSourceDeleteStateVersion(observedAt));
+
+    private static long NextStateVersion(long stateVersion) =>
+        stateVersion == long.MaxValue ? long.MaxValue : stateVersion + 1;
 
     private static IReadOnlyList<string> ResolveWorkflowIds(
         ServiceRevisionCatalogReadModel? revisionCatalog,
