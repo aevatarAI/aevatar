@@ -19,6 +19,32 @@ public static class RuntimeFleetCapabilityAdmissionValidation
         RuntimeActorStateMigrationAdmissionOptions? options = null,
         CancellationToken ct = default)
     {
+        var grant = await GetGrantedAdmissionAsync(
+            requiredCapability,
+            requiredContractId,
+            requiredReaderContractVersion,
+            admissionReader,
+            membershipReader,
+            timeProvider,
+            options,
+            ct);
+        return grant != null;
+    }
+
+    /// <summary>
+    /// Reads and validates one fleet proof against one local membership
+    /// identity, returning the exact validated snapshot for durable consumers.
+    /// </summary>
+    public static async Task<RuntimeFleetCapabilityAdmissionGrant?> GetGrantedAdmissionAsync(
+        RuntimeFleetCapability requiredCapability,
+        string requiredContractId,
+        int requiredReaderContractVersion,
+        IRuntimeFleetCapabilityAdmissionReader admissionReader,
+        IRuntimeLocalMembershipIdentityReader membershipReader,
+        TimeProvider? timeProvider = null,
+        RuntimeActorStateMigrationAdmissionOptions? options = null,
+        CancellationToken ct = default)
+    {
         ArgumentNullException.ThrowIfNull(admissionReader);
         ArgumentNullException.ThrowIfNull(membershipReader);
         ValidateRequirement(requiredCapability, requiredContractId, requiredReaderContractVersion);
@@ -26,17 +52,27 @@ public static class RuntimeFleetCapabilityAdmissionValidation
 
         var localMembership = await membershipReader.GetCurrentAsync(ct);
         if (!IsValidLocalMembership(localMembership))
-            return false;
+            return null;
 
-        var admission = await admissionReader.GetAsync(requiredCapability, ct);
-        return IsGranted(
-            admission,
+        var admission = (await admissionReader.GetAsync(requiredCapability, ct))?.Clone();
+        var validatedAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        if (!IsGranted(
+                admission,
+                requiredCapability,
+                requiredContractId,
+                requiredReaderContractVersion,
+                localMembership!,
+                validatedAt,
+                options ?? new RuntimeActorStateMigrationAdmissionOptions()))
+        {
+            return null;
+        }
+
+        return new RuntimeFleetCapabilityAdmissionGrant(
             requiredCapability,
-            requiredContractId,
-            requiredReaderContractVersion,
+            admission!,
             localMembership!,
-            (timeProvider ?? TimeProvider.System).GetUtcNow(),
-            options ?? new RuntimeActorStateMigrationAdmissionOptions());
+            validatedAt);
     }
 
     internal static bool IsValidLocalMembership(RuntimeLocalMembershipIdentity? membership) =>
@@ -140,4 +176,39 @@ public static class RuntimeFleetCapabilityAdmissionValidation
             throw new ArgumentException("A live fleet admission check requires an exact versioned capability contract.");
         }
     }
+}
+
+/// <summary>
+/// A point-in-time fleet capability grant produced from one admission and
+/// local membership read. It is evidence for the validated instant, not a
+/// perpetual grant after membership, authority, or freshness changes.
+/// </summary>
+public sealed class RuntimeFleetCapabilityAdmissionGrant
+{
+    private readonly RuntimeFleetCapabilityAdmission _admission;
+
+    internal RuntimeFleetCapabilityAdmissionGrant(
+        RuntimeFleetCapability capability,
+        RuntimeFleetCapabilityAdmission admission,
+        RuntimeLocalMembershipIdentity localMembership,
+        DateTimeOffset validatedAt)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+        ArgumentNullException.ThrowIfNull(localMembership);
+        Capability = capability;
+        _admission = admission;
+        LocalMembership = localMembership;
+        ValidatedAt = validatedAt;
+    }
+
+    public RuntimeFleetCapability Capability { get; }
+
+    /// <summary>
+    /// Returns a defensive copy of the proof that passed validation.
+    /// </summary>
+    public RuntimeFleetCapabilityAdmission Admission => _admission.Clone();
+
+    public RuntimeLocalMembershipIdentity LocalMembership { get; }
+
+    public DateTimeOffset ValidatedAt { get; }
 }

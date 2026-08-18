@@ -19,6 +19,56 @@ public sealed class RuntimeFleetCapabilityAdmissionValidationTests
         granted.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task GetGrantedAdmissionAsync_WhenProofAndMembershipAreExact_ShouldReturnSingleReadSnapshot()
+    {
+        var sourceAdmission = CreateAdmission();
+        var membership = CurrentMembership();
+        var admissionReader = new RecordingAdmissionReader(sourceAdmission);
+        var membershipReader = new RecordingMembershipReader(membership);
+
+        var grant = await RuntimeFleetCapabilityAdmissionValidation.GetGrantedAdmissionAsync(
+            RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            ContractId,
+            1,
+            admissionReader,
+            membershipReader,
+            new FixedTimeProvider(Now));
+
+        grant.Should().NotBeNull();
+        grant!.Capability.Should().Be(RuntimeFleetCapability.WorkflowNormalizedStateWritesV1);
+        grant.LocalMembership.Should().Be(membership);
+        grant.ValidatedAt.Should().Be(Now);
+        admissionReader.ReadCount.Should().Be(1);
+        membershipReader.ReadCount.Should().Be(1);
+
+        var returnedAdmission = grant.Admission;
+        returnedAdmission.Should().NotBeSameAs(sourceAdmission);
+        returnedAdmission.AuthorityStateVersion.Should().Be(9);
+        sourceAdmission.AuthorityStateVersion = 0;
+        returnedAdmission.ContractId = "caller-mutated";
+
+        grant.Admission.AuthorityStateVersion.Should().Be(9);
+        grant.Admission.ContractId.Should().Be(ContractId);
+    }
+
+    [Fact]
+    public async Task GetGrantedAdmissionAsync_WhenProofIsNotLive_ShouldReturnNull()
+    {
+        var admission = CreateAdmission();
+        admission.MembershipValidUntil = Timestamp.FromDateTimeOffset(Now);
+
+        var grant = await RuntimeFleetCapabilityAdmissionValidation.GetGrantedAdmissionAsync(
+            RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            ContractId,
+            1,
+            new StubAdmissionReader(admission),
+            new StubMembershipReader(CurrentMembership()),
+            new FixedTimeProvider(Now));
+
+        grant.Should().BeNull();
+    }
+
     [Theory]
     [InlineData(InvalidAdmissionCase.Revoked)]
     [InlineData(InvalidAdmissionCase.Stale)]
@@ -184,12 +234,40 @@ public sealed class RuntimeFleetCapabilityAdmissionValidationTests
         }
     }
 
+    private sealed class RecordingAdmissionReader(RuntimeFleetCapabilityAdmission admission)
+        : IRuntimeFleetCapabilityAdmissionReader
+    {
+        public int ReadCount { get; private set; }
+
+        public Task<RuntimeFleetCapabilityAdmission?> GetAsync(
+            RuntimeFleetCapability capability,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ReadCount++;
+            return Task.FromResult<RuntimeFleetCapabilityAdmission?>(admission);
+        }
+    }
+
     private sealed class StubMembershipReader(RuntimeLocalMembershipIdentity membership)
         : IRuntimeLocalMembershipIdentityReader
     {
         public ValueTask<RuntimeLocalMembershipIdentity?> GetCurrentAsync(CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<RuntimeLocalMembershipIdentity?>(membership);
+        }
+    }
+
+    private sealed class RecordingMembershipReader(RuntimeLocalMembershipIdentity membership)
+        : IRuntimeLocalMembershipIdentityReader
+    {
+        public int ReadCount { get; private set; }
+
+        public ValueTask<RuntimeLocalMembershipIdentity?> GetCurrentAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ReadCount++;
             return ValueTask.FromResult<RuntimeLocalMembershipIdentity?>(membership);
         }
     }

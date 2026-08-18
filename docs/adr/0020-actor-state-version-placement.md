@@ -132,6 +132,13 @@ a new logical mutation after adoption may additionally require the live gate
 to remain valid; that revalidation uses the same admission policy rather than
 trusting the historical receipt as current fleet evidence.
 
+Consumers that must persist or act on the live proof use the typed
+`RuntimeFleetCapabilityAdmissionGrant`. The validator binds one cloned
+admission, one local membership identity, and one validation timestamp in the
+same read/validation operation. Such consumers must not first request a Boolean
+grant and then re-read the admission, because those two reads could span a
+membership, authority, or freshness change.
+
 ### Out of scope
 
 - Defining a state-key protocol for projection-driven split / merge / re-key.
