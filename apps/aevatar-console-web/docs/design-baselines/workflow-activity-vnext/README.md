@@ -23,9 +23,10 @@ Use the sources in this order:
    state, and backend-compatibility contract.
 3. `aevatar-workflow-schedule-design.excalidraw`, its generator, and the
    published-workflow schedule supplement are normative whenever a Schedule
-   entry, panel, or resource is changed. They define Schedule as a Team member
-   automation backed by `ScheduledDispatch`, not a standalone schedule
-   collection, graph node, draft property, Run property, or Activity surface.
+   entry, panel, or resource is changed. They define Schedule as an exact child
+   of `scopeId + workflowId`, backed by the Workflow-scoped Schedule API, not a
+   Team member automation, graph node, draft property, Run property, or
+   Activity surface.
 4. The user-path specification is the normative end-to-end journey, decision,
    recovery, and completion-evidence contract.
 5. The PNG files are viewport references for individual states. Schedule review
@@ -146,7 +147,7 @@ failures rather than undocumented implementation choices.
 ## 文件
 
 - `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity 与 Settings，共 17 个 frame。
-- `aevatar-workflow-schedule-design.excalidraw`：根据用户提供的 Schedule wireframe 重绘的独立 Excalidraw，只包含 Workflows 快速创建、Workflow 编辑器配置、授权审查、创建等待、详情与修改，共 6 个 frame；不包含 Activity 页面。
+- `aevatar-workflow-schedule-design.excalidraw`：根据用户提供的 Schedule wireframe 重绘的独立 Excalidraw，只包含 Workflows 快速创建、Workflow 编辑器配置、创建前复核、创建等待、详情与修改，共 6 个 frame；不包含 Activity 页面。
 - `aevatar-workflow-schedule-design.gen.py`：上述 Schedule 画板的确定性生成器。
 - `render-schedule-png.py`：从 Schedule Excalidraw 确定性地将每个 frame 渲染为独立 1440×900 PNG 的 Pillow 脚本。
 - `aevatar-workflow-activity-vnext.gen.py`：画板生成器，内含画框边界、ID 唯一性和废弃术语检查。
@@ -155,9 +156,9 @@ failures rather than undocumented implementation choices.
 - `prototype-schedule.html`：打开后直接进入已发布 Workflow 的新建 Schedule 配置，不需要先从 Draft 列表寻找入口。
 - `schedule-workflows-list-modal.png`：从 Workflows 列表直接打开的新建 Schedule modal。
 - `schedule-workflow-editor-panel.png`：Workflow 编辑器右侧的新建 Schedule panel。
-- `schedule-authorization-review.png`：服务端返回的授权计划审查页。
+- `schedule-review.png`：确认 Workflow、名称、周期、时区、可选 prompt、创建后启用状态与服务端五次预览的创建复核页。
 - `schedule-creation-pending.png`：创建命令 `202 Accepted` 后等待 Schedule 状态的页面。
-- `schedule-detail.png`：Workflow 内的 Schedule 详情与恢复动作。
+- `schedule-detail.png`：Workflow 内的 Schedule 详情与生命周期动作。
 - `schedule-edit.png`：Workflow 内修改重复规则、时间、时区和可选 prompt 的页面。
 - `prototype-workflows.png`：Workflows 桌面视图截图。
 - `prototype-activity.png`：Activity 桌面视图截图。
@@ -199,7 +200,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 `Excalidraw-To-Backend Deviations`。后续实现必须应用这些强制偏差：
 
 - 用户从 Workflows 直接创建 Workflow 草稿，没有其他资源的创建前置步骤。
-- `Run` 是唯一的手动执行入口。`Schedule` 是当前 Team member automation 能力在 Workflow 编辑器里的入口，并由 `ScheduledDispatch` 承接后台触发；它不是一套独立 Schedule 集合、Run 对话框、草稿属性或画布节点。
+- `Run` 是唯一的手动执行入口。`Schedule` 是当前 Workflow 的 recurring resource，由 `scopeId + workflowId` 精确拥有并通过 Workflow-scoped API 管理；它不是 Team member automation、Run 对话框、草稿属性或画布节点。
 - Run 请求开始后先显示真实的 Accepted/Running 状态；只有 Observatory
   返回权威记录后，才能显示为 Activity 记录。
 - `Current draft · revision N`、`Published · vN`、来源、耗时、用量和
@@ -237,10 +238,10 @@ Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidra
 
 1. `01 · Workflows — quick schedule modal`：在 Workflow 列表点击已发布行的 `Schedule`，直接打开新建配置弹窗，不先进入编辑器。
 2. `02 · Workflow — schedule setup panel`：在画布旁用 `Repeat`、时间和时区构造重复规则；默认只显示人类可读摘要，`write it as cron instead` 才打开 raw cron，并由服务端返回 next-fire 预览。
-3. `03 · Schedule — review authorization`：确认 owner-scoped preflight 返回的 exact service/node grants、owner LLM、credential plan、permission digest、policy version 与 Dedicated Agent Key disclosures。
-4. `04 · Schedule — creation pending`：创建命令返回 `202 Accepted` 后只显示等待状态，不提前声称 Active、凭证或 next fire 已存在。
-5. `05 · Workflow — schedule detail`：在 Workflow canvas 旁查看 Schedule 状态、授权和生命周期动作。
-6. `06 · Workflow — change schedule`：在 Workflow panel 修改周期；目标和 pinned revision 仍是只读事实。
+3. `03 · Schedule — review before creation`：确认 Workflow、Schedule name、周期、时区、可选 prompt、enabled 与服务端返回的五次预览，然后直接创建。
+4. `04 · Schedule — creation pending`：创建命令返回 `202 Accepted` 后刷新当前 Workflow 的 Schedule list/detail，不提前声称 Active 或 next fire 已存在。
+5. `05 · Workflow — schedule detail`：在 Workflow canvas 旁查看 API 返回的 enabled、next/last fire、计数、最近 fires 与生命周期动作。
+6. `06 · Workflow — change schedule`：在 Workflow panel 修改周期和 prompt，并在 `PUT` 中保留服务端读到的 enabled 状态。
 上述 6 个 frame 分别渲染为独立 1440×900 PNG；不再生成九宫格或总览拼图。
 
 重点不是逐个查看控件，而是沿着这条主路径检查语义是否连贯：
@@ -265,7 +266,7 @@ Workflows
 1. 打开 `prototype.html`，默认进入 Workflows；点击已发布 Workflow 行的 `Schedule` 会直接打开 `New schedule` 配置弹窗，弹窗关闭后仍留在列表。只评审编辑器 Schedule panel 时可直接打开 `prototype-schedule.html`。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
 3. 在画布点击节点，右侧打开 Node configuration；`Add node` 从左侧打开 Node library；`Edit YAML` 从右侧打开 YAML 面板。
-4. 打开一个已发布 Team member Workflow，点击编辑器里的 `Schedule` 检查右侧 Member automations 面板，再点击 `New automation` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，常规路径不能出现常驻的 `Cron expression` 字段，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 或缺少权威 `teamId/memberId/publishedServiceId` 的同一动作保持禁用，并显示对应的 publish、owner 或 published-target 等待原因。列表行的 modal 与编辑器 panel 只是同一创建状态机的两个容器，不是两个 Schedule 资源：先请求 `/api/schedules/preview` 和 owner-scoped automation preflight，再展示服务端返回的 service/node grants、owner LLM、credential plan、disclosures、permission digest 与 policy version；确认后只显示 `202 Accepted` pending，不会在 owner automation read model 返回前声称 Active、凭证或 next fire 已存在。Schedule 流程不提供 Activity 跳转或筛选。面板中的 automation 数据是演示数据，不能视为 API 行为；生产实现读取 `/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations`。
+4. 打开一个已发布 Workflow，点击编辑器里的 `Schedule` 检查右侧 Workflow schedules 面板，再点击 `New schedule` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 保持禁用并显示 publish 原因。列表行 modal 与编辑器 panel 共享 `configure -> previewing -> review -> accepted`：先调用 `/api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview`，再直接调用 Workflow-scoped create；`202 Accepted` 后刷新当前 Workflow 的 list/detail，不提前声称 Active 或 next fire 已存在。详情、更新、enable/disable、run-now 与 delete 也只使用相同的 Workflow-scoped resource。Schedule 流程不提供 Activity 跳转或筛选。
 5. 在列表或编辑器点击 `Run`，确认修订、输入、连接和外部影响。
 6. 勾选外部影响确认后点击 `Run`。记录会立即写入浏览器 `localStorage`，编辑器显示运行状态。
 7. 打开 Activity，点击任意一行查看详情。

@@ -1,289 +1,256 @@
-# Workflow Schedule vNext Design
+# Workflow Schedule vNext Design Specification
 
-## Status
+**Status:** Design baseline for frontend implementation
 
-Design direction approved for review on 2026-08-11 and corrected on
-2026-08-18 after comparing the design with the existing Aevatar scheduled
-workflow implementation. This document defines a published-workflow Schedule
-surface that reuses the existing Team member automation and
-`ScheduledDispatch` contracts. Activity is outside this supplement's product
-scope.
+**Backend authority:** [Issue #3446](https://github.com/aevatarAI/aevatar/issues/3446)
+and the workflow-scoped Schedule facade merged by PR #3451.
 
-Implementation branch: `feat/2026-08-11_workflow-schedule-design`.
+## Product Decision
 
-Baseline branch: `feat/2026-08-04_workflow-activity-vnext` at
-`a6602edc006dab1cd944cf029f7f99fea4c504cd`.
+The previous design implied that a Workflow Schedule was a Team member
+automation requiring a separate authorization review. The backend and the pure
+Workflow product model define something else: a recurring Schedule is a child
+resource of one Workflow, addressed by exact `scopeId + workflowId`.
 
-## Problem
-
-The previous Schedule board mixed configuration screens, Activity evidence,
-component inventories, and a runtime reference into one nine-frame overview.
-That made the deliverable hard to review and implied a product relationship
-between Schedule configuration and Activity that this surface does not need.
-
-The runtime model is different. Current scheduled workflow and Team automation
-already uses `ScheduledDispatchGAgent` plus workflow or Team service
-invocation. The Studio-facing product surface is Team member automation, rooted
-at the canonical Team member route. A Workflow Schedule is therefore not a new
-frontend scheduler, draft property, graph node, Run mode, or standalone service
-collection. It is the Workflow editor's contextual entry into the same member
-automation capability.
-
-## Semantic Decision
-
-Schedule is a contextual execution source owned by an existing Team member
-automation and backed by `ScheduledDispatch`. The Workflow editor may provide
-an inline configuration surface for the current member workflow, while the Team
-Automations tab remains the full management surface. This design does not add
-an Activity entry, Activity filter, Schedule-to-Run navigation, or Activity
-state to the Schedule workflow.
+The corrected model is:
 
 ```mermaid
-%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    D["Team member Workflow draft"] --> P["Publish"]
-    P --> S["Published Service"]
-    S --> T["Team member automation"]
-    T --> Q["ScheduledDispatch scheduleId"]
-    Q --> R["Owner-scoped Schedule state"]
+    W["Published Workflow"] --> S["Workflow Schedule"]
+    S --> F["Scheduled fires"]
+    F --> R["Workflow execution"]
 ```
 
-`Run` remains the sole manual execution action. `Schedule` is a separate
-background schedule entry configuration, not a mode inside the Run dialog.
+- Workflow owns Schedule configuration, list, detail, and mutations.
+- Schedule is not a Workflow graph node, Run-dialog mode, global setting, or
+  Team member automation.
+- Team Automation remains a separate Team/Member product resource.
+- Activity remains a separate Run history surface. No Activity page or
+  Schedule-to-Activity link belongs in this design supplement.
 
-### Identity Boundaries
+## Identity Boundary
 
-The schedule owner is the canonical Team member route:
-
-```text
-scopeId + teamId + memberId
-```
-
-The schedule target is the exact published service and revision already
-returned by the member workflow/publishing contract:
+The frontend Schedule resource needs only:
 
 ```text
 scopeId
-teamId
-memberId
 workflowId
-activeRevisionId
-publishedServiceId
+scheduleId
 ```
 
-`workflowId`, `memberId`, and `publishedServiceId` are separate identities.
-The UI must not infer `teamId` or `memberId` from a workflow, service ID,
-display name, string prefix, or route segment position. If the current Workflow
-surface does not have an authoritative Team member owner, it must not create a
-Schedule. It may only show an unavailable state or navigate to a canonical Team
-member surface once the owner is known.
+`scopeId + workflowId` select the exact Schedule collection.
+`scheduleId` selects one resource inside that collection.
+
+The frontend must not require or infer `teamId`, `memberId`, or
+`publishedServiceId` for this flow. The backend resolves the published
+service, service endpoint, active revision, and authenticated NyxID owner
+binding behind the Workflow facade.
+
+Draft, unpublished, or not-ready Workflows show an unavailable validation
+state. They never fall back to Team Automation.
 
 ## Information Architecture
 
-### Entry And Placement
+### Workflows Catalogue
 
-- The Workflows catalogue exposes `Schedule` on each published Workflow row.
-  Clicking that row action opens a `New schedule` modal in place, keeps the
-  catalogue visible behind it, and starts at cadence configuration. It does
-  not navigate to the Workflow editor. The modal and editor panel render the
-  same creation state machine in different containers.
-- The Workflow Editor header exposes `Schedule` immediately beside `Run`.
-- On a draft or a Workflow without an authoritative `teamId`, `memberId`, or
-  `publishedServiceId`, the action is disabled with `Publish this workflow
-  before scheduling it.` or `Open the Team member workflow before scheduling
-  it.` as its explanation.
-- When local draft changes are newer than the published revision, the action
-  remains disabled with `Save and publish the latest changes before scheduling.`
-- When a publish command is accepted but the published target is not yet
-  readable, the action remains disabled with `Wait for the published revision
-  to become available.`
-- On a published Team member Workflow, `Schedule` opens a right panel while
-  preserving the canvas. This panel is a compact entry into the same Team
-  automation capability exposed at
-  `/scopes/:scopeId/teams/:teamId/members/:memberId/automations`; it is not a
-  route-level Settings page and not a modal Run option.
-- The catalogue modal is a quick-create path only. After creation, existing
-  Schedule management remains in the Workflow editor panel; the modal does not
-  become a second list or detail surface.
-- The modal starts with an empty optional prompt and the browser's valid IANA
-  timezone, falling back to `UTC`. Its primary `Repeat` builder follows the
-  supplied Schedule wireframe: users choose a human repeat rule, time, and
-  timezone, then review a plain-language summary. Raw cron is not a default
-  labelled form field. `write it as cron instead` explicitly opens the
-  five-field cron editor, while a muted generated cron remains available for
-  inspection and copying.
-- The repeat builder and raw cron editor are one lossless model. Selecting or
-  changing a common repeat rule composes the exact cron sent to the server. A
-  complex cron that cannot be represented by the builder reopens in raw-cron
-  mode and must never be rounded to the nearest preset.
-- `Review authorization` first sends the exact cron and timezone to
-  `/api/schedules/preview`, then requests the owner-scoped member automation
-  preflight. The browser never fabricates next-fire timestamps or derives
-  permissions from editable canvas steps. Authorization renders the exact
-  server-returned plan: service and node grants, owner LLM selection, credential
-  scopes and expiry, disclosures, permission digest, and policy version.
-- `Confirm and create` sends a command. The modal presents `202 Accepted` and
-  remains pending. The command confirms the reviewed `permissionDigest` and
-  `policyVersion`; it does not add an enabled automation, claim a credential,
-  say the Schedule is active, or show a next fire until the owner-scoped member
-  automation read model returns the new state.
-- Schedule list, detail, cadence editing, authorization review, pause, resume,
-  run-now, and delete remain Workflow-owned operations. No Activity UI is part
-  of this Schedule supplement.
-- The header may show a compact, non-interactive state badge such as
-  `1 schedule` or `Next Tue 09:00` only after a scoped schedule read model has
-  returned it. The action keeps the stable label `Schedule`.
-- The Workflows catalogue may show a one-line secondary summary for a
-  published Workflow, for example `Scheduled · next Tue 09:00`. It must not
-  add a dense new table column and it must disappear when the scoped schedule
-  query is unavailable.
+Each published Workflow row exposes `Schedule` beside `Run` and `Open`.
+The action opens a modal over the current list so users can configure recurring
+work without navigating into the editor.
 
-### Schedule Panel
+Draft and unavailable Workflows keep the action disabled and explain that the
+Workflow must be saved and published.
 
-The panel is a manager for zero or more existing Team member automations for
-one published member workflow. It follows the current `TeamAutomationsTab`
-field model and authorization flow. It has three non-overlapping modes:
+### Workflow Editor
 
-1. List mode: displays member-owned automations with name, cadence, enabled or
-   paused state, authorization state, credential expiry, and next fire. It
-   provides `New automation` and `View all automations`.
-2. Create mode: renders the same creation state machine used by the catalogue
-   modal inside the right panel, preserving the Workflow canvas.
-3. Detail mode: edits one observed automation. The selected Team member,
-   published service, and pinned published revision are read-only target facts.
+`Schedule` appears beside `Run` in the editor header. It opens the existing
+right-side surface while preserving the canvas. The panel contains:
 
-The form presents the following fields in this order:
+- a list of Schedules returned for this Workflow;
+- the same new-Schedule flow used by the catalogue modal;
+- Schedule detail and editing;
+- enable or disable, run-now, and delete actions.
 
-| Field | Product behavior |
-| --- | --- |
-| Name | User-editable label. The default follows Team Automation copy such as `<member name> recurring work`. |
-| Repeat | Primary human builder for hourly, daily, weekday, weekend, and selected-weekday rules, with time and timezone controls. |
-| Cron | Secondary escape hatch opened by `write it as cron instead`; complex five-field expressions round-trip without lossy preset conversion. |
-| Time zone | Defaults to the browser's valid IANA timezone, otherwise `UTC`; the selected IANA value is sent to the server. |
-| Prompt | Optional recurring work prompt, matching the existing Team Automation form. The UI must not make it required unless the invoked service contract explicitly rejects empty input. File attachments are not schedulable. |
-| Enabled | Creation can request enabled state, but firing only becomes truthful after authorization and schedule state are observed. |
-| Target | Read-only Team member, published service, and pinned `activeRevisionId`; later publishes prompt the user to update deliberately. |
-| Preview | Displays the next five fires only from the server preview result. It never estimates time locally. |
+The modal and panel are two containers for one state machine, not two resource
+models.
 
-An active automation detail presents the real enabled/disabled lifecycle
-because pause and resume already exist. It also shows `Next run`, `Last run`,
-`Last error`, `Fire count`, `Failure count`, credential status, and credential
-expiry only when the automation summary returns those fields. Its actions are
-`Run now`, `Pause` or `Resume`, `Save changes`, `Review and reauthorize`, and a
-confirmed `Delete automation`.
+## Creation Flow
 
-Create and reauthorize flows must include the existing Dedicated Agent Key
-review before mutation. The review must preserve these existing disclosures:
-dedicated credential per schedule, Aevatar secret custody, browser never
-receives the raw key, delete revokes the credential, pause/resume preserves
-the credential, and node IDs are the permission set when required.
+The shared state machine is:
 
-`Run now` requires an explicit confirmation whenever the published Workflow
-can create external effects. Its accepted receipt does not optimistically
-change Schedule state, last-fire data, or next-fire data.
+```text
+configure -> previewing -> review -> accepted -> refresh list/detail
+```
 
-### State Contract
+### Configure
 
-| State | Required presentation | Primary action |
+The primary form order is:
+
+| UI field | API field | Behavior |
 | --- | --- | --- |
-| Draft | Disabled header action and publish explanation | Publish |
-| Published, no automations | Empty list after the member automation query returns zero records | New automation |
-| Editing a new automation | Preview after cadence validation; no optimistic next-run claim | Review authorization |
-| Authorization review ready | Dedicated Agent Key review with exact service/node grants | Authorize and continue |
-| Credential active and enabled | Green enabled state plus server `nextFireAt` | Pause or Run now |
-| Paused | Neutral paused state; no next-run promise | Resume |
-| Mutation accepted | Pending treatment while the latest automation state catches up | Wait or Refresh |
-| Last dispatch failed | Actual server error summary and count; raw error only inside `Technical details` | Pause, Edit, or Open error |
-| Query unavailable | Unavailable state, distinct from empty; never render a sample automation | Retry |
+| Schedule name | `displayName` | Editable and required |
+| Repeat + time | `cronExpression` | Common recurring rules use the human builder |
+| Raw cron | `cronExpression` | Opens only through `write it as cron instead` |
+| Time zone | `timezone` | Browser IANA zone with `UTC` fallback |
+| Prompt | `prompt` | Optional; empty means no fixed prompt |
+| Enabled after creation | `enabled` | Explicit create request state |
 
-The panel does not label an accepted create, update, enable, disable, or
-run-now command as complete. Those commands are `202 Accepted`; the UI waits
-for the owner-scoped member automation or schedule query before claiming the
-new state.
+`headers` is supported by the API but is not a primary first-release field.
+The UI can add it later under an advanced surface without changing the core
+flow.
 
-## Existing Backend Contract
+The first release supports recurring five-field cron only. It does not expose
+one-shot fields even if lower layers contain them.
 
-The first implementation boundary already exists. The editor must reuse the
-same member automation HTTP surface used by `TeamAutomationsTab`:
+### Preview
+
+`Review schedule` validates the local form and calls:
 
 ```text
-POST   /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/preflight
-GET    /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations
-POST   /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations
-GET    /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}
-PUT    /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}
-POST   /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}/reauthorize
-POST   /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}/pause
-POST   /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}/resume
-POST   /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}/run-now
-DELETE /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}
-POST   /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}/retry-revocation
+POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview
 ```
 
-That surface composes with the generic scheduled dispatch capability:
+The request contains `cronExpression`, `timezone`, and `count: 5`. The
+browser never calculates future fire times. A preview error returns the user
+to the form with the invalid field still editable.
+
+### Review
+
+Review is a normal creation confirmation, not an authorization screen. It
+shows:
+
+- Workflow name;
+- Schedule name;
+- recurrence and timezone;
+- optional prompt;
+- enabled-after-creation state;
+- five fire times returned by preview.
+
+No Team/Member identity, service identity, node grant, LLM selection,
+credential, permission digest, or policy version appears.
+
+`Create schedule` calls:
 
 ```text
-GET    /api/schedules?ownerKind=studio_member_automation&ownerScopeId={scopeId}&ownerTeamId={teamId}&ownerMemberId={memberId}
-POST   /api/schedules/preview
+POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules
 ```
 
-The editor must not call a global ownerless schedule list and filter in the
-browser. The owner is the Team member automation owner, and the target is the
-member's published service. Browser-side service-ID filtering is not an
-authorization boundary.
+with:
 
-The response needs the existing Team Automation fields: `scheduleId`,
-`memberId`, `publishedServiceId`, display name, prompt, cron expression,
-timezone, enabled state, authorization status, credential expiry,
-revocation state, owner LLM route, next and last fire, state version, and
-updated time. No Activity contract is required by this Schedule surface.
+```json
+{
+  "displayName": "Weekly feedback report recurring work",
+  "cronExpression": "0 9 * * 1-5",
+  "timezone": "Asia/Shanghai",
+  "enabled": true,
+  "prompt": ""
+}
+```
 
-## First Release Boundaries
+### Accepted
 
-The first released product supports recurring five-field cron schedules only.
-It does not expose one-shot scheduling even though lower layers have internal
-one-shot concepts, because the public HTTP contract does not expose that mode.
+Create returns `202 Accepted` and a mutation receipt. The UI may show the
+receipt's Schedule identity, but it must not claim Active, next fire, or final
+state from the command response.
 
-It also does not include:
+The modal shows `Refreshing Workflow schedules` and polls or refreshes the
+Workflow-scoped list or detail until the read model observes the mutation.
+Closing the modal does not cancel the accepted server command.
 
-- a browser timer or local persistence pretending to be a scheduler;
-- a Schedule graph node;
-- a top-level Schedules rail item or a Settings subsection;
-- a new Schedule product that bypasses Team Automation endpoints;
-- member identity lookup based on workflow/service string guesses;
-- client-side filtering of generic ownerless schedules;
-- attachment or file payload scheduling;
-- a required prompt when the existing Team Automation contract treats prompt as
-  optional;
-- an Activity entry, Activity filter, or Schedule-to-Run navigation path.
+## Existing Schedule Management
 
-## Visual Baseline Changes
+The list and detail surfaces use:
 
-The baseline change keeps the existing Operational Automation Ledger visual
-language: dark rail, white work surface, neutral borders, compact rows,
-four-to-six-pixel radii, blue actions, and status color used only for state.
+```text
+GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules
+GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
+```
 
-- The Schedule source contains six reviewable UI scenes: Workflow catalogue
-  quick-create modal, editor-side creation panel, authorization review,
-  accepted/pending creation, Workflow-owned Schedule detail, and Workflow-owned
-  Schedule editing.
-- Workflow-owned screens keep the Workflow canvas visible beside the Schedule
-  panel. The Schedule is never drawn as a graph node and no Activity screen is
-  included in this supplement.
-- The board uses the same dark rail, white work surface, compact rows, neutral
-  borders, blue actions, and state-only status colors as the existing baseline.
-- The standalone prototype removes the Schedule node-library item and uses a
-  right-side Schedule panel as an interaction demonstration only.
-- Each of the six Schedule scenes is rendered to its own 1440x900 PNG. There is
-  no combined overview PNG.
+The UI may present only typed response facts, including:
 
-## Verification
+- display name, cron expression, timezone, enabled state, and prompt;
+- next and last fire;
+- last error and error code;
+- fire and failure counts;
+- recent fires;
+- service revision only when useful as secondary diagnostics.
 
-- Regenerate the Excalidraw board from the generator and run the baseline
-  verifier so SHA, exact frame inventory, and deterministic output agree.
-- Inspect all six standalone 1440x900 PNGs; the verifier binds each image to the
-  current Excalidraw source and renderer and rejects obsolete combined PNGs.
-- Run documentation lint and `git diff --check`.
-- Do not run a full frontend suite, full typecheck, or production build for
-  this design-only PR. GitHub CI owns complete validation when runtime code is
-  eventually introduced.
+Low-level service, actor, command, correlation, credential, or Team fields do
+not belong in the primary product UI.
+
+### Edit
+
+Edit hydrates the observed Schedule values and sends a full replacement:
+
+```text
+PUT /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
+```
+
+The request must preserve the observed `enabled` value. Editing cadence or
+prompt on a paused Schedule must not enable it accidentally.
+
+The update response is `202 Accepted`; the detail remains pending until a
+refresh observes the new state.
+
+### Lifecycle Actions
+
+| Action | Existing endpoint | UI rule |
+| --- | --- | --- |
+| Enable | `POST .../{scheduleId}:enable` | Show pending, then refresh |
+| Disable | `POST .../{scheduleId}:disable` | Show pending, then refresh |
+| Run now | `POST .../{scheduleId}:run-now` | Confirm external effects, then refresh |
+| Delete | `DELETE .../{scheduleId}` | Confirm, then remove only after refresh |
+
+All four return accepted receipts. The UI does not optimistically mutate
+authoritative Schedule state.
+
+There is no `Review and reauthorize` action because the Workflow Schedule API
+does not expose or require an authorization-preflight lifecycle.
+
+## API Compatibility
+
+The existing backend covers every required first-release interaction:
+
+| Screen or behavior | Backend support |
+| --- | --- |
+| Workflow Schedule list | Workflow-scoped `GET` collection |
+| Five-fire preview | Workflow-scoped `POST .../preview` |
+| Create | Workflow-scoped `POST`, `202 Accepted` |
+| Accepted observation | Collection/detail `GET` |
+| Detail | Workflow-scoped detail `GET` |
+| Edit | Workflow-scoped `PUT`, `202 Accepted` |
+| Enable/disable | Colon action routes |
+| Run now | Colon action route |
+| Delete | Workflow-scoped `DELETE`, `202 Accepted` |
+
+No backend contract gap remains for this design, so issue #3446 does not need
+an additional comment.
+
+## Standalone Review Artifacts
+
+The deterministic Schedule source contains exactly six independently useful
+`1440x900` scenes:
+
+1. `schedule-workflows-list-modal.png`
+2. `schedule-workflow-editor-panel.png`
+3. `schedule-review.png`
+4. `schedule-creation-pending.png`
+5. `schedule-detail.png`
+6. `schedule-edit.png`
+
+There is no contact sheet, combined overview, Activity frame, or authorization
+review image.
+
+## Verification Contract
+
+- The baseline verifier rejects Team/Member, generic Schedule API,
+  authorization-preflight, credential, grant, policy, and reauthorization
+  terms in the Schedule area.
+- The verifier requires all Workflow-scoped collection, detail, mutation, and
+  action routes.
+- The prototype must key fixtures by exact `scopeId + workflowId`.
+- The prototype must preserve observed `enabled` on update and refresh after
+  every accepted mutation.
+- The generator, Excalidraw, renderer, and six PNGs must be deterministic and
+  source-linked.
+- Focused frontend checks are local; the full suite and build remain delegated
+  to GitHub CI.

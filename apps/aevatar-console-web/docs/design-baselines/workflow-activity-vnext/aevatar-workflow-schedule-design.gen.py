@@ -2,8 +2,8 @@
 """Generate standalone Schedule review scenes for published Workflows.
 
 The scenes follow the Schedule path in the supplied wireframe while keeping
-the Aevatar product boundary explicit: a published Team member owns the
-recurring automation and its Workflow owns the configuration surface.
+the Aevatar product boundary explicit: a Schedule is owned and addressed by
+its published Workflow, independent from Team member automation.
 """
 
 from __future__ import annotations
@@ -252,13 +252,15 @@ def annotation(x: float, y: float, number: str, title: str, body: str,
     text(x + 40, y + 24, body, FS_SMALL, MUTED, width=430)
 
 
-def schedule_summary(x: float, y: float, width: float) -> None:
+def schedule_summary(x: float, y: float, width: float, *, state: str | None = None) -> None:
     rect(x, y, width, 74, bg=BLUE_BG, stroke="#84adff")
-    text(x + 16, y + 14, "TEAM MEMBER AUTOMATION", FS_SMALL, BLUE,
+    text(x + 16, y + 14, "WORKFLOW SCHEDULE", FS_SMALL, BLUE,
          font=FONT_MONO, width=width - 32)
     text(x + 16, y + 38,
-         "Weekly Feedback Report · member m-feedback · published v7",
+         "Weekly Feedback Report · Published",
          FS_BODY, INK, width=width - 32)
+    if state:
+        badge(x + width - 92, y + 22, state, "ok" if state == "Enabled" else "muted")
 
 
 def schedule_fields(
@@ -270,7 +272,7 @@ def schedule_fields(
     name: str = "Weekly Feedback Report recurring work",
     repeat_label: str = "Mon · Tue · Wed · Thu · Fri",
     repeat_time: str = "09:00",
-    time_zone: str = "Asia/Singapore",
+    time_zone: str = "Asia/Shanghai",
     human_summary: str = "Every weekday at 09:00",
     cron_expression: str = "0 9 * * 1-5",
     preview_copy: str = "next  Mon 24, Tue 25, Wed 26 Aug · see all",
@@ -336,7 +338,7 @@ def schedule_fields(
     rect(x, outcome_y + 22, width, 78, bg=SUBTLE, stroke=LINE)
     text(x + 14, outcome_y + 35,
          f"Runs {human_summary[0].lower() + human_summary[1:]}, as you, until somebody pauses it.\n"
-         "The published revision is pinned from the Workflow context above.",
+         "This recurring configuration belongs to the Workflow shown above.",
          FS_SMALL, INK, width=width - 28)
 
 
@@ -386,10 +388,10 @@ def frame_workflows_list(index: int) -> None:
     button(modal_x + modal_w - 58, modal_y + 20, 32, "×", color=MUTED)
     schedule_summary(modal_x + 28, modal_y + 92, modal_w - 56)
     schedule_fields(modal_x + 28, modal_y + 186, modal_w - 56)
-    button(modal_x + modal_w - 230, modal_y + 824, 202, "Review authorization", primary=True, color=BLUE)
+    button(modal_x + modal_w - 230, modal_y + 824, 202, "Review schedule", primary=True, color=BLUE)
     button(modal_x + modal_w - 324, modal_y + 824, 84, "Cancel", color=MUTED)
     annotation(fx + FRAME_W + 42, fy + 160, "1", "Quick create, no navigation",
-                "The published Workflow row opens this modal directly. POST /api/schedules/preview provides the fires; open the editor later for management.")
+                "The published Workflow row opens this modal directly. POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview provides the fires; open the editor later for management.")
     end_frame()
 
 
@@ -405,7 +407,7 @@ def frame_schedule_setup(index: int) -> None:
     rect(cx + 20, cy + 18, 700, 898, bg="#f7f9fc", stroke=LINE)
     text(cx + 48, cy + 52, "Workflow canvas remains visible", FS_HEAD, INK, width=420)
     text(cx + 48, cy + 92,
-         "The schedule is an owner-aware automation beside the canvas, not a graph node.",
+         "The Schedule belongs to this Workflow and stays beside the canvas, not inside the graph.",
          FS_SMALL, MUTED, width=590)
     for n, (x, label, detail, color) in enumerate(((cx + 64, "Collect feedback", "Lark messages", GREEN),
                                                      (cx + 282, "Group themes", "AI task", BLUE),
@@ -421,51 +423,54 @@ def frame_schedule_setup(index: int) -> None:
     text(cx + 776, cy + 46, "Schedule", FS_HEAD, INK, width=300)
     schedule_summary(cx + 776, cy + 88, 492)
     schedule_fields(cx + 776, cy + 182, 492)
-    button(cx + 776, cy + 836, 178, "Review authorization", primary=True, color=BLUE)
+    button(cx + 776, cy + 836, 178, "Review schedule", primary=True, color=BLUE)
     button(cx + 966, cy + 836, 92, "Cancel", color=MUTED)
     annotation(fx + FRAME_W + 42, fy + 220, "2", "Only recurring work",
-                "The public contract accepts a five-field cron and IANA timezone. POST /api/schedules/preview returns the next fires.")
+                "The public contract accepts a five-field cron and IANA timezone. POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview returns the next fires.")
     end_frame()
 
 
-def frame_authorization(index: int) -> None:
-    fx, fy = begin_frame(index, "03 · Schedule — review authorization")
-    cx, cy, cw = app_shell(fx, fy, "Workflows", title="Review before it is created",
-                           subtitle="The schedule stores durable authority for each future fire.")
-    rect(cx + 150, cy + 34, 1060, 780, bg=SURFACE, stroke=INK, sw=2)
-    text(cx + 184, cy + 66, "Weekly Feedback Report will act on your behalf", FS_HEAD, INK, width=680)
-    text(cx + 184, cy + 102, "every weekday at 09:00 · Asia/Singapore · published v7", FS_SMALL, MUTED, width=680)
-    line(cx + 184, cy + 142, 990, 0, color=LINE)
-    text(cx + 184, cy + 174, "EXACT SERVER-RETURNED AUTHORIZATION PLAN", FS_SMALL, MUTED, font=FONT_MONO, width=520)
-    permissions = [
-        ("Lark · Acme", "service nyx-service-lark-acme", "exact service", "ok"),
-        ("Node IDs", "lark.messages.read · lark.messages.write", "exact nodes", "ok"),
-        ("Owner LLM", "NyxID Gateway · gpt-4o-mini", "reviewed", "ok"),
-        ("Scopes", "read · proxy", "restricted", "ok"),
+def frame_creation_review(index: int) -> None:
+    fx, fy = begin_frame(index, "03 · Schedule — review before creation")
+    cx, cy, cw = app_shell(fx, fy, "Workflows", title="Review schedule",
+                           subtitle="Confirm the recurring setup before creating it.")
+    rect(cx + 150, cy + 34, 1060, 806, bg=SURFACE, stroke=INK, sw=2)
+    text(cx + 184, cy + 66, "Weekly Feedback Report recurring work", FS_HEAD, INK, width=680)
+    badge(cx + 978, cy + 64, "Enabled after creation", "ok")
+    line(cx + 184, cy + 112, 990, 0, color=LINE)
+    field(cx + 184, cy + 144, 476, "Workflow", "Weekly Feedback Report", disabled=True)
+    field(cx + 680, cy + 144, 494, "Schedule name", "Weekly Feedback Report recurring work")
+    field(cx + 184, cy + 224, 476, "Repeat", "Every weekday at 09:00")
+    field(cx + 680, cy + 224, 494, "Time zone", "Asia/Shanghai")
+    field(cx + 184, cy + 304, 990, "Prompt (optional)", "No prompt", disabled=True)
+    text(cx + 184, cy + 392, "NEXT FIVE FIRES · SERVER PREVIEW", FS_SMALL, MUTED,
+         font=FONT_MONO, width=520)
+    rect(cx + 184, cy + 424, 990, 176, bg=GREEN_BG, stroke=GREEN)
+    fires = [
+        ("1", "Mon 24 Aug · 09:00"),
+        ("2", "Tue 25 Aug · 09:00"),
+        ("3", "Wed 26 Aug · 09:00"),
+        ("4", "Thu 27 Aug · 09:00"),
+        ("5", "Fri 28 Aug · 09:00"),
     ]
-    for idx, (name, detail, state, kind) in enumerate(permissions):
-        y = cy + 226 + idx * 62
-        dot(cx + 190, y + 6, 12, BLUE if kind == "ok" else AMBER if kind == "wait" else RED)
-        text(cx + 220, y, name, FS_BODY, INK, width=190)
-        text(cx + 408, y, detail, FS_SMALL, MUTED, width=360)
-        badge(cx + 818, y - 4, state, kind)
-    text(cx + 184, cy + 494, "HOW IT WILL SIGN IN AS YOU", FS_SMALL, MUTED, font=FONT_MONO, width=420)
-    text(cx + 184, cy + 522, "DEDICATED AGENT KEY", FS_SMALL, BLUE, font=FONT_MONO, width=360)
-    text(cx + 184, cy + 552,
-         "A dedicated schedule credential is stored in Aevatar's vault and reused for each fire.",
+    for fire_index, (number, label) in enumerate(fires):
+        column = fire_index % 3
+        row = fire_index // 3
+        fire_x = cx + 210 + column * 312
+        fire_y = cy + 452 + row * 62
+        dot(fire_x, fire_y, 24, GREEN, bg=GREEN_BG)
+        text(fire_x, fire_y + 4, number, FS_SMALL, GREEN, width=24, align="center")
+        text(fire_x + 38, fire_y + 4, label, FS_SMALL, INK, width=230)
+    text(cx + 184, cy + 628,
+         "Preview times came from POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview.",
+         FS_SMALL, MUTED, font=FONT_MONO, width=990)
+    text(cx + 184, cy + 674,
+         "Create schedule sends the reviewed name, cron expression, time zone, enabled state, and optional prompt.",
          FS_SMALL, INK, width=860)
-    text(cx + 184, cy + 580,
-         "The browser never receives the raw key. Delete revokes it; pause keeps it available.",
-         FS_SMALL, MUTED, width=860)
-    badge(cx + 184, cy + 628, "Credential plan ready", "ok")
-    badge(cx + 354, cy + 628, "Policy team-automation-v3", "info")
-    text(cx + 184, cy + 660, "DIGEST sha256:feedback-v7-permissions", FS_SMALL, MUTED, font=FONT_MONO, width=560)
-    text(cx + 184, cy + 698, "If the workflow, revision, or grant changes, review is required again.",
-         FS_SMALL, MUTED, width=760)
-    button(cx + 850, cy + 734, 190, "Confirm and create", primary=True, color=BLUE)
-    button(cx + 1052, cy + 734, 88, "Back", color=MUTED)
-    annotation(fx + FRAME_W + 42, fy + 280, "3", "Authorization is server-owned",
-                "Confirm binds permissionDigest + policyVersion; create stays pending until owner state is observed.")
+    button(cx + 886, cy + 742, 170, "Create schedule", primary=True, color=BLUE)
+    button(cx + 1068, cy + 742, 106, "Back", color=MUTED)
+    annotation(fx + FRAME_W + 42, fy + 280, "3", "One Workflow-scoped create",
+               "Create calls POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules; service and owner resolution stay behind the API.")
     end_frame()
 
 
@@ -500,25 +505,25 @@ def frame_creation_pending(index: int) -> None:
     rect(modal_x + 28, modal_y + 184, modal_w - 56, 118, bg=BLUE_BG, stroke="#84adff")
     text(modal_x + 50, modal_y + 208, "202 ACCEPTED", FS_SMALL, BLUE,
          font=FONT_MONO, width=240)
-    text(modal_x + 50, modal_y + 240, "Waiting for Schedule state", FS_HEAD, INK,
+    text(modal_x + 50, modal_y + 240, "Refreshing Workflow schedules", FS_HEAD, INK,
          width=520)
     text(modal_x + 50, modal_y + 274,
-         "The create command was accepted. The latest owner-scoped state has not arrived yet.",
+         "The create request was accepted. Its final read-model state has not arrived yet.",
          FS_SMALL, MUTED, width=620)
     rect(modal_x + 28, modal_y + 330, modal_w - 56, 132, bg=SUBTLE, stroke=LINE)
     text(modal_x + 50, modal_y + 352, "NOT YET ACTIVE", FS_SMALL, AMBER,
          font=FONT_MONO, width=220)
     text(modal_x + 50, modal_y + 386,
-         "No credential, enabled state, or next fire is claimed until the Schedule read returns it.",
+         "Enabled state and next fire appear only after Workflow Schedule detail is observed.",
          FS_BODY, INK, width=620)
     text(modal_x + 50, modal_y + 430,
-         "You can close this dialog. Workflows will refresh when state is available.",
+         "You can close this dialog. This Workflow's schedule list keeps refreshing.",
          FS_SMALL, MUTED, width=620)
-    field(modal_x + 28, modal_y + 492, 330, "Policy", "team-automation-v3", disabled=True)
-    field(modal_x + 374, modal_y + 492, 358, "Permission digest", "sha256:feedback-v7-permissions", disabled=True)
+    field(modal_x + 28, modal_y + 492, modal_w - 56, "Observation",
+          "GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules", disabled=True)
     button(modal_x + modal_w - 146, modal_y + 650, 118, "Close", primary=True, color=BLUE)
     annotation(fx + FRAME_W + 42, fy + 240, "4", "Accepted is not active",
-                "The dialog remains honest until the owner-scoped Schedule state is observed.")
+                "The dialog remains honest until the Workflow-scoped Schedule list or detail observes the result.")
     end_frame()
 
 
@@ -553,17 +558,17 @@ def frame_schedule_detail(index: int) -> None:
     text(cx + 776, cy + 80, "Managed from this Workflow", FS_SMALL, BLUE, font=FONT_MONO, width=420)
     schedule_summary(cx + 776, cy + 112, 492)
     field(cx + 776, cy + 204, 492, "Schedule name", "Weekly review")
-    rect(cx + 776, cy + 282, 492, 136, bg=RED_BG, stroke="#fda29b")
-    text(cx + 796, cy + 302, "NEEDS ATTENTION", FS_SMALL, RED, font=FONT_MONO, width=280)
-    text(cx + 796, cy + 330, "Credential expired · owner review required", FS_SMALL, INK, width=440)
-    text(cx + 796, cy + 356, "Future fires will not start until authorization is reviewed.", FS_SMALL, MUTED, width=440)
-    button(cx + 796, cy + 378, 180, "Review and reauthorize", primary=True, color=BLUE)
-    field(cx + 776, cy + 446, 240, "Cadence", "Every Monday at 10:00")
-    field(cx + 1032, cy + 446, 236, "Time zone", "Asia/Shanghai")
-    field(cx + 776, cy + 524, 240, "Next fire", "Will not run", disabled=True)
-    field(cx + 1032, cy + 524, 236, "Last run", "Failed yesterday")
-    field(cx + 776, cy + 602, 492, "Pinned revision", "Published · v7", disabled=True)
-    text(cx + 776, cy + 694, "Authorization and next-fire state are returned by the Schedule service.", FS_SMALL, MUTED, width=492)
+    rect(cx + 776, cy + 282, 492, 92, bg=GREEN_BG, stroke=GREEN)
+    text(cx + 796, cy + 302, "ENABLED", FS_SMALL, GREEN, font=FONT_MONO, width=120)
+    text(cx + 796, cy + 334, "Next run · Mon 24 Aug at 10:00", FS_BODY, INK, width=440)
+    field(cx + 776, cy + 400, 240, "Cadence", "Every Monday at 10:00")
+    field(cx + 1032, cy + 400, 236, "Time zone", "Asia/Shanghai")
+    field(cx + 776, cy + 478, 240, "Last fire", "Mon 17 Aug · Succeeded")
+    field(cx + 1032, cy + 478, 236, "Runs", "12 total · 1 failed")
+    field(cx + 776, cy + 556, 492, "Prompt (optional)", "No prompt", disabled=True)
+    text(cx + 776, cy + 650, "RECENT FIRES", FS_SMALL, MUTED, font=FONT_MONO, width=180)
+    text(cx + 776, cy + 680, "Mon 17 Aug · Succeeded   ·   Mon 10 Aug · Succeeded", FS_SMALL, INK, width=492)
+    text(cx + 776, cy + 716, "Schedule facts are returned by the Workflow-scoped API.", FS_SMALL, MUTED, width=492)
     button(cx + 776, cy + 824, 100, "Run now", color=INK)
     button(cx + 884, cy + 824, 98, "Change", color=BLUE, bg=BLUE_BG)
     button(cx + 990, cy + 824, 84, "Pause", color=INK)
@@ -586,7 +591,7 @@ def frame_schedule_edit(index: int) -> None:
     rect(cx + 748, cy + 18, 548, 898, bg=SURFACE, stroke=LINE)
     text(cx + 776, cy + 46, "Change schedule", FS_HEAD, INK, width=330)
     text(cx + 776, cy + 80, "Managed from this Workflow", FS_SMALL, BLUE, font=FONT_MONO, width=420)
-    schedule_summary(cx + 776, cy + 112, 492)
+    schedule_summary(cx + 776, cy + 112, 492, state="Enabled")
     schedule_fields(
         cx + 776,
         cy + 204,
@@ -603,14 +608,14 @@ def frame_schedule_edit(index: int) -> None:
     button(cx + 776, cy + 824, 136, "Save changes", primary=True, color=BLUE)
     button(cx + 924, cy + 824, 92, "Cancel", color=MUTED)
     annotation(fx + FRAME_W + 42, fy + 260, "6", "Edit in Workflow",
-                "Cadence and prompt are editable here. Target identity and pinned revision remain read-only facts.")
+                "PUT sends the edited fields and preserves the observed enabled state; it never enables a paused Schedule by accident.")
     end_frame()
 
 
 text(ORIGIN_X, 70, "Aevatar — Published workflow schedules", FS_TITLE, INK, width=1040)
-text(ORIGIN_X, 126, "One owner, one recurring automation, six reviewable screens.", FS_HEAD, BLUE, width=1060)
+text(ORIGIN_X, 126, "One Workflow, one recurring resource model, six reviewable screens.", FS_HEAD, BLUE, width=1060)
 text(ORIGIN_X, 178,
-     "Schedule is configured, authorized, observed, and managed inside a published Workflow.",
+     "Schedule is configured, previewed, created, observed, and managed through the Workflow-scoped API.",
      FS_BODY, MUTED, width=1180)
 text(ORIGIN_X, 232,
      "Each frame renders to its own 1440 × 900 PNG. Notes stay outside the screen frames.",
@@ -619,7 +624,7 @@ line(ORIGIN_X, 274, 1150, 0, color=LINE)
 
 frame_workflows_list(0)
 frame_schedule_setup(1)
-frame_authorization(2)
+frame_creation_review(2)
 frame_creation_pending(3)
 frame_schedule_detail(4)
 frame_schedule_edit(5)

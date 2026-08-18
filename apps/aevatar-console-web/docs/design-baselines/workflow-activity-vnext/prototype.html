@@ -472,18 +472,9 @@
     .schedule-quick-preview p { margin: 8px 0 0; color: var(--ink); font-size: 12px; line-height: 1.45; }
     .schedule-quick-preview ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; margin: 9px 0 0; padding: 0; list-style: none; color: var(--ink); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .schedule-quick-note { margin: 14px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
-    .schedule-quick-authorization { display: grid; gap: 16px; }
-    .schedule-quick-authorization h3 { margin: 0; font-size: 16px; }
-    .schedule-quick-authorization p { margin: 0; color: var(--muted); line-height: 1.45; }
-    .schedule-quick-permissions { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-    .schedule-quick-permissions li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-    .schedule-quick-permissions li span { color: var(--muted); font-size: 12px; }
-    .schedule-quick-permissions li div span { display: block; margin-top: 3px; }
-    .schedule-quick-disclosures { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; color: var(--ink); font-size: 12px; }
-    .schedule-quick-disclosures li::before { content: "✓"; margin-right: 8px; color: var(--green); font-weight: 700; }
-    .schedule-quick-credential { padding: 13px 14px; border: 1px solid #84adff; border-radius: 6px; background: var(--blue-bg); }
-    .schedule-quick-credential strong { display: block; color: var(--blue); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
-    .schedule-quick-credential p { margin-top: 6px; color: var(--ink); font-size: 12px; }
+    .schedule-quick-review { display: grid; gap: 16px; }
+    .schedule-quick-review h3 { margin: 0; font-size: 16px; }
+    .schedule-quick-review p { margin: 0; color: var(--muted); line-height: 1.45; }
     .create-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line); }
     .create-choice { min-height: 176px; padding: 20px; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); text-align: left; }
     .create-choice:nth-child(2n) { border-right: 0; }
@@ -728,7 +719,7 @@
             <p class="validation" id="yaml-editor-error" role="alert" hidden style="margin:10px 20px 0"></p>
             <footer class="studio-panel-footer"><button type="button" class="button small" id="cancel-yaml">Cancel</button><button type="button" class="button small primary" id="apply-yaml">Apply changes</button></footer>
           </aside>
-          <aside class="studio-schedule-panel" id="schedule-panel" hidden aria-label="Workflow automations"></aside>
+          <aside class="studio-schedule-panel" id="schedule-panel" hidden aria-label="Workflow schedules"></aside>
         </div>
       </section>
 
@@ -973,7 +964,7 @@ steps:
 
     const seedWorkflows = [
       {
-        id: "wf-feedback", scopeId: "scope-demo", teamId: "team-ops", memberId: "m-feedback", publishedServiceId: "svc-feedback-digest", activeRevisionId: "rev-feedback-v7", name: "Weekly feedback digest", description: "Group feedback and post a weekly summary",
+        id: "wf-feedback", scopeId: "scope-demo", publishedServiceId: "svc-feedback-digest", activeRevisionId: "rev-feedback-v7", name: "Weekly feedback digest", description: "Group feedback and post a weekly summary",
         state: "Published", revision: "Published · v7", last: "2h ago", lastStatus: "Succeeded", creation: "Template",
         runInput: '{\n  "week": "2026-W32"\n}', effects: "Posts one summary to the weekly feedback channel.",
         steps: [
@@ -984,7 +975,7 @@ steps:
         ]
       },
       {
-        id: "wf-escalation", scopeId: "scope-demo", teamId: "team-ops", memberId: "m-escalation", publishedServiceId: null, activeRevisionId: null, name: "Customer escalation triage", description: "Classify urgent conversations and prepare replies",
+        id: "wf-escalation", scopeId: "scope-demo", publishedServiceId: null, activeRevisionId: null, name: "Customer escalation triage", description: "Classify urgent conversations and prepare replies",
         state: "Draft", revision: "Current draft · revision 12", last: "4m ago", lastStatus: "Running", creation: "Description",
         runInput: '{\n  "conversation": "support-thread-4821"\n}', effects: "May post a Lark reply and create a Linear issue.",
         steps: [
@@ -996,7 +987,7 @@ steps:
         ]
       },
       {
-        id: "wf-invoice", scopeId: "scope-demo", teamId: "team-finance", memberId: "m-invoice", publishedServiceId: "svc-invoice-follow-up", activeRevisionId: "rev-invoice-v4", name: "Invoice follow-up", description: "Prepare overdue invoice reminders for approval",
+        id: "wf-invoice", scopeId: "scope-demo", publishedServiceId: "svc-invoice-follow-up", activeRevisionId: "rev-invoice-v4", name: "Invoice follow-up", description: "Prepare overdue invoice reminders for approval",
         state: "Published", revision: "Published · v4", last: "42m ago", lastStatus: "Needs you", creation: "Template",
         runInput: '{\n  "asOf": "2026-08-03"\n}', effects: "May send approved reminder emails.",
         steps: [
@@ -1007,7 +998,7 @@ steps:
         ]
       },
       {
-        id: "wf-orders", scopeId: "scope-demo", teamId: "team-ops", memberId: "m-orders", publishedServiceId: "svc-nightly-order-sync", activeRevisionId: "rev-orders-v9", name: "Nightly order sync", description: "Move completed orders into the warehouse",
+        id: "wf-orders", scopeId: "scope-demo", publishedServiceId: "svc-nightly-order-sync", activeRevisionId: "rev-orders-v9", name: "Nightly order sync", description: "Move completed orders into the warehouse",
         state: "Published", revision: "Published · v9", last: "3:04 AM", lastStatus: "Failed", creation: "Import",
         runInput: '{\n  "date": "2026-08-02"\n}', effects: "Writes completed order rows to the warehouse.",
         steps: [
@@ -1017,7 +1008,7 @@ steps:
         ]
       },
       {
-        id: "wf-contract", scopeId: "scope-demo", teamId: "team-legal", memberId: "m-contract", publishedServiceId: null, activeRevisionId: null, name: "Contract review", description: "Flag unusual clauses and prepare a review note",
+        id: "wf-contract", scopeId: "scope-demo", publishedServiceId: null, activeRevisionId: null, name: "Contract review", description: "Flag unusual clauses and prepare a review note",
         state: "Draft", revision: "Current draft · revision 3", last: "Never", lastStatus: "Never", creation: "Blank",
         runInput: '{\n  "document": "contract.pdf"\n}', effects: "Creates a private review note.",
         steps: [
@@ -1028,67 +1019,19 @@ steps:
       }
     ];
 
-    const prototypeScheduleCredentialPlan = {
-      mode: "dedicated-per-schedule",
-      hostedBy: "Aevatar",
-      browserReceivesRawKey: false,
-      scopes: ["read", "proxy"],
-      allowAllServices: false,
-      allowAllNodes: false,
-      serviceGrantRequirement: "required",
-      nodeGrantRequirement: "required",
-      expiresAt: "2026-10-12T00:00:00Z"
-    };
-    const prototypeScheduleDisclosures = [
-      "dedicated_credential",
-      "aevatar_secret_custody",
-      "browser_never_receives_secret",
-      "delete_revokes_credential",
-      "pause_resume_preserves_credential",
-      "node_ids_are_permission_set"
+    // Production uses the workflow-scoped facade. The backend resolves service,
+    // revision, and authenticated owner details without exposing them in this UI.
+    const workflowScheduleApiContract = [
+      "GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules",
+      "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview",
+      "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules",
+      "GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}",
+      "PUT /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}",
+      "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:enable",
+      "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:disable",
+      "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:run-now",
+      "DELETE /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}"
     ];
-
-    // Static fixtures stand in for owner-scoped server responses. Authorization
-    // facts never derive from the editable canvas or its browser-generated IDs.
-    const prototypeSchedulePreflightByOwner = {
-      "scope-demo/team-ops/m-feedback": {
-        ownerScopeId: "scope-demo", ownerTeamId: "team-ops", ownerMemberId: "m-feedback",
-        publishedServiceId: "svc-feedback-digest", revisionId: "rev-feedback-v7",
-        permissionDigest: "sha256:feedback-v7-permissions",
-        policyVersion: "team-automation-policy-v3",
-        credentialPlan: prototypeScheduleCredentialPlan,
-        serviceGrants: [
-          { grantId: "service:lark-acme", targetId: "nyx-service-lark-acme", displayName: "Lark · Acme", serviceSlug: "lark", nodeIds: ["lark.messages.read", "lark.messages.write"] }
-        ],
-        ownerLLMSelection: { routeKind: "gateway", routeValue: "nyxid_gateway", nyxIdUserServiceId: "", serviceSlugSnapshot: "NyxID Gateway", model: "gpt-4o-mini" },
-        disclosures: prototypeScheduleDisclosures
-      },
-      "scope-demo/team-finance/m-invoice": {
-        ownerScopeId: "scope-demo", ownerTeamId: "team-finance", ownerMemberId: "m-invoice",
-        publishedServiceId: "svc-invoice-follow-up", revisionId: "rev-invoice-v4",
-        permissionDigest: "sha256:invoice-v4-permissions",
-        policyVersion: "team-automation-policy-v3",
-        credentialPlan: prototypeScheduleCredentialPlan,
-        serviceGrants: [
-          { grantId: "service:xero-finance", targetId: "nyx-service-xero-finance", displayName: "Xero · Finance", serviceSlug: "xero", nodeIds: ["xero.invoices.read"] },
-          { grantId: "service:gmail-accounts", targetId: "nyx-service-gmail-accounts", displayName: "Gmail · Accounts", serviceSlug: "gmail", nodeIds: ["gmail.messages.send"] }
-        ],
-        ownerLLMSelection: { routeKind: "gateway", routeValue: "nyxid_gateway", nyxIdUserServiceId: "", serviceSlugSnapshot: "NyxID Gateway", model: "gpt-4o-mini" },
-        disclosures: prototypeScheduleDisclosures
-      },
-      "scope-demo/team-ops/m-orders": {
-        ownerScopeId: "scope-demo", ownerTeamId: "team-ops", ownerMemberId: "m-orders",
-        publishedServiceId: "svc-nightly-order-sync", revisionId: "rev-orders-v9",
-        permissionDigest: "sha256:orders-v9-permissions",
-        policyVersion: "team-automation-policy-v3",
-        credentialPlan: prototypeScheduleCredentialPlan,
-        serviceGrants: [
-          { grantId: "service:warehouse-analytics", targetId: "nyx-service-warehouse-analytics", displayName: "Warehouse · Analytics", serviceSlug: "warehouse", nodeIds: ["orders.completed.read", "analytics.completed_orders.upsert"] }
-        ],
-        ownerLLMSelection: null,
-        disclosures: prototypeScheduleDisclosures
-      }
-    };
 
     const prototypeSchedulePreviewByCron = {
       "0 * * * *": { requestId: "preview-hourly-response", fires: ["Wed, Aug 19 · 00:00", "Wed, Aug 19 · 01:00", "Wed, Aug 19 · 02:00", "Wed, Aug 19 · 03:00", "Wed, Aug 19 · 04:00"] },
@@ -1128,50 +1071,39 @@ steps:
       { id: "R-1028", workflowId: "wf-invoice", workflow: "Invoice follow-up", status: "Succeeded", origin: "Manual · you", revision: "Published · v4", when: "2d ago", took: "02:04", usage: "$0.20", outcome: "Sent 6 reminders", startedBy: "You", sourceId: null }
     ];
 
-    // This is isolated prototype state. Production reads member automations from
-    // /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations.
-    const prototypeTeamAutomations = {
+    // Isolated read-model fixtures keyed by exact scopeId + workflowId.
+    const prototypeWorkflowSchedules = {
       "scope-demo": {
-        "team-ops": {
-          "m-feedback": [
+        "wf-feedback": [
             {
-              id: "sch-feedback-morning",
-              name: "Morning digest",
-              cadence: "Every weekday at 09:00",
+              scheduleId: "sch-feedback-morning",
+              displayName: "Morning digest",
               cronExpression: "0 9 * * 1-5",
-              timeZone: "Asia/Shanghai",
+              timezone: "Asia/Shanghai",
               prompt: "Summarize new feedback.",
-              revisionId: "rev-feedback-v7",
-              revisionLabel: "Published · v7",
-              publishedServiceId: "svc-feedback-digest",
               enabled: true,
-              authorizationStatus: "Credential active",
-              credentialExpiry: "Expires Oct 12, 2026",
-              nextRun: "Tue, Aug 12 at 09:00",
-              lastRun: "Failed yesterday",
-              preview: ["Tue, Aug 12 · 09:00", "Wed, Aug 13 · 09:00", "Thu, Aug 14 · 09:00", "Fri, Aug 15 · 09:00", "Mon, Aug 18 · 09:00"],
-              lastError: "Last run couldn't be completed. Review prompt or pause this automation."
+              nextFireAt: "Tue, Aug 12 at 09:00",
+              lastFireAt: "Failed yesterday",
+              fireCount: 18,
+              failureCount: 1,
+              recentFires: ["Mon, Aug 11 · Succeeded", "Fri, Aug 8 · Failed"],
+              lastError: "Last run couldn't be completed. Review the prompt or pause this Schedule."
             },
             {
-              id: "sch-feedback-weekly",
-              name: "Weekly review",
-              cadence: "Every Monday at 10:00",
+              scheduleId: "sch-feedback-weekly",
+              displayName: "Weekly review",
               cronExpression: "0 10 * * 1",
-              timeZone: "Asia/Shanghai",
+              timezone: "Asia/Shanghai",
               prompt: "",
-              revisionId: "rev-feedback-v7",
-              revisionLabel: "Published · v7",
-              publishedServiceId: "svc-feedback-digest",
               enabled: false,
-              authorizationStatus: "Credential active",
-              credentialExpiry: "Expires Oct 12, 2026",
-              nextRun: "No upcoming run",
-              lastRun: "Succeeded Mon, Aug 4",
-              preview: ["Mon, Aug 18 · 10:00", "Mon, Aug 25 · 10:00", "Mon, Sep 1 · 10:00", "Mon, Sep 8 · 10:00", "Mon, Sep 15 · 10:00"],
+              nextFireAt: "No upcoming run",
+              lastFireAt: "Succeeded Mon, Aug 4",
+              fireCount: 12,
+              failureCount: 0,
+              recentFires: ["Mon, Aug 4 · Succeeded", "Mon, Jul 28 · Succeeded"],
               lastError: ""
             }
           ]
-        }
       }
     };
 
@@ -1201,9 +1133,8 @@ steps:
     let quickScheduleWorkflow = null;
     let quickScheduleStep = "configure";
     let quickScheduleDraft = null;
-    let quickSchedulePreflight = null;
     let quickSchedulePreview = null;
-    let quickScheduleCreateConfirmation = null;
+    let quickScheduleAcceptedReceipt = null;
     let quickScheduleRequestVersion = 0;
     let canvasZoom = null;
     let runContext = null;
@@ -1374,18 +1305,10 @@ steps:
     function scheduleAvailability(workflow) {
       if (!workflow.steps.length) return { ready: false, reason: "Add a step before scheduling this workflow." };
       if (workflow.state !== "Published") {
-        return workflow.activeRevisionId
-          ? { ready: false, reason: "Save and publish the latest changes before scheduling." }
-          : { ready: false, reason: "Publish this Team member workflow before scheduling it." };
+        return { ready: false, reason: "Save and publish the latest changes before scheduling." };
       }
-      if (!workflow.scopeId || !workflow.teamId || !workflow.memberId) {
-        return { ready: false, reason: "Open the Team member workflow before scheduling it." };
-      }
-      if (!workflow.publishedServiceId) {
-        return { ready: false, reason: "Wait for the published service to become available." };
-      }
-      if (!workflow.activeRevisionId) {
-        return { ready: false, reason: "Wait for the published revision to become available." };
+      if (!workflow.scopeId || !workflow.id) {
+        return { ready: false, reason: "Wait for the Workflow identity to become available." };
       }
       return { ready: true, reason: "Create a schedule without leaving Workflows." };
     }
@@ -1451,9 +1374,8 @@ steps:
       quickScheduleWorkflow = null;
       quickScheduleStep = "configure";
       quickScheduleDraft = null;
-      quickSchedulePreflight = null;
       quickSchedulePreview = null;
-      quickScheduleCreateConfirmation = null;
+      quickScheduleAcceptedReceipt = null;
     }
 
     function closeScheduleQuickModal() {
@@ -1485,7 +1407,8 @@ steps:
         repeatTime: "09:00",
         cronExpression: "0 9 * * 1-5",
         timeZone: browserTimeZone(),
-        prompt: ""
+        prompt: "",
+        enabled: true
       };
     }
 
@@ -1540,9 +1463,9 @@ steps:
       if (!workflow || !quickScheduleDraft) return;
       const stepPresentation = {
         configure: ["New schedule", "Configure recurring work for this published Workflow."],
-        preflight: ["Validating cadence", "The server must validate the cron expression and IANA timezone."],
-        authorize: ["Review before it is created", "Confirm the exact access this schedule will use for future fires."],
-        accepted: ["Schedule request accepted", "Wait for the owner automation state before treating it as active."]
+        previewing: ["Previewing schedule", "The Workflow Schedule API is validating the recurrence."],
+        review: ["Review schedule", "Confirm the recurring setup before creating it."],
+        accepted: ["Schedule request accepted", "Wait for Workflow Schedule state before treating it as active."]
       }[quickScheduleStep];
       let root;
       let content;
@@ -1550,7 +1473,7 @@ steps:
       if (scheduleCreationSurface === "panel") {
         root = document.querySelector("#schedule-panel");
         root.hidden = false;
-        root.innerHTML = `<header class="studio-panel-header"><div><h2>${escapeHtml(stepPresentation[0])}</h2><p>${escapeHtml(stepPresentation[1])}</p></div><div><button type="button" class="icon-button" id="schedule-creation-list" aria-label="Back to automations" title="Back">←</button><button type="button" class="icon-button" id="close-schedule" aria-label="Close automations" title="Close">×</button></div></header><div class="studio-panel-body" id="schedule-panel-creation-content"></div><footer class="studio-panel-footer" id="schedule-panel-creation-footer"></footer>`;
+        root.innerHTML = `<header class="studio-panel-header"><div><h2>${escapeHtml(stepPresentation[0])}</h2><p>${escapeHtml(stepPresentation[1])}</p></div><div><button type="button" class="icon-button" id="schedule-creation-list" aria-label="Back to schedules" title="Back">←</button><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></div></header><div class="studio-panel-body" id="schedule-panel-creation-content"></div><footer class="studio-panel-footer" id="schedule-panel-creation-footer"></footer>`;
         content = root.querySelector("#schedule-panel-creation-content");
         footer = root.querySelector("#schedule-panel-creation-footer");
         root.querySelector("#schedule-creation-list").onclick = exitSchedulePanelCreation;
@@ -1565,7 +1488,7 @@ steps:
 
       if (quickScheduleStep === "configure") {
         content.innerHTML = `
-          <div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(workflow.revision)} · published target · ${escapeHtml(workflow.publishedServiceId)}</span></div><span class="schedule-state">New</span></div>
+          <div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(workflow.revision)} · Workflow Schedule</span></div><span class="schedule-state">New</span></div>
           <label class="form-row"><span class="field-label">Schedule name</span><input class="input" id="quick-schedule-name" value="${escapeHtml(quickScheduleDraft.name)}"></label>
           <section class="schedule-quick-section">
             <div class="schedule-quick-section-heading"><strong>How often</strong><span>Build the repeat rule</span></div>
@@ -1597,38 +1520,36 @@ steps:
           cronInput.focus();
         };
         updateQuickScheduleRepeatPresentation(content);
-        footer.innerHTML = `<button type="button" class="button" id="quick-schedule-cancel">Cancel</button><button type="button" class="button primary" id="quick-schedule-review">Review authorization</button>`;
+        footer.innerHTML = `<button type="button" class="button" id="quick-schedule-cancel">Cancel</button><button type="button" class="button primary" id="quick-schedule-review">Review schedule</button>`;
         footer.querySelector("#quick-schedule-cancel").onclick = exitScheduleCreation;
-        footer.querySelector("#quick-schedule-review").onclick = () => requestQuickSchedulePreflight(content);
+        footer.querySelector("#quick-schedule-review").onclick = () => requestQuickSchedulePreview(content);
         return;
       }
 
-      if (quickScheduleStep === "preflight") {
-        content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Checking</span></div><div class="schedule-quick-authorization"><div><h3>Requesting server validation</h3><p>Production sends the exact cron expression and IANA timezone to <code>POST /api/schedules/preview</code>, then requests the owner-scoped authorization plan from <code>POST /automations/preflight</code>. This prototype models both server handoffs and never calculates future fires or permission grants in the browser.</p></div></div>`;
-        footer.innerHTML = `<button type="button" class="button" id="quick-schedule-preflight-cancel">Cancel</button><button type="button" class="button primary" disabled>Validating...</button>`;
-        footer.querySelector("#quick-schedule-preflight-cancel").onclick = exitScheduleCreation;
+      if (quickScheduleStep === "previewing") {
+        content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Checking</span></div><div class="schedule-quick-review"><div><h3>Requesting server preview</h3><p>Production sends the exact cron expression and IANA timezone to <code>POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview</code>. The browser never calculates future fires; it renders the returned preview.</p></div></div>`;
+        footer.innerHTML = `<button type="button" class="button" id="quick-schedule-preview-cancel">Cancel</button><button type="button" class="button primary" disabled>Previewing...</button>`;
+        footer.querySelector("#quick-schedule-preview-cancel").onclick = exitScheduleCreation;
         return;
       }
 
       if (quickScheduleStep === "accepted") {
-        content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Pending</span></div><div class="schedule-quick-authorization"><div><h3>202 Accepted</h3><p>The create command confirmed policy <code>${escapeHtml(quickScheduleCreateConfirmation?.confirmedPolicyVersion || "unavailable")}</code> and its reviewed permission digest. The client is waiting for the server to return the owner automation state before adding it to the Workflow's Schedule list.</p></div><div class="schedule-quick-preview"><strong>Not yet Active</strong><p>No credential, enabled state, next fire, or completed Schedule is claimed until the member automation read model is observed.</p></div></div>`;
+        content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Pending</span></div><div class="schedule-quick-review"><div><h3>202 Accepted</h3><p>The client is waiting for the server and refreshing Workflow schedules through <code>GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules</code>. Receipt: <code>${escapeHtml(quickScheduleAcceptedReceipt?.scheduleId || "pending")}</code>.</p></div><div class="schedule-quick-preview"><strong>Not yet Active</strong><p>Enabled state and next fire are shown only after the Workflow-scoped list or detail read model observes the Schedule.</p></div></div>`;
         footer.innerHTML = `<button type="button" class="button primary" id="quick-schedule-close-accepted">Close</button>`;
         footer.querySelector("#quick-schedule-close-accepted").onclick = exitScheduleCreation;
         return;
       }
 
-      if (!quickSchedulePreflight || !quickSchedulePreview || !preflightMatchesWorkflow(workflow, quickSchedulePreflight)) {
+      if (quickScheduleStep !== "review" || !quickSchedulePreview) {
         quickScheduleStep = "configure";
         renderScheduleCreation();
-        showToast("Matching server preview and owner authorization preflight are required before review.");
+        showToast("A Workflow Schedule preview is required before review.");
         return;
       }
-      const grants = quickSchedulePreflight.serviceGrants.map(grant => `<li><div><strong>${escapeHtml(grant.displayName)}</strong><span>Service ID ${escapeHtml(grant.targetId)} · Node IDs ${escapeHtml(grant.nodeIds.join(", "))}</span></div><span>Exact grant</span></li>`).join("");
-      const disclosures = quickSchedulePreflight.disclosures.map(disclosure => `<li>${escapeHtml(scheduleDisclosureLabel(disclosure))}</li>`).join("");
-      content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state">Review required</span></div><div class="schedule-quick-authorization"><div><h3>${escapeHtml(workflow.name)} will act on your behalf</h3><p>The server accepted the cadence contract. Review the exact owner-scoped authorization plan before sending the create command.</p></div><div class="schedule-quick-preview"><strong>Next five fires · server response ${escapeHtml(quickSchedulePreview.requestId)}</strong><ul>${quickSchedulePreview.fires.map(fire => `<li>${escapeHtml(fire)} · ${escapeHtml(quickScheduleDraft.timeZone)}</li>`).join("")}</ul></div><ul class="schedule-quick-permissions">${grants}</ul><div class="schedule-quick-credential"><strong>Dedicated Agent Key</strong><p>${quickSchedulePreflight.ownerLLMSelection ? `${escapeHtml(quickSchedulePreflight.ownerLLMSelection.serviceSlugSnapshot)} / ${escapeHtml(quickSchedulePreflight.ownerLLMSelection.model)} · ` : ""}Scopes ${escapeHtml(quickSchedulePreflight.credentialPlan.scopes.join(" + "))} · expires ${escapeHtml(quickSchedulePreflight.credentialPlan.expiresAt)}.</p></div><ul class="schedule-quick-disclosures">${disclosures}</ul><details><summary>Authorization diagnostics</summary><p><code>${escapeHtml(quickSchedulePreflight.permissionDigest)}</code><br>Policy ${escapeHtml(quickSchedulePreflight.policyVersion)}</p></details><p class="schedule-quick-note">Confirmation returns to the surface that opened this creation flow. Existing Schedule management remains in the Workflow panel.</p></div>`;
-      footer.innerHTML = `<button type="button" class="button" id="quick-schedule-back">Back</button><button type="button" class="button primary" id="quick-schedule-confirm">Confirm and create</button>`;
+      const humanSummary = quickScheduleHumanSummary(quickScheduleDraft.cadence, quickScheduleDraft.repeatTime, quickScheduleDraft.cronExpression);
+      content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>Workflow Schedule</span></div><span class="schedule-state">Review</span></div><div class="schedule-quick-review"><div><h3>Review schedule</h3><p>Confirm the values that will be sent to the Workflow-scoped create endpoint.</p></div><div class="schedule-quick-grid"><div><span class="field-label">Schedule name</span><strong>${escapeHtml(quickScheduleDraft.name)}</strong></div><div><span class="field-label">Repeat</span><strong>${escapeHtml(humanSummary)}</strong></div><div><span class="field-label">Time zone</span><strong>${escapeHtml(quickScheduleDraft.timeZone)}</strong></div><div><span class="field-label">Enabled after creation</span><strong>${quickScheduleDraft.enabled ? "Yes" : "No"}</strong></div><div class="full"><span class="field-label">Prompt (optional)</span><strong>${escapeHtml(quickScheduleDraft.prompt || "No prompt")}</strong></div></div><div class="schedule-quick-preview"><strong>Next five fires · server response ${escapeHtml(quickSchedulePreview.requestId)}</strong><ul>${quickSchedulePreview.fires.map(fire => `<li>${escapeHtml(fire)} · ${escapeHtml(quickScheduleDraft.timeZone)}</li>`).join("")}</ul></div><p class="schedule-quick-note"><code>POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules</code> sends displayName, cronExpression, timezone, enabled, and prompt. Existing Schedule management remains in the Workflow panel.</p></div>`;
+      footer.innerHTML = `<button type="button" class="button" id="quick-schedule-back">Back</button><button type="button" class="button primary" id="quick-schedule-confirm">Create schedule</button>`;
       footer.querySelector("#quick-schedule-back").onclick = () => {
-        quickSchedulePreflight = null;
         quickSchedulePreview = null;
         quickScheduleStep = "configure";
         renderScheduleCreation();
@@ -1653,37 +1574,14 @@ steps:
       }
     }
 
-    function scheduleDisclosureLabel(disclosure) {
-      return {
-        dedicated_credential: "A dedicated credential is created for this Schedule.",
-        aevatar_secret_custody: "Aevatar keeps the restricted key in its Vault.",
-        browser_never_receives_secret: "The browser never receives the raw key.",
-        delete_revokes_credential: "Deleting the Schedule revokes its credential.",
-        pause_resume_preserves_credential: "Pausing and resuming preserve the credential.",
-        node_ids_are_permission_set: "The returned node IDs are the exact permission set."
-      }[disclosure] || disclosure.replaceAll("_", " ");
-    }
-
-    function scheduleOwnerKey(workflow) {
-      return `${workflow.scopeId}/${workflow.teamId}/${workflow.memberId}`;
-    }
-
-    function preflightMatchesWorkflow(workflow, preflight) {
-      return preflight.ownerScopeId === workflow.scopeId
-        && preflight.ownerTeamId === workflow.teamId
-        && preflight.ownerMemberId === workflow.memberId
-        && preflight.publishedServiceId === workflow.publishedServiceId
-        && preflight.revisionId === workflow.activeRevisionId;
-    }
-
-    function requestQuickSchedulePreflight(content) {
+    function requestQuickSchedulePreview(content) {
       const workflow = quickScheduleWorkflow;
       if (!workflow || !quickScheduleDraft) return;
       const name = content.querySelector("#quick-schedule-name").value.trim();
       const cronExpression = content.querySelector("#quick-schedule-cron").value.trim();
       const timeZone = content.querySelector("#quick-schedule-time-zone").value.trim();
       if (!name) {
-        showToast("Give this Schedule a name before reviewing authorization.");
+        showToast("Give this Schedule a name before review.");
         content.querySelector("#quick-schedule-name").focus();
         return;
       }
@@ -1703,45 +1601,51 @@ steps:
         repeatTime: content.querySelector("#quick-schedule-repeat-time").value,
         cronExpression,
         timeZone,
-        prompt: content.querySelector("#quick-schedule-prompt").value.trim()
+        prompt: content.querySelector("#quick-schedule-prompt").value.trim(),
+        enabled: true
       };
       const requestVersion = ++quickScheduleRequestVersion;
-      quickScheduleStep = "preflight";
-      quickSchedulePreflight = null;
+      quickScheduleStep = "previewing";
       quickSchedulePreview = null;
       renderScheduleCreation();
       window.setTimeout(() => {
-        if (quickScheduleWorkflow !== workflow || quickScheduleStep !== "preflight" || requestVersion !== quickScheduleRequestVersion) return;
-        const preflight = prototypeSchedulePreflightByOwner[scheduleOwnerKey(workflow)];
+        if (quickScheduleWorkflow !== workflow || quickScheduleStep !== "previewing" || requestVersion !== quickScheduleRequestVersion) return;
         const preview = prototypeSchedulePreviewByCron[quickScheduleDraft.cronExpression];
-        if (!preflight || !preview || !preflightMatchesWorkflow(workflow, preflight)) {
+        if (!preview) {
           quickScheduleStep = "configure";
           renderScheduleCreation();
-          showToast("Matching server preview or owner authorization preflight is unavailable for this prototype input.");
+          showToast("The Workflow Schedule API could not preview this recurrence.");
           return;
         }
-        quickSchedulePreflight = structuredClone(preflight);
         quickSchedulePreview = structuredClone(preview);
-        quickScheduleStep = "authorize";
+        quickScheduleStep = "review";
         renderScheduleCreation();
       }, 650);
     }
 
+    function refreshWorkflowSchedules(workflow) {
+      return prototypeWorkflowSchedules[workflow.scopeId]?.[workflow.id] || [];
+    }
+
     function acceptQuickScheduleCreation() {
-      if (!quickScheduleWorkflow || !quickScheduleDraft || !quickSchedulePreflight || !quickSchedulePreview
-        || !preflightMatchesWorkflow(quickScheduleWorkflow, quickSchedulePreflight)) return;
-      quickScheduleCreateConfirmation = {
-        ownerScopeId: quickScheduleWorkflow.scopeId,
-        ownerTeamId: quickScheduleWorkflow.teamId,
-        ownerMemberId: quickScheduleWorkflow.memberId,
-        publishedServiceId: quickScheduleWorkflow.publishedServiceId,
-        revisionId: quickScheduleWorkflow.activeRevisionId,
-        confirmedPermissionDigest: quickSchedulePreflight.permissionDigest,
-        confirmedPolicyVersion: quickSchedulePreflight.policyVersion
+      if (!quickScheduleWorkflow || !quickScheduleDraft || !quickSchedulePreview) return;
+      const createRequest = {
+        displayName: quickScheduleDraft.name,
+        cronExpression: quickScheduleDraft.cronExpression,
+        timezone: quickScheduleDraft.timeZone,
+        enabled: quickScheduleDraft.enabled,
+        prompt: quickScheduleDraft.prompt,
+        headers: {}
+      };
+      quickScheduleAcceptedReceipt = {
+        scheduleId: "sch-pending-feedback",
+        location: `/api/scopes/${quickScheduleWorkflow.scopeId}/workflows/${quickScheduleWorkflow.id}/schedules/sch-pending-feedback`,
+        request: createRequest
       };
       quickScheduleStep = "accepted";
       renderScheduleCreation();
-      showToast("Schedule request accepted. Waiting for the owner automation state.");
+      refreshWorkflowSchedules(quickScheduleWorkflow);
+      showToast("Schedule request accepted. Refreshing Workflow schedules.");
     }
 
     function openSchedulePrototype(id = "wf-feedback") {
@@ -1973,7 +1877,7 @@ steps:
     }
 
     function schedulePreview(schedule) {
-      return schedule.enabled ? schedule.preview : ["No upcoming runs"];
+      return schedule.enabled && schedule.nextFireAt ? [schedule.nextFireAt] : ["No upcoming runs"];
     }
 
     function scheduleEditModel(schedule) {
@@ -1994,13 +1898,13 @@ steps:
         repeatTime = `${String(Number(hour)).padStart(2, "0")}:${String(Number(minute)).padStart(2, "0")}`;
       }
       return {
-        name: schedule.name,
+        name: schedule.displayName,
         repeat,
         repeatTime,
-        timeZone: schedule.timeZone,
+        timeZone: schedule.timezone,
         cronExpression: schedule.cronExpression,
         prompt: schedule.prompt,
-        humanSummary: schedule.cadence,
+        humanSummary: quickScheduleHumanSummary(repeat, repeatTime, schedule.cronExpression),
         customCron: repeat === "Write cron yourself"
       };
     }
@@ -2019,12 +1923,13 @@ steps:
     }
 
     function schedulePending(schedule) {
-      return scheduleMutation?.scheduleId === schedule.id ? scheduleMutation : null;
+      return scheduleMutation?.scheduleId === schedule.scheduleId ? scheduleMutation : null;
     }
 
     function scheduleListRow(schedule) {
       const pending = schedulePending(schedule);
-      return `<li><button type="button" class="schedule-list-select" data-schedule-id="${escapeHtml(schedule.id)}"><div class="schedule-row"><div class="schedule-row-top"><strong>${escapeHtml(schedule.name)}</strong><span class="schedule-state${scheduleStateClass(schedule)}">${scheduleState(schedule)}</span></div><p>${escapeHtml(schedule.cadence)} · ${escapeHtml(schedule.timeZone)}<br>Next: ${escapeHtml(schedule.nextRun)}</p>${pending ? `<p class="muted">${escapeHtml(pending.label)} Waiting for the latest status.</p>` : ""}</div></button></li>`;
+      const editModel = scheduleEditModel(schedule);
+      return `<li><button type="button" class="schedule-list-select" data-schedule-id="${escapeHtml(schedule.scheduleId)}"><div class="schedule-row"><div class="schedule-row-top"><strong>${escapeHtml(schedule.displayName)}</strong><span class="schedule-state${scheduleStateClass(schedule)}">${scheduleState(schedule)}</span></div><p>${escapeHtml(editModel.humanSummary)} · ${escapeHtml(schedule.timezone)}<br>Next: ${escapeHtml(schedule.nextFireAt)}</p>${pending ? `<p class="muted">${escapeHtml(pending.label)} Waiting for the latest status.</p>` : ""}</div></button></li>`;
     }
 
     function renderSchedulePanel() {
@@ -2035,7 +1940,7 @@ steps:
         return;
       }
 
-      const schedules = prototypeTeamAutomations[currentWorkflow.scopeId]?.[currentWorkflow.teamId]?.[currentWorkflow.memberId] || [];
+      const schedules = prototypeWorkflowSchedules[currentWorkflow.scopeId]?.[currentWorkflow.id] || [];
       panel.hidden = false;
       if (schedulePanelMode === "new") {
         renderScheduleCreation();
@@ -2043,16 +1948,19 @@ steps:
       }
       if (schedulePanelMode === "list") {
         const rows = schedules.map(scheduleListRow).join("");
-        panel.innerHTML = `<header class="studio-panel-header"><div><h2>Member automations</h2><p>Recurring work for this Team member workflow.</p></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close automations" title="Close">×</button></header>
+        panel.innerHTML = `<header class="studio-panel-header"><div><h2>Workflow schedules</h2><p>Recurring runs owned by this Workflow.</p></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header>
           <div class="studio-panel-body">
-            <div class="section-heading" style="margin:0 0 10px"><div><h2>${schedules.length ? "Automations" : "No automations yet"}</h2><p>${schedules.length ? "Select an automation to review its configuration." : "Create recurring work for this published member."}</p></div><button type="button" class="button small primary" id="schedule-new">New automation</button></div>
+            <div class="section-heading" style="margin:0 0 10px"><div><h2>${schedules.length ? "Schedules" : "No schedules yet"}</h2><p>${schedules.length ? "Select a Schedule to review its configuration." : "Create recurring work for this published Workflow."}</p></div><button type="button" class="button small primary" id="schedule-new">New schedule</button></div>
             ${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : ""}
-            <button type="button" class="button small" id="schedule-all">View all automations</button>
-            <p class="muted" style="margin-top:14px">Prototype data only. Production reads /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations.</p>
+            <button type="button" class="button small" id="schedule-refresh">Refresh</button>
+            <p class="muted" style="margin-top:14px">Production reads ${escapeHtml(workflowScheduleApiContract[0])}.</p>
           </div>`;
         document.querySelector("#close-schedule").onclick = closeSchedulePanel;
         document.querySelector("#schedule-new").onclick = openSchedulePanelCreation;
-        document.querySelector("#schedule-all").onclick = () => showToast("Full management lives at the Team member Automations route.");
+        document.querySelector("#schedule-refresh").onclick = () => {
+          refreshWorkflowSchedules(currentWorkflow);
+          showToast("Workflow schedules refreshed.");
+        };
         document.querySelectorAll("[data-schedule-id]").forEach(button => {
           button.onclick = () => {
             selectedScheduleId = button.dataset.scheduleId;
@@ -2063,7 +1971,7 @@ steps:
         return;
       }
 
-      const schedule = schedules.find(item => item.id === selectedScheduleId);
+      const schedule = schedules.find(item => item.scheduleId === selectedScheduleId);
       if (!schedule) {
         schedulePanelMode = "list";
         renderSchedulePanel();
@@ -2072,22 +1980,22 @@ steps:
 
       const pending = schedulePending(schedule);
       const state = scheduleState(schedule);
-      const previewLabel = schedule.enabled ? "Next five runs" : "Upcoming runs";
+      const previewLabel = schedule.enabled ? "Next fire" : "Upcoming runs";
       const editModel = scheduleEditModel(schedule);
-      panel.innerHTML = `<header class="studio-panel-header"><div><h2>${escapeHtml(schedule.name)}</h2><p>Recurring work for this Team member workflow.</p></div><div><button type="button" class="icon-button" id="schedule-back" aria-label="Back to automations" title="Back">←</button><button type="button" class="icon-button" id="close-schedule" aria-label="Close automations" title="Close">×</button></div></header>
+      panel.innerHTML = `<header class="studio-panel-header"><div><h2>${escapeHtml(schedule.displayName)}</h2><p>Recurring runs for ${escapeHtml(currentWorkflow.name)}.</p></div><div><button type="button" class="icon-button" id="schedule-back" aria-label="Back to schedules" title="Back">←</button><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></div></header>
         <div class="studio-panel-body">
-          <section class="schedule-summary"><div class="schedule-summary-top"><strong>Team member automation</strong><span class="schedule-state${scheduleStateClass(schedule)}">${state}</span></div><p>${escapeHtml(currentWorkflow.memberId)} · ${escapeHtml(schedule.publishedServiceId)} · ${escapeHtml(schedule.revisionId)}</p></section>
+          <section class="schedule-summary"><div class="schedule-summary-top"><strong>Workflow Schedule</strong><span class="schedule-state${scheduleStateClass(schedule)}">${state}</span></div><p>Managed from this Workflow</p></section>
           <label class="form-row"><span class="field-label">Schedule name</span><input class="input" id="schedule-edit-name" value="${escapeHtml(editModel.name)}" ${pending ? "disabled" : ""}></label>
-          <div class="form-row"><span class="field-label">How often</span><div class="schedule-repeat-builder"><label><span class="field-label">Repeat</span><select class="select" id="schedule-edit-repeat" ${pending ? "disabled" : ""}><option>Every hour</option><option>Every day</option><option>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Every Mon, Wed and Fri</option><option>Write cron yourself</option></select></label><label><span class="field-label">At</span><input class="input" id="schedule-edit-repeat-time" type="time" value="${escapeHtml(editModel.repeatTime)}" ${pending ? "disabled" : ""}></label><label><span class="field-label">In</span><input class="input" id="schedule-edit-time-zone" value="${escapeHtml(editModel.timeZone)}" ${pending ? "disabled" : ""}></label></div><div class="schedule-repeat-preview"><div class="schedule-repeat-preview-row"><strong id="schedule-edit-human-summary">${escapeHtml(editModel.humanSummary)}</strong><span>server-owned next fires</span></div><div class="schedule-repeat-preview-row"><span>${escapeHtml(schedule.nextRun)}</span><span><button type="button" class="schedule-cron-action" id="schedule-edit-cron-mode" ${pending ? "disabled" : ""}>write it as cron instead</button><code class="schedule-cron-code" id="schedule-edit-generated-cron">${escapeHtml(editModel.cronExpression)}</code></span></div></div><label class="schedule-cron-editor" id="schedule-edit-cron-editor" ${editModel.customCron ? "" : "hidden"}><span class="field-label">Cron</span><input class="input mono" id="schedule-edit-cron" value="${escapeHtml(editModel.cronExpression)}" ${pending ? "disabled" : ""}><small>Complex expressions stay in raw-cron mode and are never rounded to a preset.</small></label></div>
+          <div class="form-row"><span class="field-label">How often</span><div class="schedule-repeat-builder"><label><span class="field-label">Repeat</span><select class="select" id="schedule-edit-repeat" ${pending ? "disabled" : ""}><option>Every hour</option><option>Every day</option><option>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Every Mon, Wed and Fri</option><option>Write cron yourself</option></select></label><label><span class="field-label">At</span><input class="input" id="schedule-edit-repeat-time" type="time" value="${escapeHtml(editModel.repeatTime)}" ${pending ? "disabled" : ""}></label><label><span class="field-label">In</span><input class="input" id="schedule-edit-time-zone" value="${escapeHtml(editModel.timeZone)}" ${pending ? "disabled" : ""}></label></div><div class="schedule-repeat-preview"><div class="schedule-repeat-preview-row"><strong id="schedule-edit-human-summary">${escapeHtml(editModel.humanSummary)}</strong><span>server-owned next fire</span></div><div class="schedule-repeat-preview-row"><span>${escapeHtml(schedule.nextFireAt)}</span><span><button type="button" class="schedule-cron-action" id="schedule-edit-cron-mode" ${pending ? "disabled" : ""}>write it as cron instead</button><code class="schedule-cron-code" id="schedule-edit-generated-cron">${escapeHtml(editModel.cronExpression)}</code></span></div></div><label class="schedule-cron-editor" id="schedule-edit-cron-editor" ${editModel.customCron ? "" : "hidden"}><span class="field-label">Cron</span><input class="input mono" id="schedule-edit-cron" value="${escapeHtml(editModel.cronExpression)}" ${pending ? "disabled" : ""}><small>Complex expressions stay in raw-cron mode and are never rounded to a preset.</small></label></div>
           <label class="form-row"><span class="field-label">Prompt (optional)</span><textarea class="textarea" id="schedule-edit-prompt" ${pending ? "disabled" : ""}>${escapeHtml(editModel.prompt)}</textarea><small>Sent with each scheduled run only when provided.</small></label>
-          <section class="schedule-summary"><div class="schedule-summary-top"><strong>Dedicated Agent Key</strong><span class="schedule-state">${escapeHtml(schedule.authorizationStatus)}</span></div><p>${escapeHtml(schedule.credentialExpiry)} · browser never receives the raw key</p></section>
           <label class="schedule-toggle"><span>Schedule is active</span><input id="schedule-enabled" type="checkbox" role="switch" ${schedule.enabled ? "checked" : ""} ${pending ? "disabled" : ""}></label>
           <div class="form-row"><span class="field-label">${previewLabel}</span><ul class="schedule-preview">${schedulePreview(schedule).map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>
-          <div class="form-row"><span class="field-label">Last run</span><p class="muted" style="margin:4px 0 0">${escapeHtml(schedule.lastRun)}</p></div>
-          ${schedule.lastError ? `<div class="schedule-alert"><strong>Last run</strong>${escapeHtml(schedule.lastError)}</div>` : ""}
-          ${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Waiting for the latest automation status.</div>` : "<div class=\"schedule-observation\"><strong>Observed Schedule state only.</strong><br>Production rereads the owner-scoped automation after each accepted command.</div>"}
+          <div class="form-row"><span class="field-label">Last fire</span><p class="muted" style="margin:4px 0 0">${escapeHtml(schedule.lastFireAt)} · ${schedule.fireCount} total · ${schedule.failureCount} failed</p></div>
+          <div class="form-row"><span class="field-label">Recent fires</span><ul class="schedule-preview">${schedule.recentFires.map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>
+          ${schedule.lastError ? `<div class="schedule-alert"><strong>Last fire</strong>${escapeHtml(schedule.lastError)}</div>` : ""}
+          ${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Waiting for the latest Workflow Schedule status.</div>` : "<div class=\"schedule-observation\"><strong>Observed Schedule state only.</strong><br>Production rereads the Workflow-scoped list or detail after every accepted mutation.</div>"}
         </div>
-        <footer class="studio-panel-footer"><button type="button" class="button small danger" id="schedule-delete" ${pending ? "disabled" : ""}>Delete</button><button type="button" class="button small" id="schedule-run-now" ${pending ? "disabled" : ""}>Run now</button><button type="button" class="button small" id="schedule-reauthorize" ${pending ? "disabled" : ""}>Review</button><button type="button" class="button small primary" id="schedule-save" ${pending ? "disabled" : ""}>Save changes</button></footer>`;
+        <footer class="studio-panel-footer"><button type="button" class="button small danger" id="schedule-delete" ${pending ? "disabled" : ""}>Delete</button><button type="button" class="button small" id="schedule-run-now" ${pending ? "disabled" : ""}>Run now</button><button type="button" class="button small primary" id="schedule-save" ${pending ? "disabled" : ""}>Save changes</button></footer>`;
 
       document.querySelector("#close-schedule").onclick = closeSchedulePanel;
       document.querySelector("#schedule-back").onclick = () => { schedulePanelMode = "list"; selectedScheduleId = null; renderSchedulePanel(); };
@@ -2102,37 +2010,41 @@ steps:
       };
       updateScheduleEditRepeatPresentation(panel, Boolean(pending));
       document.querySelector("#schedule-enabled").onchange = event => {
-        scheduleMutation = { scheduleId: schedule.id, label: event.target.checked ? "Enable request accepted." : "Pause request accepted." };
+        scheduleMutation = { scheduleId: schedule.scheduleId, label: event.target.checked ? "Enable request accepted." : "Pause request accepted." };
+        refreshWorkflowSchedules(currentWorkflow);
         renderSchedulePanel();
         showToast(`${scheduleMutation.label} Waiting for the latest status.`);
       };
       document.querySelector("#schedule-save").onclick = () => {
         const scheduleUpdateDraft = {
-          name: panel.querySelector("#schedule-edit-name").value.trim(),
-          cadence: panel.querySelector("#schedule-edit-repeat").value,
-          repeatTime: panel.querySelector("#schedule-edit-repeat-time").value,
-          timeZone: panel.querySelector("#schedule-edit-time-zone").value.trim(),
+          displayName: panel.querySelector("#schedule-edit-name").value.trim(),
           cronExpression: panel.querySelector("#schedule-edit-cron").value.trim(),
+          timezone: panel.querySelector("#schedule-edit-time-zone").value.trim(),
+          enabled: schedule.enabled,
           prompt: panel.querySelector("#schedule-edit-prompt").value.trim()
         };
-        if (!scheduleUpdateDraft.name || !isValidTimeZone(scheduleUpdateDraft.timeZone) || scheduleUpdateDraft.cronExpression.split(/\s+/).length !== 5) {
+        if (!scheduleUpdateDraft.displayName || !isValidTimeZone(scheduleUpdateDraft.timezone) || scheduleUpdateDraft.cronExpression.split(/\s+/).length !== 5) {
           showToast("Name, a valid IANA timezone, and a five-field cron are required.");
           return;
         }
-        scheduleMutation = { scheduleId: schedule.id, label: "Automation update accepted.", request: scheduleUpdateDraft };
+        scheduleMutation = { scheduleId: schedule.scheduleId, label: "Schedule update accepted.", request: scheduleUpdateDraft };
+        refreshWorkflowSchedules(currentWorkflow);
         renderSchedulePanel();
-        showToast("Automation update accepted. Waiting for the latest status.");
+        showToast("Schedule update accepted. Waiting for the latest status.");
       };
       document.querySelector("#schedule-run-now").onclick = () => {
         if (!window.confirm("Run this published workflow now? It may change external systems.")) return;
-        showToast("Run request accepted.");
-      };
-      document.querySelector("#schedule-reauthorize").onclick = () => showToast("Review and reauthorize uses the Team Automation authorization flow.");
-      document.querySelector("#schedule-delete").onclick = () => {
-        if (!window.confirm("Delete this automation? The dedicated credential will be revoked.")) return;
-        scheduleMutation = { scheduleId: schedule.id, label: "Automation deletion accepted." };
+        scheduleMutation = { scheduleId: schedule.scheduleId, label: "Run-now request accepted." };
+        refreshWorkflowSchedules(currentWorkflow);
         renderSchedulePanel();
-        showToast("Automation deletion accepted. Waiting for the latest status.");
+        showToast("Run-now request accepted. Waiting for the latest Schedule detail.");
+      };
+      document.querySelector("#schedule-delete").onclick = () => {
+        if (!window.confirm("Delete this Schedule? This cannot be undone.")) return;
+        scheduleMutation = { scheduleId: schedule.scheduleId, label: "Schedule deletion accepted." };
+        refreshWorkflowSchedules(currentWorkflow);
+        renderSchedulePanel();
+        showToast("Schedule deletion accepted. Waiting for the Workflow list to confirm removal.");
       };
     }
 
@@ -2317,8 +2229,6 @@ steps:
       const item = {
         id,
         scopeId: "scope-demo",
-        teamId: "team-draft",
-        memberId: `m-draft-${Date.now().toString(36)}`,
         publishedServiceId: null,
         activeRevisionId: null,
         name,

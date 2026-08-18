@@ -23,19 +23,20 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "b5fb0e7e30e642f0aab33856a03267a06970cf5483c54bdc59adfbc64d16c594",
-    "schedule-workflow-editor-panel.png": "9e0fc671026786f999d76158d943e21e26ae7c0e911870d6a9415397ec62f95a",
-    "schedule-authorization-review.png": "d0220554a03f99b0fbc5ffeee9dc6d383c028a14ad9d8f50e239e4db253b29e6",
-    "schedule-creation-pending.png": "0e3191ac228b57b4082d62a1175eecc71d7a9601a9180775453e1b53de827071",
-    "schedule-detail.png": "fc78c4c7a6aa8d406be4ded881d494356ed8dfb65fcd01ebf124b079db29dc3c",
-    "schedule-edit.png": "d1059e49a54bb4f33757e424c45652f980f305639b66b4cd1e34a7b374527160",
+    "schedule-workflows-list-modal.png": "873264abdaee639bd6cefe2b784fef26498aaef4d31946ee9e6c1512d0261d8d",
+    "schedule-workflow-editor-panel.png": "189fa4bb97f36ed6f8af7454ecad03255d12862061808553c5ada52240232cfc",
+    "schedule-review.png": "9ad34eb17cbebfa5ae75f94d684550f7750b9a750f44dae0de83f906f44d13f2",
+    "schedule-creation-pending.png": "79cbf3606069d0cb9d24dcbd8625e6561271bc3e725afc4d102d8fb446eeacea",
+    "schedule-detail.png": "198c7e2679cfa797fd677714b88f5b04e45544145bc64ece29557e32f82986d8",
+    "schedule-edit.png": "a7529bfb627a17a0ff7b9284db2dcd9bfaec60628e7b6dbccc8c9cb1fed6abb3",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
     "aevatar-workflow-schedule-design.png",
+    "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "84b05e328f28173b6e375653af800cd393a835b377b23b588166e7afa733c989"
+EXPECTED_SCHEDULE_SHA256 = "709f570fab7ed53eb90d674e6f44e83b6ace47594730b63f15390ab12c9c37e2"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -58,7 +59,7 @@ EXPECTED_FRAMES = (
 EXPECTED_SCHEDULE_FRAMES = (
     "01 · Workflows — quick schedule modal",
     "02 · Workflow — schedule setup panel",
-    "03 · Schedule — review authorization",
+    "03 · Schedule — review before creation",
     "04 · Schedule — creation pending",
     "05 · Workflow — schedule detail",
     "06 · Workflow — change schedule",
@@ -212,21 +213,37 @@ def main() -> None:
     schedule_visible_text_casefolded = schedule_visible_text.casefold()
     if "Schedule" not in schedule_visible_text:
         raise SystemExit("schedule entry point is missing from the schedule design board")
-    for required in ("Team member automation", "Pinned revision",
-                     "Dedicated Agent Key", "write it as cron instead", "Time zone",
-                     "NEXT FIVE FIRES", "Review authorization",
-                     "Pause", "Delete"):
+    for required in ("Workflow Schedule", "write it as cron instead", "Time zone",
+                     "NEXT FIVE FIRES", "Review schedule", "Create schedule",
+                     "202 Accepted", "Run now", "Pause", "Delete"):
         if required.casefold() not in schedule_visible_text_casefolded:
             raise SystemExit(f"schedule frame is missing required copy: {required}")
     if "prompt (optional)" not in schedule_visible_text_casefolded:
         raise SystemExit("schedule frame incorrectly hides optional recurring prompt semantics")
-    for required_state in ("credential expired · owner review required", "not yet active"):
+    for required_state in ("enabled after creation", "not yet active"):
         if required_state not in schedule_visible_text_casefolded:
-            raise SystemExit(f"schedule frames are missing honest credential state: {required_state}")
-    if "not a graph node" not in schedule_visible_text_casefolded:
-        raise SystemExit("schedule board does not state that graph nodes are out of scope")
+            raise SystemExit(f"schedule frames are missing honest Schedule state: {required_state}")
     if "trigger" in schedule_visible_text_casefolded:
         raise SystemExit("schedule board still contains unsupported trigger terminology")
+    for forbidden in (
+        "team member",
+        "team automation",
+        "teamid",
+        "memberid",
+        "publishedserviceid",
+        "dedicated agent key",
+        "node ids",
+        "owner llm",
+        "permission digest",
+        "permissiondigest",
+        "policy version",
+        "policyversion",
+        "review and reauthorize",
+        "/api/schedules",
+        "/automations/preflight",
+    ):
+        if forbidden in schedule_visible_text_casefolded:
+            raise SystemExit(f"Schedule design leaks the wrong resource model: {forbidden}")
     schedule_frame_names = tuple(
         element["name"]
         for element in schedule_document["elements"]
@@ -267,7 +284,7 @@ def main() -> None:
             raise SystemExit(f"Schedule design still links to Activity: {forbidden}")
 
     quick_modal_text = schedule_frame_text("01 · Workflows — quick schedule modal").casefold()
-    for required in ("new schedule", "without leaving workflows", "review authorization"):
+    for required in ("new schedule", "without leaving workflows", "review schedule"):
         if required not in quick_modal_text:
             raise SystemExit(f"Workflow catalogue quick-create modal is missing: {required}")
     if "open the editor" not in quick_modal_text:
@@ -284,7 +301,7 @@ def main() -> None:
             "every weekday at 09:00",
             "write it as cron instead",
             "server preview required",
-            "post /api/schedules/preview",
+            "post /api/scopes/{scopeid}/workflows/{workflowid}/schedules/preview",
             "no prompt",
         ):
             if required not in configure_text:
@@ -307,24 +324,29 @@ def main() -> None:
     if "cron expression" in schedule_edit_text:
         raise SystemExit("Workflow Schedule edit exposes raw cron as a default primary field")
 
-    authorization_text = schedule_frame_text("03 · Schedule — review authorization").casefold()
+    review_text = schedule_frame_text("03 · Schedule — review before creation").casefold()
     for required in (
-        "exact server-returned authorization plan",
-        "lark · acme",
-        "node ids",
-        "owner llm",
-        "read · proxy",
-        "permissiondigest + policyversion",
-        "sha256:feedback-v7-permissions",
+        "review schedule",
+        "weekly feedback report",
+        "weekly feedback report recurring work",
+        "every weekday at 09:00",
+        "asia/shanghai",
+        "no prompt",
+        "enabled after creation",
+        "next five fires",
+        "create schedule",
+        "post /api/scopes/{scopeid}/workflows/{workflowid}/schedules",
     ):
-        if required not in authorization_text:
-            raise SystemExit(f"Schedule authorization frame is missing server review fact: {required}")
-    for forbidden in ("linear", "salesforce", "warehouse"):
-        if forbidden in authorization_text:
-            raise SystemExit(f"Schedule authorization frame still contains unrelated sample access: {forbidden}")
+        if required not in review_text:
+            raise SystemExit(f"Schedule creation review is missing API-backed fact: {required}")
 
     pending_text = schedule_frame_text("04 · Schedule — creation pending").casefold()
-    for required in ("202 accepted", "not yet active", "waiting for schedule state"):
+    for required in (
+        "202 accepted",
+        "not yet active",
+        "refreshing workflow schedules",
+        "get /api/scopes/{scopeid}/workflows/{workflowid}/schedules",
+    ):
         if required not in pending_text:
             raise SystemExit(f"Schedule pending frame is missing honest accepted state: {required}")
 
@@ -342,11 +364,13 @@ def main() -> None:
     for required in ("weekly review", "every monday at 10:00", "asia/shanghai"):
         if required not in schedule_detail_text:
             raise SystemExit(f"Workflow Schedule detail does not round-trip selected state: {required}")
-    if "authorization and next-fire state are returned by the schedule service" not in schedule_detail_text:
-        raise SystemExit("Workflow Schedule detail does not identify the Schedule state source")
-    for required in ("Review and reauthorize", "Run now", "Change", "Pause", "Delete"):
+    if "schedule facts are returned by the workflow-scoped api" not in schedule_detail_text:
+        raise SystemExit("Workflow Schedule detail does not identify its typed read source")
+    for required in ("Run now", "Change", "Pause", "Delete"):
         if required.casefold() not in schedule_detail_text:
             raise SystemExit(f"Workflow Schedule detail is missing lifecycle action: {required}")
+    if "Review and reauthorize".casefold() in schedule_detail_text:
+        raise SystemExit("Workflow Schedule detail still exposes fictional reauthorization")
     if "what will run" in schedule_visible_text_casefolded:
         raise SystemExit("Schedule board still presents the removed collection model")
 
@@ -355,7 +379,7 @@ def main() -> None:
     creation_end = prototype_text.index("function openSchedulePrototype", creation_start)
     creation_text = prototype_text[creation_start:creation_end]
     configure_start = creation_text.index('if (quickScheduleStep === "configure")')
-    configure_end = creation_text.index('if (quickScheduleStep === "preflight")', configure_start)
+    configure_end = creation_text.index('if (quickScheduleStep === "previewing")', configure_start)
     configure_creation_text = creation_text[configure_start:configure_end]
     if 'id="editor-schedule"' not in prototype_text:
         raise SystemExit("prototype schedule action is missing from the editor")
@@ -368,17 +392,15 @@ def main() -> None:
         "function openScheduleQuickModal",
         "function openSchedulePanelCreation",
         "function renderScheduleCreation",
-        "function requestQuickSchedulePreflight",
+        "function requestQuickSchedulePreview",
         "function acceptQuickScheduleCreation",
-        "Review authorization",
-        "Confirm and create",
+        "Review schedule",
+        "Create schedule",
         "without leaving Workflows",
         "server preview required",
         "never calculates future fires",
-        "POST /automations/preflight",
-        "prototypeSchedulePreflightByOwner",
-        "quickSchedulePreflight.serviceGrants.map",
-        "Node IDs",
+        "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview",
+        "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules",
         "Repeat",
         "Every weekday at 09:00",
         "write it as cron instead",
@@ -387,27 +409,18 @@ def main() -> None:
         '"Every hour": "0 * * * *"',
         '"Write cron yourself": "15 14 * * 2,4"',
         "prototypeSchedulePreviewByCron",
-        "POST /api/schedules/preview",
         "const presetCron = quickScheduleCronByRepeat[repeat]",
         "browserTimeZone()",
-        "preflightMatchesWorkflow",
-        "confirmedPermissionDigest",
-        "confirmedPolicyVersion",
-        "Deleting the Schedule revokes its credential.",
-        "Pausing and resuming preserve the credential.",
         "202 Accepted",
         "waiting for the server",
         "Not yet Active",
         "Save and publish the latest changes before scheduling.",
-        "Wait for the published service to become available.",
-        "Wait for the published revision to become available.",
     ):
         if required not in prototype_text:
             raise SystemExit(f"prototype quick-create Schedule modal is missing: {required}")
     for required in (
         'scheduleCreationSurface === "panel"',
         'schedulePanelMode = "new"',
-        "prototypeSchedulePreflightByOwner[scheduleOwnerKey(workflow)]",
         "prototypeSchedulePreviewByCron[quickScheduleDraft.cronExpression]",
         'modal.id === "schedule-quick-modal"',
     ):
@@ -421,6 +434,14 @@ def main() -> None:
         '<strong>Lark</strong><span>Already granted</span>',
         "prototypeSchedulePreflightByService",
         "prototypeSchedulePreviewByRequest",
+        "prototypeSchedulePreflightByOwner",
+        "requestQuickSchedulePreflight",
+        "preflightMatchesWorkflow",
+        "confirmedPermissionDigest",
+        "confirmedPolicyVersion",
+        "Dedicated Agent Key",
+        "Review and reauthorize",
+        "/automations/preflight",
     ):
         if forbidden in prototype_text:
             raise SystemExit(f"prototype quick-create Schedule modal still contains optimistic or shared sample state: {forbidden}")
@@ -440,16 +461,15 @@ def main() -> None:
         'id="schedule-edit-time-zone"',
         'id="schedule-edit-cron"',
         'id="schedule-edit-prompt"',
-        'name: panel.querySelector("#schedule-edit-name").value.trim()',
-        'cadence: panel.querySelector("#schedule-edit-repeat").value',
-        'repeatTime: panel.querySelector("#schedule-edit-repeat-time").value',
-        'timeZone: panel.querySelector("#schedule-edit-time-zone").value.trim()',
+        'displayName: panel.querySelector("#schedule-edit-name").value.trim()',
         'cronExpression: panel.querySelector("#schedule-edit-cron").value.trim()',
+        'timezone: panel.querySelector("#schedule-edit-time-zone").value.trim()',
+        "enabled: schedule.enabled",
         'prompt: panel.querySelector("#schedule-edit-prompt").value.trim()',
     ):
         if required not in prototype_text:
             raise SystemExit(f"prototype Schedule edit does not round-trip observed state: {required}")
-    for forbidden in ("const grants = workflow.steps.map", "schedules.unshift(", "enabled: true"):
+    for forbidden in ("const grants = workflow.steps.map", "schedules.unshift("):
         if forbidden in creation_text:
             raise SystemExit(f"prototype Schedule creation derives or invents observed state: {forbidden}")
     if 'window.location.hash === "#schedule"' not in prototype_text:
@@ -487,41 +507,50 @@ def main() -> None:
         raise SystemExit("prototype treats an accepted Schedule update as authoritative")
     if "prototypeSchedules[currentWorkflow.id] = []" in prototype_text:
         raise SystemExit("prototype treats an accepted Schedule delete as authoritative")
-    if any(
-        required not in prototype_text
-        for required in (
-            "preflight.ownerScopeId === workflow.scopeId",
-            "preflight.ownerTeamId === workflow.teamId",
-            "preflight.ownerMemberId === workflow.memberId",
-            "preflight.publishedServiceId === workflow.publishedServiceId",
-        )
+    for required in (
+        "prototypeWorkflowSchedules[currentWorkflow.scopeId]?.[currentWorkflow.id]",
+        "GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules",
+        "GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}",
+        "PUT /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}",
+        "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:enable",
+        "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:disable",
+        "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:run-now",
+        "DELETE /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}",
+        "displayName: quickScheduleDraft.name",
+        "cronExpression: quickScheduleDraft.cronExpression",
+        "timezone: quickScheduleDraft.timeZone",
+        "enabled: quickScheduleDraft.enabled",
+        "prompt: quickScheduleDraft.prompt",
+        "schedule.scheduleId",
+        "enabled: schedule.enabled",
+        "refreshWorkflowSchedules",
     ):
-        raise SystemExit("prototype does not model the Team member automation owner")
-    if "preflight.revisionId === workflow.activeRevisionId" not in prototype_text:
-        raise SystemExit("prototype does not model the active published revision identity")
-    if "prototypeSchedules[currentWorkflow.id]" in prototype_text:
-        raise SystemExit("prototype indexes Schedules by workflow identity instead of published service identity")
-    if "prototypeSchedules" in prototype_text:
-        raise SystemExit("prototype still uses standalone Schedule state instead of Team automations")
-    if "prototypeTeamAutomations[currentWorkflow.scopeId]?.[currentWorkflow.teamId]?.[currentWorkflow.memberId]" not in prototype_text:
-        raise SystemExit("prototype does not scope automations to the Team member owner")
-    if "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations" not in prototype_text:
-        raise SystemExit("prototype does not point production reads at Team Automation endpoints")
+        if required not in prototype_text:
+            raise SystemExit(f"prototype is missing workflow-scoped Schedule behavior: {required}")
+    schedule_surface_text = prototype_text[
+        prototype_text.index("function scheduleAvailability"):
+        prototype_text.index("function renderActivity")
+    ]
+    for forbidden in (
+        "schedule.id",
+        ".teamId",
+        ".memberId",
+        "prototypeTeamAutomations",
+        "Team member automation",
+        "Team Automation",
+        "/api/schedules",
+    ):
+        if forbidden in schedule_surface_text:
+            raise SystemExit(f"prototype Schedule flow uses the wrong product owner: {forbidden}")
+    if "teamId" in prototype_text or "memberId" in prototype_text:
+        raise SystemExit("pure Workflow prototype fixtures still require Team or Member identity")
     if "Prompt (optional)" not in prototype_text:
         raise SystemExit("prototype does not expose prompt as optional")
-    if "Dedicated Agent Key" not in prototype_text:
-        raise SystemExit("prototype is missing Team Automation authorization review")
-    if "Schedule update accepted." in prototype_text or "Schedule deletion accepted." in prototype_text:
-        raise SystemExit("prototype still names accepted mutations as standalone Schedule changes")
-    if "Automation update accepted." not in prototype_text or "Automation deletion accepted." not in prototype_text:
-        raise SystemExit("prototype does not model accepted Team Automation mutations")
-    if "revision: currentWorkflow.revision" in prototype_text:
-        raise SystemExit("prototype uses a revision display label as the Schedule pin identity")
-    if "revisionId: quickScheduleWorkflow.activeRevisionId" not in prototype_text:
-        raise SystemExit("prototype does not pin new Schedules to the active revision identity")
+    if "Schedule update accepted." not in prototype_text or "Schedule deletion accepted." not in prototype_text:
+        raise SystemExit("prototype does not model accepted Workflow Schedule mutations")
     if "function schedulePreview(schedule)" not in prototype_text:
         raise SystemExit("prototype does not distinguish paused Schedule previews")
-    if 'schedule.enabled ? schedule.preview : ["No upcoming runs"]' not in prototype_text:
+    if 'schedule.enabled && schedule.nextFireAt ? [schedule.nextFireAt] : ["No upcoming runs"]' not in prototype_text:
         raise SystemExit("prototype promises upcoming runs for a paused Schedule")
 
     schedule_prototype_text = schedule_prototype_path.read_text(encoding="utf-8")
