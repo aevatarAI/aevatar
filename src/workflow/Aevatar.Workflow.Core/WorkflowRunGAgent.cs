@@ -532,10 +532,14 @@ public sealed partial class WorkflowRunGAgent
             return;
         }
 
-        if (IsCompensating(State) ||
-            kernelState.Active ||
-            !string.IsNullOrWhiteSpace(kernelState.RunId))
+        if (IsCompensating(State))
             return;
+
+        if (kernelState.Active || !string.IsNullOrWhiteSpace(kernelState.RunId))
+        {
+            await TryRecoverFailedForEachParentAsync(kernelState, currentRunId, command.ObservedStateVersion);
+            return;
+        }
 
         var completion = new WorkflowCompletedEvent
         {
@@ -556,6 +560,78 @@ public sealed partial class WorkflowRunGAgent
             Any.Pack(kernelState),
             CancellationToken.None);
         await RecoverPendingWorkflowCompletionAsync(CancellationToken.None);
+    }
+
+    private async Task<bool> TryRecoverFailedForEachParentAsync(
+        WorkflowExecutionKernelState kernelState,
+        string runId,
+        long observedStateVersion)
+    {
+        if (!kernelState.Active ||
+            !string.Equals(
+                WorkflowRunIdNormalizer.Normalize(kernelState.RunId),
+                runId,
+                StringComparison.Ordinal) ||
+            kernelState.CurrentStepDispatchPending ||
+            string.IsNullOrWhiteSpace(kernelState.CurrentStepId) ||
+            !kernelState.ExecutionIdsByStepId.TryGetValue(
+                kernelState.CurrentStepId,
+                out var parentExecutionId) ||
+            string.IsNullOrWhiteSpace(parentExecutionId))
+        {
+            return false;
+        }
+
+        var workflow = ResolveWorkflowForTransition(State);
+        var currentStep = workflow?.GetStep(kernelState.CurrentStepId);
+        if (currentStep == null ||
+            !string.Equals(
+                WorkflowPrimitiveCatalog.ToCanonicalType(currentStep.Type),
+                "foreach",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var packed = State.ExecutionStates.GetValueOrDefault(ForEachModule.ModuleStateKey);
+        if (packed?.Is(ForEachModuleState.Descriptor) != true)
+            return false;
+
+        var forEachState = packed.Unpack<ForEachModuleState>();
+        if (!ForEachModule.TryPrepareFailedParentCompletion(
+                forEachState,
+                runId,
+                currentStep.Id,
+                parentExecutionId,
+                kernelState.RetryAttemptsByStepId.GetValueOrDefault(currentStep.Id),
+                out var parentKey,
+                out var stateChanged,
+                out var collectedCount,
+                out var expectedCount))
+        {
+            return false;
+        }
+
+        if (stateChanged)
+        {
+            await UpsertExecutionStateAsync(
+                ForEachModule.ModuleStateKey,
+                Any.Pack(forEachState),
+                CancellationToken.None);
+        }
+
+        Logger.LogWarning(
+            "Recover failed foreach parent completion. actor={ActorId} run={RunId} step={StepId} parent={ParentKey} collected={CollectedCount} expected={ExpectedCount} observedStateVersion={ObservedStateVersion} stateChanged={StateChanged}",
+            Id,
+            runId,
+            currentStep.Id,
+            parentKey,
+            collectedCount,
+            expectedCount,
+            observedStateVersion,
+            stateChanged);
+        await RecoverForEachDurablePublicationsAsync(CancellationToken.None);
+        return true;
     }
 
     private async Task RecoverToolCallActorLocalStateAsync(CancellationToken ct)

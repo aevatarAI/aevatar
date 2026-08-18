@@ -194,6 +194,129 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
     }
 
     [Fact]
+    public async Task Reconciliation_ShouldCompleteActiveForEachWithPersistedFailedChild()
+    {
+        const string actorId = "run-foreach-stranded-failure";
+        var store = new InMemoryEventStore();
+        var scheduler = new RecordingCallbackScheduler();
+        var agent = CreateAgent(actorId, store, scheduler, out _, out var publisher);
+        await agent.ActivateAsync();
+        await BindForEachWorkflowAsync(agent, actorId);
+        await PersistForTestAsync(agent, new WorkflowRunExecutionStartedEvent
+        {
+            RunId = actorId,
+            WorkflowName = "foreach_recovery",
+            Input = "alpha\n---\nbeta",
+            StartedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, new StartWorkflowEvent
+        {
+            RunId = actorId,
+            WorkflowName = "foreach_recovery",
+            Input = "alpha\n---\nbeta",
+        }));
+        var parentRequest = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle(request => request.StepId == "foreach-step")
+            .Subject;
+        publisher.Published.Clear();
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, parentRequest));
+        var childRequests = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepRequestEvent>()
+            .OrderBy(static request => request.StepId, StringComparer.Ordinal)
+            .ToArray();
+        childRequests.Should().HaveCount(2);
+
+        var strandedState = agent.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>();
+        var parent = strandedState.Parents.Values.Should().ContainSingle().Subject;
+        parent.PendingDispatches.Clear();
+        parent.DispatchedStepIds.Clear();
+        parent.DispatchedStepIds.Add(childRequests.Select(static request => request.StepId));
+        parent.Collected.Add(new ForEachItemResult
+        {
+            StepId = childRequests[0].StepId,
+            Index = 0,
+            Success = false,
+            Error = "historical child failure",
+        });
+        parent.CollectedStepIds.Add(childRequests[0].StepId);
+        parent.SettledWorkerStepIds.Add(childRequests[0].StepId);
+        strandedState.Backpressure.Queue.Clear();
+        strandedState.Backpressure.HeadIndex = 0;
+        strandedState.Backpressure.ActiveWorkers = 1;
+        await ((IWorkflowExecutionStateHost)agent).UpsertExecutionStateAsync(
+            ForEachModule.ModuleStateKey,
+            Any.Pack(strandedState));
+        var activeKernel = agent.State.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        activeKernel.Active.Should().BeTrue();
+        activeKernel.RunId.Should().Be(actorId);
+        activeKernel.CurrentStepId.Should().Be("foreach-step");
+        activeKernel.CurrentStepDispatchPending.Should().BeFalse();
+        activeKernel.ExecutionIdsByStepId["foreach-step"].Should().Be(parentRequest.ExecutionId);
+        parent.ParentExecutionId.Should().Be(parentRequest.ExecutionId);
+        var reconciliationProbe = agent.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>();
+        ForEachModule.TryPrepareFailedParentCompletion(
+                reconciliationProbe,
+                actorId,
+                "foreach-step",
+                parentRequest.ExecutionId,
+                0,
+                out _,
+                out var probeChanged,
+                out _,
+                out _)
+            .Should().BeTrue();
+        probeChanged.Should().BeTrue();
+        publisher.Published.Clear();
+
+        await agent.HandleEventAsync(EnvelopeFrom(
+            "workflow.run.terminal-recovery",
+            new ReconcileWorkflowTerminalStateCommand
+            {
+                RunId = actorId,
+                ObservedStateVersion = 1550,
+            }));
+
+        var pending = agent.State.ExecutionStates[ForEachModule.ModuleStateKey]
+            .Unpack<ForEachModuleState>()
+            .Parents.Values.Should().ContainSingle().Subject.PendingCompletion;
+        pending.Should().NotBeNull();
+        pending.ExecutionId.Should().Be(parentRequest.ExecutionId);
+        pending.Success.Should().BeFalse();
+        pending.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        pending.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+
+        var recovery = scheduler.TimeoutRequests
+            .Where(request => request.TriggerEnvelope.Payload?.Is(
+                ForEachPublicationRetryFiredEvent.Descriptor) == true)
+            .Should().ContainSingle().Subject;
+        await agent.HandleEventAsync(recovery.TriggerEnvelope);
+        var parentCompletion = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle(completion => completion.StepId == "foreach-step")
+            .Subject;
+
+        publisher.Published.Clear();
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, parentCompletion));
+        var workflowCompletion = publisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<WorkflowCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        workflowCompletion.Success.Should().BeFalse();
+
+        await agent.HandleEventAsync(EnvelopeFrom(actorId, workflowCompletion));
+        agent.State.Status.Should().Be("failed");
+        agent.State.FinalError.Should().Contain(ForEachModule.FailedItemsError);
+    }
+
+    [Fact]
     public async Task Activation_ShouldScheduleAndDrainPersistedCompletionOutboxWithoutExecutingTool()
     {
         const string actorId = "run-tool-completion-recovery";

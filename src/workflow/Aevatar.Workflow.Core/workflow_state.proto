@@ -883,6 +883,20 @@ message ForEachItemResult
   WorkflowFileRef file_ref = 4;
   string error = 5;
   string step_id = 6;
+  WorkflowStepFailureOutcome failure_outcome = 7;
+  WorkflowRecoveryFailureKind recovery_failure_kind = 8;
+  WorkflowStepRetryDisposition retry_disposition = 9;
+  WorkflowStepCompletionOutcome outcome = 10;
+}
+
+message ForEachCompletedParentAttemptState
+{
+  string parent_run_id = 1;
+  string parent_step_id = 2;
+  string parent_execution_id = 3;
+  map<string, string> child_execution_ids = 4;
+  map<string, string> outstanding_child_execution_ids = 5;
+  bool outstanding_workers_accounted = 6;
 }
 
 message ForEachParentState
@@ -901,6 +915,7 @@ message ForEachParentState
   string parent_execution_id = 12;
   string parent_idempotency_key = 13;
   map<string, string> child_execution_ids = 14;
+  repeated string outstanding_worker_step_ids = 15;
 }
 
 message ForEachModuleState
@@ -912,6 +927,7 @@ message ForEachModuleState
   map<string, bool> completion_tombstones = 3;
   map<string, string> completed_child_outputs = 5;
   string completed_child_outputs_run_id = 6;
+  map<string, ForEachCompletedParentAttemptState> completed_parent_attempts = 7;
 }
 
 message ForEachPublicationRetryFiredEvent

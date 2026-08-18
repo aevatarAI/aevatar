@@ -78,6 +78,13 @@ internal static class BackpressureHelper
     }
 
     /// <summary>
+    /// Settles a worker without admitting more queued work. Composite modules use this when a
+    /// definitive child failure has already made the parent attempt terminal.
+    /// </summary>
+    public static void CompleteWithoutTopUp(BackpressureQueueState bp) =>
+        bp.ActiveWorkers = Math.Max(0, bp.ActiveWorkers - 1);
+
+    /// <summary>
     /// Dequeues enough queued work to restore the configured floor/target without exceeding max.
     /// </summary>
     public static IReadOnlyList<BackpressureQueueEntry> TopUpToTarget(BackpressureQueueState bp)
