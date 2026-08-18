@@ -574,11 +574,8 @@ describe('Workflow Activity vNext catalogue', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Drafts' })).toBeInTheDocument();
     expect(
-      screen.queryByRole('option', { name: 'Active workflows' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('option', { name: 'Archived' }),
-    ).not.toBeInTheDocument();
+      screen.getByRole('option', { name: 'Show archived workflows' }),
+    ).toBeInTheDocument();
   });
 
   it('refreshes the workflow catalogue when returning from the editor', async () => {
@@ -670,7 +667,7 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(2);
   });
 
-  it('maps unsupported legacy views to the backend all view', async () => {
+  it('keeps the archived workflow view on the frontend and backend', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=archived';
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
@@ -693,14 +690,12 @@ describe('Workflow Activity vNext catalogue', () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     expect(await screen.findByText('Archived workflow')).toBeInTheDocument();
-    expect(screen.getByText('All workflows')).toBeInTheDocument();
+    expect(screen.getByText('Show archived workflows')).toBeInTheDocument();
     expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith(
-      expect.objectContaining({ view: 'all' }),
+      expect.objectContaining({ view: 'archived' }),
       expect.any(AbortSignal),
     );
-    expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows',
-    );
+    expect(history.replace).not.toHaveBeenCalled();
   });
 
   it('sends the drafts view and restored search to the backend', async () => {
@@ -1355,8 +1350,12 @@ describe('Workflow Activity vNext catalogue', () => {
     };
     let archived = false;
     mockScopesApi.queryWorkflowCatalogue.mockImplementation(
-      (input: { cursor?: string; query?: string }) => {
-        if (input.query === 'wf-alpha' && input.cursor !== 'archive-page-2') {
+      (input: { cursor?: string; query?: string; view?: string }) => {
+        if (
+          input.view === 'archived' &&
+          input.query === 'wf-alpha' &&
+          input.cursor !== 'archive-page-2'
+        ) {
           return Promise.resolve(
             createCatalogueResponse(
               [
@@ -1405,7 +1404,7 @@ describe('Workflow Activity vNext catalogue', () => {
     await waitFor(() =>
       expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith({
         scopeId: 'scope-alpha',
-        view: 'all',
+        view: 'archived',
         query: 'wf-alpha',
         cursor: undefined,
         take: 100,
@@ -1413,7 +1412,7 @@ describe('Workflow Activity vNext catalogue', () => {
     );
     expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith({
       scopeId: 'scope-alpha',
-      view: 'all',
+      view: 'archived',
       query: 'wf-alpha',
       cursor: 'archive-page-2',
       take: 100,

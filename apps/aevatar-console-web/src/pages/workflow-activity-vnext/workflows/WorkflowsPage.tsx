@@ -73,6 +73,7 @@ function toWorkflowRow(item: ScopeWorkflowCatalogueRow): WorkflowRow {
 
 async function readWorkflowCatalogueMatch(
   scopeId: string,
+  view: ScopeWorkflowCatalogueView,
   workflowId: string,
 ): Promise<readonly WorkflowRow[]> {
   let cursor: string | undefined;
@@ -81,7 +82,7 @@ async function readWorkflowCatalogueMatch(
   do {
     const response = await scopesApi.queryWorkflowCatalogue({
       scopeId,
-      view: 'all',
+      view,
       query: workflowId,
       cursor,
       take: 100,
@@ -102,6 +103,7 @@ async function readWorkflowCatalogueMatch(
 
 function readWorkflowView(params: URLSearchParams): ScopeWorkflowCatalogueView {
   const view = params.get('view');
+  if (view === 'archived') return 'archived';
   return view === 'drafts' ? 'drafts' : 'all';
 }
 
@@ -391,7 +393,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
       const observation = await observeWorkflowArchival({
         readWorkflows: () =>
-          readWorkflowCatalogueMatch(scopeId, target.workflowId),
+          readWorkflowCatalogueMatch(scopeId, 'archived', target.workflowId),
         workflowId: target.workflowId,
       });
       if (observation.kind === 'delayed') {
@@ -453,7 +455,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
 
       const observation = await observeWorkflowRemoval({
         readWorkflows: () =>
-          readWorkflowCatalogueMatch(scopeId, deleteTarget.workflowId),
+          readWorkflowCatalogueMatch(scopeId, 'all', deleteTarget.workflowId),
         workflowId: deleteTarget.workflowId,
       });
       if (observation.kind === 'delayed') {
@@ -564,7 +566,15 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                 ),
                 value: 'drafts',
               },
+              {
+                label: t(
+                  'workflowActivityVNext.workflows.archivedView',
+                  'Show archived workflows',
+                ),
+                value: 'archived',
+              },
             ]}
+            virtual={false}
             value={view}
           />
         </Space>

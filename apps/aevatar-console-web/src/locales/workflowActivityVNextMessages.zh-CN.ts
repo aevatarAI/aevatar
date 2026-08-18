@@ -536,7 +536,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.archiveTitle': '确认归档此工作流？',
     'workflowActivityVNext.workflows.archiveTryAgain': '重试',
     'workflowActivityVNext.workflows.archivedStatus': '已归档',
-    'workflowActivityVNext.workflows.archivedView': '已归档',
+    'workflowActivityVNext.workflows.archivedView': '显示已归档工作流',
     'workflowActivityVNext.workflows.clearFilters': '清除筛选',
     'workflowActivityVNext.workflows.columnActions': '操作',
     'workflowActivityVNext.workflows.columnStatus': '状态',

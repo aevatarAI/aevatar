@@ -1,4 +1,4 @@
-export type ScopeWorkflowCatalogueView = 'all' | 'drafts';
+export type ScopeWorkflowCatalogueView = 'all' | 'drafts' | 'archived';
 
 export interface ScopeWorkflowCatalogueActionCapability {
   available: boolean;
