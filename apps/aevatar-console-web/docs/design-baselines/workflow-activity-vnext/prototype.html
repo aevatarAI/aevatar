@@ -453,6 +453,24 @@
     .schedule-quick-context span { display: block; margin-top: 4px; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .schedule-quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
     .schedule-quick-grid .full { grid-column: 1 / -1; }
+    .schedule-quick-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+    .schedule-quick-section:first-of-type { margin-top: 0; padding-top: 0; border-top: 0; }
+    .schedule-quick-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
+    .schedule-quick-section-heading strong { font-size: 13px; }
+    .schedule-quick-section-heading span { color: var(--muted); font-size: 11px; }
+    .schedule-repeat-builder { display: grid; grid-template-columns: minmax(220px, 1.35fr) minmax(120px, .65fr) minmax(180px, 1fr); gap: 10px; align-items: end; }
+    .schedule-repeat-builder label { min-width: 0; }
+    .schedule-repeat-preview { margin-top: 10px; padding: 12px 14px; border: 1px solid #86efac; border-radius: 6px; background: var(--green-bg); }
+    .schedule-repeat-preview-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+    .schedule-repeat-preview-row + .schedule-repeat-preview-row { margin-top: 7px; }
+    .schedule-repeat-preview strong { color: var(--green); font-size: 13px; }
+    .schedule-repeat-preview span { color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .schedule-cron-action { display: inline; padding: 0; color: var(--blue); border: 0; background: transparent; font: inherit; cursor: pointer; }
+    .schedule-cron-action:hover { text-decoration: underline; }
+    .schedule-cron-code { margin-left: 8px; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .schedule-cron-editor { display: block; margin-top: 10px; padding: 12px; border: 1px solid #84adff; border-radius: 6px; background: var(--blue-bg); }
+    .schedule-cron-editor small { display: block; margin-top: 7px; color: var(--muted); line-height: 1.4; }
+    .schedule-needs-field textarea { min-height: 76px; }
     .schedule-quick-preview { margin-top: 18px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--subtle); }
     .schedule-quick-preview strong { display: block; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
     .schedule-quick-preview p { margin: 8px 0 0; color: var(--ink); font-size: 12px; line-height: 1.45; }
@@ -611,6 +629,9 @@
       .modal-header, .modal-body, .modal-footer { padding-left: 16px; padding-right: 16px; }
       .schedule-quick-grid { grid-template-columns: 1fr; }
       .schedule-quick-grid .full { grid-column: auto; }
+      .schedule-repeat-builder { grid-template-columns: 1fr; }
+      .schedule-repeat-preview-row { display: block; }
+      .schedule-repeat-preview-row > :last-child { display: block; margin-top: 5px; }
       .schedule-quick-preview ul { grid-template-columns: 1fr; }
       .schedule-quick-context { align-items: flex-start; flex-direction: column; }
       .detail-grid { display: block; }
@@ -641,6 +662,10 @@
       .settings-detail:nth-child(2n) { padding-left: 0; border-left: 0; }
       .technical-row { grid-template-columns: 1fr; }
     }
+
+    .studio-schedule-panel .schedule-repeat-builder { grid-template-columns: 1fr; }
+    .studio-schedule-panel .schedule-repeat-preview-row { display: block; }
+    .studio-schedule-panel .schedule-repeat-preview-row > :last-child { display: block; margin-top: 5px; }
   </style>
 </head>
 <body>
@@ -1073,7 +1098,9 @@ steps:
       "0 * * * *": { requestId: "preview-hourly-response", fires: ["Wed, Aug 19 · 00:00", "Wed, Aug 19 · 01:00", "Wed, Aug 19 · 02:00", "Wed, Aug 19 · 03:00", "Wed, Aug 19 · 04:00"] },
       "0 9 * * *": { requestId: "preview-daily-response", fires: ["Wed, Aug 19 · 09:00", "Thu, Aug 20 · 09:00", "Fri, Aug 21 · 09:00", "Sat, Aug 22 · 09:00", "Sun, Aug 23 · 09:00"] },
       "0 9 * * 1-5": { requestId: "preview-weekdays-response", fires: ["Wed, Aug 19 · 09:00", "Thu, Aug 20 · 09:00", "Fri, Aug 21 · 09:00", "Mon, Aug 24 · 09:00", "Tue, Aug 25 · 09:00"] },
+      "0 9 * * 0,6": { requestId: "preview-weekends-response", fires: ["Sat, Aug 22 · 09:00", "Sun, Aug 23 · 09:00", "Sat, Aug 29 · 09:00", "Sun, Aug 30 · 09:00", "Sat, Sep 5 · 09:00"] },
       "0 9 * * 1": { requestId: "preview-mondays-response", fires: ["Mon, Aug 24 · 09:00", "Mon, Aug 31 · 09:00", "Mon, Sep 7 · 09:00", "Mon, Sep 14 · 09:00", "Mon, Sep 21 · 09:00"] },
+      "0 9 * * 1,3,5": { requestId: "preview-mwf-response", fires: ["Wed, Aug 19 · 09:00", "Fri, Aug 21 · 09:00", "Mon, Aug 24 · 09:00", "Wed, Aug 26 · 09:00", "Fri, Aug 28 · 09:00"] },
       "15 14 * * 2,4": { requestId: "preview-custom-response", fires: ["Thu, Aug 20 · 14:15", "Tue, Aug 25 · 14:15", "Thu, Aug 27 · 14:15", "Tue, Sep 1 · 14:15", "Thu, Sep 3 · 14:15"] }
     };
 
@@ -1152,12 +1179,14 @@ steps:
       }
     };
 
-    const quickScheduleCronByCadence = {
+    const quickScheduleCronByRepeat = {
       "Every hour": "0 * * * *",
-      "Every weekday": "0 9 * * 1-5",
       "Every day": "0 9 * * *",
+      "Every weekday": "0 9 * * 1-5",
+      "Every weekend": "0 9 * * 0,6",
       "Every Monday": "0 9 * * 1",
-      "Custom cron": "15 14 * * 2,4"
+      "Every Mon, Wed and Fri": "0 9 * * 1,3,5",
+      "Write cron yourself": "15 14 * * 2,4"
     };
 
     const workflows = loadWorkflows();
@@ -1457,6 +1486,7 @@ steps:
       quickScheduleDraft = {
         name: `${workflow.name} recurring work`,
         cadence: "Every weekday",
+        repeatTime: "09:00",
         cronExpression: "0 9 * * 1-5",
         timeZone: browserTimeZone(),
         prompt: ""
@@ -1469,7 +1499,7 @@ steps:
       initializeScheduleCreation(workflow, "modal");
       renderScheduleCreation();
       document.querySelector("#schedule-quick-modal").hidden = false;
-      setTimeout(() => document.querySelector("#schedule-quick-content #quick-schedule-name")?.focus(), 0);
+      setTimeout(() => document.querySelector("#schedule-quick-content #quick-schedule-repeat")?.focus(), 0);
     }
 
     function openSchedulePanelCreation() {
@@ -1478,7 +1508,35 @@ steps:
       schedulePanelMode = "new";
       selectedScheduleId = null;
       renderSchedulePanel();
-      setTimeout(() => document.querySelector("#schedule-panel #quick-schedule-name")?.focus(), 0);
+      setTimeout(() => document.querySelector("#schedule-panel #quick-schedule-repeat")?.focus(), 0);
+    }
+
+    function quickScheduleCronForRepeat(repeat, repeatTime) {
+      const presetCron = quickScheduleCronByRepeat[repeat] || quickScheduleCronByRepeat["Every weekday"];
+      if (repeat === "Every hour" || repeat === "Write cron yourself") return presetCron;
+      const [hour = "09", minute = "00"] = repeatTime.split(":");
+      return presetCron.replace(/^\d+\s+\d+/, `${Number(minute)} ${Number(hour)}`);
+    }
+
+    function quickScheduleHumanSummary(repeat, repeatTime, cronExpression) {
+      if (repeat === "Every hour") return "Every hour";
+      if (repeat === "Write cron yourself") return `Custom schedule · ${cronExpression}`;
+      return `${repeat} at ${repeatTime}`;
+    }
+
+    function updateQuickScheduleRepeatPresentation(content) {
+      const repeatInput = content.querySelector("#quick-schedule-repeat");
+      const timeInput = content.querySelector("#quick-schedule-repeat-time");
+      const cronInput = content.querySelector("#quick-schedule-cron");
+      const cronEditor = content.querySelector("#quick-schedule-cron-editor");
+      const generatedCron = content.querySelector("#quick-schedule-generated-cron");
+      const humanSummary = content.querySelector("#quick-schedule-human-summary");
+      const customCron = repeatInput.value === "Write cron yourself";
+      timeInput.disabled = customCron || repeatInput.value === "Every hour";
+      cronEditor.hidden = !customCron;
+      if (!customCron) cronInput.value = quickScheduleCronForRepeat(repeatInput.value, timeInput.value);
+      generatedCron.textContent = cronInput.value.trim();
+      humanSummary.textContent = quickScheduleHumanSummary(repeatInput.value, timeInput.value, cronInput.value.trim());
     }
 
     function renderScheduleCreation() {
@@ -1512,29 +1570,36 @@ steps:
       if (quickScheduleStep === "configure") {
         content.innerHTML = `
           <div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(workflow.revision)} · published target · ${escapeHtml(workflow.publishedServiceId)}</span></div><span class="schedule-state">New</span></div>
-          <div class="schedule-flow" aria-label="Schedule lifecycle"><div class="schedule-flow-step current"><strong>1 · Configure</strong>cadence and inputs</div><div class="schedule-flow-step"><strong>2 · Authorize</strong>review access</div><div class="schedule-flow-step"><strong>3 · Observe</strong>watch Activity</div></div>
-          <div class="schedule-quick-grid">
-            <label class="full"><span class="field-label">Schedule name</span><input class="input" id="quick-schedule-name" value="${escapeHtml(quickScheduleDraft.name)}"></label>
-            <label><span class="field-label">Cadence</span><select class="select" id="quick-schedule-cadence"><option>Every hour</option><option>Every day</option><option>Every weekday</option><option>Every Monday</option><option>Custom cron</option></select></label>
-            <label><span class="field-label">Time zone</span><input class="input" id="quick-schedule-time-zone" value="${escapeHtml(quickScheduleDraft.timeZone)}"></label>
-            <label><span class="field-label">Cron expression</span><input class="input mono" id="quick-schedule-cron" value="${escapeHtml(quickScheduleDraft.cronExpression)}"></label>
-            <label><span class="field-label">Pinned revision</span><input class="input" value="${escapeHtml(workflow.revision)}" disabled></label>
-            <label class="full"><span class="field-label">Prompt (optional)</span><textarea class="textarea" id="quick-schedule-prompt">${escapeHtml(quickScheduleDraft.prompt)}</textarea><small>Sent with each scheduled run only when provided.</small></label>
-          </div>
-          <div class="schedule-quick-preview"><strong>Next five fires · server preview required</strong><p>The standalone prototype never estimates timestamps locally. Continue to request <code>POST /api/schedules/preview</code>; production shows only server-returned fires.</p></div>
-          <p class="schedule-quick-note">The list action renders this shared creation flow in a modal; the Workflow editor renders it in this right panel. Neither claims a next run before owner state is observed.</p>`;
-        const cadenceInput = content.querySelector("#quick-schedule-cadence");
+          <section class="schedule-quick-section">
+            <div class="schedule-quick-section-heading"><strong>How often</strong><span>Build the repeat rule</span></div>
+            <div class="schedule-repeat-builder">
+              <label><span class="field-label">Repeat</span><select class="select" id="quick-schedule-repeat"><option>Every hour</option><option>Every day</option><option>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Every Mon, Wed and Fri</option><option>Write cron yourself</option></select></label>
+              <label><span class="field-label">At</span><input class="input" id="quick-schedule-repeat-time" type="time" value="${escapeHtml(quickScheduleDraft.repeatTime)}"></label>
+              <label><span class="field-label">In</span><input class="input" id="quick-schedule-time-zone" value="${escapeHtml(quickScheduleDraft.timeZone)}"></label>
+            </div>
+            <div class="schedule-repeat-preview">
+              <div class="schedule-repeat-preview-row"><strong id="quick-schedule-human-summary">Every weekday at 09:00</strong><span>worked out by the server</span></div>
+              <div class="schedule-repeat-preview-row"><span>Next five fires · server preview required</span><span><button type="button" class="schedule-cron-action" id="quick-schedule-cron-mode">write it as cron instead</button><code class="schedule-cron-code" id="quick-schedule-generated-cron">${escapeHtml(quickScheduleDraft.cronExpression)}</code></span></div>
+            </div>
+            <label class="schedule-cron-editor" id="quick-schedule-cron-editor" hidden><span class="field-label">Cron</span><input class="input mono" id="quick-schedule-cron" value="${escapeHtml(quickScheduleDraft.cronExpression)}"><small>Use a five-field cron. Complex expressions reopen here without being rounded to a preset.</small></label>
+          </section>
+          <section class="schedule-quick-section schedule-needs-field">
+            <div class="schedule-quick-section-heading"><strong>What it needs</strong><span>filled fresh at every fire</span></div>
+            <label><span class="field-label">Starting prompt (optional)</span><textarea class="textarea" id="quick-schedule-prompt">${escapeHtml(quickScheduleDraft.prompt)}</textarea></label>
+          </section>`;
+        const repeatInput = content.querySelector("#quick-schedule-repeat");
+        const timeInput = content.querySelector("#quick-schedule-repeat-time");
         const cronInput = content.querySelector("#quick-schedule-cron");
-        cadenceInput.value = quickScheduleDraft.cadence;
-        cadenceInput.onchange = event => {
-          const presetCron = quickScheduleCronByCadence[event.target.value];
-          if (presetCron) cronInput.value = presetCron;
+        repeatInput.value = quickScheduleDraft.cadence;
+        repeatInput.onchange = () => updateQuickScheduleRepeatPresentation(content);
+        timeInput.oninput = () => updateQuickScheduleRepeatPresentation(content);
+        cronInput.oninput = () => updateQuickScheduleRepeatPresentation(content);
+        content.querySelector("#quick-schedule-cron-mode").onclick = () => {
+          repeatInput.value = "Write cron yourself";
+          updateQuickScheduleRepeatPresentation(content);
+          cronInput.focus();
         };
-        cronInput.oninput = event => {
-          const matchingPreset = Object.entries(quickScheduleCronByCadence)
-            .find(([, cronExpression]) => cronExpression === event.target.value.trim());
-          cadenceInput.value = matchingPreset ? matchingPreset[0] : "Custom cron";
-        };
+        updateQuickScheduleRepeatPresentation(content);
         footer.innerHTML = `<button type="button" class="button" id="quick-schedule-cancel">Cancel</button><button type="button" class="button primary" id="quick-schedule-review">Review authorization</button>`;
         footer.querySelector("#quick-schedule-cancel").onclick = exitScheduleCreation;
         footer.querySelector("#quick-schedule-review").onclick = () => requestQuickSchedulePreflight(content);
@@ -1630,8 +1695,9 @@ steps:
         return;
       }
       quickScheduleDraft = {
-        name: content.querySelector("#quick-schedule-name").value.trim() || `${workflow.name} recurring work`,
-        cadence: content.querySelector("#quick-schedule-cadence").value,
+        name: quickScheduleDraft.name || `${workflow.name} recurring work`,
+        cadence: content.querySelector("#quick-schedule-repeat").value,
+        repeatTime: content.querySelector("#quick-schedule-repeat-time").value,
         cronExpression,
         timeZone,
         prompt: content.querySelector("#quick-schedule-prompt").value.trim()
@@ -1979,11 +2045,8 @@ steps:
           <div class="schedule-flow" aria-label="Schedule lifecycle"><div class="schedule-flow-step current"><strong>1 · Configure</strong>cadence and inputs</div><div class="schedule-flow-step current"><strong>2 · Authorize</strong>credential state observed</div><div class="schedule-flow-step"><strong>3 · Observe</strong>next fire and Activity</div></div>
           <section class="schedule-summary"><div class="schedule-summary-top"><strong>Team member automation</strong><span class="schedule-state${scheduleStateClass(schedule)}">${state}</span></div><p>${escapeHtml(currentWorkflow.memberId)} · ${escapeHtml(schedule.publishedServiceId)} · ${escapeHtml(schedule.revisionId)}</p></section>
           <label class="form-row"><span class="field-label">Automation name</span><input class="input" value="${escapeHtml(schedule.name)}" ${pending ? "disabled" : ""}></label>
-          <div class="form-row"><span class="field-label">When should it run?</span><div class="schedule-cadence" role="group" aria-label="Cadence"><span class="selected">Over and over</span><span>Every week</span><span>Custom cron</span></div><input class="input" aria-label="Cadence" value="${escapeHtml(schedule.cadence)}" ${pending ? "disabled" : ""}></div>
-          <label class="form-row"><span class="field-label">Cron expression</span><input class="input" value="${escapeHtml(schedule.cronExpression)}" ${pending ? "disabled" : ""}></label>
-          <label class="form-row"><span class="field-label">Time zone</span><input class="input" value="${escapeHtml(schedule.timeZone)}" ${pending ? "disabled" : ""}></label>
+          <div class="form-row"><span class="field-label">How often</span><div class="schedule-repeat-builder"><label><span class="field-label">Repeat</span><select class="select" ${pending ? "disabled" : ""}><option selected>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Write cron yourself</option></select></label><label><span class="field-label">At</span><input class="input" type="time" value="09:00" ${pending ? "disabled" : ""}></label><label><span class="field-label">In</span><input class="input" value="${escapeHtml(schedule.timeZone)}" ${pending ? "disabled" : ""}></label></div><div class="schedule-repeat-preview"><div class="schedule-repeat-preview-row"><strong>${escapeHtml(schedule.cadence)}</strong><span>server-owned next fires</span></div><div class="schedule-repeat-preview-row"><span>${escapeHtml(schedule.nextRun)}</span><span><button type="button" class="schedule-cron-action" id="schedule-edit-cron-mode" ${pending ? "disabled" : ""}>write it as cron instead</button><code class="schedule-cron-code">${escapeHtml(schedule.cronExpression)}</code></span></div></div><label class="schedule-cron-editor" id="schedule-edit-cron-editor" hidden><span class="field-label">Cron</span><input class="input mono" value="${escapeHtml(schedule.cronExpression)}" ${pending ? "disabled" : ""}></label></div>
           <label class="form-row"><span class="field-label">Prompt (optional)</span><textarea class="textarea" ${pending ? "disabled" : ""}>${escapeHtml(schedule.prompt)}</textarea><small>Sent with each scheduled run only when provided.</small></label>
-          <label class="form-row"><span class="field-label">Pinned revision</span><input class="input" value="${escapeHtml(schedule.revisionLabel)}" disabled></label>
           <section class="schedule-summary"><div class="schedule-summary-top"><strong>Dedicated Agent Key</strong><span class="schedule-state">${escapeHtml(schedule.authorizationStatus)}</span></div><p>${escapeHtml(schedule.credentialExpiry)} · browser never receives the raw key</p></section>
           <label class="schedule-toggle"><span>Schedule is active</span><input id="schedule-enabled" type="checkbox" role="switch" ${schedule.enabled ? "checked" : ""} ${pending ? "disabled" : ""}></label>
           <div class="form-row"><span class="field-label">${previewLabel}</span><ul class="schedule-preview">${schedulePreview(schedule).map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>
@@ -1995,6 +2058,10 @@ steps:
 
       document.querySelector("#close-schedule").onclick = closeSchedulePanel;
       document.querySelector("#schedule-back").onclick = () => { schedulePanelMode = "list"; selectedScheduleId = null; renderSchedulePanel(); };
+      document.querySelector("#schedule-edit-cron-mode").onclick = () => {
+        document.querySelector("#schedule-edit-cron-editor").hidden = false;
+        document.querySelector("#schedule-edit-cron-editor input").focus();
+      };
       document.querySelector("#schedule-enabled").onchange = event => {
         scheduleMutation = { scheduleId: schedule.id, label: event.target.checked ? "Enable request accepted." : "Pause request accepted." };
         renderSchedulePanel();

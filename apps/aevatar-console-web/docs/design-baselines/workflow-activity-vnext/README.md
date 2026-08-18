@@ -121,7 +121,7 @@ Contract specification:
 Schedule design, when Schedule is in scope:
   aevatar-workflow-schedule-design.excalidraw
 Schedule design SHA-256:
-  a1414dca238070508f39d6009666344eb20f711fbabb438dffb76b624a3460af
+  dae8f2038e6aede704219d4a129be97550d07f393edadf34e0e86007234000b5
 Schedule supplement, when Schedule is in scope:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-11-workflow-schedule-design.md
@@ -234,7 +234,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidraw`，按下面顺序检查：
 
 1. `01 · Workflows — quick schedule modal`：在 Workflow 列表点击已发布行的 `Schedule`，直接打开新建配置弹窗，不先进入编辑器。
-2. `02 · Schedule — configure recurring work`：在画布旁配置周期、时区、cron、可选 prompt 和服务端预览。
+2. `02 · Schedule — configure recurring work`：在画布旁用 `Repeat`、时间和时区构造重复规则；默认只显示人类可读摘要，`write it as cron instead` 才打开 raw cron，并由服务端返回 next-fire 预览。
 3. `03 · Schedule — review authorization`：确认 owner-scoped preflight 返回的 exact service/node grants、owner LLM、credential plan、permission digest、policy version 与 Dedicated Agent Key disclosures。
 4. `04 · Activity — scheduled runs`：只看由 Schedule 产生的 immutable Runs，以及 Schedule source filter。
 5. `05 · Workflow — schedule detail`：在 Workflow canvas 旁查看 Schedule 状态、授权和生命周期动作。
@@ -265,7 +265,7 @@ Workflows
 1. 打开 `prototype.html`，默认进入 Workflows；点击已发布 Workflow 行的 `Schedule` 会直接打开 `New schedule` 配置弹窗，弹窗关闭后仍留在列表。只评审编辑器 Schedule panel 时可直接打开 `prototype-schedule.html`。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
 3. 在画布点击节点，右侧打开 Node configuration；`Add node` 从左侧打开 Node library；`Edit YAML` 从右侧打开 YAML 面板。
-4. 打开一个已发布 Team member Workflow，点击编辑器里的 `Schedule` 检查右侧 Member automations 面板，再点击 `New automation` 检查创建流程仍在右侧 panel；点击 `View scheduled runs` 检查当前 Workflow 的通用 `Source: Schedule` Activity 筛选。未发布 Workflow 或缺少权威 `teamId/memberId/publishedServiceId` 的同一动作保持禁用，并显示对应的 publish、owner 或 published-target 等待原因。列表行的 modal 与编辑器 panel 只是同一创建状态机的两个容器，不是两个 Schedule 资源：先请求 `/api/schedules/preview` 和 owner-scoped automation preflight，再展示服务端返回的 service/node grants、owner LLM、credential plan、disclosures、permission digest 与 policy version；确认后只显示 `202 Accepted` pending，不会在 owner automation read model 返回前声称 Active、凭证或 next fire 已存在。面板中的 automation 数据是演示数据，不能视为 API 行为；生产实现读取 `/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations`。
+4. 打开一个已发布 Team member Workflow，点击编辑器里的 `Schedule` 检查右侧 Member automations 面板，再点击 `New automation` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，常规路径不能出现常驻的 `Cron expression` 字段，只有点击 `write it as cron instead` 才显示 raw cron editor。点击 `View scheduled runs` 检查当前 Workflow 的通用 `Source: Schedule` Activity 筛选。未发布 Workflow 或缺少权威 `teamId/memberId/publishedServiceId` 的同一动作保持禁用，并显示对应的 publish、owner 或 published-target 等待原因。列表行的 modal 与编辑器 panel 只是同一创建状态机的两个容器，不是两个 Schedule 资源：先请求 `/api/schedules/preview` 和 owner-scoped automation preflight，再展示服务端返回的 service/node grants、owner LLM、credential plan、disclosures、permission digest 与 policy version；确认后只显示 `202 Accepted` pending，不会在 owner automation read model 返回前声称 Active、凭证或 next fire 已存在。面板中的 automation 数据是演示数据，不能视为 API 行为；生产实现读取 `/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations`。
 5. 在列表或编辑器点击 `Run`，确认修订、输入、连接和外部影响。
 6. 勾选外部影响确认后点击 `Run`。记录会立即写入浏览器 `localStorage`，编辑器显示运行状态。
 7. 打开 Activity，点击任意一行查看详情。

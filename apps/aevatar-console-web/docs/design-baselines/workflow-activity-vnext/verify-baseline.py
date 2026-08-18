@@ -25,9 +25,9 @@ SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PAGE_PNG_NAME = "prototype-schedule.png"
 SCHEDULE_BOARD_PNG_NAME = "aevatar-workflow-schedule-design.png"
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "a1414dca238070508f39d6009666344eb20f711fbabb438dffb76b624a3460af"
-EXPECTED_SCHEDULE_PAGE_PNG_SHA256 = "2684917770868542d3e94168bd01d81b20577ce738118e1169e62dd6e844b926"
-EXPECTED_SCHEDULE_BOARD_PNG_SHA256 = "5eb0d32b23bfaf7688c9f07a91ec9baeb3d084cab4da6e0e43dd95ad80a7e777"
+EXPECTED_SCHEDULE_SHA256 = "dae8f2038e6aede704219d4a129be97550d07f393edadf34e0e86007234000b5"
+EXPECTED_SCHEDULE_PAGE_PNG_SHA256 = "c46f2e35d4289a75173bfa6f27f720684d2d52f7e28c7aabe8076edb890339f9"
+EXPECTED_SCHEDULE_BOARD_PNG_SHA256 = "d2c9c94794881c051bc71b9a8f5212f88caf5ce7f1017f05eabc0fb5dcf6f7cb"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -204,7 +204,7 @@ def main() -> None:
     if "Schedule" not in schedule_visible_text:
         raise SystemExit("schedule entry point is missing from the schedule design board")
     for required in ("Team member automation", "Published target", "Activities",
-                     "Dedicated Agent Key", "Cron expression", "Time zone",
+                     "Dedicated Agent Key", "write it as cron instead", "Time zone",
                      "NEXT FIVE FIRES", "Review authorization",
                      "Pause", "Delete"):
         if required.casefold() not in schedule_visible_text_casefolded:
@@ -266,9 +266,25 @@ def main() -> None:
         "02 · Schedule — configure recurring work",
     ):
         configure_text = schedule_frame_text(configure_frame_name).casefold()
-        for required in ("server preview required", "post /api/schedules/preview", "no prompt"):
+        for required in (
+            "repeat",
+            "every weekday at 09:00",
+            "write it as cron instead",
+            "server preview required",
+            "post /api/schedules/preview",
+            "no prompt",
+        ):
             if required not in configure_text:
                 raise SystemExit(f"{configure_frame_name} is missing server-owned preview semantics: {required}")
+        if "cron expression" in configure_text:
+            raise SystemExit(f"{configure_frame_name} exposes raw cron as a default primary field")
+
+    schedule_edit_text = schedule_frame_text("06 · Workflow — change schedule").casefold()
+    for required in ("repeat", "every weekday at 09:00", "write it as cron instead"):
+        if required not in schedule_edit_text:
+            raise SystemExit(f"Workflow Schedule edit is missing repeat-builder semantics: {required}")
+    if "cron expression" in schedule_edit_text:
+        raise SystemExit("Workflow Schedule edit exposes raw cron as a default primary field")
 
     authorization_text = schedule_frame_text("03 · Schedule — review authorization").casefold()
     for required in (
@@ -311,6 +327,9 @@ def main() -> None:
     creation_start = prototype_text.index("function resetScheduleCreation")
     creation_end = prototype_text.index("function openSchedulePrototype", creation_start)
     creation_text = prototype_text[creation_start:creation_end]
+    configure_start = creation_text.index('if (quickScheduleStep === "configure")')
+    configure_end = creation_text.index('if (quickScheduleStep === "preflight")', configure_start)
+    configure_creation_text = creation_text[configure_start:configure_end]
     if 'id="editor-schedule"' not in prototype_text:
         raise SystemExit("prototype schedule action is missing from the editor")
     if 'data-schedule-workflow="${item.id}"' not in prototype_text:
@@ -328,17 +347,21 @@ def main() -> None:
         "Confirm and create",
         "without leaving Workflows",
         "server preview required",
-        "never estimates timestamps locally",
+        "never calculates future fires",
         "POST /automations/preflight",
         "prototypeSchedulePreflightByOwner",
         "quickSchedulePreflight.serviceGrants.map",
         "Node IDs",
-        "Custom cron",
+        "Repeat",
+        "Every weekday at 09:00",
+        "write it as cron instead",
+        'id="quick-schedule-cron-editor" hidden',
+        "updateQuickScheduleRepeatPresentation",
         '"Every hour": "0 * * * *"',
-        '"Custom cron": "15 14 * * 2,4"',
+        '"Write cron yourself": "15 14 * * 2,4"',
         "prototypeSchedulePreviewByCron",
         "POST /api/schedules/preview",
-        "const presetCron = quickScheduleCronByCadence",
+        "const presetCron = quickScheduleCronByRepeat[repeat]",
         "browserTimeZone()",
         "preflightMatchesWorkflow",
         "confirmedPermissionDigest",
@@ -374,6 +397,8 @@ def main() -> None:
     ):
         if forbidden in prototype_text:
             raise SystemExit(f"prototype quick-create Schedule modal still contains optimistic or shared sample state: {forbidden}")
+    if '<span class="field-label">Cron expression</span>' in configure_creation_text:
+        raise SystemExit("prototype quick-create Schedule exposes raw cron as a default primary field")
     for forbidden in ("const grants = workflow.steps.map", "schedules.unshift(", "enabled: true"):
         if forbidden in creation_text:
             raise SystemExit(f"prototype Schedule creation derives or invents observed state: {forbidden}")

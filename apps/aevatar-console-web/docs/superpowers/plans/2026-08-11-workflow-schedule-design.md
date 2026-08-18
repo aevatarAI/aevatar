@@ -156,6 +156,12 @@ policy version, and end in a `202 Accepted` pending state until the owner
 automation read model is observed. The editor panel reuses this creation state
 machine without replacing its right-panel presentation with the catalogue modal.
 
+Match the supplied Schedule wireframe's control hierarchy: `Repeat`, time, and
+timezone are the default primary controls; a human sentence reads the rule
+back; `write it as cron instead` opens the raw five-field editor. Do not render
+`Cron expression` as an always-visible peer field, and do not reduce a complex
+cron to an approximate preset when reopening it.
+
 - [ ] **Step 2: Remove the Schedule node-library entry and mutation path**
 
 Delete the node-library button whose data type is `schedule`, then remove the

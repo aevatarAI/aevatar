@@ -262,32 +262,68 @@ def schedule_summary(x: float, y: float, width: float) -> None:
 
 
 def schedule_fields(x: float, y: float, width: float, *, show_preview: bool = False) -> None:
-    field(x, y, width, "Automation name", "Morning feedback digest")
-    text(x, y + 76, "HOW OFTEN", FS_SMALL, MUTED, font=FONT_MONO)
-    cursor = x
-    cursor = chip(cursor, y + 98, "Every weekday", selected=True, width=142)
-    cursor = chip(cursor, y + 98, "Every week", width=124)
-    chip(cursor, y + 98, "Custom cron", width=122)
-    field(x, y + 146, width * 0.54, "Repeat", "Mon  Tue  Wed  Thu  Fri")
-    field(x + width * 0.57, y + 146, width * 0.43, "At", "09:00")
-    field(x, y + 224, width, "Time zone", "Asia/Singapore")
-    field(x, y + 302, width, "Cron expression", "0 9 * * 1-5", mono=True)
-    text(x, y + 380, "NEXT FIVE FIRES · SERVER RESPONSE" if show_preview else "NEXT FIVE FIRES · SERVER PREVIEW REQUIRED", FS_SMALL, MUTED, font=FONT_MONO)
-    rect(x, y + 402, width, 70, bg=SUBTLE, stroke=LINE)
-    text(x + 14, y + 414,
-         "Mon 24 Aug 09:00   ·   Tue 25 Aug 09:00\n"
-         "Wed 26 Aug 09:00   ·   Thu 27 Aug 09:00\n"
-         "Fri 28 Aug 09:00" if show_preview else
-         "No timestamps are estimated in the browser.\n"
-         "Review authorization requests the server response.",
-         FS_SMALL, INK if show_preview else MUTED, font=FONT_MONO, width=width - 28)
-    text(x, y + 484, "PROMPT (OPTIONAL)", FS_SMALL, MUTED, font=FONT_MONO)
-    rect(x, y + 506, width, 54, bg=SURFACE, stroke=LINE)
-    text(x + 12, y + 520, "No prompt", FS_SMALL, MUTED, width=width - 24)
-    text(x, y + 574,
-         "POST /api/schedules/preview returns these fires. The selected IANA\n"
-         "timezone and exact cron are sent unchanged; the browser never estimates.",
-         FS_SMALL, MUTED, width=width)
+    text(x, y, "HOW OFTEN", FS_SMALL, MUTED, font=FONT_MONO)
+    text(x, y + 40, "Repeat", FS_SMALL, MUTED, font=FONT_MONO, width=72)
+    repeat_x = x + 84
+    compact = width < 600
+    repeat_w = width - 84 if compact else width * 0.46
+    rect(repeat_x, y + 26, repeat_w, 46, bg=SURFACE, stroke=LINE)
+    text(repeat_x + 12, y + 40, "Mon · Tue · Wed · Thu · Fri", FS_SMALL, INK,
+         width=repeat_w - 36)
+    text(repeat_x + repeat_w - 20, y + 40, "▾", FS_SMALL, MUTED, width=12)
+    if compact:
+        time_x = x + 28
+        time_y = y + 82
+        text(x, y + 96, "at", FS_SMALL, MUTED, width=20)
+        time_w = 104
+        zone_x = x + 176
+        text(x + 148, y + 96, "in", FS_SMALL, MUTED, width=20)
+    else:
+        time_x = repeat_x + repeat_w + 34
+        time_y = y + 26
+        text(time_x - 24, y + 40, "at", FS_SMALL, MUTED, width=20)
+        time_w = max(88, width * 0.16)
+        zone_x = time_x + time_w + 34
+        text(zone_x - 22, y + 40, "in", FS_SMALL, MUTED, width=20)
+    rect(time_x, time_y, time_w, 46, bg=SURFACE, stroke=LINE)
+    text(time_x + 12, time_y + 14, "09:00", FS_SMALL, INK, width=time_w - 24)
+    zone_w = x + width - zone_x
+    rect(zone_x, time_y, zone_w, 46, bg=SURFACE, stroke=LINE)
+    text(zone_x + 12, time_y + 14, "Asia/Singapore", FS_SMALL, INK, width=zone_w - 30)
+    text(zone_x + zone_w - 20, time_y + 14, "▾", FS_SMALL, MUTED, width=12)
+
+    preview_y = y + (146 if compact else 90)
+    preview_h = 112 if compact else 92
+    rect(x, preview_y, width, preview_h, bg=GREEN_BG, stroke=GREEN)
+    text(x + 14, preview_y + 14, "Every weekday at 09:00", FS_BODY, GREEN,
+         width=width * 0.5)
+    text(x + width - 210, preview_y + 16,
+         "SERVER RESPONSE" if show_preview else "SERVER PREVIEW REQUIRED",
+         FS_SMALL, MUTED, font=FONT_MONO, width=196, align="right")
+    text(x + 14, preview_y + 50,
+         "next  Mon 24, Tue 25, Wed 26 Aug · see all" if show_preview else
+         "Next five fires appear after review.",
+         FS_SMALL, INK if show_preview else MUTED, width=width * 0.56)
+    cron_y = preview_y + (78 if compact else 50)
+    text(x + (14 if compact else width * 0.58), cron_y,
+         "write it as cron instead", FS_SMALL, BLUE, width=178)
+    text(x + width - 110, cron_y, "0 9 * * 1-5", FS_SMALL, MUTED,
+         font=FONT_MONO, width=100, align="right")
+
+    needs_y = preview_y + preview_h + 28
+    text(x, needs_y, "WHAT IT NEEDS", FS_SMALL, MUTED, font=FONT_MONO)
+    text(x + 142, needs_y, "filled fresh at every fire", FS_SMALL, MUTED,
+         width=220)
+    field(x, needs_y + 28, width, "Starting prompt (optional)", "No prompt",
+          disabled=True, h=54)
+
+    outcome_y = needs_y + 120
+    text(x, outcome_y, "WHAT WILL HAPPEN", FS_SMALL, MUTED, font=FONT_MONO)
+    rect(x, outcome_y + 22, width, 78, bg=SUBTLE, stroke=LINE)
+    text(x + 14, outcome_y + 35,
+         "Runs every weekday at 09:00, as you, until somebody pauses it.\n"
+         "The published revision is pinned from the Workflow context above.",
+         FS_SMALL, INK, width=width - 28)
 
 
 def frame_workflows_list(index: int) -> None:
@@ -335,13 +371,11 @@ def frame_workflows_list(index: int) -> None:
     text(modal_x + 28, modal_y + 58, "Configure recurring work without leaving Workflows.", FS_SMALL, MUTED, width=520)
     button(modal_x + modal_w - 58, modal_y + 20, 32, "×", color=MUTED)
     schedule_summary(modal_x + 28, modal_y + 92, modal_w - 56)
-    text(modal_x + 28, modal_y + 182, "1  Configure   ·   2  Authorize   ·   3  Observe", FS_SMALL, MUTED,
-         font=FONT_MONO, width=650)
-    schedule_fields(modal_x + 28, modal_y + 214, modal_w - 56)
+    schedule_fields(modal_x + 28, modal_y + 186, modal_w - 56)
     button(modal_x + modal_w - 230, modal_y + 824, 202, "Review authorization", primary=True, color=BLUE)
     button(modal_x + modal_w - 324, modal_y + 824, 84, "Cancel", color=MUTED)
     annotation(fx + FRAME_W + 42, fy + 160, "1", "Quick create, no navigation",
-                "The published Workflow row opens this modal directly; open the editor later for Schedule management.")
+                "The published Workflow row opens this modal directly. POST /api/schedules/preview provides the fires; open the editor later for management.")
     end_frame()
 
 
@@ -371,14 +405,12 @@ def frame_schedule_setup(index: int) -> None:
         badge(x + 18, cy + 288, "Ready", "ok")
     rect(cx + 748, cy + 18, 548, 898, bg=SURFACE, stroke=LINE)
     text(cx + 776, cy + 46, "Schedule", FS_HEAD, INK, width=300)
-    text(cx + 776, cy + 78, "1  Configure   ·   2  Authorize   ·   3  Observe", FS_SMALL, MUTED,
-         font=FONT_MONO, width=490)
-    schedule_summary(cx + 776, cy + 112, 492)
-    schedule_fields(cx + 776, cy + 206, 492)
+    schedule_summary(cx + 776, cy + 88, 492)
+    schedule_fields(cx + 776, cy + 182, 492)
     button(cx + 776, cy + 836, 178, "Review authorization", primary=True, color=BLUE)
     button(cx + 966, cy + 836, 92, "Cancel", color=MUTED)
     annotation(fx + FRAME_W + 42, fy + 220, "2", "Only recurring work",
-                "The public contract accepts a five-field cron and an IANA timezone; the preview comes from the server.")
+                "The public contract accepts a five-field cron and IANA timezone. POST /api/schedules/preview returns the next fires.")
     end_frame()
 
 
@@ -527,20 +559,7 @@ def frame_schedule_edit(index: int) -> None:
     text(cx + 776, cy + 46, "Change schedule", FS_HEAD, INK, width=330)
     text(cx + 776, cy + 80, "Managed from this Workflow", FS_SMALL, BLUE, font=FONT_MONO, width=420)
     schedule_summary(cx + 776, cy + 112, 492)
-    field(cx + 776, cy + 204, 492, "Automation name", "Morning feedback digest")
-    text(cx + 776, cy + 282, "HOW OFTEN", FS_SMALL, MUTED, font=FONT_MONO)
-    chip(cx + 776, cy + 304, "Every weekday", selected=True, width=142)
-    chip(cx + 926, cy + 304, "Every week", width=124)
-    chip(cx + 1058, cy + 304, "Custom cron", width=122)
-    field(cx + 776, cy + 352, 264, "Repeat", "Mon Tue Wed Thu Fri")
-    field(cx + 1056, cy + 352, 212, "At", "09:00")
-    field(cx + 776, cy + 430, 492, "Time zone", "Asia/Shanghai")
-    field(cx + 776, cy + 508, 492, "Cron expression", "0 9 * * 1-5", mono=True)
-    field(cx + 776, cy + 586, 310, "Prompt (optional)", "Summarize new feedback.")
-    field(cx + 1102, cy + 586, 166, "Pinned revision", "v7", disabled=True)
-    rect(cx + 776, cy + 668, 492, 72, bg=AMBER_BG, stroke="#fecd6b")
-    text(cx + 796, cy + 686, "REVIEW BEFORE SAVING", FS_SMALL, AMBER, font=FONT_MONO, width=350)
-    text(cx + 796, cy + 714, "A new published revision can change reachable services.", FS_SMALL, INK, width=450)
+    schedule_fields(cx + 776, cy + 204, 492, show_preview=True)
     button(cx + 776, cy + 824, 136, "Save changes", primary=True, color=BLUE)
     button(cx + 924, cy + 824, 92, "Cancel", color=MUTED)
     annotation(fx + FRAME_W + 42, fy + 260, "6", "Edit in Workflow",

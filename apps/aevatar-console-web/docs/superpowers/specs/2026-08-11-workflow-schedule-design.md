@@ -106,9 +106,16 @@ member surface once the owner is known.
   Schedule management remains in the Workflow editor panel; the modal does not
   become a second list or detail surface.
 - The modal starts with an empty optional prompt and the browser's valid IANA
-  timezone, falling back to `UTC`. Cadence presets and the five-field cron
-  expression are one input model: changing a preset updates cron, while
-  manually changing cron selects `Custom cron`.
+  timezone, falling back to `UTC`. Its primary `Repeat` builder follows the
+  supplied Schedule wireframe: users choose a human repeat rule, time, and
+  timezone, then review a plain-language summary. Raw cron is not a default
+  labelled form field. `write it as cron instead` explicitly opens the
+  five-field cron editor, while a muted generated cron remains available for
+  inspection and copying.
+- The repeat builder and raw cron editor are one lossless model. Selecting or
+  changing a common repeat rule composes the exact cron sent to the server. A
+  complex cron that cannot be represented by the builder reopens in raw-cron
+  mode and must never be rounded to the nearest preset.
 - `Review authorization` first sends the exact cron and timezone to
   `/api/schedules/preview`, then requests the owner-scoped member automation
   preflight. The browser never fabricates next-fire timestamps or derives
@@ -151,8 +158,8 @@ The form presents the following fields in this order:
 | Field | Product behavior |
 | --- | --- |
 | Name | User-editable label. The default follows Team Automation copy such as `<member name> recurring work`. |
-| Cadence | Presets for hourly, daily, weekdays, weekly, and custom five-field cron. |
-| Cron expression | Visible when the user chooses custom cadence or needs to inspect the exact schedule. |
+| Repeat | Primary human builder for hourly, daily, weekday, weekend, and selected-weekday rules, with time and timezone controls. |
+| Cron | Secondary escape hatch opened by `write it as cron instead`; complex five-field expressions round-trip without lossy preset conversion. |
 | Time zone | Defaults to the browser's valid IANA timezone, otherwise `UTC`; the selected IANA value is sent to the server. |
 | Prompt | Optional recurring work prompt, matching the existing Team Automation form. The UI must not make it required unless the invoked service contract explicitly rejects empty input. File attachments are not schedulable. |
 | Enabled | Creation can request enabled state, but firing only becomes truthful after authorization and schedule state are observed. |
