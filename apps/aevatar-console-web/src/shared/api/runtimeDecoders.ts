@@ -3,6 +3,14 @@ import type {
   WorkflowSignalResponse,
 } from "@aevatar-react-sdk/types";
 import type {
+  WorkflowActorGraphEdge,
+  WorkflowActorGraphEnrichedSnapshot,
+  WorkflowActorGraphNode,
+  WorkflowActorGraphSubgraph,
+  WorkflowActorSnapshot,
+  WorkflowActorTimelineItem,
+} from "@/shared/models/runtime/actors";
+import type {
   PlaygroundWorkflowParseResult,
   PlaygroundWorkflowSaveResult,
   WorkflowAuthoringDefinition,
@@ -12,14 +20,6 @@ import type {
   WorkflowAuthoringRole,
   WorkflowAuthoringStep,
 } from "@/shared/models/runtime/authoring";
-import type {
-  WorkflowActorGraphEdge,
-  WorkflowActorGraphEnrichedSnapshot,
-  WorkflowActorGraphNode,
-  WorkflowActorGraphSubgraph,
-  WorkflowActorSnapshot,
-  WorkflowActorTimelineItem,
-} from "@/shared/models/runtime/actors";
 import type {
   WorkflowCatalogChildStep,
   WorkflowCatalogDefinition,
@@ -41,6 +41,12 @@ import type {
   WorkflowPrimitiveDescriptor,
   WorkflowPrimitiveParameterDescriptor,
 } from "@/shared/models/runtime/query";
+import type {
+  WorkflowTemplateDetail,
+  WorkflowTemplateFreshness,
+  WorkflowTemplateListResponse,
+  WorkflowTemplateSummary,
+} from "@/shared/models/runtime/workflowTemplates";
 import {
   type Decoder,
   expectArray,
@@ -85,6 +91,171 @@ function decodeWorkflowCatalogItem(
     primitives: expectStringArray(record.primitives, `${label}.primitives`),
   };
 }
+
+function decodeWorkflowTemplateFreshness(
+  value: unknown,
+  label = "WorkflowTemplateFreshness",
+): WorkflowTemplateFreshness {
+  const record = expectRecord(value, label);
+  return {
+    projectionWatermark: expectString(
+      record.projectionWatermark,
+      `${label}.projectionWatermark`,
+    ),
+    lastEventId: expectString(record.lastEventId, `${label}.lastEventId`),
+    versionSemantics: expectString(
+      record.versionSemantics,
+      `${label}.versionSemantics`,
+    ),
+  };
+}
+
+function decodeWorkflowTemplateSummary(
+  value: unknown,
+  label = "WorkflowTemplateSummary",
+): WorkflowTemplateSummary {
+  const record = expectRecord(value, label);
+  return {
+    templateId: expectString(record.templateId, `${label}.templateId`),
+    displayName: expectString(record.displayName, `${label}.displayName`),
+    description: expectString(record.description, `${label}.description`),
+    defaultDraftName: expectString(
+      record.defaultDraftName,
+      `${label}.defaultDraftName`,
+    ),
+    authorityStateVersion: expectNumber(
+      record.authorityStateVersion,
+      `${label}.authorityStateVersion`,
+    ),
+    stepCount: expectNumber(record.stepCount, `${label}.stepCount`),
+    requiredConnections: expectStringArray(
+      record.requiredConnections,
+      `${label}.requiredConnections`,
+    ),
+    requiresLlmProvider: expectBoolean(
+      record.requiresLlmProvider,
+      `${label}.requiresLlmProvider`,
+    ),
+    freshness: decodeWorkflowTemplateFreshness(
+      record.freshness,
+      `${label}.freshness`,
+    ),
+  };
+}
+
+function decodeWorkflowTemplateDefinition(
+  value: unknown,
+  label = "WorkflowTemplateDefinition",
+): WorkflowTemplateDetail["definition"] {
+  const record = expectRecord(value, label);
+  return {
+    name: expectString(record.name, `${label}.name`),
+    description: expectString(record.description, `${label}.description`),
+    closedWorldMode: expectBoolean(
+      record.closedWorldMode,
+      `${label}.closedWorldMode`,
+    ),
+    roles: expectArray(record.roles, `${label}.roles`, (entry, roleLabel) => {
+      const role = expectRecord(entry, roleLabel);
+      return {
+        id: expectString(role.id, `${roleLabel}.id`),
+        name: expectString(role.name, `${roleLabel}.name`),
+        connectors: expectStringArray(
+          role.connectors,
+          `${roleLabel}.connectors`,
+        ),
+      };
+    }),
+    steps: expectArray(record.steps, `${label}.steps`, (entry, stepLabel) => {
+      const step = expectRecord(entry, stepLabel);
+      return {
+        id: expectString(step.id, `${stepLabel}.id`),
+        type: expectString(step.type, `${stepLabel}.type`),
+        targetRole: expectString(step.targetRole, `${stepLabel}.targetRole`),
+        parameters: expectStringRecord(
+          step.parameters,
+          `${stepLabel}.parameters`,
+        ),
+        next: expectString(step.next, `${stepLabel}.next`),
+        branches: expectStringRecord(step.branches, `${stepLabel}.branches`),
+        children: expectArray(
+          step.children,
+          `${stepLabel}.children`,
+          (childEntry, childLabel) => {
+            const child = expectRecord(childEntry, childLabel);
+            return {
+              id: expectString(child.id, `${childLabel}.id`),
+              type: expectString(child.type, `${childLabel}.type`),
+              targetRole: expectString(
+                child.targetRole,
+                `${childLabel}.targetRole`,
+              ),
+            };
+          },
+        ),
+      };
+    }),
+  };
+}
+
+function decodeWorkflowTemplateDetail(
+  value: unknown,
+  label = "WorkflowTemplateDetail",
+): WorkflowTemplateDetail {
+  const record = expectRecord(value, label);
+  return {
+    template: decodeWorkflowTemplateSummary(
+      record.template,
+      `${label}.template`,
+    ),
+    yaml: expectString(record.yaml, `${label}.yaml`),
+    definition: decodeWorkflowTemplateDefinition(
+      record.definition,
+      `${label}.definition`,
+    ),
+    edges: expectArray(record.edges, `${label}.edges`, (entry, edgeLabel) => {
+      const edge = expectRecord(entry, edgeLabel);
+      return {
+        from: expectString(edge.from, `${edgeLabel}.from`),
+        to: expectString(edge.to, `${edgeLabel}.to`),
+        label: expectString(edge.label, `${edgeLabel}.label`),
+      };
+    }),
+    authorityStateVersion: expectNumber(
+      record.authorityStateVersion,
+      `${label}.authorityStateVersion`,
+    ),
+    freshness: decodeWorkflowTemplateFreshness(
+      record.freshness,
+      `${label}.freshness`,
+    ),
+  };
+}
+
+export const decodeWorkflowTemplateListResponse: Decoder<WorkflowTemplateListResponse> = (
+  value,
+) => {
+  const record = expectRecord(value, "WorkflowTemplateListResponse");
+  return {
+    items: expectArray(
+      record.items,
+      "WorkflowTemplateListResponse.items",
+      decodeWorkflowTemplateSummary,
+    ),
+    nextCursor:
+      record.nextCursor === null || record.nextCursor === undefined
+        ? null
+        : expectString(record.nextCursor, "WorkflowTemplateListResponse.nextCursor"),
+    freshness: decodeWorkflowTemplateFreshness(
+      record.freshness,
+      "WorkflowTemplateListResponse.freshness",
+    ),
+  };
+};
+
+export const decodeWorkflowTemplateDetailResponse: Decoder<WorkflowTemplateDetail> = (
+  value,
+) => decodeWorkflowTemplateDetail(value);
 
 function decodeWorkflowCatalogRole(
   value: unknown,

@@ -244,6 +244,7 @@ jest.mock('@umijs/max', () => ({
 }));
 
 jest.mock('@/shared/studio/api', () => ({
+  isStudioApiErrorCode: () => false,
   isStudioApiStatus: (error: unknown, status: number) =>
     Boolean(
       error &&
@@ -268,6 +269,7 @@ jest.mock('@/shared/studio/api', () => ({
     getWorkflow: jest.fn(),
     getWorkflowDraft: jest.fn(),
     getWorkflowDraftFile: jest.fn(),
+    instantiateWorkflowTemplate: jest.fn(),
     listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
     previewExplicitRequests: jest.fn(),
@@ -277,6 +279,13 @@ jest.mock('@/shared/studio/api', () => ({
     saveUserLlmSettings: jest.fn(),
     serializeYaml: jest.fn(),
     updateWorkflowDraft: jest.fn(),
+  },
+}));
+
+jest.mock('@/shared/api/runtimeCatalogApi', () => ({
+  runtimeCatalogApi: {
+    getWorkflowTemplate: jest.fn(),
+    listWorkflowTemplates: jest.fn(),
   },
 }));
 
@@ -440,6 +449,7 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   getWorkflow: jest.Mock;
   getWorkflowDraft: jest.Mock;
   getWorkflowDraftFile: jest.Mock;
+  instantiateWorkflowTemplate: jest.Mock;
   listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
   previewExplicitRequests: jest.Mock;
@@ -449,6 +459,11 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   saveUserLlmSettings: jest.Mock;
   serializeYaml: jest.Mock;
   updateWorkflowDraft: jest.Mock;
+};
+const mockRuntimeCatalogApi = jest.requireMock('@/shared/api/runtimeCatalogApi')
+  .runtimeCatalogApi as {
+  getWorkflowTemplate: jest.Mock;
+  listWorkflowTemplates: jest.Mock;
 };
 const mockCreateWorkflowRevisionIdentityCandidate = jest.requireMock(
   '@/shared/studio/explicitRequestConfirmation',
@@ -5565,6 +5580,59 @@ describe('Workflow Activity vNext creation', () => {
     });
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
     mockScopesApi.listWorkflows.mockResolvedValue([]);
+    mockRuntimeCatalogApi.listWorkflowTemplates.mockResolvedValue({
+      items: [
+        {
+          templateId: 'template-incident-triage',
+          displayName: 'Incident triage',
+          description: 'Classify an incident.',
+          defaultDraftName: 'Incident triage',
+          authorityStateVersion: 7,
+          stepCount: 2,
+          requiredConnections: ['pagerduty'],
+          requiresLlmProvider: true,
+          freshness: {
+            projectionWatermark: '2026-08-18T00:00:00Z',
+            lastEventId: 'event-template-7',
+            versionSemantics: 'workflow-catalog-authority-state-version',
+          },
+        },
+      ],
+      nextCursor: null,
+      freshness: {
+        projectionWatermark: '2026-08-18T00:00:00Z',
+        lastEventId: 'event-template-7',
+        versionSemantics: 'workflow-catalog-authority-state-version',
+      },
+    });
+    mockStudioApi.instantiateWorkflowTemplate.mockResolvedValue({
+      accepted: true,
+      workflowId: 'wf-created-alpha',
+      commandId: 'cmd-template-alpha',
+      ackStage: 'accepted',
+      actorId: 'actor-workspace-alpha',
+      workspaceId: 'workspace-scope-alpha',
+      expectedVersion: 1,
+      ackedAtUtc: '2026-08-18T00:00:00Z',
+      readiness: {
+        readable: false,
+        stage: 'materializing',
+        message: 'Draft accepted.',
+      },
+    });
+    mockStudioApi.getWorkflowDraftFile.mockResolvedValue({
+      workflowId: 'wf-created-alpha',
+      name: 'Incident triage',
+      fileName: 'incident-triage.yaml',
+      filePath: '/workflows/incident-triage.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: incident_triage\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-18T00:00:00Z',
+      document: { name: 'incident_triage', roles: [], steps: [] },
+      draftExists: true,
+      findings: [],
+    });
   });
 
   afterEach(() => cleanupTestQueryClients());
@@ -5719,7 +5787,7 @@ describe('Workflow Activity vNext creation', () => {
     expect(screen.getByLabelText('Workflow name')).toHaveValue('Weekly review');
   });
 
-  it('keeps bundled template version metadata out of the primary interface', async () => {
+  it('keeps implementation version metadata out of the public template browser', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     const templateButton = await screen.findByRole('button', {
       name: 'Use template',
@@ -5730,16 +5798,7 @@ describe('Workflow Activity vNext creation', () => {
     expect(screen.queryByText(/2026\.08\.1/)).not.toBeInTheDocument();
   });
 
-  it('submits bundled template YAML with the backend parser field names', async () => {
-    mockStudioApi.parseYaml.mockResolvedValue({
-      document: {
-        name: 'incident_triage',
-        roles: [],
-        steps: [{ id: 'classify', type: 'llm_call' }],
-      },
-      findings: [],
-    });
-
+  it('instantiates a public template with its authority version and opens the materialized draft', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     const templateButton = await screen.findByRole('button', {
       name: 'Use template',
@@ -5747,15 +5806,22 @@ describe('Workflow Activity vNext creation', () => {
     await waitFor(() => expect(templateButton).toBeEnabled());
     fireEvent.click(templateButton);
     fireEvent.click(
-      screen.getByRole('button', { name: 'Use template and open' }),
+      await screen.findByRole('button', {
+        name: 'Use template Incident triage',
+      }),
     );
 
-    await waitFor(() => expect(mockStudioApi.parseYaml).toHaveBeenCalled());
-    const submittedYaml = mockStudioApi.parseYaml.mock.calls[0][0].yaml;
-    expect(submittedYaml).toContain('system_prompt:');
-    expect(submittedYaml).toContain('target_role:');
-    expect(submittedYaml).not.toContain('systemPrompt:');
-    expect(submittedYaml).not.toContain('targetRole:');
+    await waitFor(() =>
+      expect(mockStudioApi.instantiateWorkflowTemplate).toHaveBeenCalledWith({
+        expectedAuthorityStateVersion: 7,
+        scopeId: 'scope-alpha',
+        templateId: 'template-incident-triage',
+      }),
+    );
+    expect(mockStudioApi.parseYaml).not.toHaveBeenCalled();
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+    );
   });
 
   it('validates imported YAML before creating and preserves invalid input', async () => {

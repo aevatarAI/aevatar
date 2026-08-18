@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
@@ -34,6 +34,7 @@ jest.mock('@umijs/max', () => ({
 }));
 
 jest.mock('@/shared/studio/api', () => ({
+  isStudioApiErrorCode: jest.fn(),
   isStudioApiStatus: (error: unknown, status: number) =>
     Boolean(
       error &&
@@ -44,9 +45,41 @@ jest.mock('@/shared/studio/api', () => ({
   studioApi: {
     authorWorkflow: jest.fn(),
     createWorkflowDraft: jest.fn(),
+    instantiateWorkflowTemplate: jest.fn(),
     getWorkspaceSettings: jest.fn(),
     listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
+  },
+}));
+
+jest.mock('@/shared/api/runtimeCatalogApi', () => ({
+  runtimeCatalogApi: {
+    listWorkflowTemplates: jest.fn(async () => ({
+      items: [
+        {
+          templateId: 'template-incident-triage',
+          displayName: 'Incident triage',
+          description: 'Classify an incident.',
+          defaultDraftName: 'Incident triage',
+          authorityStateVersion: 7,
+          stepCount: 2,
+          requiredConnections: ['pagerduty'],
+          requiresLlmProvider: true,
+          freshness: {
+            projectionWatermark: '2026-08-18T00:00:00Z',
+            lastEventId: 'event-template-7',
+            versionSemantics: 'workflow-catalog-authority-state-version',
+          },
+        },
+      ],
+      nextCursor: null,
+      freshness: {
+        projectionWatermark: '2026-08-18T00:00:00Z',
+        lastEventId: 'event-template-7',
+        versionSemantics: 'workflow-catalog-authority-state-version',
+      },
+    })),
+    getWorkflowTemplate: jest.fn(),
   },
 }));
 
@@ -59,12 +92,7 @@ jest.mock('@/shared/navigation/history', () => ({
 }));
 
 jest.mock('../hooks/useDraftMaterialization', () => ({
-  useDraftMaterialization: () => ({
-    error: null,
-    observe: jest.fn(),
-    phase: 'idle',
-    retry: jest.fn(),
-  }),
+  useDraftMaterialization: jest.fn(),
 }));
 
 jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
@@ -75,14 +103,27 @@ jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
 const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   authorWorkflow: jest.Mock;
   createWorkflowDraft: jest.Mock;
+  instantiateWorkflowTemplate: jest.Mock;
   getWorkspaceSettings: jest.Mock;
   listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
+};
+const mockIsStudioApiErrorCode = jest.requireMock('@/shared/studio/api')
+  .isStudioApiErrorCode as jest.Mock;
+
+const mockRuntimeCatalogApi = jest.requireMock('@/shared/api/runtimeCatalogApi')
+  .runtimeCatalogApi as {
+  getWorkflowTemplate: jest.Mock;
+  listWorkflowTemplates: jest.Mock;
 };
 
 const mockScopesApi = jest.requireMock('@/shared/api/scopesApi').scopesApi as {
   listWorkflows: jest.Mock;
 };
+
+const mockUseDraftMaterialization = jest.requireMock(
+  '../hooks/useDraftMaterialization',
+).useDraftMaterialization as jest.Mock;
 
 const readyWorkspace = {
   runtimeBaseUrl: '',
@@ -113,9 +154,34 @@ const materializedWorkflow = {
   },
 } as const;
 
+const acceptedTemplateReceipt = {
+  accepted: true,
+  workflowId: 'wf-created-alpha',
+  commandId: 'cmd-template-alpha',
+  ackStage: 'accepted',
+  actorId: 'actor-workspace-alpha',
+  workspaceId: 'workspace-scope-alpha',
+  expectedVersion: 1,
+  ackedAtUtc: '2026-08-18T00:00:00Z',
+  readiness: {
+    readable: false,
+    stage: 'materializing',
+    message: 'Draft accepted.',
+  },
+} as const;
+
 describe('New workflow save-target recovery', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockIsStudioApiErrorCode.mockReturnValue(false);
+    mockUseDraftMaterialization.mockReturnValue({
+      error: null,
+      observe: jest.fn(async () => ({ workflowId: 'wf-created-alpha' })),
+      phase: 'idle',
+      receipt: null,
+      reset: jest.fn(),
+      retry: jest.fn(),
+    });
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
     mockScopesApi.listWorkflows.mockResolvedValue([]);
   });
@@ -368,33 +434,246 @@ describe('New workflow save-target recovery', () => {
 
   it('creates and opens an independently named template copy', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
-    mockStudioApi.parseYaml.mockResolvedValue({
-      document: { name: 'incident_triage', roles: [], steps: [] },
-      findings: [],
-    });
-    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
 
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
 
     fireEvent.click(
       await screen.findByRole('button', { name: 'Use template' }),
     );
-    expect(screen.queryByLabelText('Workflow name')).not.toBeInTheDocument();
+    expect(await screen.findByText('Incident triage')).toBeVisible();
     fireEvent.click(
-      screen.getByRole('button', { name: 'Use template and open' }),
+      screen.getByRole('button', {
+        name: 'Use template Incident triage',
+      }),
     );
 
     await waitFor(() =>
-      expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fileName: 'incident-triage-copy.yaml',
-          workflowName: 'Incident triage copy',
-        }),
-      ),
+      expect(mockStudioApi.instantiateWorkflowTemplate).toHaveBeenCalledWith({
+        expectedAuthorityStateVersion: 7,
+        scopeId: 'scope-alpha',
+        templateId: 'template-incident-triage',
+      }),
     );
     expect(history.push).toHaveBeenCalledWith(
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
     );
+  });
+
+  it('views template details without creating, then uses the same instantiate action from the modal', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockRuntimeCatalogApi.getWorkflowTemplate.mockResolvedValue({
+      template: {
+        templateId: 'template-incident-triage',
+        displayName: 'Incident triage',
+        description: 'Classify an incident.',
+        defaultDraftName: 'Incident triage',
+        authorityStateVersion: 7,
+        stepCount: 1,
+        requiredConnections: [],
+        requiresLlmProvider: false,
+        freshness: {
+          projectionWatermark: '2026-08-18T00:00:00Z',
+          lastEventId: 'event-template-7',
+          versionSemantics: 'workflow-catalog-authority-state-version',
+        },
+      },
+      yaml: 'name: incident_triage\nsteps: []\n',
+      definition: {
+        name: 'incident_triage',
+        description: 'Classify an incident.',
+        closedWorldMode: true,
+        roles: [],
+        steps: [
+          {
+            id: 'classify',
+            type: 'llm_call',
+            targetRole: '',
+            parameters: {},
+            next: '',
+            branches: {},
+            children: [],
+          },
+        ],
+      },
+      edges: [],
+      authorityStateVersion: 7,
+      freshness: {
+        projectionWatermark: '2026-08-18T00:00:00Z',
+        lastEventId: 'event-template-7',
+        versionSemantics: 'workflow-catalog-authority-state-version',
+      },
+    });
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Use template' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Incident triage' }),
+    );
+
+    expect(
+      await screen.findByRole('tab', { name: 'Overview' }),
+    ).toBeInTheDocument();
+    expect(mockStudioApi.instantiateWorkflowTemplate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use this template' }));
+    await waitFor(() =>
+      expect(mockStudioApi.instantiateWorkflowTemplate).toHaveBeenCalledWith({
+        expectedAuthorityStateVersion: 7,
+        scopeId: 'scope-alpha',
+        templateId: 'template-incident-triage',
+      }),
+    );
+  });
+
+  it('refreshes stale modal details before retrying template instantiation', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockIsStudioApiErrorCode.mockImplementation(
+      (_error: unknown, status: number, code: string) =>
+        status === 409 && code === 'WORKFLOW_TEMPLATE_VERSION_CONFLICT',
+    );
+    const detailVersion7 = {
+      template: {
+        templateId: 'template-incident-triage',
+        displayName: 'Incident triage',
+        description: 'Classify an incident.',
+        defaultDraftName: 'Incident triage',
+        authorityStateVersion: 7,
+        stepCount: 1,
+        requiredConnections: [],
+        requiresLlmProvider: false,
+        freshness: {
+          projectionWatermark: '2026-08-18T00:00:00Z',
+          lastEventId: 'event-template-7',
+          versionSemantics: 'workflow-catalog-authority-state-version',
+        },
+      },
+      yaml: 'name: incident_triage\nsteps: []\n',
+      definition: {
+        name: 'incident_triage',
+        description: 'Classify an incident.',
+        closedWorldMode: true,
+        roles: [],
+        steps: [],
+      },
+      edges: [],
+      authorityStateVersion: 7,
+      freshness: {
+        projectionWatermark: '2026-08-18T00:00:00Z',
+        lastEventId: 'event-template-7',
+        versionSemantics: 'workflow-catalog-authority-state-version',
+      },
+    };
+    const detailVersion8 = {
+      ...detailVersion7,
+      authorityStateVersion: 8,
+      template: {
+        ...detailVersion7.template,
+        authorityStateVersion: 8,
+        freshness: {
+          ...detailVersion7.template.freshness,
+          lastEventId: 'event-template-8',
+        },
+      },
+      freshness: {
+        ...detailVersion7.freshness,
+        lastEventId: 'event-template-8',
+      },
+    };
+    mockRuntimeCatalogApi.getWorkflowTemplate
+      .mockResolvedValueOnce(detailVersion7)
+      .mockResolvedValueOnce(detailVersion8);
+    mockStudioApi.instantiateWorkflowTemplate
+      .mockRejectedValueOnce({
+        status: 409,
+        code: 'WORKFLOW_TEMPLATE_VERSION_CONFLICT',
+      })
+      .mockResolvedValueOnce(acceptedTemplateReceipt);
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Use template' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Incident triage' }),
+    );
+
+    const dialog = await screen.findByRole('dialog');
+    const useThisTemplate = within(dialog).getByRole('button', {
+      name: 'Use this template',
+    });
+    await waitFor(() => expect(useThisTemplate).toBeEnabled());
+    fireEvent.click(useThisTemplate);
+    await waitFor(() =>
+      expect(mockStudioApi.instantiateWorkflowTemplate).toHaveBeenCalledWith({
+        expectedAuthorityStateVersion: 7,
+        scopeId: 'scope-alpha',
+        templateId: 'template-incident-triage',
+      }),
+    );
+
+    expect(
+      await within(dialog).findByText('Template is out of date'),
+    ).toBeVisible();
+    expect(
+      within(dialog).getByRole('button', { name: 'Use this template' }),
+    ).toBeDisabled();
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Refresh catalog' }),
+    );
+    await waitFor(() =>
+      expect(mockRuntimeCatalogApi.getWorkflowTemplate).toHaveBeenCalledTimes(
+        2,
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole('button', { name: 'Use this template' }),
+      ).toBeEnabled(),
+    );
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Use this template' }),
+    );
+
+    await waitFor(() =>
+      expect(
+        mockStudioApi.instantiateWorkflowTemplate,
+      ).toHaveBeenLastCalledWith({
+        expectedAuthorityStateVersion: 8,
+        scopeId: 'scope-alpha',
+        templateId: 'template-incident-triage',
+      }),
+    );
+  });
+
+  it.each([
+    'delayed',
+    'failed',
+  ] as const)('prevents duplicate template instantiation while the accepted draft is %s', async (phase) => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockUseDraftMaterialization.mockReturnValue({
+      error: phase === 'failed' ? new Error('Observation unavailable') : null,
+      observe: jest.fn(),
+      phase,
+      receipt: acceptedTemplateReceipt,
+      reset: jest.fn(),
+      retry: jest.fn(),
+    });
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Use template' }),
+    );
+
+    const instantiate = await screen.findByRole('button', {
+      name: 'Use template Incident triage',
+    });
+    expect(instantiate).toBeDisabled();
+    fireEvent.click(instantiate);
+    expect(mockStudioApi.instantiateWorkflowTemplate).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
   });
 
   it('keeps all three creation methods available after a network failure', async () => {

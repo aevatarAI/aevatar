@@ -226,6 +226,32 @@ export const workflowActivityVNextCss = `
 .wa-vnext__creation-actions { display: flex; justify-content: flex-end; padding-top: 2px; }
 .wa-vnext__creation-actions .ant-btn { min-width: 156px; }
 .wa-vnext__creation-template-preview { border-left: 2px solid var(--wa-blue); padding: 2px 0 2px 14px; }
+.wa-vnext__template-browser { display: grid; gap: 18px; min-width: 0; }
+.wa-vnext__template-browser-heading { align-items: flex-start; display: flex; gap: 20px; justify-content: space-between; }
+.wa-vnext__template-browser-heading .ant-btn { margin-left: -12px; }
+.wa-vnext__template-browser-heading h2 { font-size: 22px; line-height: 28px; margin: 4px 0 0; }
+.wa-vnext__template-browser-heading p { margin: 6px 0 0; max-width: 680px; }
+.wa-vnext__template-page-status { color: var(--wa-muted); font-size: 12px; padding-top: 8px; white-space: nowrap; }
+.wa-vnext__template-toolbar { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }
+.wa-vnext__template-search { flex: 1 1 320px; max-width: 560px; }
+.wa-vnext__template-list { border-top: 1px solid var(--wa-line); display: grid; }
+.wa-vnext__template-row { align-items: stretch; border-bottom: 1px solid var(--wa-line); display: grid; gap: 20px; grid-template-columns: minmax(220px, 1.2fr) minmax(280px, 1.4fr) auto; padding: 18px 0; }
+.wa-vnext__template-identity { min-width: 0; }
+.wa-vnext__template-identity h4 { font-size: 15px; line-height: 20px; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__template-identity p { color: var(--wa-muted); line-height: 18px; margin: 6px 0 8px; overflow-wrap: anywhere; }
+.wa-vnext__template-meta { color: var(--wa-faint); display: block; font-size: 11px; line-height: 16px; }
+.wa-vnext__template-facts { align-items: stretch; display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); min-width: 0; }
+.wa-vnext__template-fact { display: grid; gap: 4px; min-width: 0; }
+.wa-vnext__template-fact span { color: var(--wa-muted); font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+.wa-vnext__template-fact strong { font-size: 12px; font-weight: 600; line-height: 17px; overflow-wrap: anywhere; }
+.wa-vnext__template-actions { align-items: center; display: flex; gap: 8px; justify-content: flex-end; min-width: 184px; }
+.wa-vnext__template-pagination { align-items: center; display: flex; justify-content: space-between; min-height: 34px; }
+.wa-vnext__template-detail-summary { border-bottom: 1px solid var(--wa-line); display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 18px; padding-bottom: 16px; }
+.wa-vnext__template-overview p { line-height: 19px; }
+.wa-vnext__template-steps { display: grid; gap: 8px; list-style: decimal; margin: 0; padding-left: 24px; }
+.wa-vnext__template-steps li { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); display: grid; gap: 4px; padding: 10px 12px; }
+.wa-vnext__template-steps li > div { align-items: baseline; display: flex; gap: 8px; min-width: 0; }
+.wa-vnext__template-steps li span, .wa-vnext__template-steps li small { color: var(--wa-muted); overflow-wrap: anywhere; }
 .wa-vnext__form-title { font-size: 16px; font-weight: 700; line-height: 22px; margin: 0; }
 .wa-vnext__editor-toolbar { flex-wrap: nowrap; justify-content: flex-end; min-width: 0; overflow: visible; }
 .wa-vnext__editor-toolbar > * { flex: 0 1 auto; min-width: 0; }
@@ -644,6 +670,8 @@ export const workflowActivityVNextCss = `
   .wa-vnext__settings-footer { padding-inline: 32px; }
   .wa-vnext__creation-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wa-vnext__split { grid-template-columns: 1fr; }
+  .wa-vnext__template-row { grid-template-columns: minmax(0, 1fr); }
+  .wa-vnext__template-actions { justify-content: flex-start; }
 }
 @media (max-width: 767px) {
   .wa-vnext { grid-template-columns: minmax(0, 1fr); }
@@ -704,6 +732,16 @@ export const workflowActivityVNextCss = `
   .wa-vnext__account-profile, .wa-vnext__account-section-heading { align-items: stretch; flex-direction: column; }
   .wa-vnext__account-profile > .ant-btn, .wa-vnext__account-section-heading > .ant-btn { width: 100%; }
   .wa-vnext__state--compact { padding: 18px; }
+  .wa-vnext__template-browser-heading { flex-direction: column; gap: 8px; }
+  .wa-vnext__template-toolbar { align-items: stretch; flex-direction: column; }
+  .wa-vnext__template-search { flex-basis: auto; max-width: none; width: 100%; }
+  .wa-vnext__template-toolbar .ant-select { width: 100%; }
+  .wa-vnext__template-facts, .wa-vnext__template-detail-summary { grid-template-columns: 1fr; }
+  .wa-vnext__template-actions { width: 100%; }
+  .wa-vnext__template-actions .ant-btn { flex: 1 1 0; }
+  .wa-vnext__template-pagination { align-items: stretch; flex-direction: column; gap: 10px; }
+  .wa-vnext__template-pagination .ant-space { display: grid; grid-template-columns: 1fr 1fr; }
+  .wa-vnext__template-pagination .ant-btn { width: 100%; }
   .wa-vnext__publish-review-item { gap: 6px; padding-block: 10px; }
 }
 @media (max-width: 360px) {

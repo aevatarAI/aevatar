@@ -843,6 +843,67 @@ describe('studioApi host-session requests', () => {
     expect(init?.method).toBe('POST');
   });
 
+  it('instantiates a public template with its authority version and decodes the accepted draft receipt', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        accepted: true,
+        workflowId: 'wf-template-draft',
+        commandId: 'cmd-template-instantiate',
+        ackStage: 'accepted',
+        actorId: 'actor-workspace',
+        workspaceId: 'workspace-scope-alpha',
+        expectedVersion: 1,
+        ackedAtUtc: '2026-08-18T00:00:00Z',
+        readiness: {
+          readable: false,
+          stage: 'materializing',
+          message: 'Draft accepted.',
+        },
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.instantiateWorkflowTemplate({
+        expectedAuthorityStateVersion: 12,
+        scopeId: 'scope-alpha',
+        templateId: 'template-alpha',
+      }),
+    ).resolves.toMatchObject({
+      workflowId: 'wf-template-draft',
+      commandId: 'cmd-template-instantiate',
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe(
+      '/api/scopes/scope-alpha/workflow-templates/template-alpha:instantiate',
+    );
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      expectedAuthorityStateVersion: 12,
+    });
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+  });
+
   it('includes the requested scope when updating a scoped workflow draft', async () => {
     persistAuthSession({
       tokens: {

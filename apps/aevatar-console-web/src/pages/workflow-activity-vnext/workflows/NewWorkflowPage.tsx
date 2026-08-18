@@ -23,8 +23,8 @@ import {
 } from '../navigation';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import WorkflowTemplateBrowser from './WorkflowTemplateBrowser';
 import {
-  BUNDLED_WORKFLOW_TEMPLATES,
   createBlankWorkflowYaml,
   hasBlockingFindings,
   resolveAvailableWorkflowFileName,
@@ -76,9 +76,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   const [name, setName] = React.useState('');
   const [prompt, setPrompt] = React.useState('');
   const [yaml, setYaml] = React.useState('');
-  const [templateId, setTemplateId] = React.useState(
-    BUNDLED_WORKFLOW_TEMPLATES[0]?.id ?? '',
-  );
   const [directoryId, setDirectoryId] = React.useState('');
   const [findings, setFindings] = React.useState<
     readonly StudioValidationFinding[]
@@ -235,9 +232,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     if (readable) navigateToWorkflow(readable.workflowId);
   };
 
-  const selectedTemplate = BUNDLED_WORKFLOW_TEMPLATES.find(
-    (item) => item.id === templateId,
-  );
   const normalizedName = name.trim().toLocaleLowerCase();
   const duplicateName = Boolean(
     normalizedName &&
@@ -252,24 +246,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
               .toLocaleLowerCase() === normalizedName,
         )),
   );
-  const templateName = selectedTemplate
-    ? t(
-        selectedTemplate.nameMessage.id,
-        selectedTemplate.nameMessage.defaultMessage,
-      )
-    : '';
-  const templateDescription = selectedTemplate
-    ? t(
-        selectedTemplate.descriptionMessage.id,
-        selectedTemplate.descriptionMessage.defaultMessage,
-      )
-    : '';
-  const templateCopyName = selectedTemplate
-    ? t(
-        selectedTemplate.copyNameMessage.id,
-        selectedTemplate.copyNameMessage.defaultMessage,
-      )
-    : '';
   const saveTargetUnavailable = !directoryId;
   const workspaceAccessDenied =
     isStudioApiStatus(workspace.error, 401) ||
@@ -286,8 +262,12 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     <WorkflowActivityVNextShell
       activeSection="workflows"
       description={t(
-        'workflowActivityVNext.new.description',
-        'Choose how you want to start.',
+        mode === 'template'
+          ? 'workflowActivityVNext.new.templateBrowser.description'
+          : 'workflowActivityVNext.new.description',
+        mode === 'template'
+          ? 'Browse public templates and start from a ready-made workflow.'
+          : 'Choose how you want to start.',
       )}
       headerActions={
         <Button
@@ -300,9 +280,14 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
         </Button>
       }
       scopeId={scopeId}
-      title={t('workflowActivityVNext.new.title', 'New workflow')}
+      title={t(
+        mode === 'template'
+          ? 'workflowActivityVNext.new.templateBrowser.title'
+          : 'workflowActivityVNext.new.title',
+        mode === 'template' ? 'Start from a template' : 'New workflow',
+      )}
     >
-      {workspace.isError ? (
+      {mode !== 'template' && workspace.isError ? (
         <Alert
           action={
             <Space wrap>
@@ -330,7 +315,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
           type="error"
         />
       ) : null}
-      {workspace.data?.directories.length === 0 ? (
+      {mode !== 'template' && workspace.data?.directories.length === 0 ? (
         <Alert
           action={
             <Space wrap>
@@ -355,7 +340,12 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
         />
       ) : null}
 
-      {!mode ? (
+      {mode === 'template' ? (
+        <WorkflowTemplateBrowser
+          onBack={() => setMode(null)}
+          scopeId={scopeId}
+        />
+      ) : !mode ? (
         <fieldset
           aria-label={t(
             'workflowActivityVNext.new.chooserAria',
@@ -516,59 +506,6 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                     {t(
                       'workflowActivityVNext.new.validateCreate',
                       'Import and open',
-                    )}
-                  </Button>
-                </div>
-              </>
-            ) : null}
-
-            {mode === 'template' ? (
-              <>
-                <div className="wa-vnext__creation-field">
-                  <span>
-                    {t('workflowActivityVNext.new.template', 'Template')}
-                  </span>
-                  <Select
-                    aria-label={t(
-                      'workflowActivityVNext.new.template',
-                      'Template',
-                    )}
-                    onChange={setTemplateId}
-                    options={BUNDLED_WORKFLOW_TEMPLATES.map((item) => ({
-                      label: t(
-                        item.nameMessage.id,
-                        item.nameMessage.defaultMessage,
-                      ),
-                      value: item.id,
-                    }))}
-                    className="wa-vnext__field-control"
-                    value={templateId}
-                  />
-                </div>
-                {selectedTemplate ? (
-                  <div className="wa-vnext__creation-template-preview">
-                    <strong>{templateName}</strong>
-                    <p className="wa-vnext__creation-option-description">
-                      {templateDescription}
-                    </p>
-                  </div>
-                ) : null}
-                <div className="wa-vnext__creation-actions">
-                  <Button
-                    disabled={!selectedTemplate || saveTargetUnavailable}
-                    loading={submitting}
-                    onClick={() =>
-                      selectedTemplate &&
-                      void validateAndPersist(
-                        selectedTemplate.yaml,
-                        templateCopyName,
-                      )
-                    }
-                    type="primary"
-                  >
-                    {t(
-                      'workflowActivityVNext.new.createTemplate',
-                      'Use template and open',
                     )}
                   </Button>
                 </div>

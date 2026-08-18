@@ -285,7 +285,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.chooserAria': '工作流创建方式',
     'workflowActivityVNext.new.createBlank': '创建并打开',
     'workflowActivityVNext.new.createFailed': '无法创建工作流',
-    'workflowActivityVNext.new.createTemplate': '使用模板并打开',
     'workflowActivityVNext.new.creatingDescription': '通常只需要片刻时间。',
     'workflowActivityVNext.new.description': '选择一种开始方式。',
     'workflowActivityVNext.new.defaultWorkspace': '默认工作区',
@@ -318,11 +317,81 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.reviewAccess': '检查访问权限',
     'workflowActivityVNext.new.saveTargetRequired':
       '请先选择可用的保存位置，再创建工作流。',
-    'workflowActivityVNext.new.template': '模板',
-    'workflowActivityVNext.new.templateDescription.incidentTriage':
-      '对事件分类、准备响应并请求人工审批。',
-    'workflowActivityVNext.new.templateCopyName.incidentTriage': '事件分流副本',
-    'workflowActivityVNext.new.templateName.incidentTriage': '事件分流',
+    'workflowActivityVNext.new.templateBrowser.title': '从模板开始',
+    'workflowActivityVNext.new.templateBrowser.description':
+      '浏览公开模板，从现成的工作流开始。',
+    'workflowActivityVNext.new.templateBrowser.changeMethod': '更换创建方式',
+    'workflowActivityVNext.new.templateBrowser.body':
+      '浏览公开工作流模板、查看契约，或直接创建草稿。',
+    'workflowActivityVNext.new.templateBrowser.search': '搜索模板',
+    'workflowActivityVNext.new.templateBrowser.sort': '模板排序',
+    'workflowActivityVNext.new.templateBrowser.sort.recent': '最近更新',
+    'workflowActivityVNext.new.templateBrowser.sort.nameAsc': '名称 A–Z',
+    'workflowActivityVNext.new.templateBrowser.sort.nameDesc': '名称 Z–A',
+    'workflowActivityVNext.new.templateBrowser.sort.oldest': '最早更新',
+    'workflowActivityVNext.new.templateBrowser.page': '第 {page} 页',
+    'workflowActivityVNext.new.templateBrowser.templatesOnPage':
+      '本页 {count} 个模板',
+    'workflowActivityVNext.new.templateBrowser.previous': '上一页',
+    'workflowActivityVNext.new.templateBrowser.next': '下一页',
+    'workflowActivityVNext.new.templateBrowser.loading': '正在加载模板…',
+    'workflowActivityVNext.new.templateBrowser.loadFailed': '无法加载模板',
+    'workflowActivityVNext.new.templateBrowser.retry': '重试',
+    'workflowActivityVNext.new.templateBrowser.signIn':
+      '登录后才能浏览公开工作流模板。',
+    'workflowActivityVNext.new.templateBrowser.noSearchResults':
+      '没有匹配搜索条件的模板。',
+    'workflowActivityVNext.new.templateBrowser.noTemplates':
+      '暂时没有可用的公开工作流模板。',
+    'workflowActivityVNext.new.templateBrowser.view': '查看',
+    'workflowActivityVNext.new.templateBrowser.viewNamed': '查看 {name}',
+    'workflowActivityVNext.new.templateBrowser.use': '使用模板',
+    'workflowActivityVNext.new.templateBrowser.useNamed': '使用模板 {name}',
+    'workflowActivityVNext.new.templateBrowser.stepNumber': '步骤 {number}',
+    'workflowActivityVNext.new.templateBrowser.reads': '读取',
+    'workflowActivityVNext.new.templateBrowser.connection': '连接',
+    'workflowActivityVNext.new.templateBrowser.does': '执行',
+    'workflowActivityVNext.new.templateBrowser.workflowInputs': '工作流输入',
+    'workflowActivityVNext.new.templateBrowser.none': '无',
+    'workflowActivityVNext.new.templateBrowser.llmProvider': 'LLM Provider',
+    'workflowActivityVNext.new.templateBrowser.runsSteps':
+      '运行 {count} 个{unit}',
+    'workflowActivityVNext.new.templateBrowser.step': '步骤',
+    'workflowActivityVNext.new.templateBrowser.steps': '步骤',
+    'workflowActivityVNext.new.templateBrowser.updated': '更新于 {date}',
+    'workflowActivityVNext.new.templateBrowser.fallbackDescription':
+      '适用于当前工作区的现成工作流。',
+    'workflowActivityVNext.new.templateBrowser.contract': '{name} 契约',
+    'workflowActivityVNext.new.templateBrowser.detailLoading':
+      '正在加载模板详情…',
+    'workflowActivityVNext.new.templateBrowser.detailFailed':
+      '无法加载模板详情',
+    'workflowActivityVNext.new.templateBrowser.noLongerAvailable':
+      '该模板已不可用。',
+    'workflowActivityVNext.new.templateBrowser.overview': '概览',
+    'workflowActivityVNext.new.templateBrowser.stepsTab': '共 {count} 个步骤',
+    'workflowActivityVNext.new.templateBrowser.source':
+      '来源：公开工作流模板 · 版本 {version}',
+    'workflowActivityVNext.new.templateBrowser.role': '角色：{role}',
+    'workflowActivityVNext.new.templateBrowser.cancel': '取消',
+    'workflowActivityVNext.new.templateBrowser.useThis': '使用此模板',
+    'workflowActivityVNext.new.templateBrowser.templateOutOfDate': '模板已更新',
+    'workflowActivityVNext.new.templateBrowser.templateOutOfDateDescription':
+      '你查看模板期间它发生了变化，请刷新目录后重试。',
+    'workflowActivityVNext.new.templateBrowser.refreshCatalog': '刷新目录',
+    'workflowActivityVNext.new.templateBrowser.creationFailed': '模板创建失败',
+    'workflowActivityVNext.new.templateBrowser.couldNotUse':
+      '无法使用工作流模板',
+    'workflowActivityVNext.new.templateBrowser.creating': '正在创建工作流…',
+    'workflowActivityVNext.new.templateBrowser.projectionDelayed':
+      '所需时间比预期更长',
+    'workflowActivityVNext.new.templateBrowser.observationFailed':
+      '无法打开工作流',
+    'workflowActivityVNext.new.templateBrowser.safeToRetry':
+      '你的内容已保留，请重试以完成打开工作流。',
+    'workflowActivityVNext.new.templateBrowser.creatingDescription':
+      '通常只需要片刻时间。',
+    'workflowActivityVNext.new.templateBrowser.tryAgain': '重试',
     'workflowActivityVNext.new.title': '新建工作流',
     'workflowActivityVNext.new.validateCreate': '导入并打开',
     'workflowActivityVNext.new.workspaceUnavailable': '保存位置不可用',
