@@ -1,6 +1,6 @@
 import { render, waitFor } from "@testing-library/react";
 import React from "react";
-import { requiresGlobalAuthGate } from "./shared/auth/globalAuthGate";
+import { requiresGlobalAuthGate } from "./app";
 import { ProtectedRouteRedirectGate } from "./shared/auth/ProtectedRouteRedirectGate";
 
 const mockedHistoryReplace = jest.fn();

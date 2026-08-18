@@ -1,5 +1,6 @@
 using System.Text;
 using System.Runtime.CompilerServices;
+using System.Reflection;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -11,6 +12,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -37,6 +39,22 @@ public sealed class AgentRunGAgentTests
         RecordingExecutors.TryGetValue(agent, out var executor)
             ? executor.DrainAsync(agent.State)
             : Task.CompletedTask;
+
+    [Fact]
+    public void ReplyGenerationFailureHandler_MustAcceptOnlySelfMessages()
+    {
+        var method = typeof(AgentRunGAgent).GetMethod(
+            nameof(AgentRunGAgent.HandleReplyGenerationFailedAsync),
+            BindingFlags.Instance | BindingFlags.Public);
+        method.Should().NotBeNull();
+
+        var attribute = method!.GetCustomAttribute<EventHandlerAttribute>();
+        attribute.Should().NotBeNull();
+        attribute!.AllowSelfHandling.Should().BeTrue(
+            "reply generation failures are published to the run actor's own inbox");
+        attribute.OnlySelfHandling.Should().BeTrue(
+            "the transient failure continuation carries runtime credentials and has no external sender");
+    }
 
     [Fact]
     public void StripInlineMediaPayloads_ShouldRemoveMediaDataBase64FromDurableStepState()
@@ -2454,6 +2472,59 @@ public sealed class AgentRunGAgentTests
         providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().BeNull();
         providerFactory.Requests[1].ToolContext!.Routing.ModelOverride.Should().BeNull();
         providerFactory.Requests[1].ToolContext!.Routing.NyxIdRoutePreference.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenOwnerFallbackHasOnlyRelayAccessToken_ReusesRuntimeToken()
+    {
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("conversation:c");
+        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var providerFactory = new RejectToolsThenReplyProviderFactory();
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            toolSources: [new CountingAgentRunToolSource(new AgentRunNoopTool())],
+            localSkillCatalog: new LocalSkillCatalog());
+        var runtime = CreateRunAgent(
+            new DispatchingActorRuntime(("conversation:c", targetActor)),
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var activity = BuildRelayActivity();
+        activity.TransportExtras ??= new TransportExtras();
+        activity.TransportExtras.NyxUserAccessToken = "relay-owner-runtime-token";
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-relay-owner-fallback",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-owner-fallback",
+            ToolContext = (AgentToolExecutionContext.Empty with
+            {
+                SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
+            }).ToPayload(),
+            LlmControl = new LLMControlContext(
+                null,
+                null,
+                null,
+                "owner-model",
+                "/api/v1/proxy/s/owner",
+                4,
+                null).ToPayload(),
+        });
+
+        runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        providerFactory.Requests.Should().HaveCount(2);
+        providerFactory.Requests[0].LlmControl!.NyxIdAccessToken.Should().Be("relay-owner-runtime-token");
+        providerFactory.Requests[1].Tools.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("relay-owner-runtime-token");
+        providerFactory.Requests[1].LlmControl!.NyxIdOrgToken.Should().Be("relay-owner-runtime-token");
+        runtime.State.GenerationStep!.LlmControl!.NyxIdAccessToken.Should().BeEmpty();
+        runtime.State.GenerationStep.OwnerFallbackLlmControl!.NyxIdAccessToken.Should().BeEmpty();
     }
 
     [Fact]

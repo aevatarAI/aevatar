@@ -79,7 +79,7 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        (await ErrorMessageAsync(response)).Should().Be("A single authenticated scope is required.");
+        (await ErrorMessageAsync(response)).Should().Be("Authenticated caller access context is required.");
         actors.CreateCommands.Should().BeEmpty();
     }
 
@@ -98,7 +98,37 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         payload.RootElement.TryGetProperty("enabled", out _).Should().BeFalse();
         payload.RootElement.TryGetProperty("cohortBasisPoints", out _).Should().BeFalse();
+        payload.RootElement.GetRawText().Should().NotContain("ownerKind");
         payload.RootElement.GetProperty("authorityStateVersion").GetInt64().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetAIAgentDetail_ShouldHideAuthorizationOwnerKind()
+    {
+        var owner = AgentProfileOwners.ForScope("scope-alpha");
+        var management = new RecordingManagementQuery
+        {
+            Snapshot = Management(owner, "prof-research", "research", authorityVersion: 9),
+        };
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(
+                owner,
+                authorityVersion: 9,
+                Entry("prof-research", "research", AgentProfileProvisioningStatus.Active)),
+        };
+        await using var host = await AgentProfileTestHost.StartAsync(catalog, management);
+
+        var response = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            "/api/ai/agents/research",
+            "scope-alpha",
+            "user-alpha"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        payload.RootElement.GetProperty("profileSlug").GetString().Should().Be("research");
+        payload.RootElement.TryGetProperty("ownerKind", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -120,6 +150,32 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         payload.RootElement.GetProperty("activationModes").EnumerateArray()
             .Select(static item => item.GetString())
             .Should().BeEquivalentTo("SHADOW", "ENFORCED");
+        payload.RootElement.GetProperty("agentSources").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().BeEquivalentTo("my_agents", "system_agents");
+        var json = payload.RootElement.GetRawText().ToLowerInvariant();
+        json.Should().NotContain("owner");
+        json.Should().NotContain("caller");
+        json.Should().NotContain("scope");
+    }
+
+    [Fact]
+    public async Task ManagementEditorOptions_ShouldPreserveExistingOwnershipContract()
+    {
+        await using var host = await AgentProfileTestHost.StartAsync();
+
+        var response = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            "/api/agent-profiles/editor-options",
+            "scope-alpha",
+            "user-alpha"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        payload.RootElement.GetProperty("referenceOwnerKinds").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().BeEquivalentTo("caller", "system");
+        payload.RootElement.TryGetProperty("agentSources", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -135,14 +191,179 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         request.Headers.Add("Idempotency-Key", "set-ai-default");
         request.Content = JsonContent.Create(new
         {
-            agentProfile = new { ownerKind = "caller", profileSlug = "research" },
+            agentProfile = new { source = "my_agents", profileSlug = "research" },
             enabled = false,
         });
 
         var response = await host.Client.SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).ToLowerInvariant().Should()
+            .NotContain("ownerkind");
         actors.BindingCommands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SetAIDefaultAgent_ShouldRejectLegacyOwnershipFieldsWithoutEchoingThem()
+    {
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
+        using var request = Request(
+            HttpMethod.Put,
+            "/api/ai/agents/default/nyxid.chat",
+            "scope-alpha",
+            "user-alpha");
+        request.Content = JsonContent.Create(new
+        {
+            agentProfile = new { ownerKind = "caller", profileSlug = "research" },
+            expectedVersion = 0,
+            idempotencyKey = "set-ai-default",
+        });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var json = (await response.Content.ReadAsStringAsync()).ToLowerInvariant();
+        json.Should().NotContain("owner");
+        json.Should().NotContain("caller");
+        json.Should().NotContain("scope");
+        actors.BindingCommands.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("my_agents", false)]
+    [InlineData("system_agents", true)]
+    public async Task SetAIDefaultAgent_ShouldMapProductSourceToInternalReference(
+        string source,
+        bool expectsSystemTarget)
+    {
+        var scopeOwner = AgentProfileOwners.ForScope("scope-alpha");
+        var targetOwner = expectsSystemTarget ? AgentProfileOwners.ForSystem() : scopeOwner;
+        var entry = Entry("prof-research", "research", AgentProfileProvisioningStatus.Active, publishedRevision: 2);
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = requestedOwner => requestedOwner.Equals(targetOwner)
+                ? Catalog(targetOwner, authorityVersion: 0, entry)
+                : requestedOwner.Equals(scopeOwner)
+                    ? Catalog(scopeOwner, authorityVersion: 0)
+                    : null,
+        };
+        var execution = new RecordingExecutionQuery
+        {
+            Resolve = target => Execution(target, "research"),
+        };
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(
+            catalog: catalog,
+            actorPort: actors,
+            execution: execution);
+        using var request = Request(
+            HttpMethod.Put,
+            "/api/ai/agents/default/nyxid.chat",
+            "scope-alpha",
+            "user-alpha");
+        request.Content = JsonContent.Create(new
+        {
+            agentProfile = new { source, profileSlug = "research" },
+            expectedVersion = 0,
+            idempotencyKey = $"set-ai-{source}",
+        });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        actors.BindingCommands.Should().ContainSingle();
+        actors.BindingCommands[0].Target.Owner.OwnerCase.Should().Be(
+            expectsSystemTarget
+                ? AgentProfileOwner.OwnerOneofCase.System
+                : AgentProfileOwner.OwnerOneofCase.Scope);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        payload.RootElement.TryGetProperty("actorId", out _).Should().BeFalse();
+        payload.RootElement.GetRawText().ToLowerInvariant().Should().NotContain("ownerkind");
+    }
+
+    [Theory]
+    [InlineData("GET")]
+    [InlineData("PUT")]
+    [InlineData("DELETE")]
+    public async Task AIDefaultAgentErrors_ShouldNotExposeAuthorizationOwnership(string method)
+    {
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(AgentProfileOwners.ForSystem(), authorityVersion: 4),
+        };
+        await using var host = await AgentProfileTestHost.StartAsync(catalog: catalog);
+        using var request = Request(
+            new HttpMethod(method),
+            "/api/ai/agents/default/nyxid.chat",
+            "scope-alpha",
+            "user-alpha");
+        if (method == "PUT")
+        {
+            request.Content = JsonContent.Create(new
+            {
+                agentProfile = new { source = "my_agents", profileSlug = "research" },
+                expectedVersion = 4,
+                idempotencyKey = "set-ai-default",
+            });
+        }
+        else if (method == "DELETE")
+        {
+            request.Content = JsonContent.Create(new
+            {
+                expectedVersion = 4,
+                idempotencyKey = "clear-ai-default",
+            });
+        }
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        AssertStrictAIError(payload.RootElement, "AI_AGENT_UNAVAILABLE");
+        var json = payload.RootElement.GetRawText().ToLowerInvariant();
+        json.Should().NotContain("owner");
+        json.Should().NotContain("caller");
+        json.Should().NotContain("scope");
+        json.Should().NotContain("authority");
+    }
+
+    [Fact]
+    public async Task GetAIAgentDetail_WhenMissing_ShouldReturnStrictNeutralError()
+    {
+        await using var host = await AgentProfileTestHost.StartAsync();
+
+        var response = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            "/api/ai/agents/missing",
+            "scope-alpha",
+            "user-alpha"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        AssertStrictAIError(payload.RootElement, "AI_AGENT_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task CreateAIAgent_WhenRequestIsInvalid_ShouldReturnStrictNeutralError()
+    {
+        await using var host = await AgentProfileTestHost.StartAsync();
+        using var request = Request(
+            HttpMethod.Post,
+            "/api/ai/agents",
+            "scope-alpha",
+            "user-alpha");
+        request.Content = JsonContent.Create(new
+        {
+            profileSlug = " ",
+            idempotencyKey = "create-invalid",
+        });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        AssertStrictAIError(payload.RootElement, "AI_AGENT_INVALID");
     }
 
     [Fact]
@@ -639,6 +860,14 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
             : null;
     }
 
+    private static void AssertStrictAIError(JsonElement error, string expectedCode)
+    {
+        error.EnumerateObject().Select(static property => property.Name)
+            .Should().BeEquivalentTo("code", "message");
+        error.GetProperty("code").GetString().Should().Be(expectedCode);
+        error.GetProperty("message").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
     private static HttpRequestMessage Request(HttpMethod method, string path, string scopeId, string? subject)
     {
         var request = new HttpRequestMessage(method, path);
@@ -742,6 +971,29 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
             DateTimeOffset.UtcNow);
     }
 
+    private static AgentProfileExecutionSnapshot Execution(
+        AgentProfileBindingTarget target,
+        string profileSlug)
+    {
+        var identity = new AgentProfileIdentity
+        {
+            Owner = target.Owner.Clone(),
+            ProfileId = target.ProfileId,
+            ProfileSlug = profileSlug,
+        };
+        return new AgentProfileExecutionSnapshot(
+            $"actor-{target.ProfileId}",
+            target.PublishedRevision,
+            identity,
+            new AgentProfilePublishedSnapshot
+            {
+                Identity = identity.Clone(),
+                PublishedRevision = target.PublishedRevision,
+                SnapshotSha256 = target.SnapshotSha256,
+            },
+            DateTimeOffset.UtcNow);
+    }
+
     private static AgentProfileMutationOutcome Mutation(
         string operationId,
         string code,
@@ -768,7 +1020,8 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         public static async Task<AgentProfileTestHost> StartAsync(
             RecordingCatalogQuery? catalog = null,
             RecordingManagementQuery? management = null,
-            RecordingActorPort? actorPort = null)
+            RecordingActorPort? actorPort = null,
+            RecordingExecutionQuery? execution = null)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = Environments.Development });
             builder.WebHost.UseTestServer();
@@ -777,7 +1030,7 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
             builder.Services.AddAuthorization();
             builder.Services.AddSingleton<IAgentProfileCatalogQueryPort>(catalog ?? new RecordingCatalogQuery());
             builder.Services.AddSingleton<IAgentProfileManagementQueryPort>(management ?? new RecordingManagementQuery());
-            builder.Services.AddSingleton<IAgentProfileExecutionQueryPort>(new RecordingExecutionQuery());
+            builder.Services.AddSingleton<IAgentProfileExecutionQueryPort>(execution ?? new RecordingExecutionQuery());
             builder.Services.AddSingleton<IAgentProfileActorPort>(actorPort ?? new RecordingActorPort());
             builder.Services.AddSingleton<IAgentProfileSkillSealer>(new StaticSkillSealer());
             builder.Services.AddSingleton(TimeProvider.System);
@@ -837,7 +1090,9 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
 
     private sealed class RecordingExecutionQuery : IAgentProfileExecutionQueryPort
     {
-        public Task<AgentProfileExecutionSnapshot?> GetAsync(AgentProfileBindingTarget target, CancellationToken ct = default) => Task.FromResult<AgentProfileExecutionSnapshot?>(null);
+        public Func<AgentProfileBindingTarget, AgentProfileExecutionSnapshot?> Resolve { get; init; } = _ => null;
+        public Task<AgentProfileExecutionSnapshot?> GetAsync(AgentProfileBindingTarget target, CancellationToken ct = default) =>
+            Task.FromResult(Resolve(target));
     }
 
     private sealed class RecordingActorPort : IAgentProfileActorPort

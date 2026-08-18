@@ -5,10 +5,7 @@ import { history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import { chatHistoryApi } from './chatHistoryApi';
-import ChatPage, {
-  buildChatConversationRouteHref,
-  hydrateStoredMessages,
-} from './index';
+import ChatPage, { hydrateStoredMessages } from './index';
 import { createNyxIdCatalogKey, listNyxIdConnectors } from './nyxIdServiceApi';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
@@ -37,15 +34,7 @@ jest.mock('@/shared/studio/api', () => ({
   },
 }));
 jest.mock('@/shared/navigation/history', () => ({
-  ...jest.requireActual('@/shared/navigation/history'),
-  history: {
-    push: jest.fn((target: string) =>
-      globalThis.history.pushState(globalThis.history.state, '', target),
-    ),
-    replace: jest.fn((target: string) =>
-      globalThis.history.replaceState(globalThis.history.state, '', target),
-    ),
-  },
+  history: { push: jest.fn() },
 }));
 jest.mock('@/shared/ui/aevatarPageShells', () => {
   const mockReact = require('react');
@@ -326,19 +315,9 @@ function activeTaskState(
 }
 
 async function openCanonicalConversation(): Promise<void> {
-  const conversationButton = await screen.findByRole('button', {
-    name: 'Canonical conversation',
-  });
-  if (new URLSearchParams(window.location.search).has('conversationId')) {
-    await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'Canonical conversation' }),
-      ).toHaveAttribute('aria-current', 'page'),
-    );
-    return;
-  }
-
-  fireEvent.click(conversationButton);
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Canonical conversation' }),
+  );
 }
 
 function taskRow(description: string): HTMLElement {
@@ -378,18 +357,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
     });
   });
 
-  it('builds canonical AI Chat URLs without discarding unrelated query parameters', () => {
-    const search =
-      '?scopeId=scope-alpha&conversationId=conversation-old&view=compact';
-
-    expect(buildChatConversationRouteHref('conversation-beta', search)).toBe(
-      '/ai/chat?scopeId=scope-alpha&conversationId=conversation-beta&view=compact',
-    );
-    expect(buildChatConversationRouteHref(undefined, search)).toBe(
-      '/ai/chat?scopeId=scope-alpha&view=compact',
-    );
-  });
-
   it('sends typed first and continuation turns using RUN_STARTED identity', async () => {
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(completedStream('First answer'))
@@ -420,12 +387,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(first).not.toHaveProperty('sessionId');
     expect(first).not.toHaveProperty('workflow');
     expect(first).not.toHaveProperty('conversation');
-    expect(history.replace).toHaveBeenCalledTimes(1);
-    expect(history.replace).toHaveBeenCalledWith(
-      '/ai/chat?conversationId=conversation-alpha',
-    );
-    expect(window.location.pathname).toBe('/ai/chat');
-    expect(window.location.search).toBe('?conversationId=conversation-alpha');
   });
 
   it('enables actor-authorized stop after current state materializes during an active SSE', async () => {
@@ -598,168 +559,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
     expect(chatHistoryApi.loadConversationState).toHaveBeenCalledWith(
       'conversation-alpha',
     );
-    expect(history.push).toHaveBeenCalledWith(
-      '/ai/chat?conversationId=conversation-alpha',
-    );
-  });
-
-  it('restores a canonical conversation from an AI Chat deep link', async () => {
-    window.history.replaceState(
-      {},
-      '',
-      '/ai/chat?conversationId=conversation-alpha',
-    );
-    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
-      serverConversation,
-    ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue({
-      messages: [
-        {
-          id: 'turn-alpha:assistant',
-          turnId: 'turn-alpha',
-          role: 'assistant',
-          content: 'Restored from the AI workspace',
-          timestamp: 2,
-          status: 'complete',
-        },
-      ],
-      stateVersion: 7,
-    });
-    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
-      currentState(),
-    );
-
-    renderWithQueryClient(<ChatPage />);
-
-    expect(
-      await screen.findByText('Restored from the AI workspace'),
-    ).toBeInTheDocument();
-    expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
-      'conversation-alpha',
-    );
-    expect(chatHistoryApi.loadConversationState).toHaveBeenCalledWith(
-      'conversation-alpha',
-    );
-  });
-
-  it('starts a new chat by clearing only the conversation deep link', async () => {
-    window.history.replaceState(
-      {},
-      '',
-      '/ai/chat?scopeId=scope-alpha&conversationId=conversation-alpha&view=compact#turn-alpha',
-    );
-    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
-      serverConversation,
-    ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue({
-      messages: [
-        {
-          id: 'turn-alpha:assistant',
-          turnId: 'turn-alpha',
-          role: 'assistant',
-          content: 'Existing conversation',
-          timestamp: 2,
-          status: 'complete',
-        },
-      ],
-      stateVersion: 7,
-    });
-    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
-      currentState(),
-    );
-
-    renderWithQueryClient(<ChatPage />);
-    expect(
-      await screen.findByText('Existing conversation'),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'New Chat' }));
-
-    expect(history.push).toHaveBeenCalledWith(
-      '/ai/chat?scopeId=scope-alpha&view=compact',
-    );
-    expect(window.location.pathname).toBe('/ai/chat');
-    expect(window.location.search).toBe('?scopeId=scope-alpha&view=compact');
-    expect(window.location.hash).toBe('');
-    expect(screen.queryByText('Existing conversation')).not.toBeInTheDocument();
-  });
-
-  it('clears the active conversation when browser navigation removes the deep link', async () => {
-    window.history.replaceState(
-      {},
-      '',
-      '/ai/chat?scopeId=scope-alpha&conversationId=conversation-alpha',
-    );
-    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
-      serverConversation,
-    ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue({
-      messages: [
-        {
-          id: 'turn-alpha:assistant',
-          turnId: 'turn-alpha',
-          role: 'assistant',
-          content: 'Conversation reached from history',
-          timestamp: 2,
-          status: 'complete',
-        },
-      ],
-      stateVersion: 7,
-    });
-    (chatHistoryApi.loadConversationState as jest.Mock).mockResolvedValue(
-      currentState(),
-    );
-
-    renderWithQueryClient(<ChatPage />);
-    expect(
-      await screen.findByText('Conversation reached from history'),
-    ).toBeInTheDocument();
-
-    window.history.replaceState({}, '', '/ai/chat?scopeId=scope-alpha');
-    fireEvent(window, new PopStateEvent('popstate'));
-
-    await waitFor(() =>
-      expect(
-        screen.queryByText('Conversation reached from history'),
-      ).not.toBeInTheDocument(),
-    );
-    expect(history.push).not.toHaveBeenCalled();
-    expect(window.location.search).toBe('?scopeId=scope-alpha');
-  });
-
-  it('defers browser route removal until the active stream finishes', async () => {
-    const stream = openSseResponse([
-      runStarted(),
-      {
-        type: 'TEXT_MESSAGE_CONTENT',
-        textMessageContent: { delta: 'Still working.' },
-      },
-    ]);
-    let streamClosed = false;
-    (authFetch as jest.Mock).mockResolvedValue(stream.response);
-
-    renderWithQueryClient(<ChatPage />);
-    try {
-      await sendPrompt('Keep this run visible');
-      await waitFor(() => expect(requestBodies()).toHaveLength(1));
-      expect(window.location.search).toBe('?conversationId=conversation-alpha');
-
-      window.history.replaceState({}, '', '/ai/chat');
-      fireEvent(window, new PopStateEvent('popstate'));
-
-      expect(screen.getAllByText('Keep this run visible')).not.toHaveLength(0);
-      expect(screen.getByRole('button', { name: 'New Chat' })).toBeDisabled();
-
-      stream.close();
-      streamClosed = true;
-
-      await waitFor(() =>
-        expect(screen.queryAllByText('Keep this run visible')).toHaveLength(0),
-      );
-      expect(screen.getByRole('button', { name: 'New Chat' })).toBeEnabled();
-    } finally {
-      if (!streamClosed) stream.close();
-    }
   });
 
   it('UC1a renders live and reloaded committed connect requests identically', async () => {
@@ -1780,7 +1579,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
     ]);
 
     reconciledView.unmount();
-    window.history.replaceState({}, '', '/ai/chat');
     const liveRetryView = renderWithQueryClient(<ChatPage />);
     await sendPrompt('Observe the external record retry');
     expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
@@ -2003,7 +1801,11 @@ describe('ChatPage canonical NyxID Assistant', () => {
           {
             planRevision: 2,
             revisionCause: 'scope_resolution',
-            addedStepIds: ['step-condition-true', 'step-write', 'step-verify'],
+            addedStepIds: [
+              'step-condition-true',
+              'step-write',
+              'step-verify',
+            ],
             cancelledStepIds: [],
           },
         ],
@@ -2213,7 +2015,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
     ]);
 
     firstView.unmount();
-    window.history.replaceState({}, '', '/ai/chat');
     const liveReturnedView = renderWithQueryClient(<ChatPage />);
     await sendPrompt('Observe the conditional write return');
     expect(

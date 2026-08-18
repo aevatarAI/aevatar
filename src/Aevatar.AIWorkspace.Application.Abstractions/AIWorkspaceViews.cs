@@ -34,6 +34,38 @@ public enum AIWorkspaceRunDetailSectionVersionStatus
     VersionMismatch = 3,
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<AIWorkspaceConversationKind>))]
+public enum AIWorkspaceConversationKind
+{
+    [JsonStringEnumMemberName("assistant")]
+    Assistant = 0,
+
+    [JsonStringEnumMemberName("workflow")]
+    Workflow = 1,
+
+    [JsonStringEnumMemberName("other")]
+    Other = 2,
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<AIWorkspaceRunOrigin>))]
+public enum AIWorkspaceRunOrigin
+{
+    [JsonStringEnumMemberName("interactive")]
+    Interactive = 0,
+
+    [JsonStringEnumMemberName("integration")]
+    Integration = 1,
+
+    [JsonStringEnumMemberName("automation")]
+    Automation = 2,
+
+    [JsonStringEnumMemberName("development")]
+    Development = 3,
+
+    [JsonStringEnumMemberName("other")]
+    Other = 4,
+}
+
 public sealed record AIWorkspaceSourceErrorView(string Code, string Message);
 
 public sealed record AIWorkspaceAgentsView(
@@ -43,8 +75,6 @@ public sealed record AIWorkspaceAgentsView(
 
 public sealed record AIWorkspaceAgentCollectionView(
     string Source,
-    string OwnerKind,
-    string? ScopeId,
     AIWorkspaceSourceAvailability Availability,
     IReadOnlyList<AIWorkspaceAgentSummaryView> Items,
     string? NextCursor,
@@ -66,28 +96,25 @@ public sealed record AIWorkspaceAgentSummaryView(
 public sealed record AIWorkspaceModelsView(
     string Consistency,
     AIWorkspacePersonalModelsView PersonalDefault,
-    AIWorkspaceScopeModelsView ScopeCatalog);
+    AIWorkspaceCatalogModelsView Catalog);
 
 public sealed record AIWorkspacePersonalModelsView(
     string Source,
-    string AuthorityKind,
     AIWorkspaceSourceAvailability Availability,
     long? AuthorityStateVersion,
     DateTimeOffset? UpdatedAtUtc,
     AIWorkspaceUserLlmSettingsView? Settings,
     AIWorkspaceSourceErrorView? Error);
 
-public sealed record AIWorkspaceScopeModelsView(
+public sealed record AIWorkspaceCatalogModelsView(
     string Source,
-    string AuthorityKind,
-    string ScopeId,
     AIWorkspaceSourceAvailability Availability,
     long? AuthorityStateVersion,
     DateTimeOffset? UpdatedAtUtc,
-    AIWorkspaceScopeModelPolicyView? Policy,
+    AIWorkspaceModelCatalogPolicyView? Policy,
     AIWorkspaceSourceErrorView? Error);
 
-public sealed record AIWorkspaceScopeModelPolicyView(
+public sealed record AIWorkspaceModelCatalogPolicyView(
     string Mode,
     bool Configured,
     IReadOnlyList<AIWorkspaceModelSourceView> Sources,
@@ -178,7 +205,6 @@ public sealed record AIWorkspaceActivityView(
 
 public sealed record AIWorkspaceConversationCollectionView(
     string Source,
-    string ScopeId,
     AIWorkspaceSourceAvailability Availability,
     IReadOnlyList<AIWorkspaceConversationSummaryView> Items,
     string? NextCursor,
@@ -187,8 +213,7 @@ public sealed record AIWorkspaceConversationCollectionView(
 public sealed record AIWorkspaceConversationSummaryView(
     string ConversationId,
     string Title,
-    string ServiceId,
-    string ServiceKind,
+    AIWorkspaceConversationKind ConversationKind,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc,
     int MessageCount,
@@ -202,7 +227,6 @@ public sealed record AIWorkspaceConversationSummaryView(
 
 public sealed record AIWorkspaceRunCollectionView(
     string Source,
-    string ScopeId,
     AIWorkspaceSourceAvailability Availability,
     IReadOnlyList<AIWorkspaceRunSummaryView> Items,
     string? NextCursor,
@@ -215,7 +239,7 @@ public sealed record AIWorkspaceRunSummaryView(
     string? WorkflowId,
     string WorkflowName,
     string Status,
-    string RunOrigin,
+    AIWorkspaceRunOrigin RunOrigin,
     bool? Success,
     string InputSummary,
     AIWorkspaceRunStepSummaryView? CurrentStep,
@@ -244,7 +268,6 @@ public sealed record AIWorkspaceRunWaitingSummaryView(
 
 public sealed record AIWorkspaceRunDetailView(
     string Source,
-    string ScopeId,
     long AuthorityStateVersion,
     DateTimeOffset UpdatedAtUtc,
     string? ReportVersion,
