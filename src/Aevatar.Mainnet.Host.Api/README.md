@@ -155,6 +155,13 @@ legacy `/chat`、`/scopes/**` 和 `/settings` 使用同一 SPA document；`/admi
 - `GET /api/ai/context`
 - `GET /api/ai/overview`
 - `GET /api/ai/agents`
+- `POST /api/ai/agents`
+- `GET /api/ai/agents/editor-options`
+- `GET /api/ai/agents/{profileSlug}`
+- `PUT /api/ai/agents/{profileSlug}/draft`
+- `POST /api/ai/agents/{profileSlug}:validate`
+- `POST /api/ai/agents/{profileSlug}:publish`
+- `GET|PUT|DELETE /api/ai/agents/default/{agentKind}`
 - `GET /api/ai/models`
 - `GET /api/ai/activity`
 - `GET /api/ai/activity/conversations`
@@ -164,8 +171,9 @@ legacy `/chat`、`/scopes/**` 和 `/settings` 使用同一 SPA document；`/admi
 这些 query 复用 Agent Profile、user model preference、scope model catalog、Conversation 和
 Workflow Observatory 的既有 Application/query authority；各来源独立暴露可用性、版本与刷新时间，
 不会在 Host 或浏览器内伪造统一版本、统一排序或第二份事实状态。当前 Console Web 导航到 Overview、
-Chat 以及 Agents/Models 基础查询页；Agent 编辑/发布/default 和 Models 独立保存尚未接入。
-Activity API 是后续 Activity/Run Detail 页面的后端基础，Channels 与 Capabilities 仍为规划项。完整边界见
+Chat、Agents、Models 和 Activity，并提供 own-scope Run Detail。Agent create/draft/validate/publish/default
+管理 facade 已接入后端，UI 编辑器仍待后续切片；Models 独立保存尚未接入。Channels 与 Capabilities
+仍为规划项。完整边界见
 [`docs/canon/ai-workspace.md`](../../docs/canon/ai-workspace.md)。
 
 Backend Admin 的 Studio 从 `/admin#/studio` 进入。Admin shell 通过 Mainnet-owned

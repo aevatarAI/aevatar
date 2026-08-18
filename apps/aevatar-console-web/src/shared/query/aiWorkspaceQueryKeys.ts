@@ -72,4 +72,59 @@ export const aiWorkspaceQueryKeys = {
       authority.scopeId,
     ] as const;
   },
+  activityConversations(
+    authority: AIWorkspaceScopeAuthority,
+    input: { take?: number } = {},
+  ) {
+    return [
+      'ai-workspace',
+      'activity',
+      'conversations',
+      authority.principalId,
+      authority.sessionExpiresAt,
+      authority.scopeId,
+      input.take ?? null,
+    ] as const;
+  },
+  activityRuns(
+    authority: AIWorkspaceScopeAuthority,
+    input: {
+      status?: string;
+      origins?: readonly string[];
+      workflowId?: string;
+      q?: string;
+      from?: string;
+      to?: string;
+      take?: number;
+      includeTotalCount?: boolean;
+    } = {},
+  ) {
+    return [
+      'ai-workspace',
+      'activity',
+      'runs',
+      authority.principalId,
+      authority.sessionExpiresAt,
+      authority.scopeId,
+      input.status ?? '',
+      [...(input.origins ?? [])],
+      input.workflowId ?? '',
+      input.q ?? '',
+      input.from ?? '',
+      input.to ?? '',
+      input.take ?? null,
+      input.includeTotalCount ?? false,
+    ] as const;
+  },
+  activityRunDetail(authority: AIWorkspaceScopeAuthority, runId: string) {
+    return [
+      'ai-workspace',
+      'activity',
+      'run-detail',
+      authority.principalId,
+      authority.sessionExpiresAt,
+      authority.scopeId,
+      runId,
+    ] as const;
+  },
 };

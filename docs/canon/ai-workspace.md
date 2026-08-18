@@ -55,12 +55,12 @@ console-web 使用认证后的 history routes：
 | --- | --- | --- |
 | Overview | `/ai` | 已交付；分来源展示 Agents、Conversations、Runs 摘要 |
 | Chat | `/ai/chat` | 已交付；复用现有 React Chat 主链 |
-| Agents | `/ai/agents` | 基础查询已交付；分页展示 own-scope profiles 与只读 system templates |
+| Agents | `/ai/agents` | 基础查询已交付；own-scope 管理 API 已交付，编辑器 UI 待后续切片 |
 | Models | `/ai/models` | 基础查询已交付；personal default 与 scope catalog 分区展示 |
 | Channels | `/ai/channels` | 规划中；不进入当前路由和导航 |
 | Capabilities | `/ai/capabilities` | 规划中；不进入当前路由和导航 |
-| Activity | `/ai/activity` | 后端 query facade 已交付，页面规划中；不进入当前导航 |
-| Run Detail | `/ai/activity/runs/:runId` | 后端 query facade 已交付，页面规划中 |
+| Activity | `/ai/activity` | 已交付；Conversations 与 Runs 保持独立来源与分页 |
+| Run Detail | `/ai/activity/runs/:runId` | 已交付；result-first 展示 Timeline、Operations、Steps 与次级 freshness |
 
 `/chat` 只保留到 `/ai/chat` 的兼容跳转。未实现或没有真实 authority 的目的地不得进入导航。Agent
 create/clone/draft edit/validate/test/publish/default 与 Models 独立保存流程尚未接入本轮 UI，不属于当前交付。
@@ -108,16 +108,25 @@ AI workspace query facade 只调用现有 query/read-model port。它不读取 A
 - `published` 只表达发布事实，不等价于 runtime execution readiness；缺少独立执行可用性 read model 时不得显示为“可执行”。
 - 已发布 revision 不可变，历史 Conversation/Run 必须继续指向原 revision。
 
-写操作继续走 canonical Agent Profile resource API：
+AI Workspace 的 Agent Profile 管理使用 caller-scope facade：
 
-- `POST /api/scopes/{scopeId}/agent-profiles`
-- `PUT /api/scopes/{scopeId}/agent-profiles/{profileSlug}/draft`
-- `POST /api/scopes/{scopeId}/agent-profiles/{profileSlug}:validate`
-- `POST /api/scopes/{scopeId}/agent-profiles/{profileSlug}:publish`
+- `POST /api/ai/agents`
+- `GET /api/ai/agents/editor-options`
+- `GET /api/ai/agents/{profileSlug}`
+- `PUT /api/ai/agents/{profileSlug}/draft`
+- `POST /api/ai/agents/{profileSlug}:validate`
+- `POST /api/ai/agents/{profileSlug}:publish`
+- `GET|PUT|DELETE /api/ai/agents/default/{agentKind}`
 
-这些 endpoint 仍校验认证 scope 与 route scope 相同，并保留 `Idempotency-Key`、`If-Match`、`202 Accepted`
-和后续 read-model observation 语义。当前 `/ai/agents` 只消费查询 facade；create、clone、draft edit、
-validate、test、publish、default 和 revision detail 是下一阶段 UI 工作，不得把列表页描述为已具备这些操作。
+facade 只从唯一认证 scope claim 建立 owner，不接受 route/query/body 自报 scope，并复用同一个
+`AgentProfileApplicationService` command/query 边界。mutation 保留 `Idempotency-Key`、`If-Match`、
+`202 Accepted` 和后续 read-model observation 语义；响应不暴露内部 `actorId`。personal default contract
+只表达 Agent Profile reference，不暴露 platform Admin 专属的 rollout `enabled/cohortBasisPoints`。
+原有 `/api/scopes/{scopeId}/agent-profiles*` 与 `/api/admin/agent-profiles*` contract 保持不变。
+
+当前 `/ai/agents` UI 仍只消费查询 facade；create、clone、draft edit、validate、test、publish、default 和
+revision detail 是下一阶段 UI 工作，不得把列表页描述为已具备这些操作。system template detail/clone 与
+immutable published revision history 仍缺正式 read model/API，不能从当前 revision 或 display data 伪造。
 
 ### 4.2 Models
 

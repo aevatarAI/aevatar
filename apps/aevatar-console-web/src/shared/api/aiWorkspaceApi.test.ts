@@ -173,6 +173,118 @@ const overviewPayload = {
   },
 };
 
+const runDetailPayload = {
+  source: 'workflow_run_observatory',
+  scopeId: 'scope-alpha',
+  authorityStateVersion: 13,
+  updatedAtUtc: '2026-08-18T08:20:00Z',
+  reportVersion: 'report-7',
+  sections: {
+    overview: {
+      detailStateVersion: 13,
+      sourceStateVersion: 13,
+      versionStatus: 'aligned',
+      reason: null,
+    },
+    steps: {
+      detailStateVersion: 13,
+      sourceStateVersion: 12,
+      versionStatus: 'version_mismatch',
+      reason: 'Step details are one version behind.',
+    },
+    timeline: {
+      detailStateVersion: 13,
+      sourceStateVersion: 13,
+      versionStatus: 'aligned',
+      reason: null,
+    },
+    executionPath: {
+      detailStateVersion: 13,
+      sourceStateVersion: 0,
+      versionStatus: 'unavailable',
+      reason: 'Execution path is unavailable.',
+    },
+  },
+  summary: {
+    ...overviewPayload.recentRuns.items[0],
+    runId: 'run.alpha/branch',
+    currentStep: null,
+    waiting: null,
+    authorityStateVersion: 13,
+  },
+  finalOutput: 'Sanitized final output.',
+  steps: [
+    {
+      stepId: 'step-alpha',
+      displayName: 'Draft release notes',
+      requestedAtUtc: '2026-08-18T08:00:00Z',
+      completedAtUtc: '2026-08-18T08:05:00Z',
+      success: false,
+      outcome: 'failed',
+      durationMs: 300000,
+      failureOutputTruncated: true,
+      nextStepId: '',
+      branchKey: 'validation',
+      suspensionType: '',
+      suspensionTimeoutSeconds: null,
+      usage: {
+        promptTokens: 120,
+        completionTokens: 40,
+        totalTokens: 160,
+        cost: 0.03,
+      },
+    },
+  ],
+  timeline: [
+    {
+      kind: 'step_completed',
+      timestampUtc: '2026-08-18T08:05:00Z',
+      stage: 'completed',
+      stepId: 'step-alpha',
+      toolCall: {
+        toolName: 'validator',
+        callId: 'call-alpha',
+        success: false,
+      },
+    },
+  ],
+  operations: [
+    {
+      operationId: 'operation-alpha',
+      kind: 'chat_completion',
+      startedAtUtc: '2026-08-18T08:00:00Z',
+      completedAtUtc: '2026-08-18T08:05:00Z',
+      model: 'gpt-alpha',
+      provider: 'provider-alpha',
+      availableToolNames: ['validator'],
+      finishReason: 'tool_calls',
+      usage: {
+        promptTokens: 120,
+        completionTokens: 40,
+        totalTokens: 160,
+        cost: 0.03,
+      },
+      success: false,
+      toolCallId: 'call-alpha',
+      toolName: 'validator',
+      durationMs: 300000,
+    },
+  ],
+  statistics: {
+    totalSteps: 1,
+    requestedSteps: 1,
+    completedSteps: 1,
+    roleReplyCount: 1,
+    stepTypeCounts: { role: 1 },
+  },
+  usageTotals: {
+    promptTokens: 120,
+    completionTokens: 40,
+    totalTokens: 160,
+    cost: 0.03,
+  },
+};
+
 function jsonResponse(payload: unknown): Response {
   return {
     json: async () => payload,
@@ -455,5 +567,87 @@ describe('aiWorkspaceApi', () => {
       status: 503,
     });
     await expect(request).rejects.toBeInstanceOf(AIWorkspaceApiError);
+  });
+
+  it('builds a scope-free workflow run query with one CSV origins value', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue(jsonResponse(overviewPayload.recentRuns));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      aiWorkspaceApi.getRuns({
+        cursor: ' opaque.cursor ',
+        from: '2026-08-17T00:00:00Z',
+        includeTotalCount: true,
+        origins: ['chat', 'schedule'],
+        q: ' release notes ',
+        status: ' running ',
+        take: 25,
+        to: '2026-08-18T00:00:00Z',
+        workflowId: ' wf.alpha ',
+      }),
+    ).resolves.toMatchObject({
+      availability: 'available',
+      items: [{ runId: 'run-alpha' }],
+    });
+
+    const [input] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe(
+      '/api/ai/activity/runs?status=running&origins=chat%2Cschedule&workflowId=wf.alpha&q=release+notes&from=2026-08-17T00%3A00%3A00Z&to=2026-08-18T00%3A00%3A00Z&take=25&cursor=opaque.cursor&includeTotalCount=true',
+    );
+    expect(input).not.toContain('scopeId');
+  });
+
+  it('decodes a 503 collection response as typed unavailable activity', async () => {
+    const unavailable = {
+      source: 'workflow_run_observatory',
+      scopeId: 'scope-alpha',
+      availability: 'unavailable',
+      items: [],
+      nextCursor: null,
+      hasMore: false,
+      totalCount: null,
+      error: {
+        code: 'WORKFLOW_RUNS_UNAVAILABLE',
+        message: 'Workflow run activity is temporarily unavailable.',
+      },
+    };
+    global.fetch = jest.fn().mockResolvedValue({
+      json: async () => unavailable,
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+    } as Response) as typeof global.fetch;
+
+    await expect(aiWorkspaceApi.getRuns()).resolves.toEqual(unavailable);
+  });
+
+  it('decodes sanitized run detail and preserves its opaque run id', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue(jsonResponse(runDetailPayload));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      aiWorkspaceApi.getRun('run.alpha/branch'),
+    ).resolves.toMatchObject({
+      authorityStateVersion: 13,
+      summary: { runId: 'run.alpha/branch' },
+      sections: {
+        steps: { versionStatus: 'version_mismatch' },
+        executionPath: { versionStatus: 'unavailable' },
+      },
+      timeline: [{ toolCall: { toolName: 'validator' } }],
+      operations: [{ availableToolNames: ['validator'] }],
+      usageTotals: { totalTokens: 160 },
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      '/api/ai/activity/runs/run.alpha%2Fbranch',
+    );
   });
 });

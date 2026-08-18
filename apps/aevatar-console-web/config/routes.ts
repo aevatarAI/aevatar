@@ -51,6 +51,18 @@ export default [
     parentKeys: ["/ai"],
   },
   {
+    path: "/ai/activity/runs/:runId",
+    component: "./ai/activity/run-detail",
+    hideInMenu: true,
+    parentKeys: ["/ai"],
+  },
+  {
+    path: "/ai/activity",
+    component: "./ai/activity",
+    hideInMenu: true,
+    parentKeys: ["/ai"],
+  },
+  {
     path: "/ai",
     name: "AI",
     component: "./ai",

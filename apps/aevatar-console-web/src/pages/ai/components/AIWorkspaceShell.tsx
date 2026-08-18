@@ -1,5 +1,6 @@
 import {
   DatabaseOutlined,
+  HistoryOutlined,
   HomeOutlined,
   MessageOutlined,
   RobotOutlined,
@@ -21,6 +22,7 @@ import {
 } from '@/shared/auth/session';
 import { t } from '@/shared/i18n/messages';
 import {
+  AI_ACTIVITY_ROUTE,
   AI_AGENTS_ROUTE,
   AI_CHAT_ROUTE,
   AI_MODELS_ROUTE,
@@ -128,6 +130,13 @@ function AIWorkspaceHeader({
       key: 'models',
       label: t('pages.ai.shell.navigation.models', 'Models'),
       path: AI_MODELS_ROUTE,
+    },
+    {
+      apiKey: 'activity',
+      icon: <HistoryOutlined />,
+      key: 'activity',
+      label: t('pages.ai.shell.navigation.activity', 'Activity'),
+      path: AI_ACTIVITY_ROUTE,
     },
   ];
   const navigationItems: AIWorkspaceNavigationItem[] = navigationCandidates

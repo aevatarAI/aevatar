@@ -590,6 +590,7 @@ public static class MainnetHostBuilderExtensions
         app.MapLLMModelCatalogEndpoints();
         app.MapAgentProfileEndpoints();
         app.MapAIWorkspaceEndpoints();
+        app.MapAIWorkspaceAgentManagementEndpoints();
         app.MapDefaultVoiceAgentEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();

@@ -63,4 +63,25 @@ describe('aiWorkspaceQueryKeys', () => {
       aiWorkspaceQueryKeys.agents(alpha, { take: 48 }),
     );
   });
+
+  it('keeps variable-length run origins in one collision-free key element', () => {
+    const authority = {
+      principalId: 'user-alpha',
+      sessionExpiresAt: 1_700_003_600_000,
+      scopeId: 'scope-alpha',
+    };
+
+    const twoOrigins = aiWorkspaceQueryKeys.activityRuns(authority, {
+      origins: ['chat', 'schedule'],
+      workflowId: 'wf-alpha',
+    });
+    const shiftedFields = aiWorkspaceQueryKeys.activityRuns(authority, {
+      origins: ['chat'],
+      workflowId: 'schedule',
+      q: 'wf-alpha',
+    });
+
+    expect(twoOrigins).not.toEqual(shiftedFields);
+    expect(twoOrigins[7]).toEqual(['chat', 'schedule']);
+  });
 });

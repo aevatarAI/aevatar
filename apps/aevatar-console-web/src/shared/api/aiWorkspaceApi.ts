@@ -9,6 +9,7 @@ import {
   readNumber,
   readOptionalString,
   readString,
+  readStringArray,
 } from './http/decoders';
 import { readResponseErrorDetails } from './http/error';
 
@@ -206,6 +207,126 @@ export type AIWorkspaceRunCollection = {
   hasMore: boolean;
   totalCount: number | null;
   error: AIWorkspaceSourceError | null;
+};
+
+export type AIWorkspaceActivity = {
+  consistency: AIWorkspaceConsistency;
+  conversations: AIWorkspaceConversationCollection;
+  runs: AIWorkspaceRunCollection;
+};
+
+export type AIWorkspaceConversationsQuery = {
+  take?: number;
+  cursor?: string;
+};
+
+export type AIWorkspaceRunsQuery = {
+  status?: string;
+  origins?: readonly string[];
+  workflowId?: string;
+  q?: string;
+  from?: string;
+  to?: string;
+  take?: number;
+  cursor?: string;
+  includeTotalCount?: boolean;
+};
+
+export type AIWorkspaceRunDetailSectionVersionStatus =
+  | 'unknown'
+  | 'aligned'
+  | 'unavailable'
+  | 'version_mismatch';
+
+export type AIWorkspaceRunDetailSectionVersion = {
+  detailStateVersion: number;
+  sourceStateVersion: number;
+  versionStatus: AIWorkspaceRunDetailSectionVersionStatus;
+  reason: string | null;
+};
+
+export type AIWorkspaceRunDetailSectionVersions = {
+  overview: AIWorkspaceRunDetailSectionVersion;
+  steps: AIWorkspaceRunDetailSectionVersion;
+  timeline: AIWorkspaceRunDetailSectionVersion;
+  executionPath: AIWorkspaceRunDetailSectionVersion;
+};
+
+export type AIWorkspaceUsageTotals = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cost: number;
+};
+
+export type AIWorkspaceRunStepDetail = {
+  stepId: string;
+  displayName: string;
+  requestedAtUtc: string | null;
+  completedAtUtc: string | null;
+  success: boolean | null;
+  outcome: string;
+  durationMs: number | null;
+  failureOutputTruncated: boolean;
+  nextStepId: string;
+  branchKey: string;
+  suspensionType: string;
+  suspensionTimeoutSeconds: number | null;
+  usage: AIWorkspaceUsageTotals;
+};
+
+export type AIWorkspaceRunToolCall = {
+  toolName: string;
+  callId: string;
+  success: boolean;
+};
+
+export type AIWorkspaceRunTimelineEvent = {
+  kind: string;
+  timestampUtc: string;
+  stage: string;
+  stepId: string;
+  toolCall: AIWorkspaceRunToolCall | null;
+};
+
+export type AIWorkspaceRunOperation = {
+  operationId: string;
+  kind: string;
+  startedAtUtc: string | null;
+  completedAtUtc: string | null;
+  model: string;
+  provider: string;
+  availableToolNames: string[];
+  finishReason: string;
+  usage: AIWorkspaceUsageTotals;
+  success: boolean | null;
+  toolCallId: string;
+  toolName: string;
+  durationMs: number | null;
+};
+
+export type AIWorkspaceRunStatistics = {
+  totalSteps: number;
+  requestedSteps: number;
+  completedSteps: number;
+  roleReplyCount: number;
+  stepTypeCounts: Record<string, number>;
+};
+
+export type AIWorkspaceRunDetail = {
+  source: 'workflow_run_observatory';
+  scopeId: string;
+  authorityStateVersion: number;
+  updatedAtUtc: string;
+  reportVersion: string | null;
+  sections: AIWorkspaceRunDetailSectionVersions;
+  summary: AIWorkspaceRunSummary;
+  finalOutput: string;
+  steps: AIWorkspaceRunStepDetail[];
+  timeline: AIWorkspaceRunTimelineEvent[];
+  operations: AIWorkspaceRunOperation[];
+  statistics: AIWorkspaceRunStatistics;
+  usageTotals: AIWorkspaceUsageTotals;
 };
 
 export type AIWorkspaceOverview = {
@@ -953,6 +1074,384 @@ function decodeRunCollection(
   };
 }
 
+function decodeActivity(
+  value: unknown,
+  label = 'AIWorkspaceActivity',
+): AIWorkspaceActivity {
+  const record = expectRecord(value, label);
+  return {
+    consistency: readEnum(
+      record,
+      ['consistency', 'Consistency'],
+      `${label}.consistency`,
+      ['independent_read_models'],
+    ),
+    conversations: decodeConversationCollection(
+      record.conversations ?? record.Conversations,
+      `${label}.conversations`,
+    ),
+    runs: decodeRunCollection(record.runs ?? record.Runs, `${label}.runs`),
+  };
+}
+
+function decodeUsageTotals(
+  value: unknown,
+  label = 'AIWorkspaceUsageTotals',
+): AIWorkspaceUsageTotals {
+  const record = expectRecord(value, label);
+  return {
+    promptTokens: readSafeNonNegativeInteger(
+      record,
+      ['promptTokens', 'PromptTokens'],
+      `${label}.promptTokens`,
+    ),
+    completionTokens: readSafeNonNegativeInteger(
+      record,
+      ['completionTokens', 'CompletionTokens'],
+      `${label}.completionTokens`,
+    ),
+    totalTokens: readSafeNonNegativeInteger(
+      record,
+      ['totalTokens', 'TotalTokens'],
+      `${label}.totalTokens`,
+    ),
+    cost: readNonNegativeNumber(record, ['cost', 'Cost'], `${label}.cost`),
+  };
+}
+
+function readNonNegativeNumber(
+  record: JsonRecord,
+  keys: string | string[],
+  label: string,
+): number {
+  const value = readNumber(record, keys, label);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative finite number.`);
+  }
+  return value;
+}
+
+function decodeRunDetailSectionVersion(
+  value: unknown,
+  label: string,
+): AIWorkspaceRunDetailSectionVersion {
+  const record = expectRecord(value, label);
+  return {
+    detailStateVersion: readSafeNonNegativeInteger(
+      record,
+      ['detailStateVersion', 'DetailStateVersion'],
+      `${label}.detailStateVersion`,
+    ),
+    sourceStateVersion: readSafeNonNegativeInteger(
+      record,
+      ['sourceStateVersion', 'SourceStateVersion'],
+      `${label}.sourceStateVersion`,
+    ),
+    versionStatus: readEnum(
+      record,
+      ['versionStatus', 'VersionStatus'],
+      `${label}.versionStatus`,
+      ['unknown', 'aligned', 'unavailable', 'version_mismatch'],
+    ),
+    reason: readNullableString(record, ['reason', 'Reason'], `${label}.reason`),
+  };
+}
+
+function decodeRunDetailSections(
+  value: unknown,
+  label: string,
+): AIWorkspaceRunDetailSectionVersions {
+  const record = expectRecord(value, label);
+  return {
+    overview: decodeRunDetailSectionVersion(
+      record.overview ?? record.Overview,
+      `${label}.overview`,
+    ),
+    steps: decodeRunDetailSectionVersion(
+      record.steps ?? record.Steps,
+      `${label}.steps`,
+    ),
+    timeline: decodeRunDetailSectionVersion(
+      record.timeline ?? record.Timeline,
+      `${label}.timeline`,
+    ),
+    executionPath: decodeRunDetailSectionVersion(
+      record.executionPath ?? record.ExecutionPath,
+      `${label}.executionPath`,
+    ),
+  };
+}
+
+function decodeRunStepDetail(
+  value: unknown,
+  label = 'AIWorkspaceRunStepDetail',
+): AIWorkspaceRunStepDetail {
+  const record = expectRecord(value, label);
+  return {
+    stepId: readString(record, ['stepId', 'StepId'], `${label}.stepId`),
+    displayName: readString(
+      record,
+      ['displayName', 'DisplayName'],
+      `${label}.displayName`,
+    ),
+    requestedAtUtc: readNullableString(
+      record,
+      ['requestedAtUtc', 'RequestedAtUtc'],
+      `${label}.requestedAtUtc`,
+    ),
+    completedAtUtc: readNullableString(
+      record,
+      ['completedAtUtc', 'CompletedAtUtc'],
+      `${label}.completedAtUtc`,
+    ),
+    success: readNullableBoolean(
+      record,
+      ['success', 'Success'],
+      `${label}.success`,
+    ),
+    outcome: readString(record, ['outcome', 'Outcome'], `${label}.outcome`),
+    durationMs: readNullableNonNegativeNumber(
+      record,
+      ['durationMs', 'DurationMs'],
+      `${label}.durationMs`,
+    ),
+    failureOutputTruncated: readBoolean(
+      record,
+      ['failureOutputTruncated', 'FailureOutputTruncated'],
+      `${label}.failureOutputTruncated`,
+    ),
+    nextStepId: readString(
+      record,
+      ['nextStepId', 'NextStepId'],
+      `${label}.nextStepId`,
+    ),
+    branchKey: readString(
+      record,
+      ['branchKey', 'BranchKey'],
+      `${label}.branchKey`,
+    ),
+    suspensionType: readString(
+      record,
+      ['suspensionType', 'SuspensionType'],
+      `${label}.suspensionType`,
+    ),
+    suspensionTimeoutSeconds: readNullableSafeNonNegativeInteger(
+      record,
+      ['suspensionTimeoutSeconds', 'SuspensionTimeoutSeconds'],
+      `${label}.suspensionTimeoutSeconds`,
+    ),
+    usage: decodeUsageTotals(record.usage ?? record.Usage, `${label}.usage`),
+  };
+}
+
+function decodeRunToolCall(
+  value: unknown,
+  label = 'AIWorkspaceRunToolCall',
+): AIWorkspaceRunToolCall {
+  const record = expectRecord(value, label);
+  return {
+    toolName: readString(record, ['toolName', 'ToolName'], `${label}.toolName`),
+    callId: readString(record, ['callId', 'CallId'], `${label}.callId`),
+    success: readBoolean(record, ['success', 'Success'], `${label}.success`),
+  };
+}
+
+function decodeRunTimelineEvent(
+  value: unknown,
+  label = 'AIWorkspaceRunTimelineEvent',
+): AIWorkspaceRunTimelineEvent {
+  const record = expectRecord(value, label);
+  return {
+    kind: readString(record, ['kind', 'Kind'], `${label}.kind`),
+    timestampUtc: readNonEmptyString(
+      record,
+      ['timestampUtc', 'TimestampUtc'],
+      `${label}.timestampUtc`,
+    ),
+    stage: readString(record, ['stage', 'Stage'], `${label}.stage`),
+    stepId: readString(record, ['stepId', 'StepId'], `${label}.stepId`),
+    toolCall: decodeNullableRecord(
+      record.toolCall ?? record.ToolCall,
+      `${label}.toolCall`,
+      (nested, nestedLabel) => decodeRunToolCall(nested, nestedLabel),
+    ),
+  };
+}
+
+function decodeRunOperation(
+  value: unknown,
+  label = 'AIWorkspaceRunOperation',
+): AIWorkspaceRunOperation {
+  const record = expectRecord(value, label);
+  return {
+    operationId: readString(
+      record,
+      ['operationId', 'OperationId'],
+      `${label}.operationId`,
+    ),
+    kind: readString(record, ['kind', 'Kind'], `${label}.kind`),
+    startedAtUtc: readNullableString(
+      record,
+      ['startedAtUtc', 'StartedAtUtc'],
+      `${label}.startedAtUtc`,
+    ),
+    completedAtUtc: readNullableString(
+      record,
+      ['completedAtUtc', 'CompletedAtUtc'],
+      `${label}.completedAtUtc`,
+    ),
+    model: readString(record, ['model', 'Model'], `${label}.model`),
+    provider: readString(record, ['provider', 'Provider'], `${label}.provider`),
+    availableToolNames: readStringArray(
+      record,
+      ['availableToolNames', 'AvailableToolNames'],
+      `${label}.availableToolNames`,
+    ),
+    finishReason: readString(
+      record,
+      ['finishReason', 'FinishReason'],
+      `${label}.finishReason`,
+    ),
+    usage: decodeUsageTotals(record.usage ?? record.Usage, `${label}.usage`),
+    success: readNullableBoolean(
+      record,
+      ['success', 'Success'],
+      `${label}.success`,
+    ),
+    toolCallId: readString(
+      record,
+      ['toolCallId', 'ToolCallId'],
+      `${label}.toolCallId`,
+    ),
+    toolName: readString(record, ['toolName', 'ToolName'], `${label}.toolName`),
+    durationMs: readNullableNonNegativeNumber(
+      record,
+      ['durationMs', 'DurationMs'],
+      `${label}.durationMs`,
+    ),
+  };
+}
+
+function decodeStepTypeCounts(
+  value: unknown,
+  label: string,
+): Record<string, number> {
+  const record = expectRecord(value, label);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => {
+      if (
+        typeof entry !== 'number' ||
+        !Number.isSafeInteger(entry) ||
+        entry < 0
+      ) {
+        throw new Error(`${label}.${key} must be a non-negative safe integer.`);
+      }
+      return [key, entry];
+    }),
+  );
+}
+
+function decodeRunStatistics(
+  value: unknown,
+  label = 'AIWorkspaceRunStatistics',
+): AIWorkspaceRunStatistics {
+  const record = expectRecord(value, label);
+  return {
+    totalSteps: readSafeNonNegativeInteger(
+      record,
+      ['totalSteps', 'TotalSteps'],
+      `${label}.totalSteps`,
+    ),
+    requestedSteps: readSafeNonNegativeInteger(
+      record,
+      ['requestedSteps', 'RequestedSteps'],
+      `${label}.requestedSteps`,
+    ),
+    completedSteps: readSafeNonNegativeInteger(
+      record,
+      ['completedSteps', 'CompletedSteps'],
+      `${label}.completedSteps`,
+    ),
+    roleReplyCount: readSafeNonNegativeInteger(
+      record,
+      ['roleReplyCount', 'RoleReplyCount'],
+      `${label}.roleReplyCount`,
+    ),
+    stepTypeCounts: decodeStepTypeCounts(
+      record.stepTypeCounts ?? record.StepTypeCounts,
+      `${label}.stepTypeCounts`,
+    ),
+  };
+}
+
+function decodeRunDetail(
+  value: unknown,
+  label = 'AIWorkspaceRunDetail',
+): AIWorkspaceRunDetail {
+  const record = expectRecord(value, label);
+  return {
+    source: readEnum(record, ['source', 'Source'], `${label}.source`, [
+      'workflow_run_observatory',
+    ]),
+    scopeId: readNonEmptyString(
+      record,
+      ['scopeId', 'ScopeId'],
+      `${label}.scopeId`,
+    ),
+    authorityStateVersion: readSafeNonNegativeInteger(
+      record,
+      ['authorityStateVersion', 'AuthorityStateVersion'],
+      `${label}.authorityStateVersion`,
+    ),
+    updatedAtUtc: readNonEmptyString(
+      record,
+      ['updatedAtUtc', 'UpdatedAtUtc'],
+      `${label}.updatedAtUtc`,
+    ),
+    reportVersion: readNullableString(
+      record,
+      ['reportVersion', 'ReportVersion'],
+      `${label}.reportVersion`,
+    ),
+    sections: decodeRunDetailSections(
+      record.sections ?? record.Sections,
+      `${label}.sections`,
+    ),
+    summary: decodeRunSummary(
+      record.summary ?? record.Summary,
+      `${label}.summary`,
+    ),
+    finalOutput: readString(
+      record,
+      ['finalOutput', 'FinalOutput'],
+      `${label}.finalOutput`,
+    ),
+    steps: expectArray(
+      record.steps ?? record.Steps,
+      `${label}.steps`,
+      decodeRunStepDetail,
+    ),
+    timeline: expectArray(
+      record.timeline ?? record.Timeline,
+      `${label}.timeline`,
+      decodeRunTimelineEvent,
+    ),
+    operations: expectArray(
+      record.operations ?? record.Operations,
+      `${label}.operations`,
+      decodeRunOperation,
+    ),
+    statistics: decodeRunStatistics(
+      record.statistics ?? record.Statistics,
+      `${label}.statistics`,
+    ),
+    usageTotals: decodeUsageTotals(
+      record.usageTotals ?? record.UsageTotals,
+      `${label}.usageTotals`,
+    ),
+  };
+}
+
 function decodeOverview(
   value: unknown,
   label = 'AIWorkspaceOverview',
@@ -1007,6 +1506,91 @@ async function requestAIWorkspaceJson<T>(
   return decoder(await response.json());
 }
 
+function readCollectionErrorPayload(value: unknown): {
+  code?: string;
+  message?: string;
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  const record = value as JsonRecord;
+  const nested =
+    record.error &&
+    typeof record.error === 'object' &&
+    !Array.isArray(record.error)
+      ? (record.error as JsonRecord)
+      : undefined;
+  const code = nested?.code ?? nested?.Code ?? record.code ?? record.Code;
+  const message =
+    nested?.message ?? nested?.Message ?? record.message ?? record.Message;
+  return {
+    code: typeof code === 'string' && code.trim() ? code.trim() : undefined,
+    message:
+      typeof message === 'string' && message.trim()
+        ? message.trim()
+        : undefined,
+  };
+}
+
+async function readResponseJsonBody(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    if (typeof response.text !== 'function') {
+      return undefined;
+    }
+    const text = await response.text();
+    if (!text.trim()) {
+      return undefined;
+    }
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+async function requestAIWorkspaceCollectionJson<
+  T extends { availability: AIWorkspaceActivityCollectionAvailability },
+>(input: string, decoder: Decoder<T>, signal?: AbortSignal): Promise<T> {
+  const response = await authFetch(input, {
+    headers: { Accept: 'application/json' },
+    ...(signal ? { signal } : {}),
+  });
+  if (response.ok) {
+    return decoder(await response.json());
+  }
+
+  if (response.status === 503) {
+    const payload = await readResponseJsonBody(response);
+    try {
+      const decoded = decoder(payload);
+      if (decoded.availability === 'unavailable') {
+        return decoded;
+      }
+    } catch {
+      // Fall through to the regular typed HTTP error for malformed bodies.
+    }
+
+    const bodyError = readCollectionErrorPayload(payload);
+    throw new AIWorkspaceApiError(
+      bodyError.message ??
+        `HTTP ${response.status} ${response.statusText}`.trim(),
+      response.status,
+      bodyError.code,
+    );
+  }
+
+  const error = await readResponseErrorDetails(response);
+  throw new AIWorkspaceApiError(error.message, error.status, error.code);
+}
+
+function trimOptionalQueryValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
 export const aiWorkspaceApi = {
   getContext(signal?: AbortSignal): Promise<AIWorkspaceContext> {
     return requestAIWorkspaceJson('/api/ai/context', decodeContext, signal);
@@ -1036,5 +1620,96 @@ export const aiWorkspaceApi = {
       decodeOverview,
       signal,
     );
+  },
+
+  getActivity(
+    query: {
+      take?: number;
+      conversationCursor?: string;
+      runCursor?: string;
+    } = {},
+    signal?: AbortSignal,
+  ): Promise<AIWorkspaceActivity> {
+    return requestAIWorkspaceJson(
+      withQuery('/api/ai/activity', {
+        take: query.take,
+        conversationCursor: trimOptionalQueryValue(query.conversationCursor),
+        runCursor: trimOptionalQueryValue(query.runCursor),
+      }),
+      decodeActivity,
+      signal,
+    );
+  },
+
+  getConversations(
+    query: AIWorkspaceConversationsQuery = {},
+    signal?: AbortSignal,
+  ): Promise<AIWorkspaceConversationCollection> {
+    return requestAIWorkspaceCollectionJson(
+      withQuery('/api/ai/activity/conversations', {
+        take: query.take,
+        cursor: trimOptionalQueryValue(query.cursor),
+      }),
+      (value, label) =>
+        decodeConversationCollection(
+          value,
+          label ?? 'AIWorkspaceConversationCollection',
+        ),
+      signal,
+    );
+  },
+
+  getRuns(
+    query: AIWorkspaceRunsQuery = {},
+    signal?: AbortSignal,
+  ): Promise<AIWorkspaceRunCollection> {
+    const origins = query.origins
+      ?.map((origin) => origin.trim())
+      .filter(Boolean)
+      .join(',');
+    return requestAIWorkspaceCollectionJson(
+      withQuery('/api/ai/activity/runs', {
+        status: trimOptionalQueryValue(query.status),
+        origins: origins || undefined,
+        workflowId: trimOptionalQueryValue(query.workflowId),
+        q: trimOptionalQueryValue(query.q),
+        from: trimOptionalQueryValue(query.from),
+        to: trimOptionalQueryValue(query.to),
+        take: query.take,
+        cursor: trimOptionalQueryValue(query.cursor),
+        includeTotalCount: query.includeTotalCount,
+      }),
+      (value, label) =>
+        decodeRunCollection(value, label ?? 'AIWorkspaceRunCollection'),
+      signal,
+    );
+  },
+
+  async getRun(
+    runId: string,
+    signal?: AbortSignal,
+  ): Promise<AIWorkspaceRunDetail> {
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) {
+      throw new AIWorkspaceApiError(
+        'Workflow run was not found.',
+        404,
+        'WORKFLOW_RUN_NOT_FOUND',
+      );
+    }
+
+    const detail = await requestAIWorkspaceJson(
+      `/api/ai/activity/runs/${encodeURIComponent(normalizedRunId)}`,
+      decodeRunDetail,
+      signal,
+    );
+    if (detail.summary.runId !== normalizedRunId) {
+      throw new AIWorkspaceApiError(
+        'The workflow run detail did not match the requested run.',
+        502,
+        'WORKFLOW_RUN_ID_MISMATCH',
+      );
+    }
+    return detail;
   },
 };
