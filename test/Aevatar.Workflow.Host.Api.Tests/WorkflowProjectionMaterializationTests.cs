@@ -782,6 +782,92 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldMutateOnce_AndNotAppendTimelineOnDuplicate()
+    {
+        var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+        var envelope = BuildCommittedEnvelope(
+            1,
+            new StepRequestEvent
+            {
+                RunId = "run-1",
+                StepId = "step-1",
+                StepType = "tool_call",
+            },
+            BuildState("running"));
+
+        await projector.ProjectAsync(context, envelope);
+
+        reportStore.MutationCount.Should().Be(1);
+        reportStore.ReducerCallCount.Should().Be(1);
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(1);
+        reportStore.Stored["actor-1"].Timeline
+            .Should().ContainSingle(entry => entry.Stage == "step.request");
+
+        await projector.ProjectAsync(context, envelope.Clone());
+
+        reportStore.MutationCount.Should().Be(2);
+        reportStore.ReducerCallCount.Should().Be(2);
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(2, "an exact report duplicate must still recover the graph phase");
+        reportStore.Stored["actor-1"].Timeline
+            .Should().ContainSingle(entry => entry.Stage == "step.request");
+    }
+
+    [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldRejectDifferentEventAtSameVersion()
+    {
+        var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                1,
+                new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-1",
+                    StepType = "tool_call",
+                },
+                BuildState("running"),
+                eventId: "evt-original"));
+
+        var conflictingProjection = () => projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                1,
+                new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-2",
+                    StepType = "assign",
+                },
+                BuildState("running"),
+                eventId: "evt-conflict")).AsTask();
+
+        await conflictingProjection.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to event 'evt-original'*");
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(1);
+        reportStore.Stored["actor-1"].Timeline
+            .Should().ContainSingle(entry => entry.Stage == "step.request");
+    }
+
+    [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldMaterializeTypedSkippedOutcome()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
@@ -1140,6 +1226,10 @@ public sealed class WorkflowProjectionMaterializationTests
 
         public int UpsertCount { get; private set; }
 
+        public int MutationCount { get; private set; }
+
+        public int ReducerCallCount { get; private set; }
+
         public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
         {
             Stored[_keySelector(readModel)] = readModel;
@@ -1172,20 +1262,22 @@ public sealed class WorkflowProjectionMaterializationTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            MutationCount++;
             Stored.TryGetValue(key, out var existing);
-            var incoming = reducer(existing);
+            var incoming = reducer(existing?.Clone());
+            ReducerCallCount++;
             if (!string.Equals(_keySelector(incoming), key, StringComparison.Ordinal))
                 throw new InvalidOperationException("Projection mutation changed the document key.");
 
             var result = ProjectionWriteResultEvaluator.Evaluate(existing, incoming);
             if (result.IsApplied)
             {
-                Stored[key] = incoming;
+                Stored[key] = incoming.Clone();
                 UpsertCount++;
             }
 
             Stored.TryGetValue(key, out var committed);
-            return Task.FromResult(new ProjectionDocumentMutationResult<TReadModel>(result, committed));
+            return Task.FromResult(new ProjectionDocumentMutationResult<TReadModel>(result, committed?.Clone()));
         }
     }
 
