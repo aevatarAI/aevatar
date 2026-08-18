@@ -3,7 +3,7 @@
 ## Status
 
 Design direction approved for review on 2026-08-11 and corrected on
-2026-08-12 after comparing the design with the existing Aevatar scheduled
+2026-08-18 after comparing the design with the existing Aevatar scheduled
 workflow implementation. This document extends the Workflow Activity vNext
 baseline with a published-workflow schedule entry that reuses the existing
 Team member automation and `ScheduledDispatch` contracts.
@@ -97,6 +97,9 @@ member surface once the owner is known.
   automation capability exposed at
   `/scopes/:scopeId/teams/:teamId/members/:memberId/automations`; it is not a
   route-level Settings page and not a modal Run option.
+- Schedule list, detail, cadence editing, authorization review, pause, resume,
+  run-now, and delete remain Workflow-owned operations. Activity must never
+  render a second Schedule-definition collection or management surface.
 - The header may show a compact, non-interactive state badge such as
   `1 schedule` or `Next Tue 09:00` only after a scoped schedule read model has
   returned it. The action keeps the stable label `Schedule`.
@@ -170,6 +173,10 @@ claiming the new state or a new run.
 ## Activity And Run Detail
 
 - Activity retains `Schedule` as a generic Run-source filter.
+- Activity is Run-only: each row is an immutable execution record with its
+  Run ID, Workflow, source, started time, result, and status. It does not show
+  cadence, next-fire, authorization, pause, resume, or delete controls for a
+  Schedule definition.
 - Opening Activity from the schedule panel can combine the current Workflow
   filter with `origin=schedule`, and must label the result `Scheduled runs`.
   It must not claim that every row belongs to one named schedule until a
@@ -244,12 +251,14 @@ The baseline change keeps the existing Operational Automation Ledger visual
 language: dark rail, white work surface, neutral borders, compact rows,
 four-to-six-pixel radii, blue actions, and status color used only for state.
 
-- The schedule-only board follows the supplied wireframe's readable sequence:
-  Workflow entry, recurring cadence configuration, authorization review,
-  Activity list, schedule detail, cadence editing, cadence control states,
-  schedule row states, and a lifecycle reference.
-- Every screen keeps the Workflow canvas or Activity list visible where that
-  context matters; the schedule is never drawn as a graph node.
+- The schedule-only board follows the corrected readable sequence: Workflow
+  entry, recurring cadence configuration, authorization review, scheduled Run
+  evidence in Activity, Workflow-owned schedule detail, Workflow-owned cadence
+  editing, cadence control states, Workflow Schedule row states, and a
+  lifecycle reference.
+- Workflow-owned screens keep the Workflow canvas visible beside the Schedule
+  panel. The Activity screen shows only Scheduled Run evidence; the schedule is
+  never drawn as a graph node or an Activity-owned definition.
 - The board uses the same dark rail, white work surface, compact rows, neutral
   borders, blue actions, and state-only status colors as the existing baseline.
 - The standalone prototype removes the Schedule node-library item and uses a

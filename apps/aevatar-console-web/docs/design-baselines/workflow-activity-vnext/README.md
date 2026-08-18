@@ -25,7 +25,8 @@ Use the sources in this order:
    published-workflow schedule supplement are normative whenever a Schedule
    entry, panel, resource, or Activity origin is changed. They define Schedule
    as a Team member automation backed by `ScheduledDispatch`, not a standalone
-   schedule collection, graph node, draft property, or Run property.
+   schedule collection, graph node, draft property, Run property, or
+   Activity-owned definition list.
 4. The user-path specification is the normative end-to-end journey, decision,
    recovery, and completion-evidence contract.
 5. The PNG files are viewport references for individual states. Schedule
@@ -120,7 +121,7 @@ Contract specification:
 Schedule design, when Schedule is in scope:
   aevatar-workflow-schedule-design.excalidraw
 Schedule design SHA-256:
-  d1838c0e292b77af646a386cffe7da4590f9ac33da3510526f19fe38b4395084
+  e281bd31161cd5969b94a60ed8d40f8e1b4efc99e7b28f0c465b811e956e4b51
 Schedule supplement, when Schedule is in scope:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-11-workflow-schedule-design.md
@@ -147,7 +148,7 @@ failures rather than undocumented implementation choices.
 ## 文件
 
 - `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity 与 Settings，共 17 个 frame。
-- `aevatar-workflow-schedule-design.excalidraw`：根据用户提供的 schedule wireframe 重绘的独立 Excalidraw，只包含从 Workflows 进入排程、配置周期、授权、Activity 观察、详情恢复、修改和组件状态，共 9 个 frame。
+- `aevatar-workflow-schedule-design.excalidraw`：根据用户提供的 schedule wireframe 重绘的独立 Excalidraw，只包含从 Workflows 进入排程、配置周期、授权、Scheduled Run evidence、Workflow-owned 详情与修改、恢复和组件状态，共 9 个 frame。
 - `aevatar-workflow-schedule-design.gen.py`：上述 Schedule 画板的确定性生成器。
 - `aevatar-workflow-schedule-design.png`：9 个 Schedule frame 的 4800×3200 完整评审总览图。
 - `render-schedule-png.py`：从 Schedule Excalidraw 确定性渲染页面图和总览图的 Pillow 脚本。
@@ -235,11 +236,11 @@ Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidra
 1. `01 · Workflows — schedule entry`：从已发布 Workflow 进入 Schedule。
 2. `02 · Schedule — configure recurring work`：在画布旁配置周期、时区、cron、可选 prompt 和服务端预览。
 3. `03 · Schedule — review authorization`：确认 Team member 权限与 Dedicated Agent Key。
-4. `04 · Activities — schedules that run without you`：观察 active、paused、late 和 needs attention 行。
-5. `05 · Schedule — opened`：查看单个排程详情、每次 fire 和恢复动作。
-6. `06 · Schedule — change cadence`：修改周期；目标和 pinned revision 仍是只读事实。
+4. `04 · Activity — scheduled runs`：只看由 Schedule 产生的 immutable Runs，以及 Schedule source filter。
+5. `05 · Workflow — schedule detail`：在 Workflow canvas 旁查看 Schedule 状态、授权和生命周期动作。
+6. `06 · Workflow — change schedule`：在 Workflow panel 修改周期；目标和 pinned revision 仍是只读事实。
 7. `SPEC · cadence control`：周期控件和不可表达 cron 的保真规则。
-8. `SPEC · schedule row states`：创建中、active、paused、needs attention 等行状态。
+8. `SPEC · Workflow Schedule row states`：Workflow panel 中的创建中、active、paused、needs attention 等行状态。
 9. `REF · schedule lifecycle`：现有 API / ScheduledDispatch 能力与本期边界。
 
 重点不是逐个查看控件，而是沿着这条主路径检查语义是否连贯：

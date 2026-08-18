@@ -25,9 +25,9 @@ SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PAGE_PNG_NAME = "prototype-schedule.png"
 SCHEDULE_BOARD_PNG_NAME = "aevatar-workflow-schedule-design.png"
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "d1838c0e292b77af646a386cffe7da4590f9ac33da3510526f19fe38b4395084"
-EXPECTED_SCHEDULE_PAGE_PNG_SHA256 = "3fc54bb81f4065147013e00279c329f147b9a0c69e7d97ae0f986651a8bddc11"
-EXPECTED_SCHEDULE_BOARD_PNG_SHA256 = "ff7b4cbfffa0c592e58ee07f54e8c9126cb8c50820f44c9ecd99d8ba3279c781"
+EXPECTED_SCHEDULE_SHA256 = "e281bd31161cd5969b94a60ed8d40f8e1b4efc99e7b28f0c465b811e956e4b51"
+EXPECTED_SCHEDULE_PAGE_PNG_SHA256 = "431f196ef3fb7ada5a0ec230fca04bd67d2ccf8da9ee6fa8d21ef6dc8f983e48"
+EXPECTED_SCHEDULE_BOARD_PNG_SHA256 = "34bbb3c8d8fe4716db71d4527306bc74d48101c305bb312dfdcab0ee268397c7"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -51,11 +51,11 @@ EXPECTED_SCHEDULE_FRAMES = (
     "01 · Workflows — schedule entry",
     "02 · Schedule — configure recurring work",
     "03 · Schedule — review authorization",
-    "04 · Activities — schedules that run without you",
-    "05 · Schedule — opened",
-    "06 · Schedule — change cadence",
+    "04 · Activity — scheduled runs",
+    "05 · Workflow — schedule detail",
+    "06 · Workflow — change schedule",
     "SPEC · cadence control",
-    "SPEC · schedule row states",
+    "SPEC · Workflow Schedule row states",
     "REF · schedule lifecycle",
 )
 
@@ -230,6 +230,51 @@ def main() -> None:
     if len(schedule_frame_names) != len(EXPECTED_SCHEDULE_FRAMES):
         raise SystemExit("schedule board must contain the complete configure-to-observe flow")
 
+    schedule_frames_by_name = {
+        element["name"]: element["id"]
+        for element in schedule_document["elements"]
+        if element.get("type") == "frame"
+    }
+
+    def schedule_frame_text(frame_name: str) -> str:
+        frame_id = schedule_frames_by_name.get(frame_name)
+        return "\n".join(
+            element["text"]
+            for element in schedule_document["elements"]
+            if element.get("type") == "text" and element.get("frameId") == frame_id
+        )
+
+    activity_frame_text = schedule_frame_text("04 · Activity — scheduled runs")
+    activity_frame_text_casefolded = activity_frame_text.casefold()
+    for required in ("Every row is one immutable Run", "Run ID", "Source: Schedule",
+                     "Workflow > Schedule"):
+        if required.casefold() not in activity_frame_text_casefolded:
+            raise SystemExit(f"scheduled Run evidence frame is missing: {required}")
+    for forbidden in ("What will run", "Next fire", "Pause", "Delete", "Change cadence"):
+        if forbidden.casefold() in activity_frame_text_casefolded:
+            raise SystemExit(f"Activity still owns Schedule management: {forbidden}")
+
+    for workflow_frame_name in (
+        "05 · Workflow — schedule detail",
+        "06 · Workflow — change schedule",
+    ):
+        workflow_frame_text = schedule_frame_text(workflow_frame_name).casefold()
+        if "workflow canvas remains visible" not in workflow_frame_text:
+            raise SystemExit(f"{workflow_frame_name} is not visibly owned by Workflow")
+        if "managed from this workflow" not in workflow_frame_text:
+            raise SystemExit(f"{workflow_frame_name} does not state its Workflow ownership")
+
+    schedule_detail_text = schedule_frame_text("05 · Workflow — schedule detail").casefold()
+    if "view scheduled runs" not in schedule_detail_text:
+        raise SystemExit("Workflow Schedule detail does not link to its Activity run evidence")
+    for required in ("Review and reauthorize", "Run now", "Change", "Pause", "Delete"):
+        if required.casefold() not in schedule_detail_text:
+            raise SystemExit(f"Workflow Schedule detail is missing lifecycle action: {required}")
+    if "every fire" in schedule_detail_text:
+        raise SystemExit("Workflow Schedule detail duplicates Activity Run history")
+    if "what will run" in schedule_visible_text_casefolded:
+        raise SystemExit("Schedule board still presents a Schedule collection inside Activity")
+
     prototype_text = prototype_path.read_text(encoding="utf-8")
     if 'id="editor-schedule"' not in prototype_text:
         raise SystemExit("prototype schedule action is missing from the editor")
@@ -251,6 +296,10 @@ def main() -> None:
         raise SystemExit("prototype Schedule panel does not reserve desktop width")
     if 'data-activity-filter="Scheduled"' not in prototype_text:
         raise SystemExit("prototype is missing the generic Scheduled runs Activity filter")
+    if "What will run" in prototype_text:
+        raise SystemExit("prototype still presents Schedule definitions inside Activity")
+    if 'activityFilter = "Scheduled"' not in prototype_text or "View scheduled runs" not in prototype_text:
+        raise SystemExit("prototype does not link Workflow Schedule management to Activity Run evidence")
     if "scheduleMutation" not in prototype_text:
         raise SystemExit("prototype does not model accepted Schedule mutations")
     if 'data-step-type="schedule"' in prototype_text:

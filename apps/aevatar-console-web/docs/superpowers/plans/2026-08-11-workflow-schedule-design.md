@@ -27,6 +27,10 @@ CSS, vanilla JavaScript, repository documentation lint.
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py`
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/README.md`
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype.html`
+- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype-schedule.html`
+- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/render-schedule-png.py`
+- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype-schedule.png`
+- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.png`
 
 ### Task 1: Lock The Product Contract
 
@@ -97,7 +101,7 @@ Generate nine schedule-only frames from the attachment's schedule sections:
 
 ```python
 01 Workflows entry -> 02 Configure cadence -> 03 Authorization review
-04 Activity schedule list -> 05 Schedule detail -> 06 Change cadence
+04 Activity scheduled Runs -> 05 Workflow Schedule detail -> 06 Workflow change cadence
 SPEC cadence control -> SPEC row states -> REF lifecycle
 ```
 
@@ -124,8 +128,10 @@ states frames, where the observed reason is visible next to its action.
 
 - [ ] **Step 4: Keep the lifecycle boundary explicit**
 
-Show the published Workflow entry, generic Scheduled Activity evidence,
-owner-aware Team Automation identity, and the `202 Accepted` reread boundary.
+Show the published Workflow entry, generic Scheduled Activity Run evidence,
+Workflow-owned Schedule detail and cadence editing, owner-aware Team Automation
+identity, and the `202 Accepted` reread boundary. Activity must never own a
+Schedule definition list or management action.
 
 ### Task 3: Make The Standalone Prototype Match The Baseline
 
@@ -198,13 +204,13 @@ Add the schedule generator and schedule-only board to the normative source
 order, document the nine-frame reading order, and keep `Run` scoped to manual
 execution only.
 
-- [ ] **Step 4: Review the interaction reference**
+- [ ] **Step 4: Render and review the interaction references**
 
-Review the standalone prototype's published Workflow and its Schedule panel at
-desktop and mobile widths when a browser-accessible target is available. The
-local-file browser policy blocks that review in this branch, so the committed
-Excalidraw frame remains the durable visual reference; a supplementary PNG is
-not a baseline requirement, and no workaround should be used.
+Render `prototype-schedule.png` at 1440x900 and the complete nine-frame
+`aevatar-workflow-schedule-design.png` overview at 4800x3200. Commit both PNGs
+as baseline review artifacts. The verifier must bind them to the current
+Excalidraw source and renderer hashes, reject blank output, and compare fresh
+Pillow renders byte-for-byte whenever Pillow is available.
 
 ### Task 5: Focused Verification And Pull Request
 
