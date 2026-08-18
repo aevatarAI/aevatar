@@ -238,6 +238,7 @@ public sealed partial class ToolCallModule :
                     ExecutionId = request.ExecutionId,
                     Success = false,
                     Error = "tool_call 缺少 tool 参数",
+                    OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 },
             }, ctx, ct);
             return;
@@ -2762,6 +2763,7 @@ public sealed partial class ToolCallModule :
                 ExecutionId = request.ExecutionId,
                 Success = true,
                 Output = result.ResultJson,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             };
         }
 
@@ -3433,6 +3435,7 @@ public sealed partial class ToolCallModule :
                 RetryDisposition = !terminalInvoked && retryable
                     ? WorkflowStepRetryDisposition.Allowed
                     : WorkflowStepRetryDisposition.Forbidden,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             },
         }, ctx, ct);
     }

@@ -4,9 +4,11 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.Runtime;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
@@ -16,6 +18,7 @@ using Google.Protobuf;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -38,7 +41,9 @@ namespace Aevatar.Workflow.Core;
 // Refactor (iter78/cluster-078-workflow-subrun-lifecycle-handoff):
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
-[GAgent("workflow.run")]
+[GAgent(
+    "workflow.run",
+    StateSchemaVersion = 1)]
 public sealed partial class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost,
@@ -131,7 +136,8 @@ public sealed partial class WorkflowRunGAgent
             (evt, direction, token) => PublishAsync(evt, direction, token),
             (actorId, evt, token) => SendToAsync(actorId, evt, token),
             (callbackId, dueTime, evt, token) => ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, ct: token),
-            (lease, token) => CancelDurableCallbackAsync(lease, token));
+            (lease, token) => CancelDurableCallbackAsync(lease, token),
+            SelectSubWorkflowValueRepresentationAsync);
     }
 
     public string RunId => string.IsNullOrWhiteSpace(State.RunId)
@@ -182,6 +188,21 @@ public sealed partial class WorkflowRunGAgent
 
     WorkflowCapabilityAdmissionPlan IWorkflowExecutionStateHost.CapabilityAdmissionPlanSnapshot =>
         State.CapabilityAdmissionPlan?.Clone() ?? new WorkflowCapabilityAdmissionPlan();
+
+    IRuntimeActorStateSchemaContextReader? IWorkflowExecutionStateHost.RuntimeStateSchemaContextReader =>
+        Services.GetService<IRuntimeActorStateSchemaContextReader>();
+
+    IRuntimeFleetCapabilityAdmissionReader? IWorkflowExecutionStateHost.RuntimeFleetCapabilityAdmissionReader =>
+        Services.GetService<IRuntimeFleetCapabilityAdmissionReader>();
+
+    IRuntimeLocalMembershipIdentityReader? IWorkflowExecutionStateHost.RuntimeLocalMembershipIdentityReader =>
+        Services.GetService<IRuntimeLocalMembershipIdentityReader>();
+
+    TimeProvider? IWorkflowExecutionStateHost.RuntimeFleetAdmissionTimeProvider =>
+        Services.GetService<TimeProvider>() ?? _timeProvider;
+
+    RuntimeActorStateMigrationAdmissionOptions? IWorkflowExecutionStateHost.RuntimeFleetAdmissionOptions =>
+        Services.GetService<RuntimeActorStateMigrationAdmissionOptions>();
 
     Task IWorkflowExecutionStateHost.UpdateExecutionContextAsync(
         WorkflowRunExecutionContextDelta delta,
@@ -260,6 +281,14 @@ public sealed partial class WorkflowRunGAgent
         return PersistDomainEventAsync(evt, ct);
     }
 
+    Task IWorkflowExecutionStateHost.RecordCompensableStepOutcomeAsync(
+        CompensableStepOutputCapturedEvent evt,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        return PersistDomainEventAsync(evt, ct);
+    }
+
     async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
         WorkflowCompletedEvent terminalFailure,
         StepCompletedEvent? terminalStep,
@@ -285,6 +314,10 @@ public sealed partial class WorkflowRunGAgent
             CompensationStepId = entry.CompensationStepId,
             IdempotencyKey = entry.IdempotencyKey,
             CapturedOutput = entry.CapturedOutput,
+            CapturedOutputValueId = entry.CapturedOutputValueId,
+            CapturedOutputProducerStepId = entry.CapturedOutputProducerStepId,
+            CapturedOutputProducerExecutionId = entry.CapturedOutputProducerExecutionId,
+            CapturedOutputSourceKind = entry.CapturedOutputSourceKind,
             ExecutionId = executionId,
         }, ct);
 
@@ -300,6 +333,9 @@ public sealed partial class WorkflowRunGAgent
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(completion);
+
+        if (MatchesPendingCompensationCompletion(State, completion))
+            return await ContinueCommittedCompensationCompletionAsync(completion, ct);
 
         if (!IsCompensating(State))
             return EmptyCompensationResult(WorkflowCompensationTransitionStatus.NoCompensableLedger);
@@ -318,10 +354,6 @@ public sealed partial class WorkflowRunGAgent
             return EmptyCompensationResult(WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate);
         }
 
-        var remainingUncompensated = completion.Success
-            ? 0
-            : CalculateRemainingUncompensated(State.CompensableLedger.Count, cursor);
-
         await PersistDomainEventAsync(new CompensationStepCompletedEvent
         {
             RunId = WorkflowRunIdNormalizer.Normalize(completion.RunId),
@@ -331,8 +363,66 @@ public sealed partial class WorkflowRunGAgent
             ExecutionId = completion.ExecutionId ?? string.Empty,
         }, ct);
 
+        return await ContinueCommittedCompensationCompletionAsync(completion, ct);
+    }
+
+    async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.RecoverCompensationStepCompletionAsync(
+        CompensationStepCompletedEvent completion,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(completion);
+
+        if (MatchesPendingCompensationCompletion(State, completion))
+            return await ContinueCommittedCompensationCompletionAsync(completion, ct);
+
+        if (State.SagaStatus == WorkflowSagaStatus.CompensatedFailed)
+            return EmptyCompensationResult(WorkflowCompensationTransitionStatus.CompletedAll);
+        if (State.SagaStatus == WorkflowSagaStatus.CompensationDeadLetter)
+        {
+            return EmptyCompensationResult(
+                WorkflowCompensationTransitionStatus.CompensationDeadLettered);
+        }
+
+        if (!IsCompensating(State))
+            return EmptyCompensationResult(WorkflowCompensationTransitionStatus.NoCompensableLedger);
+
+        if (TryGetLedgerEntry(State.CompensationCursor, out var currentEntry) &&
+            MatchesCurrentCompensation(completion, currentEntry))
+        {
+            return await ((IWorkflowExecutionStateHost)this)
+                .RecordCompensationStepCompletionAsync(completion, ct);
+        }
+
+        if (!string.IsNullOrWhiteSpace(State.CompensationExecutionId))
+        {
+            return BuildCurrentCompensationResult(
+                WorkflowCompensationTransitionStatus.AdvancedAndRequestedNext);
+        }
+
+        return EmptyCompensationResult(WorkflowCompensationTransitionStatus.NoCompensableLedger);
+    }
+
+    private async Task<WorkflowCompensationTransitionResult> ContinueCommittedCompensationCompletionAsync(
+        CompensationStepCompletedEvent completion,
+        CancellationToken ct)
+    {
         if (!completion.Success)
         {
+            if (State.SagaStatus == WorkflowSagaStatus.CompensationDeadLetter)
+            {
+                return EmptyCompensationResult(
+                    WorkflowCompensationTransitionStatus.CompensationDeadLettered);
+            }
+
+            if (!IsCompensating(State))
+                return EmptyCompensationResult(WorkflowCompensationTransitionStatus.NoCompensableLedger);
+
+            var cursor = State.CompensationCursor;
+            if (!TryGetLedgerEntry(cursor, out var currentEntry))
+                return EmptyCompensationResult(WorkflowCompensationTransitionStatus.NoCompensableLedger);
+            var remainingUncompensated = CalculateRemainingUncompensated(
+                State.CompensableLedger.Count,
+                cursor);
             await PersistDomainEventAsync(new WorkflowCompensationFailedEvent
             {
                 RunId = State.RunId ?? string.Empty,
@@ -343,7 +433,13 @@ public sealed partial class WorkflowRunGAgent
             return EmptyCompensationResult(WorkflowCompensationTransitionStatus.CompensationDeadLettered);
         }
 
-        var nextCursor = cursor - 1;
+        if (State.SagaStatus == WorkflowSagaStatus.CompensatedFailed)
+            return EmptyCompensationResult(WorkflowCompensationTransitionStatus.CompletedAll);
+
+        if (!IsCompensating(State))
+            return EmptyCompensationResult(WorkflowCompensationTransitionStatus.NoCompensableLedger);
+
+        var nextCursor = State.CompensationCursor;
         if (nextCursor < 0)
         {
             await PersistDomainEventAsync(new WorkflowCompensationCompletedEvent
@@ -354,7 +450,8 @@ public sealed partial class WorkflowRunGAgent
             return EmptyCompensationResult(WorkflowCompensationTransitionStatus.CompletedAll);
         }
 
-        var nextEntry = State.CompensableLedger[nextCursor];
+        if (!TryGetLedgerEntry(nextCursor, out var nextEntry))
+            return EmptyCompensationResult(WorkflowCompensationTransitionStatus.NoCompensableLedger);
         var nextExecutionId = Guid.NewGuid().ToString("N");
         var originFailedStepId = ResolveLastFailedStepId(State);
         await PersistDomainEventAsync(new CompensationRequestEvent
@@ -364,6 +461,10 @@ public sealed partial class WorkflowRunGAgent
             CompensationStepId = nextEntry.CompensationStepId,
             IdempotencyKey = nextEntry.IdempotencyKey,
             CapturedOutput = nextEntry.CapturedOutput,
+            CapturedOutputValueId = nextEntry.CapturedOutputValueId,
+            CapturedOutputProducerStepId = nextEntry.CapturedOutputProducerStepId,
+            CapturedOutputProducerExecutionId = nextEntry.CapturedOutputProducerExecutionId,
+            CapturedOutputSourceKind = nextEntry.CapturedOutputSourceKind,
             ExecutionId = nextExecutionId,
         }, ct);
 
@@ -372,6 +473,31 @@ public sealed partial class WorkflowRunGAgent
             nextEntry,
             originFailedStepId,
             nextExecutionId);
+    }
+
+    private static bool MatchesPendingCompensationCompletion(
+        WorkflowRunState state,
+        CompensationStepCompletedEvent completion)
+    {
+        var pending = state.PendingCompensationCompletion;
+        return pending != null &&
+               string.Equals(
+                   WorkflowRunIdNormalizer.Normalize(pending.RunId),
+                   WorkflowRunIdNormalizer.Normalize(completion.RunId),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   pending.CompensationStepId?.Trim(),
+                   completion.CompensationStepId?.Trim(),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   pending.ExecutionId?.Trim(),
+                   completion.ExecutionId?.Trim(),
+                   StringComparison.Ordinal) &&
+               pending.Success == completion.Success &&
+               string.Equals(
+                   pending.Error ?? string.Empty,
+                   completion.Error ?? string.Empty,
+                   StringComparison.Ordinal);
     }
 
     async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.RecordCompensationPhaseDeadlineExceededAsync(
@@ -410,6 +536,7 @@ public sealed partial class WorkflowRunGAgent
             return;
         await DrainPendingDefinitionBindingContinuationAsync(ct);
         InstallCognitiveModules();
+        await RecoverPendingWorkflowExecutionDispatchAsync(ct);
         await RecoverTerminalNotificationAsync(ct);
         await RecoverToolCallActorLocalStateAsync(ct);
         await RecoverForEachDurablePublicationsAsync(ct);
@@ -429,6 +556,36 @@ public sealed partial class WorkflowRunGAgent
 
         await DispatchPendingInteractiveActionContinuationsAsync(ct);
         await ResumeCompensationAsync(ct);
+    }
+
+    private async Task RecoverPendingWorkflowExecutionDispatchAsync(CancellationToken ct)
+    {
+        if (!State.ExecutionStates.TryGetValue(WorkflowExecutionKernel.ModuleStateKey, out var packed) ||
+            packed?.Is(WorkflowExecutionKernelState.Descriptor) != true)
+        {
+            return;
+        }
+
+        var kernelState = packed.Unpack<WorkflowExecutionKernelState>();
+        var hasPendingCompensationOutcome =
+            kernelState.PendingCompensationOutcome?.Completion != null;
+        var hasPendingDispatch = kernelState.Active &&
+                                 kernelState.CurrentStepDispatchPending &&
+                                 !string.IsNullOrWhiteSpace(kernelState.RunId);
+        if (!hasPendingCompensationOutcome && !hasPendingDispatch)
+        {
+            return;
+        }
+
+        await PublishAsync(
+            new WorkflowExecutionRecoveryRequestedEvent
+            {
+                RunId = hasPendingCompensationOutcome
+                    ? kernelState.PendingCompensationOutcome!.Completion.RunId
+                    : kernelState.RunId,
+            },
+            TopologyAudience.Self,
+            ct);
     }
 
     protected override Task OnDeactivateAsync(CancellationToken ct)
@@ -1498,6 +1655,11 @@ public sealed partial class WorkflowRunGAgent
                 return null;
             }
         }
+
+        var valueRepresentation = await SelectWorkflowRunRepresentationAsync(
+            request.ForkSeed,
+            CancellationToken.None);
+
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
@@ -1653,9 +1815,58 @@ public sealed partial class WorkflowRunGAgent
             RunId = runId,
             ForkSeed = request.ForkSeed,
             BindingGeneration = State.BindingGeneration,
+            ValueRepresentation = valueRepresentation,
         };
         start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
         return start;
+    }
+
+    private Task<WorkflowExecutionValueRepresentation> SelectWorkflowRunRepresentationAsync(
+        WorkflowRunForkSeed? forkSeed,
+        CancellationToken ct) =>
+        WorkflowNormalizedStateWriteAdmission.SelectNewRunRepresentationAsync(
+            (IWorkflowExecutionStateHost)this,
+            forkSeed,
+            ct);
+
+    private async Task<WorkflowExecutionValueRepresentation> SelectSubWorkflowValueRepresentationAsync(
+        WorkflowExecutionValueRepresentation requested,
+        CancellationToken ct)
+    {
+        if (!System.Enum.IsDefined(requested))
+            throw new InvalidOperationException("Sub-workflow start declares an unknown value representation.");
+        if (requested == WorkflowExecutionValueRepresentation.Legacy)
+            return requested;
+
+        var selected = await SelectWorkflowRunRepresentationAsync(forkSeed: null, ct);
+        if (requested == WorkflowExecutionValueRepresentation.Normalized &&
+            selected != WorkflowExecutionValueRepresentation.Normalized)
+        {
+            throw new InvalidOperationException(
+                "A normalized sub-workflow start requires live fleet admission for normalized state writes.");
+        }
+
+        return requested == WorkflowExecutionValueRepresentation.Unspecified
+            ? selected
+            : requested;
+    }
+
+    private static WorkflowExecutionValueRepresentation NormalizePersistedValueRepresentation(
+        WorkflowExecutionValueRepresentation representation) =>
+        representation switch
+        {
+            WorkflowExecutionValueRepresentation.Unspecified => WorkflowExecutionValueRepresentation.Legacy,
+            WorkflowExecutionValueRepresentation.Legacy => WorkflowExecutionValueRepresentation.Legacy,
+            WorkflowExecutionValueRepresentation.Normalized => WorkflowExecutionValueRepresentation.Normalized,
+            _ => throw new InvalidOperationException(
+                $"Workflow Run persisted an unknown value representation '{representation}'."),
+        };
+
+    private async Task EnsureNormalizedRunStartAdmissionAsync(
+        WorkflowChatRequestEvent request,
+        CancellationToken ct)
+    {
+        _ = await SelectWorkflowRunRepresentationAsync(request.ForkSeed, ct);
     }
 
     private void ValidateUnattendedWebhookCredential(WorkflowChatRequestEvent request, string scopeId)
@@ -2913,6 +3124,10 @@ public sealed partial class WorkflowRunGAgent
             CompensationStepId = entry.CompensationStepId ?? string.Empty,
             IdempotencyKey = entry.IdempotencyKey ?? string.Empty,
             CapturedOutput = entry.CapturedOutput ?? string.Empty,
+            CapturedOutputValueId = entry.CapturedOutputValueId ?? string.Empty,
+            CapturedOutputProducerStepId = entry.CapturedOutputProducerStepId ?? string.Empty,
+            CapturedOutputProducerExecutionId = entry.CapturedOutputProducerExecutionId ?? string.Empty,
+            CapturedOutputSourceKind = entry.CapturedOutputSourceKind,
             ExecutionId = executionId,
         };
 
@@ -2958,6 +3173,26 @@ public sealed partial class WorkflowRunGAgent
         var stepCompletionKey = BuildStepCompletionArtifactKey(artifactFact as StepCompletedEvent);
         if (stepCompletionKey != null && State.ProcessedStepCompletionKeys.ContainsKey(stepCompletionKey))
             return;
+
+        if (artifactFact is StepCompletedEvent normalizedCompletion &&
+            TryGetNormalizedKernelState(State, out var normalizedKernelState))
+        {
+            var selfPublished = string.Equals(
+                envelope.Route?.PublisherActorId?.Trim(),
+                Id,
+                StringComparison.Ordinal);
+            if (!selfPublished ||
+                !WorkflowExecutionValueStore.IsAcceptedCompletion(normalizedKernelState, normalizedCompletion))
+            {
+                Logger.LogWarning(
+                    "Ignore non-authoritative normalized completion artifact. actor={ActorId} publisher={PublisherActorId} step={StepId} execution={ExecutionId}",
+                    Id,
+                    envelope.Route?.PublisherActorId ?? string.Empty,
+                    normalizedCompletion.StepId,
+                    normalizedCompletion.ExecutionId);
+                return;
+            }
+        }
 
         await PersistDomainEventAsync(artifactFact, CancellationToken.None);
     }
@@ -3232,6 +3467,7 @@ public sealed partial class WorkflowRunGAgent
             .On<WorkflowExecutionStateClearedEvent>(ApplyWorkflowExecutionStateCleared)
             .On<WorkflowRunLineageRecordedEvent>(ApplyWorkflowRunLineageRecorded)
             .On<CompensableStepDispatchedEvent>(ApplyCompensableStepDispatched)
+            .On<CompensableStepOutputCapturedEvent>(ApplyCompensableStepOutputCaptured)
             .On<StepCompletedEvent>(ApplyStepCompleted)
             .On<CompensationRequestEvent>(ApplyCompensationRequest)
             .On<CompensationStepCompletedEvent>(ApplyCompensationStepCompleted)
@@ -3471,6 +3707,7 @@ public sealed partial class WorkflowRunGAgent
         next.DeadLetterError = string.Empty;
         next.CompensationOriginFailedStepId = string.Empty;
         next.TerminalWorkflowCompletionRecorded = false;
+        next.PendingCompensationCompletion = null;
         next.ExecutionStates.Clear();
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.SubWorkflowBindings.Clear();
@@ -3629,6 +3866,7 @@ public sealed partial class WorkflowRunGAgent
         next.DeadLetterError = string.Empty;
         next.CompensationOriginFailedStepId = string.Empty;
         next.TerminalWorkflowCompletionRecorded = false;
+        next.PendingCompensationCompletion = null;
         next.CompletionNotificationTarget = evt.CompletionNotificationTarget?.Clone();
         next.LastCommandId = string.IsNullOrWhiteSpace(evt.WorkflowCommandId)
             ? current.LastCommandId
@@ -4003,6 +4241,12 @@ public sealed partial class WorkflowRunGAgent
         if (completionKey != null)
             next.ProcessedStepCompletionKeys[completionKey] = true;
 
+        // Normalized completions are admitted by the execution kernel against
+        // the exact dispatch lease. Only the follow-up typed outcome event may
+        // mutate the compensation ledger; the raw completion is not authority.
+        if (HasNormalizedExecutionValues(current))
+            return next;
+
         var workflow = ResolveWorkflowForTransition(current);
         var step = string.IsNullOrWhiteSpace(stepId) ? null : workflow?.GetStep(stepId);
         var compensationStepId = step?.Compensation?.Trim() ?? string.Empty;
@@ -4086,8 +4330,71 @@ public sealed partial class WorkflowRunGAgent
             CompensationStepId = compensationStepId,
             IdempotencyKey = idempotencyKey,
             CapturedOutput = string.Empty,
+            CapturedOutputValueId = evt.CapturedOutputValueId ?? string.Empty,
+            CapturedOutputProducerStepId = evt.CapturedOutputProducerStepId ?? string.Empty,
+            CapturedOutputProducerExecutionId = evt.CapturedOutputProducerExecutionId ?? string.Empty,
+            CapturedOutputSourceKind = evt.CapturedOutputSourceKind,
             LedgerStatus = CompensableLedgerEntryStatus.Provisional,
         });
+        return next;
+    }
+
+    private static WorkflowRunState ApplyCompensableStepOutputCaptured(
+        WorkflowRunState current,
+        CompensableStepOutputCapturedEvent evt)
+    {
+        var next = current.Clone();
+        var stepId = evt.StepId?.Trim() ?? string.Empty;
+        var compensationStepId = evt.CompensationStepId?.Trim() ?? string.Empty;
+        var idempotencyKey = evt.IdempotencyKey ?? string.Empty;
+        if (stepId.Length == 0 || compensationStepId.Length == 0)
+            return next;
+
+        if (!evt.Success)
+        {
+            if (NormalizeFailureOutcome(evt.FailureOutcome) == WorkflowStepFailureOutcome.CalleeConfirmed)
+                RemoveMatchingProvisionalLedgerEntries(next, stepId, compensationStepId, idempotencyKey);
+            return next;
+        }
+
+        var valueId = evt.CapturedOutputValueId?.Trim() ?? string.Empty;
+        if (valueId.Length == 0 ||
+            evt.CapturedOutputSourceKind == WorkflowCanonicalValueSourceKind.Unspecified)
+        {
+            throw new InvalidOperationException(
+                $"Normalized compensable step '{stepId}' has no exact canonical output identity.");
+        }
+
+        var matching = next.CompensableLedger.FirstOrDefault(entry =>
+            string.Equals(entry.StepId, stepId, StringComparison.Ordinal) &&
+            string.Equals(entry.CompensationStepId, compensationStepId, StringComparison.Ordinal) &&
+            string.Equals(entry.IdempotencyKey, idempotencyKey, StringComparison.Ordinal));
+        if (matching == null)
+        {
+            matching = new CompletedStepLedgerEntry
+            {
+                StepId = stepId,
+                CompensationStepId = compensationStepId,
+                IdempotencyKey = idempotencyKey,
+            };
+            next.CompensableLedger.Add(matching);
+        }
+        else if (matching.LedgerStatus == CompensableLedgerEntryStatus.Confirmed &&
+                 (!string.Equals(matching.CapturedOutputValueId, valueId, StringComparison.Ordinal) ||
+                  !string.Equals(matching.CapturedOutputProducerStepId, evt.CapturedOutputProducerStepId, StringComparison.Ordinal) ||
+                  !string.Equals(matching.CapturedOutputProducerExecutionId, evt.CapturedOutputProducerExecutionId, StringComparison.Ordinal) ||
+                  matching.CapturedOutputSourceKind != evt.CapturedOutputSourceKind))
+        {
+            throw new InvalidOperationException(
+                $"Compensable step '{stepId}' canonical output identity changed after confirmation.");
+        }
+
+        matching.CapturedOutput = string.Empty;
+        matching.CapturedOutputValueId = valueId;
+        matching.CapturedOutputProducerStepId = evt.CapturedOutputProducerStepId ?? string.Empty;
+        matching.CapturedOutputProducerExecutionId = evt.CapturedOutputProducerExecutionId ?? string.Empty;
+        matching.CapturedOutputSourceKind = evt.CapturedOutputSourceKind;
+        matching.LedgerStatus = CompensableLedgerEntryStatus.Confirmed;
         return next;
     }
 
@@ -4098,6 +4405,7 @@ public sealed partial class WorkflowRunGAgent
         if (string.IsNullOrWhiteSpace(compensationStepId))
             return next;
 
+        next.PendingCompensationCompletion = null;
         next.SagaStatus = WorkflowSagaStatus.Compensating;
         next.CompensationExecutionId = evt.ExecutionId?.Trim() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(evt.FailedStepId))
@@ -4105,9 +4413,16 @@ public sealed partial class WorkflowRunGAgent
         for (var i = next.CompensableLedger.Count - 1; i >= 0; i--)
         {
             var ledgerEntry = next.CompensableLedger[i];
+            var canonicalIdentityMatches = !string.IsNullOrWhiteSpace(evt.CapturedOutputValueId)
+                ? string.Equals(ledgerEntry.CapturedOutputValueId, evt.CapturedOutputValueId, StringComparison.Ordinal) &&
+                  string.Equals(ledgerEntry.CapturedOutputProducerStepId, evt.CapturedOutputProducerStepId, StringComparison.Ordinal) &&
+                  string.Equals(ledgerEntry.CapturedOutputProducerExecutionId, evt.CapturedOutputProducerExecutionId, StringComparison.Ordinal) &&
+                  ledgerEntry.CapturedOutputSourceKind == evt.CapturedOutputSourceKind
+                : string.IsNullOrWhiteSpace(ledgerEntry.CapturedOutputValueId) &&
+                  string.Equals(ledgerEntry.CapturedOutput ?? string.Empty, evt.CapturedOutput ?? string.Empty, StringComparison.Ordinal);
             if (string.Equals(ledgerEntry.CompensationStepId, compensationStepId, StringComparison.Ordinal) &&
                 string.Equals(ledgerEntry.IdempotencyKey ?? string.Empty, evt.IdempotencyKey ?? string.Empty, StringComparison.Ordinal) &&
-                string.Equals(ledgerEntry.CapturedOutput ?? string.Empty, evt.CapturedOutput ?? string.Empty, StringComparison.Ordinal))
+                canonicalIdentityMatches)
             {
                 next.CompensationCursor = i;
                 break;
@@ -4125,6 +4440,7 @@ public sealed partial class WorkflowRunGAgent
         if (!IsCompensating(next))
             return next;
 
+        next.PendingCompensationCompletion = evt.Clone();
         if (!evt.Success)
         {
             next.CompensationExecutionId = string.Empty;
@@ -4219,6 +4535,7 @@ public sealed partial class WorkflowRunGAgent
             : evt.RecoveryFailureKind;
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         next.TerminalWorkflowCompletionRecorded = true;
+        next.PendingCompensationCompletion = null;
         next.ExecutionContext = new WorkflowRunExecutionContextState();
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
@@ -4739,6 +5056,8 @@ public sealed partial class WorkflowRunGAgent
             return lineage.SourceRunId;
         if (StateTransitionMatcher.TryExtract<CompensableStepDispatchedEvent>(evt, out var compensable))
             return compensable.RunId;
+        if (StateTransitionMatcher.TryExtract<CompensableStepOutputCapturedEvent>(evt, out var compensableOutput))
+            return compensableOutput.RunId;
         if (StateTransitionMatcher.TryExtract<StepRequestEvent>(evt, out var stepRequest))
             return stepRequest.RunId;
         if (StateTransitionMatcher.TryExtract<StepCompletedEvent>(evt, out var stepCompleted))
@@ -5115,7 +5434,8 @@ public sealed partial class WorkflowRunGAgent
 
     private async Task ResumeCompensationAsync(CancellationToken ct)
     {
-        if (!IsCompensating(State) ||
+        if (HasPendingWorkflowCompensationOutcome(State) ||
+            !IsCompensating(State) ||
             string.IsNullOrWhiteSpace(State.CompensationExecutionId) ||
             !TryGetLedgerEntry(State.CompensationCursor, out var entry))
         {
@@ -5129,8 +5449,26 @@ public sealed partial class WorkflowRunGAgent
             CompensationStepId = entry.CompensationStepId,
             IdempotencyKey = entry.IdempotencyKey,
             CapturedOutput = entry.CapturedOutput,
+            CapturedOutputValueId = entry.CapturedOutputValueId,
+            CapturedOutputProducerStepId = entry.CapturedOutputProducerStepId,
+            CapturedOutputProducerExecutionId = entry.CapturedOutputProducerExecutionId,
+            CapturedOutputSourceKind = entry.CapturedOutputSourceKind,
             ExecutionId = State.CompensationExecutionId ?? string.Empty,
         }, TopologyAudience.Self, ct);
+    }
+
+    private static bool HasPendingWorkflowCompensationOutcome(WorkflowRunState state)
+    {
+        if (!state.ExecutionStates.TryGetValue(
+                WorkflowExecutionKernel.ModuleStateKey,
+                out var packed) ||
+            packed?.Is(WorkflowExecutionKernelState.Descriptor) != true)
+        {
+            return false;
+        }
+
+        return packed.Unpack<WorkflowExecutionKernelState>()
+                   .PendingCompensationOutcome?.Completion != null;
     }
 
     private WorkflowCompensationTransitionResult BuildCurrentCompensationResult(
@@ -5157,11 +5495,25 @@ public sealed partial class WorkflowRunGAgent
             failedStepId ?? string.Empty,
             entry.IdempotencyKey ?? string.Empty,
             entry.CapturedOutput ?? string.Empty,
+            entry.CapturedOutputValueId ?? string.Empty,
+            entry.CapturedOutputProducerStepId ?? string.Empty,
+            entry.CapturedOutputProducerExecutionId ?? string.Empty,
+            entry.CapturedOutputSourceKind,
             executionId ?? string.Empty);
 
     private static WorkflowCompensationTransitionResult EmptyCompensationResult(
         WorkflowCompensationTransitionStatus status) =>
-        new(status, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
+        new(
+            status,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            WorkflowCanonicalValueSourceKind.Unspecified,
+            string.Empty);
 
     private static int CalculateRemainingUncompensated(int ledgerCount, int cursor)
     {
@@ -5246,6 +5598,41 @@ public sealed partial class WorkflowRunGAgent
         }
 
         return string.Empty;
+    }
+
+    private static bool HasNormalizedExecutionValues(WorkflowRunState state)
+    {
+        foreach (var packedState in state.ExecutionStates.Values)
+        {
+            if (packedState?.Is(WorkflowExecutionKernelState.Descriptor) == true &&
+                packedState.Unpack<WorkflowExecutionKernelState>().NormalizedValues != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetNormalizedKernelState(
+        WorkflowRunState state,
+        out WorkflowExecutionKernelState kernelState)
+    {
+        foreach (var packedState in state.ExecutionStates.Values)
+        {
+            if (packedState?.Is(WorkflowExecutionKernelState.Descriptor) != true)
+                continue;
+
+            var candidate = packedState.Unpack<WorkflowExecutionKernelState>();
+            if (candidate.NormalizedValues == null)
+                continue;
+
+            kernelState = candidate;
+            return true;
+        }
+
+        kernelState = new WorkflowExecutionKernelState();
+        return false;
     }
 
     private static string ResolveLastFailedStepId(WorkflowRunState state)
@@ -5585,6 +5972,12 @@ public sealed partial class WorkflowRunGAgent
         if (validationErrors.Count > 0)
             return WorkflowCompilationResult.Invalid(string.Join("; ", validationErrors));
 
+        // Select the new logical run representation before binding cleanup,
+        // actor-tree mutation, execution-start persistence, or start dispatch.
+        var valueRepresentation = await SelectWorkflowRunRepresentationAsync(
+            forkSeed: null,
+            ct);
+
         var workflowName = parsed.Name ?? string.Empty;
         var bind = new BindWorkflowRunDefinitionEvent
         {
@@ -5608,7 +6001,8 @@ public sealed partial class WorkflowRunGAgent
         };
         var continuation = BuildDefinitionBindingContinuation(
             executeAfterBind: true,
-            executionInput);
+            executionInput,
+            valueRepresentation);
         await PersistDomainEventsAsync(
             [
                 bind,
@@ -5662,13 +6056,16 @@ public sealed partial class WorkflowRunGAgent
 
     private WorkflowRunDefinitionBindingContinuationState BuildDefinitionBindingContinuation(
         bool executeAfterBind,
-        string executionInput)
+        string executionInput,
+        WorkflowExecutionValueRepresentation valueRepresentation =
+            WorkflowExecutionValueRepresentation.Unspecified)
     {
         var continuation = new WorkflowRunDefinitionBindingContinuationState
         {
             ContinuationId = Guid.NewGuid().ToString("N"),
             ExecuteAfterBind = executeAfterBind,
             ExecutionInput = executionInput ?? string.Empty,
+            ValueRepresentation = valueRepresentation,
         };
         continuation.DefinitionResolutionTimeoutLeases.Add(
             State.PendingSubWorkflowDefinitionResolutions
@@ -5769,6 +6166,8 @@ public sealed partial class WorkflowRunGAgent
                 Input = continuation.ExecutionInput,
                 RunId = runId,
                 BindingGeneration = State.BindingGeneration,
+                ValueRepresentation = NormalizePersistedValueRepresentation(
+                    continuation.ValueRepresentation),
             },
             sessionId: string.Empty,
             ct);

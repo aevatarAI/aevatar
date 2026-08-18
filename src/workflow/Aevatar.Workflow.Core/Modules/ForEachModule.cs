@@ -84,7 +84,8 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             var runId = WorkflowRunIdNormalizer.Normalize(evt.RunId);
             var parentKey = BuildParentAttemptKey(runId, evt.StepId, evt.ExecutionId);
             var state = LoadState(ctx);
-            FenceCompletedChildOutputsToRun(state, runId);
+            if (!IsNormalizedRun(ctx))
+                FenceCompletedChildOutputsToRun(state, runId);
 
             if (state.CompletionTombstones.ContainsKey(parentKey))
                 return;
@@ -150,6 +151,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                         ExecutionId = evt.ExecutionId,
                         Success = true,
                         Output = string.Empty,
+                        OutputProvenance = WorkflowStepOutputProvenance.Produced,
                     },
                 };
                 state.Parents[parentKey] = emptyParent;
@@ -182,6 +184,9 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 state.Backpressure,
                 maxConcurrent,
                 minConcurrent);
+            var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+                ctx,
+                WorkflowExecutionKernel.ModuleStateKey);
 
             ctx.Logger.LogInformation(
                 "ForEach {StepId}: {Count} items, sub_step_type={SubType}",
@@ -215,6 +220,17 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     evt.ExternalInvocation,
                     BuildChildExecutionId(runId, evt.StepId, i, evt.ExecutionId),
                     BuildChildIdempotencyKey(runId, evt.StepId, i, evt.ExecutionId, evt.IdempotencyKey));
+                if (WorkflowExecutionValueStore.IsNormalized(kernelState))
+                {
+                    var childRequest = BackpressureHelper.ToStepRequest(entry, kernelState);
+                    WorkflowExecutionValueStore.PrepareInternalDispatch(
+                        kernelState,
+                        childRequest,
+                        originEnvelopeId: null);
+                    entry.ExecutionId = childRequest.ExecutionId;
+                    entry.InputValueId = childRequest.InputValueId;
+                    BackpressureHelper.ClearInlineInputAfterCanonicalAdmission(entry, kernelState);
+                }
                 parentState.ChildExecutionIds[entry.StepId] = entry.ExecutionId;
 
                 if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
@@ -236,6 +252,14 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 
             // Checkpoint the parent, queue, active-worker count, and all immediate dispatch intents
             // before the first child publication can escape this actor turn.
+            if (WorkflowExecutionValueStore.IsNormalized(kernelState))
+            {
+                await WorkflowExecutionStateAccess.SaveAsync(
+                    ctx,
+                    WorkflowExecutionKernel.ModuleStateKey,
+                    kernelState,
+                    ct);
+            }
             await SaveStateAsync(state, ctx, ct);
             if (backpressureApplied != null)
                 await TryPublishBackpressureAppliedAsync(backpressureApplied, ctx, ct);
@@ -294,7 +318,14 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             var fileRef = itemIndex >= 0 && itemIndex < parentState.ItemFileRefs.Count
                 ? parentState.ItemFileRefs[itemIndex]
                 : null;
-            parentState.Collected.Add(evt.ToForEachItemResult(itemIndex, fileRef));
+            var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+                ctx,
+                WorkflowExecutionKernel.ModuleStateKey);
+            var normalizedValues = WorkflowExecutionValueStore.IsNormalized(kernelState);
+            var itemResult = evt.ToForEachItemResult(itemIndex, fileRef);
+            if (normalizedValues)
+                itemResult.Output = string.Empty;
+            parentState.Collected.Add(itemResult);
             state.Parents[parentKey] = parentState;
             state.Backpressure = BackpressureHelper.EnsureInitialized(
                 state.Backpressure,
@@ -312,15 +343,24 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 var results = parentState.Collected;
                 var allSuccess = results.All(r => r.Success);
                 var useFileItemResults = IsInputFileRefsSource(parentState);
-                IEnumerable<ForEachItemResult> mergedResults = useFileItemResults
+                IEnumerable<ForEachItemResult> orderedResults = useFileItemResults
                     ? results.OrderBy(static result => result.Index)
                     : results.AsEnumerable();
-                var merged = string.Join("\n---\n", mergedResults.Select(r => r.Output));
+                var materializedResults = orderedResults
+                    .Select(result => (
+                        Result: result,
+                        Output: normalizedValues
+                            ? WorkflowExecutionValueStore.ResolveCompletedStepOutput(
+                                kernelState,
+                                result.StepId)
+                            : result.Output ?? string.Empty))
+                    .ToArray();
+                var merged = string.Join("\n---\n", materializedResults.Select(static result => result.Output));
                 var error = allSuccess
                     ? string.Empty
                     : "one or more foreach items failed";
                 var fileItemResults = useFileItemResults
-                    ? BuildFileItemResults(results)
+                    ? BuildFileItemResults(materializedResults)
                     : null;
 
                 ctx.Logger.LogInformation(
@@ -334,7 +374,18 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     ExecutionId = parentState.ParentExecutionId,
                     Success = allSuccess, Output = merged, Error = error,
                     FileItemResults = fileItemResults,
+                    OutputProvenance = normalizedValues && parentState.Expected == 1
+                        ? WorkflowStepOutputProvenance.ReferencedStepOutput
+                        : WorkflowStepOutputProvenance.Produced,
                 };
+                if (normalizedValues && parentState.Expected == 1)
+                {
+                    await WorkflowExecutionValueStore.ReferenceCompletedStepOutputAsync(
+                        parentState.PendingCompletion,
+                        evt,
+                        ctx,
+                        ct);
+                }
             }
 
             // Completion settlement, queue cursor advancement, top-up intents, and terminal outbox
@@ -620,8 +671,13 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
     {
         try
         {
+            var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+                ctx,
+                WorkflowExecutionKernel.ModuleStateKey);
             await ctx.PublishAsync(
-                BackpressureHelper.ToStepRequest(publication.Entry),
+                BackpressureHelper.ToStepRequest(
+                    publication.Entry,
+                    WorkflowExecutionValueStore.IsNormalized(kernelState) ? kernelState : null),
                 TopologyAudience.Self,
                 ct,
                 BuildChildPublishOptions(publication.Entry));
@@ -653,6 +709,11 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
     private ForEachModuleState LoadState(IWorkflowExecutionContext ctx)
     {
         var state = WorkflowExecutionStateAccess.Load<ForEachModuleState>(ctx, ModuleStateKey);
+        if (IsNormalizedRun(ctx))
+        {
+            state.CompletedChildOutputs.Clear();
+            state.CompletedChildOutputsRunId = string.Empty;
+        }
         PruneAcceptedChildPublications(state);
         return state;
     }
@@ -726,7 +787,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         try
         {
             await ctx.PublishAsync(
-                completion.Clone(),
+                WorkflowExecutionValueStore.HydrateReferencedCompletionForPublication(completion, ctx),
                 TopologyAudience.Self,
                 ct,
                 BuildCompletionPublishOptions(parentKey));
@@ -745,7 +806,8 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
-        PreserveCompletedChildOutputs(state, parentState);
+        if (!IsNormalizedRun(ctx))
+            PreserveCompletedChildOutputs(state, parentState);
         state.Parents.Remove(parentKey);
         AddCompletionTombstone(state, parentKey);
         if (state.Parents.Count == 0)
@@ -1000,6 +1062,14 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         state.CompletionTombstones[parentKey] = true;
     }
 
+    private static bool IsNormalizedRun(IWorkflowExecutionContext ctx)
+    {
+        var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+            ctx,
+            WorkflowExecutionKernel.ModuleStateKey);
+        return WorkflowExecutionValueStore.IsNormalized(kernelState);
+    }
+
     private static void PreserveCompletedChildOutputs(
         ForEachModuleState state,
         ForEachParentState parentState)
@@ -1042,18 +1112,19 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         return fileRef.FileName;
     }
 
-    private static WorkflowFileItemResultSet BuildFileItemResults(IEnumerable<ForEachItemResult> results)
+    private static WorkflowFileItemResultSet BuildFileItemResults(
+        IEnumerable<(ForEachItemResult Result, string Output)> results)
     {
         var resultSet = new WorkflowFileItemResultSet();
         resultSet.Results.Add(results
-            .OrderBy(static result => result.Index)
-            .Select(static result => new WorkflowFileItemResult
+            .OrderBy(static item => item.Result.Index)
+            .Select(static item => new WorkflowFileItemResult
             {
-                Index = result.Index,
-                FileRef = result.FileRef?.Clone(),
-                Success = result.Success,
-                Output = result.Output,
-                Error = result.Error,
+                Index = item.Result.Index,
+                FileRef = item.Result.FileRef?.Clone(),
+                Success = item.Result.Success,
+                Output = item.Output,
+                Error = item.Result.Error,
             }));
         return resultSet;
     }

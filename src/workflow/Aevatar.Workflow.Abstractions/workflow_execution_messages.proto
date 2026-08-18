@@ -343,6 +343,106 @@ message WorkflowRunForkSeed
   int32 attempt = 4;
   WorkflowStepIdempotencyState start_step_idempotency = 5;
   string original_run_id = 6;
+  // Typed source snapshot for normalized runs. Legacy sources leave this absent
+  // and continue to use variables.
+  WorkflowNormalizedExecutionSeed normalized_values = 7;
+  // Request-level overlay applied after the source snapshot. Keeping overrides
+  // separate prevents a fork command from destroying canonical provenance.
+  map<string, string> variable_overrides = 8;
+}
+
+message WorkflowCanonicalValueSeed
+{
+  string value_id = 1;
+  string value = 2;
+  string producer_step_id = 3;
+  string producer_execution_id = 4;
+  WorkflowCanonicalValueSourceKind source_kind = 5;
+}
+
+enum WorkflowValueBindingSeedKind
+{
+  WORKFLOW_VALUE_BINDING_SEED_KIND_UNSPECIFIED = 0;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_STEP_OUTPUT = 1;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_CURRENT_INPUT = 2;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_ASSIGNED_VALUE = 3;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_INTERNAL_OUTPUT = 4;
+  WORKFLOW_VALUE_BINDING_SEED_KIND_REQUEST_OVERRIDE = 5;
+}
+
+message WorkflowValueBindingSeed
+{
+  string value_id = 1;
+  WorkflowValueBindingSeedKind binding_kind = 2;
+}
+
+message WorkflowNormalizedUsageMetricsSeed
+{
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+  string model = 4;
+  double cost = 5;
+  int64 latency_ms = 6;
+}
+
+message WorkflowJsonValueBindingSeed
+{
+  string output_value_id = 1;
+}
+
+message WorkflowCompletedStepSeed
+{
+  string step_id = 1;
+  string output_value_id = 2;
+  bool success = 3;
+  string error = 4;
+  string branch_key = 5;
+  string next_step_id = 6;
+  string assigned_variable = 7;
+  string assigned_value_id = 8;
+  map<string, string> annotations = 9;
+  WorkflowNormalizedUsageMetricsSeed usage = 10;
+  bool has_usage = 11;
+  map<string, WorkflowJsonValueBindingSeed> json_value_bindings = 12;
+  bool emit_legacy_mirrors = 13;
+  string execution_id = 14;
+  WorkflowStepOutputProvenance output_provenance = 15;
+  WorkflowStepAssignedValueProvenance assigned_value_provenance = 16;
+  string output_source_step_id = 17;
+  string output_source_execution_id = 18;
+  string output_source_value_id = 19;
+  string output_reference_id = 20;
+  WorkflowStepFailureOutcome failure_outcome = 21;
+  WorkflowStepRetryDisposition retry_disposition = 22;
+  WorkflowStepCompletionOutcome outcome = 23;
+  string assigned_mirror_value_id = 24;
+}
+
+message WorkflowPendingOutputReferenceSeed
+{
+  string reference_id = 1;
+  string source_step_id = 2;
+  string source_execution_id = 3;
+  string source_value_id = 4;
+  string target_step_id = 5;
+  string target_execution_id = 6;
+}
+
+message WorkflowNormalizedExecutionSeed
+{
+  map<string, WorkflowCanonicalValueSeed> canonical_values = 1;
+  map<string, WorkflowValueBindingSeed> bindings = 2;
+  map<string, WorkflowCompletedStepSeed> completed_steps = 3;
+  uint64 next_value_sequence = 4;
+  string current_step_input_value_id = 5;
+  map<string, string> variables = 6;
+  map<string, WorkflowPendingOutputReferenceSeed> pending_output_references = 7;
+  // Source-run physical completions retained only to validate historical
+  // aliases/provenance in this immutable fork seed. Restore must never copy
+  // these identities into the target run's live acceptance ledger.
+  map<string, string> source_completion_value_ids = 8;
+  map<string, WorkflowCompletedStepSeed> source_completions = 9;
 }
 
 message WorkflowStepIdempotencyState
@@ -439,6 +539,14 @@ message StartWorkflowEvent
   // single-run actors use zero. The execution boundary rejects a Start whose
   // generation does not match the actor's committed binding.
   int64 binding_generation = 8;
+  WorkflowExecutionValueRepresentation value_representation = 9;
+}
+
+// Actor-owned activation continuation. It does not start a new logical run;
+// it only drains a dispatch intent already committed in kernel state.
+message WorkflowExecutionRecoveryRequestedEvent
+{
+  string run_id = 1;
 }
 
 enum WorkflowRunActorReusePolicy
@@ -453,8 +561,20 @@ enum WorkflowRunActorReusePolicy
   WORKFLOW_RUN_ACTOR_REUSE_POLICY_SERIAL_SINGLETON = 2;
 }
 
+// Representation selected at the logical run admission boundary. A plain
+// new run may fall back to LEGACY when the normalized-state fleet gate is
+// unavailable; normalized forks are never silently downgraded.
+enum WorkflowExecutionValueRepresentation
+{
+  WORKFLOW_EXECUTION_VALUE_REPRESENTATION_UNSPECIFIED = 0;
+  WORKFLOW_EXECUTION_VALUE_REPRESENTATION_LEGACY = 1;
+  WORKFLOW_EXECUTION_VALUE_REPRESENTATION_NORMALIZED = 2;
+}
+
 message BindWorkflowRunDefinitionEvent
 {
+  reserved 18;
+  reserved "normalized_state_fleet_capability";
   string definition_actor_id = 1;
   string workflow_name = 2;
   string workflow_yaml = 3;
@@ -800,6 +920,10 @@ message StepRequestEvent
   // Effective authored step timeout after runtime normalization. Modules that own an
   // eventized external-operation watchdog use this instead of creating a second timeout policy.
   int32 timeout_ms = 13;
+  // Exact canonical input instance owned by the run actor. Nested dispatchers
+  // propagate this id for pass-through inputs; synthesized inputs are assigned
+  // a new canonical identity by the execution bridge before executor entry.
+  string input_value_id = 14;
 }
 message WorkflowUsageMetrics {
   int32 prompt_tokens = 1;
@@ -836,6 +960,43 @@ enum WorkflowStepCompletionOutcome {
   WORKFLOW_STEP_COMPLETION_OUTCOME_SKIPPED = 3;
 }
 
+enum WorkflowStepOutputProvenance {
+  WORKFLOW_STEP_OUTPUT_PROVENANCE_UNSPECIFIED = 0;
+  // The completion produced a new logical value instance.
+  WORKFLOW_STEP_OUTPUT_PROVENANCE_PRODUCED = 1;
+  // The completion intentionally forwards the current step input. The kernel
+  // preserves dataflow while binding aliases to the existing canonical value.
+  WORKFLOW_STEP_OUTPUT_PROVENANCE_FORWARDED_INPUT = 2;
+  // The completion forwards the canonical output of another completed step in
+  // the same logical run. output_source_step_id identifies that exact source;
+  // content equality alone never establishes this relationship.
+  WORKFLOW_STEP_OUTPUT_PROVENANCE_REFERENCED_STEP_OUTPUT = 3;
+}
+
+enum WorkflowStepAssignedValueProvenance {
+  WORKFLOW_STEP_ASSIGNED_VALUE_PROVENANCE_UNSPECIFIED = 0;
+  // The assigned value is a distinct logical value, even when its bytes happen
+  // to equal the step output.
+  WORKFLOW_STEP_ASSIGNED_VALUE_PROVENANCE_PRODUCED = 1;
+  // The assigned-value mirror explicitly aliases this completion's output.
+  WORKFLOW_STEP_ASSIGNED_VALUE_PROVENANCE_REFERENCES_OUTPUT = 2;
+}
+
+// Identifies the semantic origin of a canonical value. Initial/request values
+// intentionally have no producer step identity; they remain distinguishable
+// from a produced step output without inventing a fake producer.
+enum WorkflowCanonicalValueSourceKind {
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_INITIAL_INPUT = 1;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_REQUEST_OVERRIDE = 2;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_STEP_OUTPUT = 3;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_ASSIGNED_VALUE = 4;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_INTERNAL_OUTPUT = 5;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_ERROR_POLICY = 6;
+  WORKFLOW_CANONICAL_VALUE_SOURCE_KIND_INTERNAL_INPUT = 7;
+}
+
+
 message StepCompletedEvent {
   string step_id = 1;
   bool success = 2;
@@ -856,6 +1017,12 @@ message StepCompletedEvent {
   WorkflowRecoveryFailureKind recovery_failure_kind = 17;
   WorkflowStepCompletionOutcome outcome = 18;
   WorkflowStepRetryDisposition retry_disposition = 19;
+  WorkflowStepOutputProvenance output_provenance = 20;
+  WorkflowStepAssignedValueProvenance assigned_value_provenance = 21;
+  string output_source_step_id = 22;
+  string output_source_execution_id = 23;
+  string output_source_value_id = 24;
+  string output_reference_id = 25;
 }
 message SubWorkflowInvokeRequestedEvent
 {
@@ -869,6 +1036,8 @@ message SubWorkflowInvokeRequestedEvent
   string root_run_id = 8;
   int32 requested_depth = 9;
   repeated WorkflowFileRef input_file_refs = 10;
+  string parent_execution_id = 11;
+  WorkflowExecutionValueRepresentation value_representation = 12;
 }
 message WorkflowDefinitionSnapshot
 {
@@ -929,6 +1098,8 @@ message SubWorkflowDefinitionResolutionRegisteredEvent
   string root_run_id = 14;
   int32 requested_depth = 15;
   repeated WorkflowFileRef input_file_refs = 16;
+  string parent_execution_id = 17;
+  WorkflowExecutionValueRepresentation value_representation = 18;
 }
 message SubWorkflowDefinitionResolutionClearedEvent
 {
@@ -963,6 +1134,8 @@ message SubWorkflowInvocationRegisteredEvent
   int32 depth = 16;
   repeated WorkflowFileRef input_file_refs = 17;
   int64 binding_generation = 18;
+  string parent_execution_id = 19;
+  WorkflowExecutionValueRepresentation value_representation = 20;
 }
 message SubWorkflowInvocationHandoffAdvancedEvent
 {
@@ -1668,6 +1841,27 @@ message CompensableStepDispatchedEvent
   string compensation_step_id = 3;
   string idempotency_key = 4;
   int64 dispatched_at_unix_ms = 5;
+  string captured_output_value_id = 6;
+  string captured_output_producer_step_id = 7;
+  string captured_output_producer_execution_id = 8;
+  WorkflowCanonicalValueSourceKind captured_output_source_kind = 9;
+}
+
+// Confirms the exact canonical value that a compensable execution committed.
+// Normalized runs carry identity only; captured_output remains a legacy-only
+// field on the ledger/request contracts.
+message CompensableStepOutputCapturedEvent
+{
+  string run_id = 1;
+  string step_id = 2;
+  string compensation_step_id = 3;
+  string idempotency_key = 4;
+  string captured_output_value_id = 5;
+  string captured_output_producer_step_id = 6;
+  string captured_output_producer_execution_id = 7;
+  WorkflowCanonicalValueSourceKind captured_output_source_kind = 8;
+  bool success = 9;
+  WorkflowStepFailureOutcome failure_outcome = 10;
 }
 
 message CompensationRequestEvent
@@ -1678,6 +1872,10 @@ message CompensationRequestEvent
   string idempotency_key = 4;
   string captured_output = 5;
   string execution_id = 6;
+  string captured_output_value_id = 7;
+  string captured_output_producer_step_id = 8;
+  string captured_output_producer_execution_id = 9;
+  WorkflowCanonicalValueSourceKind captured_output_source_kind = 10;
 }
 
 message WorkflowCompensationRetryRequestedEvent

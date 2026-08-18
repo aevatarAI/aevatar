@@ -82,6 +82,37 @@ BindWorkflowDefinition(yaml)
        WorkflowExecutionBridgeModule: 接入 Foundation 事件管线
 ```
 
+### Normalized execution state rollout
+
+`workflow.run` 的 state schema v1 把执行值的引用身份从 legacy string map 中分离出来。`WorkflowExecutionKernelState.normalized_values` 是否存在是完整的 legacy/normalized 判别；业务 state 不再复制 runtime schema version，版本轴只来自 `RuntimeActorIdentity.state_schema_version`。
+
+Normalized state 包含四类 actor-owned fact：
+
+1. `canonical_values`：每个被接受的生产实例都有唯一 `value_id`，即使文本内容相同也不合并；同时记录 producer step 与 execution id。
+2. `bindings`：expression-visible key 到 canonical value 的 typed alias，并区分 step output、current input、assigned value 与 internal output。
+3. `completed_steps`：显式完成 ledger，保存 output/assigned value 引用、success/error、branch/next step、annotations、usage 与 JSON alias 来源；不再用“任意非保留 variable key”猜完成态。
+4. `next_value_sequence` 与 `current_step_input_value_id`：保证新引用单调分配，并让 retry/continuation 复用精确输入实例。
+
+legacy `variables/current_step_input` 字段继续用于未采用 v1 的 run 与兼容读取，但不承载 normalized 引用身份。v0 -> v1 migration 只 clone 原 Protobuf state 并写入 runtime adoption receipt，不从历史字符串制造 provenance；因此已存在的 legacy run 仍按 legacy representation 读取。采用 receipt 之后，每个新的 logical run/fork mutation 都必须重新通过 live `WorkflowNormalizedStateWritesV1` fleet gate；gate 撤销不会破坏已提交 normalized state 的读取，也不会阻断 active-run resume 或 duplicate redelivery。
+
+补偿完成采用两段 durable handoff。`WorkflowExecutionKernel` 在调用 run actor 前先写入 `PendingCompensationOutcome`，保存 exact `StepCompletedEvent + compensation execution id`；`WorkflowRunGAgent` 提交 `CompensationStepCompletedEvent` 时同步写入 actor-owned `PendingCompensationCompletion`，直到下一条 `CompensationRequestEvent`、`WorkflowCompensationCompletedEvent` 或 `WorkflowCompensationFailedEvent` 提交后才清除。actor 返回后，kernel 必须先把结果保存为 typed continuation oneof（next compensation request、terminal completion 或 completed-without-continuation），再执行 self publish 或 terminal cleanup。这样同时覆盖“actor outcome 已提交但 kernel continuation 尚未保存”和“continuation 已保存但 publish/terminal handoff 尚未完成”两个 crash window。
+
+activation 先恢复 kernel 的 pending compensation outcome，并使用 actor pending completion、当前 cursor/execution fence 与已提交 terminal fact 对账；不得重新 dispatch 已完成的 physical compensation step。多 entry ledger 必须复用 actor 已提交的下一条 execution id、idempotency key 与 canonical captured-value provenance。transport 仍允许 at-least-once delivery，但同一 compensation completion domain fact 只能提交一次；terminal cleanup 必须在同一次 state save 中清除已完成 step 的 compensation execution fence。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    WR["WorkflowRunGAgent committed state"] -->|"Normalized values present"| CP["Current-state projector"]
+    CP -->|"Typed normalized_fork_seed"| RM["Workflow current-state read model"]
+    RM -->|"Expand compatibility variables for query DTO"| Q["Fork seed query"]
+    RM -->|"Preserve typed seed; keep overrides separate"| FC["Fork command"]
+    FC -->|"Validate references and restore"| NR["New logical run"]
+    WR -->|"Normalized values absent"| LP["Legacy variables + completed-step inference"]
+    LP --> Q
+```
+
+Projection/fork 边界不通过相等的字符串内容重建 value identity：current-state projector 原样携带 typed `normalized_fork_seed`；query mapper 只为旧 application DTO 展开兼容 variable view 与 completed step ids；真正的 fork handoff 保留 normalized seed，并把 caller overrides 单独传递。目标 run 拒绝同时携带 normalized seed 与 expanded legacy variables，校验所有 canonical reference 后恢复 state；override 会移除同名 typed binding，再创建 `RequestOverride` canonical value 并写入新的 typed binding，不回写 flat literal variable。legacy read model 没有 normalized seed 时，继续走原有 variables/completed-step path。
+
 ### External operation admission proof handoff
 
 NyxID external operation 使用一条 actor-owned proof 主链，step selector 是 `PublishedEndpoint(endpoint_id)` 或 `AuthoredRequest(request_contract_digest)`。`PublishedEndpoint` 持久化 `NyxIdOperationSelector { user_service_id, endpoint_id }`；definition admission 读取 NyxID `/api/v1/mcp/config`，shared typed adapter 只接受 exact non-generic UserService endpoint，并生成 server-owned service slug、method、path template、parameter/body contract、typed response policy、source stamp 与 digest。`AuthoredRequest` 持久化 typed request contract proposal；definition admission 只读取 exact UserService inventory，且必须由 authenticated binder 确认当前 digest 与 risk，actor 才能持久化 `NyxIdExplicitRequestGrant` 并提交 proof。NyxID `catalog_digest` 是 `PublishedEndpoint` 的 normalized descriptor revision；Aevatar 不保存另一份 UserService/OpenAPI catalog，也不以 observation time 或本地 counter 冒充 revision。

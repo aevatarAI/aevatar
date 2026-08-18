@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -114,6 +115,114 @@ public sealed class BackpressureModuleTopUpTests
             .Should().Equal("foreach-floor_item_2");
         settledParent.DispatchedStepIds.Should()
             .Equal("foreach-floor_item_0", "foreach-floor_item_1");
+    }
+
+    [Fact]
+    public async Task ForEachModule_NormalizedState_ShouldPersistEmptyCollectedOutputsAndMergeCanonicalValues()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-normalized");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-normalized",
+                StepType = "foreach",
+                RunId = "run-foreach-normalized",
+                Input = "alpha\n---\nbeta",
+                Parameters = { ["sub_step_type"] = "transform" },
+            }),
+            context,
+            CancellationToken.None);
+
+        var children = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().ToArray();
+        children.Should().HaveCount(2);
+        context.Published.Clear();
+
+        var kernelState = new WorkflowExecutionKernelState();
+        WorkflowExecutionValueStore.Initialize(kernelState);
+        await RecordNormalizedChildAsync(context, kernelState, children[0], "first-output");
+        await module.HandleAsync(
+            Envelope(Completion(children[0], "first-output")),
+            context,
+            CancellationToken.None);
+
+        var afterFirst = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey)
+            .Parents["run-foreach-normalized:foreach-normalized"];
+        afterFirst.Collected.Should().ContainSingle();
+        afterFirst.Collected[0].Output.Should().BeEmpty(
+            "normalized foreach state persists only child identity and settlement facts");
+
+        await RecordNormalizedChildAsync(context, kernelState, children[1], "second-output");
+        context.FailPublishOnce = evt => evt is StepCompletedEvent { StepId: "foreach-normalized" };
+        await module.HandleAsync(
+            Envelope(Completion(children[1], "second-output")),
+            context,
+            CancellationToken.None);
+
+        var pending = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey)
+            .Parents["run-foreach-normalized:foreach-normalized"];
+        pending.Collected.Should().HaveCount(2);
+        pending.Collected.Should().OnlyContain(static result => result.Output.Length == 0);
+        pending.PendingCompletion.Should().NotBeNull();
+        pending.PendingCompletion!.Output.Should().Be("first-output\n---\nsecond-output");
+
+        var retry = context.Scheduled.Last().Event.Should()
+            .BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
+        await module.HandleAsync(Envelope(retry), context, CancellationToken.None);
+
+        context.Published.Select(x => x.Event).OfType<StepCompletedEvent>()
+            .Should().ContainSingle()
+            .Which.Output.Should().Be("first-output\n---\nsecond-output");
+    }
+
+    [Fact]
+    public async Task ForEachModule_NormalizedSingleItem_ShouldRehydrateReferencedOutputAfterPublicationRecovery()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-single");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-single",
+                StepType = "foreach",
+                RunId = "run-foreach-single",
+                ExecutionId = "parent-execution",
+                Input = "alpha",
+                Parameters = { ["sub_step_type"] = "transform" },
+            }),
+            context,
+            CancellationToken.None);
+        var child = context.Published.Select(x => x.Event).OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        context.Published.Clear();
+
+        var kernelState = new WorkflowExecutionKernelState { RunId = "run-foreach-single" };
+        WorkflowExecutionValueStore.Initialize(kernelState);
+        await RecordNormalizedChildAsync(context, kernelState, child, "single-output");
+        context.FailPublishOnce = evt => evt is StepCompletedEvent { StepId: "foreach-single" };
+        await module.HandleAsync(
+            Envelope(Completion(child, "single-output")),
+            context,
+            CancellationToken.None);
+
+        var durableParent = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey)
+            .Parents.Values.Should().ContainSingle().Subject;
+        durableParent.PendingCompletion.Should().NotBeNull();
+        durableParent.PendingCompletion!.Output.Should().BeEmpty(
+            "normalized outboxes persist the canonical reference instead of a duplicate payload");
+        durableParent.PendingCompletion.OutputSourceValueId.Should().NotBeNullOrWhiteSpace();
+        var retry = context.Scheduled.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
+
+        module = new ForEachModule();
+        await module.HandleAsync(Envelope(retry), context, CancellationToken.None);
+
+        var completion = context.Published.Select(x => x.Event).OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        completion.StepId.Should().Be("foreach-single");
+        completion.ExecutionId.Should().Be("parent-execution");
+        completion.Output.Should().Be("single-output");
+        completion.OutputProvenance.Should().Be(WorkflowStepOutputProvenance.ReferencedStepOutput);
     }
 
     [Fact]
@@ -1443,6 +1552,29 @@ public sealed class BackpressureModuleTopUpTests
             OwnerRunId = "run-owner",
             OwnerScopeId = "scope-owner",
         };
+
+    private static StepCompletedEvent Completion(StepRequestEvent child, string output) =>
+        new()
+        {
+            StepId = child.StepId,
+            RunId = child.RunId,
+            ExecutionId = child.ExecutionId,
+            Success = true,
+            Output = output,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
+        };
+
+    private static async Task RecordNormalizedChildAsync(
+        RecordingWorkflowContext context,
+        WorkflowExecutionKernelState kernelState,
+        StepRequestEvent child,
+        string output)
+    {
+        WorkflowExecutionValueStore.RecordInternalOutput(
+            kernelState,
+            Completion(child, output));
+        await context.SaveStateAsync(WorkflowExecutionKernel.ModuleStateKey, kernelState);
+    }
 
     private sealed class RecordingWorkflowContext(string runId) : IWorkflowExecutionContext
     {

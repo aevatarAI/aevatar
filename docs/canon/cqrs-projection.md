@@ -119,6 +119,7 @@ CQRS 不应只提供零散 helper，而应定义所有 capability 复用的标�
 9. Projection scope 的 repair backlog 由 scope actor 权威持有，完整失败记录、异常原因与 `EventEnvelope` 只允许保留在 actor state / event store 中供 replay，不得进入 committed-state observation。对外发布 `CommittedStateEventPublished` 前，publication hook 必须在副本中从权威 failure 列表重新计算强类型 `ProjectionScopeFailureSummary`，清除失败事件的 reason/envelope，并把每条 `ProjectionScopeState.failures` 替换为只含重试状态与最早时间的等量滚动升级兼容占位；新 status projector 必须优先读取 summary，旧消息无 summary 时才从 failures 回退。单次滚动发布期间不得截断该兼容列表，否则旧 projector 会持久化错误计数；只有所有 reader 已支持 summary 后，后续版本才可移除该兼容编码。该净化不得回写或裁剪权威 backlog。历史 pending publication 必须在同一 event id / version 下经过相同净化后重试并推进原 checkpoint，禁止为绕过超限伪造新版本。scope 激活或 committed publication 恢复后若仍有未耗尽自动重试的 retained failures，actor 必须向自身 inbox 发布 `ReplayProjectionFailuresCommand` continuation 并自动重放该批 envelope；已经耗尽的 failure 只允许通过显式 operator replay 再次尝试，不得在每次激活时形成自动重试循环。部署不会枚举 dormant scope，因此 host-owned failure recovery reconciler 必须逐页扫描 `ProjectionScopeStatusDocument` 中 active、未 release 且存在 unresolved failure 的候选，直到 reader cursor 结束，再向 scope actor 投递 typed automatic replay command；不得使用 restart-at-zero 的全局候选上限让尾部 scope 饥饿。readmodel 只负责候选发现，是否 replay 仍由 actor state 决定，query API 不得触发该 reconciler 或 activation。自动 replay 以候选观察到的 scope committed `StateVersion` 为 actor-owned admission token，同一版本只消费一次；admission event 与每条 replay 结果都会推进权威版本，使 admission 后崩溃或超过单批上限的 backlog 可由后续版本继续。不得要求运维或用户手工 replay 才能让仍可自动恢复的已提交终态进入 readmodel。
 10. Elasticsearch projection schema-drift 的唯一权威是 provider 生成的 augmented mapping fingerprint 与稳定 alias lifecycle。query resolver / query reader / consistency probe 不得读取 live ES mapping 作为第二真相，也不得触发 repair / reindex；write-side `UpsertAsync -> EnsureIndexAsync` 只处理 greenfield / legacy bare lifecycle，遇到单一旧 fingerprint 或多 backing drift 必须 fail closed，不能 `_reindex` 或切 alias。alias 指向单一旧 fingerprint physical index 的 clean migration 只能由静态 provider-local startup reconcile（`IProjectionIndexReconcileTarget.ReconcileIndexAsync`）创建 expected physical、执行 old-to-new reindex、确认无 failures / timeout 后用一次 `_aliases` 原子切换；dynamic index scope 不参与 startup reconcile，不获得 clean drift migration。alias 多 backing、source 缺失、不兼容 mapping、reindex failure / timeout、partial copy 或非 static reconcile 路径仍必须 fail closed。
 11. commit publication 是 at-least-once：current-state projector 必须以 `actorId + authoritative StateVersion` 做单调幂等覆盖，artifact/audit consumer 必须以 committed event identity 做幂等键；不得依赖 envelope 只出现一次。
+12. Runtime fleet capability gate 只由固定 Authority actor 的 committed state 投影为 actor-scoped current-state document。Admission reader 只能读取该 document，验证唯一 exact gate、authoritative state version、membership freshness/digest/deployment 与所有 active member 的 typed capability advertisement，再产生 freshness-bearing admission proof；query/read path 不得回调 Authority、读取 runtime 偶然结构、触发 reconcile 或 projection priming。
 
 ### 5.1 Projection-driven Split / Merge / Re-key
 
@@ -184,6 +185,15 @@ v1 non-goal：复杂 owner-change bootstrap（split / merge / re-key / replace �
 2. `StepCompletedEvent.Annotations` 属于业务事件注解，Maker/Connector/Parallel 等模块信息写入此处。
 3. ReadModel 聚合使用 `StepCompletedEvent.Annotations`，并落到 step `CompletionAnnotations` 与 timeline `Data`；控制流语义则走 typed 字段。
 4. 实时输出是否带业务 annotations 由 mapper 明确定义；当前默认不自动透传 `StepCompletedEvent.Annotations` 全量字段。
+
+## 5.4 Workflow normalized fork seed
+
+`WorkflowExecutionCurrentStateDocument.normalized_fork_seed` 是 `workflow.run` committed normalized execution state 的 typed 查询副本。Projector 只 capture actor 已提交的 canonical values、bindings、completed ledger 与 current input reference，不在读侧推导第二套执行状态机。
+
+1. Normalized document 的 query mapper 可以展开兼容 `Variables / CompletedStepIds` 供既有查询 DTO 使用，但 fork command handoff 必须保留 typed seed，不能把展开后的字符串 map 当权威输入。
+2. Caller overrides 与 normalized seed 分字段传输；目标 kernel 验证引用完整性后应用 overrides，禁止同一 fork seed 同时携带 normalized values 与 expanded legacy variables。
+3. Legacy document 未携带 `normalized_fork_seed` 时，继续读取既有 fork seed variables/completed ids。Projection 不为 legacy state 制造 canonical value identity 或 provenance。
+4. 该扩展仍遵守 current-state 单调覆盖与 query-time priming 禁止项；fork 查询只读已物化的权威版本，不同步 replay actor events 或刷新投影。
 
 ## 6. 宿主接入规范
 

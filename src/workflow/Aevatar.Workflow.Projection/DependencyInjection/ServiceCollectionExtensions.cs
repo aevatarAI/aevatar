@@ -20,6 +20,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Projection.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -38,6 +39,7 @@ public static class ServiceCollectionExtensions
         var options = new WorkflowExecutionProjectionOptions();
         configure?.Invoke(options);
         services.Replace(ServiceDescriptor.Singleton(options));
+        services.AddRuntimeFleetCapabilityProjection();
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
         services.AddProjectionReadModelRuntime();

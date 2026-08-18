@@ -50,8 +50,9 @@ Lazy state migration 只适用于同一 actor 的内部 state schema 演进：
 1. 输入只来自历史 state 与 `RuntimeActorIdentity.state_schema_version`。
 2. 输出仍是同一 actor 的当前 state。
 3. 迁移不得做 I/O、跨 actor 调用、projection 写入、readmodel 读取或创建其他 actor。
-4. 迁移必须可重放同态、幂等、总定义。
-5. 具体 migration interface 与 guard 仍按后续真实迁移 case 落地；本文件不引入新 core surface。
+4. 迁移必须可重放同态、幂等、总定义；registry 只接受同一 Protobuf state contract 上从 `0` 到当前版本的完整连续链。
+5. 每个 step 必须声明 exact fleet capability、contract id 与 minimum reader contract version；runtime 只在 live admission 通过后，于 agent 构造/激活前原子写入 snapshot、schema version 与 adoption receipt。
+6. adoption receipt 是历史采用证据，不是永久 live grant；已采用 state 保持可读，需要启动新 logical mutation 的能力应使用同一 admission policy 重验当前 gate。
 
 Projection-driven bootstrap 只适用于 owner 变化：
 
@@ -67,7 +68,32 @@ Retire cleanup 是演化协议的一部分：
 2. 清理不得依赖 query path 的“如果旧数据还在就忽略”。
 3. 删除旧 owner 前，必须确认新 owner 的 committed version 已经通过 readmodel 或观察链路可见。
 
-## 4. 关联 canon
+## 4. Fleet rollout gate
+
+Fleet rollout 由一个固定身份的长期 capability Authority actor、runtime-owned durable callback scheduler 和一个 current-state read model 构成。Authority 是唯一 gate 事实 owner；reserved reconcile slot 由 runtime scheduler 持有，业务代码不能修改。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    SC["Runtime durable callback scheduler"] -->|"Persist exact delivery envelope before publish"| DS["Reserved reconcile slot"]
+    DS -->|"Verified delivery + runtime-only attestation"| AU["Fixed capability Authority actor"]
+    AU -->|"Read and immediately reread exact membership"| MS["Trusted runtime membership source"]
+    AU -->|"Commit observation + gate transitions"| AS["Authority committed state"]
+    AS -->|"Committed current-state publication"| RM["Capability authority read model"]
+    RM -->|"Materialize and query current state only"| AD["Migration and live-write admission"]
+```
+
+约束如下：
+
+1. Runtime durable callback scheduler 是 reserved reconcile slot 的唯一 owner；它必须先持久化 exact delivery envelope，再发布到 Authority inbox。通用 schedule、cancel、purge API 均不得修改或删除该 reserved slot。
+2. Local 与 Orleans runtime ingress 必须根据 scheduler-owned durable delivery state 验证 reconcile envelope，并在本次处理上下文中绑定不可序列化的 runtime attestation。Authority 只接受携带该 attestation 且与当前 envelope 精确匹配的 reconcile；外部 publisher 不能直接 open/revoke gate，也不能伪造 scheduler delivery。
+3. Authority 每次 reconcile 先读取 trusted exact membership，在 gate transition 前立即再次读取，并要求 `membership_epoch`、重算后的 `membership_digest` 与 `deployment_revision` 完全一致。任一次读取失败、证明变化、epoch 回退或同 epoch digest 冲突都 fail closed。
+4. `Observed / Unavailable / Invalid / SourceFailed / RegressedOrConflicted` 是 typed observation outcome；除 `Observed` 外均撤销当前 open gates。Gate 仅在每个 active member 对 exact capability + contract id + minimum version 唯一达标时打开。
+5. 每次 open/revoke 都基于已提交值单调增加 capability epoch；actor restart 不重置 epoch。Authority 不直接读写 read-model store，CQRS 只消费其 committed current-state publication 并物化、查询 current state。
+6. Admission 只读 Authority 的 actor-scoped current-state replica，并同时核对 authority state version、capability epoch、freshness、membership/deployment digest、全员确认数，以及本地 member id + incarnation。缺失、过期或不一致全部 fail closed；query path 不触发 reconcile、projection priming 或 actor lifecycle。
+7. Authority read model 是最终一致副本：live membership 的 epoch、digest、deployment revision 或本地 incarnation 一旦与副本不一致，admission 立即拒绝；同一 membership 下尚未投影的 revoke 只能在该 committed proof 的 `valid_until` 前形成 bounded stale-open window，到期必须拒绝。Orleans membership evidence 默认 TTL 为 30 秒，runtime policy 同时拒绝超过 `MaxMembershipEvidenceTtl` 的 proof；不得为消除该窗口在 query path 侧读 Authority actor。
+
+## 5. 关联 canon
 
 - `docs/canon/event-sourcing.md`：写侧事实源、replay 与 lazy migration 边界。
 - `docs/canon/cqrs-projection.md`：Projection Pipeline、query-time replay/priming 禁止项。

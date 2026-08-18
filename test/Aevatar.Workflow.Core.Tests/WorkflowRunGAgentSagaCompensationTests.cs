@@ -4,9 +4,11 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.Runtime;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Composition;
@@ -206,6 +208,101 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             .ContainSingle()
             .Which.RunId.Should().Be(harness.RunId);
         harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensatedFailed);
+    }
+
+    [Fact]
+    public async Task Activation_AfterCommittedCompensationOutcomeCrash_ShouldContinueNextLedgerEntryWithoutRedispatch()
+    {
+        var harness = await CreateStartedRunAsync(
+            NormalizedSagaWorkflowYaml(),
+            normalizedAdmission: true);
+        await CompleteStepAsync(
+            harness,
+            "create_order",
+            "order-output",
+            producedOutput: true);
+        await CompleteStepAsync(
+            harness,
+            "charge_payment",
+            "charge-output",
+            producedOutput: true);
+        harness.Agent.State.CompensableLedger.Should().HaveCount(2);
+        await FailStepAsync(
+            harness,
+            "ship_order",
+            "ship failed",
+            producedOutput: true);
+
+        var completedRequest = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        var completedStepRequest = StepRequests(harness.Publisher, "refund_payment")
+            .Should()
+            .ContainSingle()
+            .Subject;
+        harness.EventStore.FailAfterCommitPredicate = stateEvent =>
+            stateEvent.EventData?.Is(CompensationStepCompletedEvent.Descriptor) == true;
+
+        await FluentActions.Awaiting(() => harness.Agent.HandleEventAsync(SelfEnvelope(
+                harness.RunId,
+                new StepCompletedEvent
+                {
+                    RunId = harness.RunId,
+                    StepId = completedRequest.CompensationStepId,
+                    Success = true,
+                    Output = "done:refund_payment",
+                    ExecutionId = completedStepRequest.ExecutionId,
+                    OutputProvenance = WorkflowStepOutputProvenance.Produced,
+                })))
+            .Should()
+            .ThrowAsync<EventStoreOptimisticConcurrencyException>();
+
+        var reactivated = await CreateRunAsync(
+            harness.RunId,
+            NormalizedSagaWorkflowYaml(),
+            harness.EventStore,
+            autoReplaySelfPublished: false,
+            normalizedAdmission: true);
+
+        reactivated.Agent.State.PendingCompensationCompletion.Should().NotBeNull();
+        reactivated.Agent.State.PendingCompensationCompletion!.CompensationStepId
+            .Should().Be("refund_payment");
+        StepRequests(reactivated.Publisher, "refund_payment").Should().BeEmpty();
+        var recovery = PublishedEvents<WorkflowExecutionRecoveryRequestedEvent>(reactivated.Publisher)
+            .Should()
+            .ContainSingle()
+            .Subject
+            .Event;
+
+        reactivated.Publisher.Published.Clear();
+        await reactivated.Agent.HandleEventAsync(SelfEnvelope(reactivated.RunId, recovery));
+
+        var nextRequest = CompensationRequests(reactivated.Publisher).Should().ContainSingle().Subject;
+        nextRequest.CompensationStepId.Should().Be("cancel_order");
+        nextRequest.CapturedOutput.Should().BeEmpty(
+            "normalized compensation carries canonical identity instead of a flat value copy");
+        nextRequest.IdempotencyKey.Should().Be($"{reactivated.RunId}:create_order:1");
+        var nextLedgerEntry = reactivated.Agent.State.CompensableLedger
+            .Should()
+            .ContainSingle(entry => entry.StepId == "create_order")
+            .Subject;
+        nextRequest.CapturedOutputValueId.Should().Be(nextLedgerEntry.CapturedOutputValueId);
+        nextRequest.CapturedOutputValueId.Should().NotBeNullOrWhiteSpace();
+        nextRequest.CapturedOutputProducerStepId.Should().Be("create_order");
+        nextRequest.CapturedOutputProducerExecutionId
+            .Should().Be(nextLedgerEntry.CapturedOutputProducerExecutionId);
+        nextRequest.CapturedOutputProducerExecutionId.Should().NotBeNullOrWhiteSpace();
+        nextRequest.CapturedOutputSourceKind.Should().Be(
+            WorkflowCanonicalValueSourceKind.StepOutput);
+        nextRequest.ExecutionId.Should().NotBeNullOrWhiteSpace();
+        nextRequest.ExecutionId.Should().NotBe(completedRequest.ExecutionId);
+        reactivated.Agent.State.PendingCompensationCompletion.Should().BeNull();
+        StepRequests(reactivated.Publisher, "refund_payment").Should().BeEmpty();
+
+        reactivated.Publisher.Published.Clear();
+        await reactivated.Agent.HandleEventAsync(SelfEnvelope(reactivated.RunId, nextRequest));
+
+        StepRequests(reactivated.Publisher, "cancel_order").Should().ContainSingle();
+        StepRequests(reactivated.Publisher, "refund_payment").Should().BeEmpty(
+            "the committed physical compensation must not run again after activation");
     }
 
     [Fact]
@@ -1126,7 +1223,11 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         PublishedEvents<CompensationRequestEvent>(harness.Publisher).Should().BeEmpty();
     }
 
-    private static async Task CompleteStepAsync(RunHarness harness, string stepId, string output)
+    private static async Task CompleteStepAsync(
+        RunHarness harness,
+        string stepId,
+        string output,
+        bool producedOutput = false)
     {
         var request = harness.Publisher.Published
             .Where(x => x.Event is StepRequestEvent requestEvent && requestEvent.StepId == stepId)
@@ -1141,6 +1242,9 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             Success = true,
             Output = output,
             ExecutionId = request.ExecutionId,
+            OutputProvenance = producedOutput
+                ? WorkflowStepOutputProvenance.Produced
+                : WorkflowStepOutputProvenance.Unspecified,
         }));
     }
 
@@ -1148,7 +1252,8 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         RunHarness harness,
         string stepId,
         string error,
-        WorkflowRecoveryFailureKind recoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified)
+        WorkflowRecoveryFailureKind recoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified,
+        bool producedOutput = false)
     {
         var request = harness.Publisher.Published
             .Where(x => x.Event is StepRequestEvent requestEvent && requestEvent.StepId == stepId)
@@ -1163,6 +1268,9 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             Error = error,
             ExecutionId = request.ExecutionId,
             RecoveryFailureKind = recoveryFailureKind,
+            OutputProvenance = producedOutput
+                ? WorkflowStepOutputProvenance.Produced
+                : WorkflowStepOutputProvenance.Unspecified,
         }));
     }
 
@@ -1223,10 +1331,15 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         llmCompletion.Error.Should().Be(error);
     }
 
-    private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml)
+    private static async Task<RunHarness> CreateStartedRunAsync(
+        string workflowYaml,
+        bool normalizedAdmission = false)
     {
         var runId = "run-2097-" + Guid.NewGuid().ToString("N");
-        var harness = await CreateRunAsync(runId, workflowYaml);
+        var harness = await CreateRunAsync(
+            runId,
+            workflowYaml,
+            normalizedAdmission: normalizedAdmission);
 
         await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
         {
@@ -1241,7 +1354,8 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         string runId,
         string workflowYaml,
         RecordingEventStore? eventStore = null,
-        bool autoReplaySelfPublished = true)
+        bool autoReplaySelfPublished = true,
+        bool normalizedAdmission = false)
     {
         eventStore ??= new RecordingEventStore();
         var committedHook = new RecordingCommittedStatePublicationHook();
@@ -1258,7 +1372,10 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkflowRunState>(eventStore),
             EventPublisher = topologyPublisher,
-            Services = new TestServiceProvider(callbackScheduler, committedHook),
+            Services = new TestServiceProvider(
+                callbackScheduler,
+                committedHook,
+                normalizedAdmission),
             Logger = NullLogger.Instance,
         };
         SetAgentId(agent, runId);
@@ -1378,6 +1495,27 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             compensation: cancel_order
           - id: charge_payment
             type: transform
+            next: ship_order
+            compensation: refund_payment
+          - id: ship_order
+            type: transform
+          - id: refund_payment
+            type: transform
+          - id: cancel_order
+            type: transform
+        """;
+
+    private static string NormalizedSagaWorkflowYaml() =>
+        """
+        name: wf_2097
+        roles: []
+        steps:
+          - id: create_order
+            type: connector_call
+            next: charge_payment
+            compensation: cancel_order
+          - id: charge_payment
+            type: connector_call
             next: ship_order
             compensation: refund_payment
           - id: ship_order
@@ -1615,6 +1753,8 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     {
         private readonly Dictionary<string, List<StateEvent>> _streams = new(StringComparer.Ordinal);
 
+        public Func<StateEvent, bool>? FailAfterCommitPredicate { get; set; }
+
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,
             IEnumerable<StateEvent> events,
@@ -1629,6 +1769,16 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             var committed = events.Select(x => x.Clone()).ToList();
             stream.AddRange(committed);
             _streams[agentId] = stream;
+
+            var failAfterCommit = FailAfterCommitPredicate;
+            if (failAfterCommit != null && committed.Any(failAfterCommit))
+            {
+                FailAfterCommitPredicate = null;
+                throw new EventStoreOptimisticConcurrencyException(
+                    agentId,
+                    expectedVersion,
+                    stream[^1].Version);
+            }
 
             return Task.FromResult(new EventStoreCommitResult
             {
@@ -1673,11 +1823,40 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         }
     }
 
-    private sealed class TestServiceProvider(
-        IActorRuntimeCallbackScheduler scheduler,
-        RecordingCommittedStatePublicationHook committedHook) : IServiceProvider
+    private sealed class TestServiceProvider : IServiceProvider
     {
-        public IActorRuntimeCallbackScheduler Scheduler { get; } = scheduler;
+        private readonly RecordingCommittedStatePublicationHook _committedHook;
+        private readonly IRuntimeActorStateSchemaContextReader? _schemaContextReader;
+        private readonly IRuntimeFleetCapabilityAdmissionReader? _admissionReader;
+        private readonly IRuntimeLocalMembershipIdentityReader? _membershipReader;
+        private readonly TimeProvider? _timeProvider;
+
+        public TestServiceProvider(
+            IActorRuntimeCallbackScheduler scheduler,
+            RecordingCommittedStatePublicationHook committedHook,
+            bool normalizedAdmission)
+        {
+            Scheduler = scheduler;
+            _committedHook = committedHook;
+            if (!normalizedAdmission)
+                return;
+
+            var now = DateTimeOffset.UtcNow;
+            _schemaContextReader = new FixedSchemaContextReader(
+                CreateNormalizedSchemaContext(now));
+            _admissionReader = new FixedAdmissionReader(
+                CreateNormalizedAdmission(now));
+            _membershipReader = new FixedMembershipReader(
+                new RuntimeLocalMembershipIdentity(
+                    7,
+                    "digest-a",
+                    "revision-a",
+                    "member-a",
+                    "inc-a"));
+            _timeProvider = new FixedTimeProvider(now);
+        }
+
+        public IActorRuntimeCallbackScheduler Scheduler { get; }
 
         public object? GetService(System.Type serviceType)
         {
@@ -1686,10 +1865,103 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             if (serviceType == typeof(IActorRuntimeCallbackScheduler))
                 return Scheduler;
             if (serviceType == typeof(IEnumerable<ICommittedStatePublicationHook>))
-                return new ICommittedStatePublicationHook[] { committedHook };
+                return new ICommittedStatePublicationHook[] { _committedHook };
+            if (serviceType == typeof(IRuntimeActorStateSchemaContextReader))
+                return _schemaContextReader;
+            if (serviceType == typeof(IRuntimeFleetCapabilityAdmissionReader))
+                return _admissionReader;
+            if (serviceType == typeof(IRuntimeLocalMembershipIdentityReader))
+                return _membershipReader;
+            if (serviceType == typeof(TimeProvider))
+                return _timeProvider;
+            if (serviceType == typeof(RuntimeActorStateMigrationAdmissionOptions) &&
+                _schemaContextReader != null)
+            {
+                return new RuntimeActorStateMigrationAdmissionOptions();
+            }
 
             return null;
         }
+    }
+
+    private static RuntimeActorStateSchemaContext CreateNormalizedSchemaContext(DateTimeOffset now)
+    {
+        var receipt = new RuntimeActorStateSchemaAdoptionReceipt
+        {
+            StateSchemaVersion = 1,
+            RequiredCapability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            RequiredContractId = WorkflowNormalizedStateWriteAdmission.ContractId,
+            RequiredContractVersion = WorkflowNormalizedStateWriteAdmission.RequiredReaderContractVersion,
+            CapabilityEpoch = 3,
+            AuthorityStateVersion = 9,
+            MembershipEpoch = 7,
+            DeploymentRevision = "revision-a",
+            AdoptedAt = Timestamp.FromDateTimeOffset(now),
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            MembershipDigest = "digest-a",
+        };
+        return new RuntimeActorStateSchemaContext("workflow.run", 1, [receipt]);
+    }
+
+    private static RuntimeFleetCapabilityAdmission CreateNormalizedAdmission(DateTimeOffset now)
+    {
+        var admission = new RuntimeFleetCapabilityAdmission
+        {
+            Capability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            Status = RuntimeFleetCapabilityGateStatus.Open,
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            AuthorityStateVersion = 9,
+            CapabilityEpoch = 3,
+            MembershipEpoch = 7,
+            DeploymentRevision = "revision-a",
+            MinimumReaderContractVersion = WorkflowNormalizedStateWriteAdmission.RequiredReaderContractVersion,
+            MembershipObservedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(-5)),
+            MembershipValidUntil = Timestamp.FromDateTimeOffset(now.AddMinutes(1)),
+            ActiveMemberCount = 1,
+            ConfirmedMemberCount = 1,
+            MembershipDigest = "digest-a",
+            ContractId = WorkflowNormalizedStateWriteAdmission.ContractId,
+        };
+        admission.AdmittedMembers.Add(new RuntimeFleetAdmittedMember
+        {
+            MemberId = "member-a",
+            Incarnation = "inc-a",
+        });
+        return admission;
+    }
+
+    private sealed class FixedSchemaContextReader(RuntimeActorStateSchemaContext current)
+        : IRuntimeActorStateSchemaContextReader
+    {
+        public RuntimeActorStateSchemaContext? Current { get; } = current;
+    }
+
+    private sealed class FixedAdmissionReader(RuntimeFleetCapabilityAdmission admission)
+        : IRuntimeFleetCapabilityAdmissionReader
+    {
+        public Task<RuntimeFleetCapabilityAdmission?> GetAsync(
+            RuntimeFleetCapability capability,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<RuntimeFleetCapabilityAdmission?>(admission.Clone());
+        }
+    }
+
+    private sealed class FixedMembershipReader(RuntimeLocalMembershipIdentity membership)
+        : IRuntimeLocalMembershipIdentityReader
+    {
+        public ValueTask<RuntimeLocalMembershipIdentity?> GetCurrentAsync(
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<RuntimeLocalMembershipIdentity?>(membership);
+        }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler

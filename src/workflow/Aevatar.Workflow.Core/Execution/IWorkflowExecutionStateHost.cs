@@ -1,4 +1,6 @@
 using Google.Protobuf.WellKnownTypes;
+using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Core.Runtime;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -19,7 +21,33 @@ internal readonly record struct WorkflowCompensationTransitionResult(
     string FailedStepId,
     string IdempotencyKey,
     string CapturedOutput,
-    string ExecutionId);
+    string CapturedOutputValueId,
+    string CapturedOutputProducerStepId,
+    string CapturedOutputProducerExecutionId,
+    WorkflowCanonicalValueSourceKind CapturedOutputSourceKind,
+    string ExecutionId)
+{
+    public WorkflowCompensationTransitionResult(
+        WorkflowCompensationTransitionStatus status,
+        string nextCompensationStepId,
+        string failedStepId,
+        string idempotencyKey,
+        string capturedOutput,
+        string executionId)
+        : this(
+            status,
+            nextCompensationStepId,
+            failedStepId,
+            idempotencyKey,
+            capturedOutput,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            WorkflowCanonicalValueSourceKind.Unspecified,
+            executionId)
+    {
+    }
+}
 
 // Refactor (iter115/cluster-3):
 //   Old pattern: WorkflowRunGAgent exposed only a process-local runtime context,
@@ -54,6 +82,16 @@ internal interface IWorkflowExecutionStateHost
     /// </summary>
     WorkflowCapabilityAdmissionPlan CapabilityAdmissionPlanSnapshot => new();
 
+    IRuntimeActorStateSchemaContextReader? RuntimeStateSchemaContextReader => null;
+
+    IRuntimeFleetCapabilityAdmissionReader? RuntimeFleetCapabilityAdmissionReader => null;
+
+    IRuntimeLocalMembershipIdentityReader? RuntimeLocalMembershipIdentityReader => null;
+
+    TimeProvider? RuntimeFleetAdmissionTimeProvider => null;
+
+    RuntimeActorStateMigrationAdmissionOptions? RuntimeFleetAdmissionOptions => null;
+
     Task UpdateExecutionContextAsync(
         WorkflowRunExecutionContextDelta delta,
         CancellationToken ct = default);
@@ -82,9 +120,18 @@ internal interface IWorkflowExecutionStateHost
         CompensableStepDispatchedEvent evt,
         CancellationToken ct = default);
 
+    Task RecordCompensableStepOutcomeAsync(
+        CompensableStepOutputCapturedEvent evt,
+        CancellationToken ct = default) => Task.CompletedTask;
+
     Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
         CompensationStepCompletedEvent completion,
         CancellationToken ct = default);
+
+    Task<WorkflowCompensationTransitionResult> RecoverCompensationStepCompletionAsync(
+        CompensationStepCompletedEvent completion,
+        CancellationToken ct = default) =>
+        RecordCompensationStepCompletionAsync(completion, ct);
 
     Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
         string runId,

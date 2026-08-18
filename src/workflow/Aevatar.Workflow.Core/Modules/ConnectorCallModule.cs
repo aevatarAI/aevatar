@@ -253,6 +253,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             Output = pending.OnErrorContinue ? pending.Input : string.Empty,
             Error = pending.OnErrorContinue ? string.Empty : $"connector call timed out after {evt.TimeoutMs}ms",
             ExecutionId = pending.ExecutionId,
+            OutputProvenance = pending.OnErrorContinue
+                ? WorkflowStepOutputProvenance.ForwardedInput
+                : WorkflowStepOutputProvenance.Produced,
         };
         completion.Annotations["connector.name"] = pending.ConnectorName;
         completion.Annotations["connector.step_id"] = pending.StepId;
@@ -692,6 +695,10 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             Output = success ? output : string.Empty,
             Error = success ? string.Empty : error,
             ExecutionId = pending.ExecutionId,
+            OutputProvenance = success &&
+                               ParseBool(pending.Parameters.GetValueOrDefault("pass_through_input", "false"))
+                ? WorkflowStepOutputProvenance.ForwardedInput
+                : WorkflowStepOutputProvenance.Produced,
         };
         AppendBaseMetadata(completed, pending, durationMs);
         foreach (var (key, value) in responseAnnotations)
@@ -705,6 +712,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             completed.Success = true;
             completed.Output = pending.Input;
             completed.Error = string.Empty;
+            completed.OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput;
             completed.Annotations["connector.continued_on_error"] = "true";
             completed.Annotations["connector.error"] = error ?? string.Empty;
         }
@@ -722,8 +730,10 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = false,
             Error = error,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
     }
 
@@ -740,8 +750,10 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true,
             Output = request.Input,
+            OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput,
             Outcome = WorkflowStepCompletionOutcome.Skipped,
         };
         skipped.Annotations["connector.skipped"] = "true";

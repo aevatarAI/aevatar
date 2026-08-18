@@ -53,8 +53,10 @@ public sealed class DynamicWorkflowModule : IEventModule<IWorkflowExecutionConte
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Success = false,
                 Error = "No workflow YAML found in input.",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             return;
         }
@@ -73,8 +75,10 @@ public sealed class DynamicWorkflowModule : IEventModule<IWorkflowExecutionConte
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Success = false,
                 Error = $"Invalid workflow YAML: {errorMessage}",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             return;
         }

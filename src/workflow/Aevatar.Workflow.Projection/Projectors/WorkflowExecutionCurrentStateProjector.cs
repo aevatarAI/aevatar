@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection.Observability;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -107,6 +108,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
             InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
             ConnectorApprovals = MapConnectorApprovals(state),
         };
+        if (seedSnapshot.NormalizedValues != null)
+            document.NormalizedForkSeed = seedSnapshot.NormalizedValues.Clone();
         if (state.CapabilityAdmissionPlan is not null)
             document.CapabilityAdmissionPlan = state.CapabilityAdmissionPlan.Clone();
 
@@ -183,7 +186,9 @@ public sealed class WorkflowExecutionCurrentStateProjector
             return new WorkflowRunActivityStepReadModel
             {
                 StepId = WorkflowAuditTextSanitizer.Sanitize(kernelState.CurrentStepId),
-                InputSummary = WorkflowAuditTextSanitizer.SanitizeForDisplay(kernelState.CurrentStepInput, 160),
+                InputSummary = WorkflowAuditTextSanitizer.SanitizeForDisplay(
+                    WorkflowNormalizedExecutionSeedCodec.ResolveCurrentInput(kernelState),
+                    160),
                 Availability = "available",
             };
         }

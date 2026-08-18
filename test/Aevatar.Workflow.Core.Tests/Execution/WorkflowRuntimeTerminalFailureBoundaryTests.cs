@@ -4,8 +4,10 @@ using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.Runtime;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
@@ -781,7 +783,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task KernelAndBridge_ForEachDirectChildren_ShouldRecoverAndCheckpointOnlyMergedParent(
+    public async Task NormalizedKernelAndBridge_ForEachDirectChildren_ShouldRecoverAndCheckpointCanonicalChildren(
         bool recreateForEachAfterFirstCompletion)
     {
         const string runId = "run-foreach-kernel-checkpoints";
@@ -807,7 +809,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
                 new StepDefinition { Id = "done", Type = "notify" },
             ],
         };
-        var host = new RecordingStateHost { RunId = runId };
+        var host = CreateNormalizedStateHost(runId);
         var kernel = new WorkflowExecutionKernel(workflow, host);
         var foreachBridge = new WorkflowExecutionBridgeModule([new ForEachModule()], host);
         var ctx = new RecordingEventHandlerContext();
@@ -818,6 +820,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
                 RunId = runId,
                 WorkflowName = workflow.Name,
                 Input = "item-0\n---\nitem-1\n---\nitem-2",
+                ValueRepresentation = WorkflowExecutionValueRepresentation.Normalized,
             }),
             ctx,
             CancellationToken.None);
@@ -836,6 +839,23 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             .OrderBy(static request => request.Input, StringComparer.Ordinal)
             .ToArray();
         childRequests.Should().HaveCount(3);
+        var dispatchedKernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        dispatchedKernelState.NormalizedValues.Should().NotBeNull();
+        dispatchedKernelState.NormalizedValues!.PendingInternalDispatches.Should().HaveCount(3);
+        foreach (var child in childRequests)
+        {
+            WorkflowExecutionValueStore.TryGetInternalDispatch(
+                    dispatchedKernelState,
+                    new StepCompletedEvent
+                    {
+                        RunId = runId,
+                        StepId = child.StepId,
+                        ExecutionId = child.ExecutionId,
+                    },
+                    out _)
+                .Should().BeTrue();
+        }
         ctx.Published.Clear();
 
         for (var i = 0; i < childRequests.Length; i++)
@@ -848,12 +868,13 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
                 ExecutionId = child.ExecutionId,
                 Success = true,
                 Output = $"output-{i}",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             };
             var saveAttemptsBeforeKernel = host.SaveAttempts;
 
             await kernel.HandleAsync(Envelope(childCompletion), ctx, CancellationToken.None);
 
-            host.SaveAttempts.Should().Be(saveAttemptsBeforeKernel);
+            host.SaveAttempts.Should().Be(saveAttemptsBeforeKernel + 1);
             await foreachBridge.HandleAsync(Envelope(childCompletion), ctx, CancellationToken.None);
             if (recreateForEachAfterFirstCompletion && i == 0)
                 foreachBridge = new WorkflowExecutionBridgeModule([new ForEachModule()], host);
@@ -870,12 +891,8 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         var completedForEachState = host.States[ForEachModule.ModuleStateKey]
             .Unpack<ForEachModuleState>();
         completedForEachState.CompletionTombstones.Should().ContainSingle();
-        completedForEachState.CompletedChildOutputsRunId.Should().Be(runId);
-        completedForEachState.CompletedChildOutputs.Should().BeEquivalentTo(
-            childRequests.ToDictionary(
-                static request => request.StepId,
-                request => $"output-{Array.IndexOf(childRequests, request)}",
-                StringComparer.Ordinal));
+        completedForEachState.CompletedChildOutputsRunId.Should().BeEmpty();
+        completedForEachState.CompletedChildOutputs.Should().BeEmpty();
 
         var saveAttemptsBeforeParentCompletion = host.SaveAttempts;
         await kernel.HandleAsync(Envelope(parentCompletion), ctx, CancellationToken.None);
@@ -884,7 +901,13 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         var kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
             .Unpack<WorkflowExecutionKernelState>();
         kernelState.CurrentStepId.Should().Be("done");
-        kernelState.Variables[parentStepId].Should().Be(parentCompletion.Output);
+        WorkflowExecutionValueStore.ResolveCompletedStepOutput(kernelState, parentStepId)
+            .Should().Be(parentCompletion.Output);
+        foreach (var (child, index) in childRequests.Select(static (request, index) => (request, index)))
+        {
+            WorkflowExecutionValueStore.ResolveCompletedStepOutput(kernelState, child.StepId)
+                .Should().Be($"output-{index}");
+        }
     }
 
     [Fact]
@@ -1762,6 +1785,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     {
         Id = "envelope-1",
         Payload = Any.Pack(payload),
+        Route = new EnvelopeRoute { PublisherActorId = "agent-1" },
     };
 
     private static ForEachModuleState CreateForEachAttemptState(
@@ -2069,6 +2093,16 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
         public WorkflowRunExecutionContextState ExecutionContextSnapshot { get; } = new();
 
+        public IRuntimeActorStateSchemaContextReader? RuntimeStateSchemaContextReader { get; init; }
+
+        public IRuntimeFleetCapabilityAdmissionReader? RuntimeFleetCapabilityAdmissionReader { get; init; }
+
+        public IRuntimeLocalMembershipIdentityReader? RuntimeLocalMembershipIdentityReader { get; init; }
+
+        public TimeProvider? RuntimeFleetAdmissionTimeProvider { get; init; }
+
+        public RuntimeActorStateMigrationAdmissionOptions? RuntimeFleetAdmissionOptions { get; init; }
+
         public bool FailSave { get; set; }
 
         public int? FailSaveAttempt { get; init; }
@@ -2168,6 +2202,99 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
                 string.Empty,
                 string.Empty,
                 string.Empty);
+    }
+
+    private static RecordingStateHost CreateNormalizedStateHost(string runId)
+    {
+        var now = new DateTimeOffset(2026, 8, 18, 2, 0, 0, TimeSpan.Zero);
+        var receipt = new RuntimeActorStateSchemaAdoptionReceipt
+        {
+            StateSchemaVersion = 1,
+            RequiredCapability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            RequiredContractId = WorkflowNormalizedStateWriteAdmission.ContractId,
+            RequiredContractVersion = WorkflowNormalizedStateWriteAdmission.RequiredReaderContractVersion,
+            CapabilityEpoch = 3,
+            AuthorityStateVersion = 9,
+            MembershipEpoch = 7,
+            DeploymentRevision = "revision-a",
+            AdoptedAt = Timestamp.FromDateTimeOffset(now),
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            MembershipDigest = "digest-a",
+        };
+        var admission = new RuntimeFleetCapabilityAdmission
+        {
+            Capability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            Status = RuntimeFleetCapabilityGateStatus.Open,
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            AuthorityStateVersion = 9,
+            CapabilityEpoch = 3,
+            MembershipEpoch = 7,
+            DeploymentRevision = "revision-a",
+            MinimumReaderContractVersion = WorkflowNormalizedStateWriteAdmission.RequiredReaderContractVersion,
+            MembershipObservedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(-5)),
+            MembershipValidUntil = Timestamp.FromDateTimeOffset(now.AddMinutes(1)),
+            ActiveMemberCount = 1,
+            ConfirmedMemberCount = 1,
+            MembershipDigest = "digest-a",
+            ContractId = WorkflowNormalizedStateWriteAdmission.ContractId,
+        };
+        admission.AdmittedMembers.Add(new RuntimeFleetAdmittedMember
+        {
+            MemberId = "member-a",
+            Incarnation = "inc-a",
+        });
+
+        return new RecordingStateHost
+        {
+            RunId = runId,
+            RuntimeStateSchemaContextReader = new FixedSchemaContextAccessor(
+                new RuntimeActorStateSchemaContext("workflow.run", 1, [receipt])),
+            RuntimeFleetCapabilityAdmissionReader = new FixedAdmissionReader(admission),
+            RuntimeLocalMembershipIdentityReader = new FixedMembershipReader(new RuntimeLocalMembershipIdentity(
+                7,
+                "digest-a",
+                "revision-a",
+                "member-a",
+                "inc-a")),
+            RuntimeFleetAdmissionTimeProvider = new FixedTimeProvider(now),
+            RuntimeFleetAdmissionOptions = new RuntimeActorStateMigrationAdmissionOptions(),
+        };
+    }
+
+    private sealed class FixedSchemaContextAccessor(RuntimeActorStateSchemaContext current)
+        : IRuntimeActorStateSchemaContextReader
+    {
+        public RuntimeActorStateSchemaContext? Current { get; } = current;
+
+        public IDisposable Bind(RuntimeActorIdentity identity) =>
+            throw new NotSupportedException("The fixed test accessor cannot be rebound.");
+    }
+
+    private sealed class FixedAdmissionReader(RuntimeFleetCapabilityAdmission admission)
+        : IRuntimeFleetCapabilityAdmissionReader
+    {
+        public Task<RuntimeFleetCapabilityAdmission?> GetAsync(
+            RuntimeFleetCapability capability,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<RuntimeFleetCapabilityAdmission?>(admission.Clone());
+        }
+    }
+
+    private sealed class FixedMembershipReader(RuntimeLocalMembershipIdentity membership)
+        : IRuntimeLocalMembershipIdentityReader
+    {
+        public ValueTask<RuntimeLocalMembershipIdentity?> GetCurrentAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<RuntimeLocalMembershipIdentity?>(membership);
+        }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     private sealed class NullServiceProvider : IServiceProvider

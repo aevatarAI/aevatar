@@ -153,8 +153,7 @@ public sealed class WorkflowRunToolCallPublicationRecoveryTests
         executionStateUpserts.Should().HaveCount(expectedForEachCheckpoints)
             .And.OnlyContain(upsert => upsert.ScopeKey == ForEachModule.ModuleStateKey);
         committed.Should().HaveCount(expectedForEachCheckpoints + 1,
-            "a non-terminal child needs one foreach checkpoint, while the terminal child also " +
-            "checkpoints accepted parent-completion outbox cleanup; neither path checkpoints the kernel");
+            "schema-v0 children remain foreach-owned artifacts and do not checkpoint the kernel");
         (await store.GetVersionAsync(actorId))
             .Should().Be(versionBeforeCompletion + expectedForEachCheckpoints + 1);
 

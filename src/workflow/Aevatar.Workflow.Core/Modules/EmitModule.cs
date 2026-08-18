@@ -32,8 +32,10 @@ public sealed class EmitModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true,
             Output = request.Input ?? string.Empty,
+            OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput,
         };
         completed.Annotations["emit.event_type"] = eventType;
         completed.Annotations["emit.payload"] = payload;

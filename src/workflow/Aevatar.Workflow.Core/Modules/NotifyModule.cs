@@ -48,6 +48,7 @@ public sealed class NotifyModule : IEventModule<IWorkflowExecutionContext>
             Success = true,
             Output = AcceptedOutput,
             ExecutionId = request.ExecutionId,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         completed.Annotations["notification_status"] = AcceptedOutput;
 
@@ -130,6 +131,7 @@ public sealed class NotifyModule : IEventModule<IWorkflowExecutionContext>
                 Success = false,
                 Error = error,
                 ExecutionId = request.ExecutionId,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             },
             TopologyAudience.Self,
             ct);
