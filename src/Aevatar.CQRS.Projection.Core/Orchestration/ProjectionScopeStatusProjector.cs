@@ -76,7 +76,7 @@ public sealed class ProjectionScopeStatusProjector
             RetryExhaustedTotal = state.RetryExhaustedTotal,
             RetryExhaustedFailureCount = failureSummary.RetryExhaustedFailureCount,
             FailureDiagnosticDroppedTotal = state.FailureDiagnosticDroppedTotal,
-            InFlightObservation = state.InFlightObservation?.Clone(),
+            InFlightSource = state.InFlightObservation?.Source?.Clone(),
             ActiveMaterializationRoute = state.ActiveMaterializationRoute?.Clone(),
             MaterializationCutover = state.MaterializationCutover?.Clone(),
         };

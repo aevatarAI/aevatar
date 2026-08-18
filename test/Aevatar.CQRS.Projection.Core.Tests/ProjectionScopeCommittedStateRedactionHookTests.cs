@@ -170,6 +170,41 @@ public sealed class ProjectionScopeCommittedStateRedactionHookTests
         replayed.Reason.Should().HaveLength(2 * 1024 * 1024);
     }
 
+    [Fact]
+    public async Task BeforePublishAsync_ShouldRedactInFlightRecoveryEnvelopeWithoutMutatingAuthority()
+    {
+        var envelope = BuildEnvelope("in-flight-envelope");
+        var state = BuildState(envelope);
+        state.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = "workflow.run:test",
+                StateVersion = 1474,
+                EventId = "source-event-1474",
+            },
+            Envelope = envelope,
+        };
+        var staged = new ProjectionScopeObservationStagedEvent
+        {
+            Observation = state.InFlightObservation.Clone(),
+        };
+        var published = BuildPublished(state, BuildFailureEvent(envelope));
+        published.StateEvent.EventData = Any.Pack(staged);
+
+        await InvokeAsync(published, ProjectionActorType);
+
+        var outboundState = published.StateRoot.Unpack<ProjectionScopeState>();
+        outboundState.InFlightObservation.Source.Should().Be(state.InFlightObservation.Source);
+        outboundState.InFlightObservation.Envelope.Should().BeNull();
+        var outboundEvent = published.StateEvent.EventData
+            .Unpack<ProjectionScopeObservationStagedEvent>();
+        outboundEvent.Observation.Source.Should().Be(staged.Observation.Source);
+        outboundEvent.Observation.Envelope.Should().BeNull();
+        state.InFlightObservation.Envelope.Should().BeSameAs(envelope);
+        staged.Observation.Envelope.Should().Be(envelope);
+    }
+
     private static Task InvokeAsync(CommittedStateEventPublished published, System.Type actorType) =>
         new ProjectionScopeCommittedStateRedactionHook().BeforePublishAsync(
             new CommittedStatePublicationContext

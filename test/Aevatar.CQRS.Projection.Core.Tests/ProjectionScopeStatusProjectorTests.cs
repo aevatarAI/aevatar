@@ -39,6 +39,32 @@ public sealed class ProjectionScopeStatusProjectorTests
         });
         state.HighestSeenVersionsByActor["actor-alpha"] = 12;
         state.LastSuccessfulVersionsByActor["actor-alpha"] = 11;
+        state.LastSuccessfulSourceCoordinatesByActor["actor-alpha"] = new ProjectionSourceCoordinate
+        {
+            ActorId = "actor-alpha",
+            StateVersion = 11,
+            EventId = "source-event-11",
+        };
+        state.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = "actor-alpha",
+                StateVersion = 12,
+                EventId = "source-event-12",
+            },
+            Envelope = new EventEnvelope
+            {
+                Payload = Any.Pack(new StringValue { Value = "must-not-project" }),
+            },
+        };
+        state.ActiveMaterializationRoute = new ProjectionMaterializationRouteFingerprint
+        {
+            ContractId = "workflow-run-graph",
+            ContractVersion = 2,
+            PhysicalNamespace = "workflow-execution-graph-v2",
+            RouteEpoch = 4,
+        };
         state.RecentObservedEnvelopes.Add(new ProjectionObservedEnvelopeMetadata
         {
             EventId = "source-event-12",
@@ -79,6 +105,11 @@ public sealed class ProjectionScopeStatusProjectorTests
         document.FailureDiagnosticDroppedTotal.Should().Be(4);
         document.SourceVersions.Should().ContainSingle().Which.VersionGap.Should().Be(1);
         document.RecentObservedEnvelopes.Should().BeEquivalentTo(state.RecentObservedEnvelopes);
+        document.LastSuccessfulSourceCoordinates.Should().BeEquivalentTo(
+            state.LastSuccessfulSourceCoordinatesByActor.Values);
+        document.InFlightSource.Should().Be(state.InFlightObservation.Source);
+        document.ActiveMaterializationRoute.Should().Be(state.ActiveMaterializationRoute);
+        typeof(ProjectionScopeStatusDocument).GetProperty("InFlightObservation").Should().BeNull();
     }
 
     [Fact]
