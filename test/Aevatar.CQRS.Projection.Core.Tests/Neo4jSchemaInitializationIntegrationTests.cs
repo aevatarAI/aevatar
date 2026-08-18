@@ -62,6 +62,7 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
                 driver,
                 options.Database,
                 nodeLabel,
+                edgeType,
                 constraintName,
                 legacyNodeIndexName,
                 legacyRelationshipIndexName,
@@ -117,6 +118,7 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
                 driver,
                 options.Database,
                 nodeLabel,
+                edgeType,
                 constraintName,
                 preferredNodeIndexName,
                 preferredRelationshipIndexName,
@@ -186,6 +188,7 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
         IDriver driver,
         string database,
         string nodeLabel,
+        string edgeType,
         string constraintName,
         params string[] indexNames)
     {
@@ -195,6 +198,7 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
         {
             $"projection_graph_v2_pending_from_{edgeIdentityLabel}".ToLowerInvariant(),
             $"projection_graph_v2_pending_to_{edgeIdentityLabel}".ToLowerInvariant(),
+            $"projection_graph_relationship_scope_edge_id_{edgeType}".ToLowerInvariant(),
         };
         foreach (var indexName in indexNames
                      .Concat(versionedIndexNames)

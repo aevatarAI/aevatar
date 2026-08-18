@@ -375,6 +375,7 @@ public sealed class VersionedProjectionGraphStoreConformanceTests
         {
             $"projection_graph_node_scope_owner_id_{nodeLabel}".ToLowerInvariant(),
             $"projection_graph_relationship_scope_owner_id_{edgeType}".ToLowerInvariant(),
+            $"projection_graph_relationship_scope_edge_id_{edgeType}".ToLowerInvariant(),
             $"projection_graph_v2_pending_from_{edgeIdentityLabel}".ToLowerInvariant(),
             $"projection_graph_v2_pending_to_{edgeIdentityLabel}".ToLowerInvariant(),
         };

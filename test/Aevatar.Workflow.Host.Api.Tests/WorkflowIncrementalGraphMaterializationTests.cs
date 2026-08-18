@@ -57,14 +57,19 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
             WorkflowProjectionKinds.ExecutionMaterialization,
             IncrementalRoute());
 
-        nonGraph.UpsertNodes.Should().ContainSingle();
-        nonGraph.UpsertEdges.Should().BeEmpty();
+        // Every delta carries the bounded ownership anchor (root actor node, run node, OWNS edge)
+        // so a run that starts on the incremental route stays reachable from its actor.
+        nonGraph.UpsertNodes.Select(static node => node.NodeType)
+            .Should().BeEquivalentTo(
+                [WorkflowExecutionGraphConstants.ActorNodeType, WorkflowExecutionGraphConstants.RunNodeType]);
+        nonGraph.UpsertEdges.Should().ContainSingle()
+            .Which.EdgeType.Should().Be(WorkflowExecutionGraphConstants.EdgeTypeOwns);
         nonGraph.UpsertPendingEdges.Should().BeEmpty();
-        step.UpsertNodes.Should().HaveCount(2);
-        step.UpsertEdges.Should().ContainSingle();
+        step.UpsertNodes.Should().HaveCount(3);
+        step.UpsertEdges.Should().HaveCount(2);
         step.UpsertPendingEdges.Should().ContainSingle();
-        topology.UpsertNodes.Should().HaveCount(2);
-        topology.UpsertEdges.Should().ContainSingle();
+        topology.UpsertNodes.Should().HaveCount(3);
+        topology.UpsertEdges.Should().HaveCount(2);
 
         var mutationCounts = Enumerable.Range(0, 100)
             .Select(index => materializer.BuildIncrementalDelta(
@@ -78,7 +83,7 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
             .Select(CountMutations)
             .ToArray();
         mutationCounts.Take(10).Should().Equal(mutationCounts.TakeLast(10));
-        mutationCounts.Should().OnlyContain(count => count == 3);
+        mutationCounts.Should().OnlyContain(count => count == 5);
     }
 
     [Fact]
@@ -259,6 +264,63 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
             StateVersion = 1,
             EventId = "evt-1",
         });
+    }
+
+    [Fact]
+    public async Task Projector_WhenNewCommandStartsOnSameActor_ShouldReplaceOwnerGraphOnIncrementalRoute()
+    {
+        var reportStore = new RecordingDocumentStore();
+        var graphWriter = new RecordingGraphWriter();
+        var store = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var projector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            graphWriter,
+            store,
+            materializer);
+        var context = Context();
+        var route = materializer.ResolveStoreRoute(
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            "actor-1",
+            IncrementalRoute());
+
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(1, "evt-1", new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "step-1",
+            StepType = "tool_call",
+        }));
+        var firstRun = (await store.ReadOwnerSnapshotAsync(route)).Snapshot;
+        firstRun.Nodes.Select(static node => node.NodeId).Should().Contain("run:actor-1:cmd-1");
+        firstRun.Nodes.Select(static node => node.NodeId).Should().Contain("step:actor-1:cmd-1:step-1");
+        firstRun.Edges.Select(static edge => edge.EdgeType).Should().Contain(WorkflowExecutionGraphConstants.EdgeTypeOwns);
+
+        // A new command re-keys the whole owner graph; the incremental route must replace it
+        // as a bounded full candidate instead of leaving the previous run's nodes behind.
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            2,
+            "evt-2",
+            new WorkflowCommandObservedEvent { CommandId = "cmd-2" },
+            commandId: "cmd-2"));
+
+        var secondRun = (await store.ReadOwnerSnapshotAsync(route)).Snapshot;
+        secondRun.Source.StateVersion.Should().Be(2);
+        var nodeIds = secondRun.Nodes.Select(static node => node.NodeId).ToArray();
+        nodeIds.Should().Contain("run:actor-1:cmd-2");
+        nodeIds.Should().Contain("step:actor-1:cmd-2:step-1");
+        nodeIds.Should().NotContain("run:actor-1:cmd-1");
+        nodeIds.Should().NotContain("step:actor-1:cmd-1:step-1");
+        graphWriter.UpsertCount.Should().Be(0);
+
+        // Subsequent events continue incrementally on the replaced graph.
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            3,
+            "evt-3",
+            new StepRequestEvent { RunId = "run-1", StepId = "step-2", StepType = "tool_call" },
+            commandId: "cmd-2"));
+        var thirdRun = (await store.ReadOwnerSnapshotAsync(route)).Snapshot;
+        thirdRun.Source.StateVersion.Should().Be(3);
+        thirdRun.Nodes.Select(static node => node.NodeId).Should().Contain("step:actor-1:cmd-2:step-2");
     }
 
     [Fact]
@@ -637,7 +699,11 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
             EventData = Any.Pack(payload),
         };
 
-    private static EventEnvelope BuildCommittedEnvelope(long version, string eventId, IMessage payload)
+    private static EventEnvelope BuildCommittedEnvelope(
+        long version,
+        string eventId,
+        IMessage payload,
+        string commandId = "cmd-1")
     {
         var timestamp = DateTimeOffset.Parse("2026-08-18T08:00:00Z");
         return new EventEnvelope
@@ -658,7 +724,7 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
                 {
                     RunId = "run-1",
                     WorkflowName = "workflow",
-                    LastCommandId = "cmd-1",
+                    LastCommandId = commandId,
                     Status = "running",
                 }),
             }),

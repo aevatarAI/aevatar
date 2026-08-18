@@ -283,7 +283,8 @@ internal static class WorkflowExecutionValueStore
     internal static string RecordInternalOutput(
         WorkflowExecutionKernelState state,
         StepCompletedEvent completion,
-        string? inputValueId = null)
+        string? inputValueId = null,
+        WorkflowValueReplayEvidence replayEvidence = WorkflowValueReplayEvidence.Digest)
     {
         var normalized = state.NormalizedValues
             ?? throw new InvalidOperationException("Normalized workflow value state is unavailable.");
@@ -345,7 +346,7 @@ internal static class WorkflowExecutionValueStore
             RetryDisposition = completion.RetryDisposition,
             Outcome = completion.Outcome,
         };
-        PopulateCompletionDigests(normalized, completed);
+        PopulateCompletionDigests(normalized, completed, replayEvidence);
         normalized.CompletedSteps[stepId] = completed;
         MarkCompletionAccepted(
             normalized,
@@ -358,7 +359,8 @@ internal static class WorkflowExecutionValueStore
                 assignedValueId,
                 assignedMirrorValueId,
                 jsonAliases: [],
-                emitLegacyMirrors: false));
+                emitLegacyMirrors: false,
+                replayEvidence));
         ConsumeOutputReference(normalized, outputReferenceId);
         RemoveUnreferencedValues(normalized);
         return valueId;
@@ -366,7 +368,8 @@ internal static class WorkflowExecutionValueStore
 
     internal static string RecordStepCompletion(
         WorkflowExecutionKernelState state,
-        StepCompletedEvent completion)
+        StepCompletedEvent completion,
+        WorkflowValueReplayEvidence replayEvidence = WorkflowValueReplayEvidence.Digest)
     {
         var normalized = state.NormalizedValues
             ?? throw new InvalidOperationException("Normalized workflow value state is unavailable.");
@@ -446,7 +449,7 @@ internal static class WorkflowExecutionValueStore
         completed.FailureOutcome = completion.FailureOutcome;
         completed.RetryDisposition = completion.RetryDisposition;
         completed.Outcome = completion.Outcome;
-        PopulateCompletionDigests(normalized, completed);
+        PopulateCompletionDigests(normalized, completed, replayEvidence);
         if (HasUsage(completion.Usage))
         {
             completed.Usage = ToUsageState(completion.Usage);
@@ -478,7 +481,8 @@ internal static class WorkflowExecutionValueStore
                 assignedValueId,
                 assignedMirrorValueId,
                 jsonAliases,
-                emitLegacyMirrors: true));
+                emitLegacyMirrors: true,
+                replayEvidence));
 
         ConsumeOutputReference(normalized, outputReferenceId);
         RemoveUnreferencedValues(normalized);
@@ -727,7 +731,8 @@ internal static class WorkflowExecutionValueStore
         string assignedValueId,
         string assignedMirrorValueId,
         IReadOnlyList<string> jsonAliases,
-        bool emitLegacyMirrors)
+        bool emitLegacyMirrors,
+        WorkflowValueReplayEvidence replayEvidence)
     {
         var accepted = new WorkflowCompletedStepState
         {
@@ -771,7 +776,7 @@ internal static class WorkflowExecutionValueStore
             };
         }
 
-        PopulateCompletionDigests(normalized, accepted);
+        PopulateCompletionDigests(normalized, accepted, replayEvidence);
 
         return accepted;
     }
@@ -852,8 +857,15 @@ internal static class WorkflowExecutionValueStore
 
     private static void PopulateCompletionDigests(
         WorkflowNormalizedExecutionValuesState normalized,
-        WorkflowCompletedStepState completed)
+        WorkflowCompletedStepState completed,
+        WorkflowValueReplayEvidence replayEvidence)
     {
+        // Digest evidence is a schema-v2 fact: it lets RemoveUnreferencedValues drop the raw
+        // payload that older replay ledgers keep alive. An actor whose runtime schema context
+        // has not adopted v2 must keep the raw value so a v1 reader can still replay exactly.
+        if (replayEvidence != WorkflowValueReplayEvidence.Digest)
+            return;
+
         completed.OutputDigest = ResolveDigest(normalized, completed.OutputValueId);
         completed.AssignedValueDigest = ResolveDigest(normalized, completed.AssignedValueId);
         completed.AssignedMirrorDigest = ResolveDigest(normalized, completed.AssignedMirrorValueId);

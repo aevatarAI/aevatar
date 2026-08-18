@@ -120,26 +120,67 @@ public sealed class WorkflowRunGraphExportVersionTests
     }
 
     [Fact]
-    public async Task ArtifactQueryPort_WhenRouteIsMissingOrLegacy_ShouldNotFallback()
+    public async Task ArtifactQueryPort_WhenRouteIsMissingOrLegacy_WithoutLegacyStore_ShouldBeUnavailable()
     {
         var report = BuildReport("actor-1", "cmd-1", 12, "evt-12");
         var store = new InMemoryProjectionGraphStore();
         var materializer = new WorkflowRunIncrementalGraphMaterializer(
             ProjectionGraphOwnerIdentityResolver.Instance);
         var missingPort = CreatePort(report, store, materializer, new StaticStatusReader(Status(null)));
-        var legacyRoute = new ProjectionMaterializationRouteFingerprint
-        {
-            ContractId = WorkflowExecutionGraphConstants.LegacyContractId,
-            ContractVersion = WorkflowExecutionGraphConstants.LegacyContractVersion,
-            PhysicalNamespace = WorkflowExecutionGraphConstants.Scope,
-            RouteEpoch = 1,
-        };
-        var legacyPort = CreatePort(report, store, materializer, new StaticStatusReader(Status(legacyRoute)));
+        var legacyPort = CreatePort(report, store, materializer, new StaticStatusReader(Status(LegacyRoute())));
 
         (await missingPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1")).SourceStateVersion
             .Should().Be(0);
         (await legacyPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1")).SourceStateVersion
             .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ArtifactQueryPort_WhenRouteIsMissingOrLegacy_ShouldReadLegacyScopeGraph()
+    {
+        // Owners that never cut over keep their graph in the legacy scope graph store; the
+        // committed route (or its absence) directs the read there instead of hiding history.
+        var report = BuildReport("actor-1", "cmd-1", 12, "evt-12");
+        report.StepIndexById["step-1"] = 0;
+        report.Steps.Add(new WorkflowExecutionStepTrace { StepId = "step-1", StepType = "assign" });
+        var store = new InMemoryProjectionGraphStore();
+        var materializer = new WorkflowRunIncrementalGraphMaterializer(
+            ProjectionGraphOwnerIdentityResolver.Instance);
+        var legacyWriter = new ProjectionGraphWriter<WorkflowRunInsightReportDocument>(
+            store,
+            new WorkflowRunInsightReportGraphMaterializer(),
+            ownerIdentityResolver: ProjectionGraphOwnerIdentityResolver.Instance);
+        await legacyWriter.UpsertAsync(report, WorkflowProjectionKinds.ExecutionMaterialization);
+        var missingPort = CreatePort(report, store, materializer, new StaticStatusReader(Status(null)), store);
+        var legacyPort = CreatePort(report, store, materializer, new StaticStatusReader(Status(LegacyRoute())), store);
+
+        foreach (var port in new[] { missingPort, legacyPort })
+        {
+            var subgraph = await port.GetWorkflowRunGraphExportSubgraphAsync("actor-1", depth: 3, take: 50);
+            subgraph.SourceStateVersion.Should().Be(12);
+            subgraph.Nodes.Select(static node => node.NodeId).Should().Contain("run:actor-1:cmd-1");
+            subgraph.Nodes.Select(static node => node.NodeId).Should().Contain("step:actor-1:cmd-1:step-1");
+            subgraph.RouteFingerprint.Should().BeNull();
+            (await port.GetWorkflowRunGraphExportEdgesAsync("actor-1", take: 50)).Should().NotBeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task ArtifactQueryPort_WhenIncrementalRouteHasNoSnapshot_ShouldNotFallbackToLegacyGraph()
+    {
+        var report = BuildReport("actor-1", "cmd-1", 12, "evt-12");
+        var store = new InMemoryProjectionGraphStore();
+        var materializer = new WorkflowRunIncrementalGraphMaterializer(
+            ProjectionGraphOwnerIdentityResolver.Instance);
+        var legacyWriter = new ProjectionGraphWriter<WorkflowRunInsightReportDocument>(
+            store,
+            new WorkflowRunInsightReportGraphMaterializer(),
+            ownerIdentityResolver: ProjectionGraphOwnerIdentityResolver.Instance);
+        await legacyWriter.UpsertAsync(report, WorkflowProjectionKinds.ExecutionMaterialization);
+        var port = CreatePort(report, store, materializer, new StaticStatusReader(Status(IncrementalRoute())), store);
+
+        (await port.GetWorkflowRunGraphExportSubgraphAsync("actor-1")).SourceStateVersion.Should().Be(0);
+        (await port.GetWorkflowRunGraphExportEdgesAsync("actor-1")).Should().BeEmpty();
     }
 
     private static async Task<QueryHarness> CreateHarnessAsync(WorkflowRunInsightReportDocument report)
@@ -161,7 +202,8 @@ public sealed class WorkflowRunGraphExportVersionTests
         WorkflowRunInsightReportDocument report,
         InMemoryProjectionGraphStore store,
         WorkflowRunIncrementalGraphMaterializer materializer,
-        IProjectionDocumentReader<ProjectionScopeStatusDocument, string> statusReader) =>
+        IProjectionDocumentReader<ProjectionScopeStatusDocument, string> statusReader,
+        IProjectionGraphStore? legacyGraphStore = null) =>
         new(
             new SingleDocumentReader<WorkflowRunInsightReportDocument>(report),
             new WorkflowExecutionReadModelMapper(),
@@ -172,7 +214,17 @@ public sealed class WorkflowRunGraphExportVersionTests
             },
             statusReader,
             store,
-            materializer);
+            materializer,
+            legacyGraphStore);
+
+    private static ProjectionMaterializationRouteFingerprint LegacyRoute() =>
+        new()
+        {
+            ContractId = WorkflowExecutionGraphConstants.LegacyContractId,
+            ContractVersion = WorkflowExecutionGraphConstants.LegacyContractVersion,
+            PhysicalNamespace = WorkflowExecutionGraphConstants.Scope,
+            RouteEpoch = 1,
+        };
 
     private static WorkflowRunInsightReportDocument BuildReport(
         string actorId,

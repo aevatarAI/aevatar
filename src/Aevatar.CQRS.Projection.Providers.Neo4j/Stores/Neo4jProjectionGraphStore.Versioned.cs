@@ -8,9 +8,27 @@ public sealed partial class Neo4jProjectionGraphStore
 {
     private const long VersionedGraphSchemaVersion = 2;
 
-    public async Task<ProjectionGraphDeltaApplyResult> ApplyDeltaAsync(
+    public Task<ProjectionGraphDeltaApplyResult> ApplyDeltaAsync(
         ProjectionGraphDelta delta,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        Neo4jProjectionGraphStoreTelemetry.ObserveWriteAsync(
+            _logger,
+            Neo4jProjectionGraphWriteTelemetryContext.ForApplyDelta(delta),
+            ct,
+            () => ApplyDeltaCoreAsync(delta, ct),
+            static result => ResolveDeltaTelemetryResult(result.Disposition));
+
+    // Bounded, low-cardinality metric tag: the disposition enum name, never route or owner values.
+    private static string ResolveDeltaTelemetryResult(ProjectionGraphDeltaApplyDisposition disposition) =>
+        disposition switch
+        {
+            ProjectionGraphDeltaApplyDisposition.Applied => Neo4jProjectionGraphStoreTelemetry.CompletedResult,
+            _ => disposition.ToString(),
+        };
+
+    private async Task<ProjectionGraphDeltaApplyResult> ApplyDeltaCoreAsync(
+        ProjectionGraphDelta delta,
+        CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         if (!ProjectionGraphDeltaContract.TryNormalize(

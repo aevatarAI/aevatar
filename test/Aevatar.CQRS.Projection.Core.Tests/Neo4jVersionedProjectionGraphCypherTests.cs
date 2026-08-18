@@ -24,6 +24,10 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
         edges.Should().Contain("(n.physicalNamespace, n.edgeId) IS UNIQUE");
         pendingFrom.Should().Contain("n.status, n.fromNodeId");
         pendingTo.Should().Contain("n.status, n.toNodeId");
+        var relationshipEdgeId = Neo4jProjectionGraphStoreVersionedCypherSupport
+            .BuildCreateRelationshipEdgeIdIndexCypher("PROJECTION_REL", "rel_edge_id");
+        relationshipEdgeId.Should().Contain("CREATE RANGE INDEX rel_edge_id IF NOT EXISTS");
+        relationshipEdgeId.Should().Contain("FOR ()-[r:PROJECTION_REL]-() ON (r.scope, r.edgeId)");
     }
 
     [Fact]

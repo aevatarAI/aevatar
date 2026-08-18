@@ -52,6 +52,8 @@ public sealed partial class Neo4jProjectionGraphStore
                 $"projection_graph_node_scope_owner_id_{_nodeLabel}");
             var relationshipOwnerIndexName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
                 $"projection_graph_relationship_scope_owner_id_{_edgeType}");
+            var relationshipEdgeIdIndexName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
+                $"projection_graph_relationship_scope_edge_id_{_edgeType}");
             var versionedOwnerConstraintName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
                 $"projection_graph_v2_owner_{_versionedOwnerStateLabel}");
             var versionedEventConstraintName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
@@ -79,6 +81,12 @@ public sealed partial class Neo4jProjectionGraphStore
                 Neo4jProjectionGraphStoreCypherSupport.BuildCreateRelationshipOwnerIndexCypher(
                     _edgeType,
                     relationshipOwnerIndexName),
+                new Dictionary<string, object?>(),
+                ct);
+            await ExecuteWriteAsync(
+                Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateRelationshipEdgeIdIndexCypher(
+                    _edgeType,
+                    relationshipEdgeIdIndexName),
                 new Dictionary<string, object?>(),
                 ct);
             await ExecuteWriteAsync(
@@ -126,6 +134,7 @@ public sealed partial class Neo4jProjectionGraphStore
 
             await AwaitIndexAsync(actualNodeOwnerIndexName, ct);
             await AwaitIndexAsync(actualRelationshipOwnerIndexName, ct);
+            await AwaitIndexAsync(relationshipEdgeIdIndexName, ct);
             _schemaInitialized = true;
         }
         finally

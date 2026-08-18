@@ -22,6 +22,16 @@ internal static class Neo4jProjectionGraphStoreVersionedCypherSupport
         $"CREATE RANGE INDEX {indexName} IF NOT EXISTS " +
         $"FOR (n:{label}) ON (n.physicalNamespace, n.projectionOwnerId, n.status, n.toNodeId)";
 
+    /// <summary>
+    /// Every incremental delta reads, deletes and rewires live relationships by exact edge id
+    /// inside one physical namespace. Without this index the planner can only prefix-scan the
+    /// (scope, projectionOwnerId) relationship index across the whole namespace, which is the
+    /// same unrelated-owner scan that #3473 removed from the legacy replacement path.
+    /// </summary>
+    internal static string BuildCreateRelationshipEdgeIdIndexCypher(string edgeType, string indexName) =>
+        $"CREATE RANGE INDEX {indexName} IF NOT EXISTS " +
+        $"FOR ()-[r:{edgeType}]-() ON (r.scope, r.edgeId)";
+
     internal static string BuildLockOwnerStateCypher(string ownerStateLabel) =>
         $"MERGE (state:{ownerStateLabel} {{physicalNamespace: $physicalNamespace, projectionOwnerId: $ownerId}}) " +
         "ON CREATE SET state.initialized = false, state.lockToken = 0 " +

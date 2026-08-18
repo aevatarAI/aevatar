@@ -521,6 +521,38 @@ public sealed class WorkflowExecutionValueStoreTests
     }
 
     [Fact]
+    public void RepeatedRetryOutputs_WithoutSchemaV2Adoption_ShouldKeepRawReplayEvidence()
+    {
+        // A v1-identity actor (no value-lifecycle receipt) must not record digest evidence,
+        // because the digest is what allows the raw replay payload to be pruned; an older
+        // reader validates exact replay against the raw canonical text.
+        var state = NormalizedState();
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            WorkflowExecutionValueStore.RecordInternalOutput(
+                state,
+                new StepCompletedEvent
+                {
+                    StepId = "retrying-child",
+                    ExecutionId = $"execution-{attempt}",
+                    Success = true,
+                    Output = $"payload-{attempt}",
+                    OutputProvenance = WorkflowStepOutputProvenance.Produced,
+                },
+                inputValueId: null,
+                WorkflowValueReplayEvidence.RawValue);
+        }
+
+        state.NormalizedValues!.AcceptedCompletions.Should().HaveCount(3);
+        state.NormalizedValues.AcceptedCompletions.Values.Should().OnlyContain(snapshot =>
+            !WorkflowExecutionValueStore.IsAuthoritativeDigest(snapshot.OutputDigest));
+        state.NormalizedValues.CompletedSteps["retrying-child"].OutputDigest.Should().BeNull();
+        state.NormalizedValues.CanonicalValues.Should().HaveCount(3);
+        state.NormalizedValues.CanonicalValues.Values.Select(static value => value.Value)
+            .Should().BeEquivalentTo(["payload-1", "payload-2", "payload-3"]);
+    }
+
+    [Fact]
     public void ProjectedSeed_ShouldOmitRedactedReplayOnlyCompletionWithoutCanonicalValue()
     {
         var state = NormalizedState();

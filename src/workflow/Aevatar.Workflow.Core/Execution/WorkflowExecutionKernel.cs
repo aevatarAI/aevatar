@@ -463,7 +463,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             WorkflowExecutionValueStore.RecordInternalOutput(
                 state,
                 evt,
-                internalDispatch.InputValueId);
+                internalDispatch.InputValueId,
+                ResolveReplayEvidence());
             WorkflowExecutionValueStore.ConsumeInternalDispatch(state, internalDispatch);
             await SaveStateAsync(state, ctx, ct);
             return;
@@ -523,7 +524,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             // Reuse the full exact-replay validator before recovery so changed
             // branch, outcome, usage, assignment, or annotation fields fail
             // closed instead of steering a committed transition.
-            _ = WorkflowExecutionValueStore.RecordStepCompletion(state, evt);
+            _ = WorkflowExecutionValueStore.RecordStepCompletion(state, evt, ResolveReplayEvidence());
             if (state.NormalizedValues!.CompletedSteps.TryGetValue(evt.StepId, out var committed) &&
                 committed.Success)
             {
@@ -642,7 +643,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             if (WorkflowExecutionValueStore.IsNormalized(state))
             {
                 completionOutputValueId =
-                    WorkflowExecutionValueStore.RecordStepCompletion(state, evt);
+                    WorkflowExecutionValueStore.RecordStepCompletion(state, evt, ResolveReplayEvidence());
             }
             else
             {
@@ -2713,6 +2714,14 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     private static bool MatchesCurrentStep(WorkflowExecutionKernelState state, string? stepId) =>
         !string.IsNullOrWhiteSpace(stepId) &&
         string.Equals(state.CurrentStepId, stepId, StringComparison.Ordinal);
+
+    // Digest replay evidence (and the raw-payload pruning it permits) is a schema-v2 fact.
+    // Only the runtime-owned adoption receipt may switch it on; a v1-identity actor keeps
+    // raw values so an older reader can still validate exact replay.
+    private WorkflowValueReplayEvidence ResolveReplayEvidence() =>
+        WorkflowNormalizedStateWriteAdmission.IsValueLifecycleGranted(_stateHost.RuntimeStateSchemaContextReader)
+            ? WorkflowValueReplayEvidence.Digest
+            : WorkflowValueReplayEvidence.RawValue;
 
     private static bool IsActiveRun(WorkflowExecutionKernelState state, string runId) =>
         state.Active &&

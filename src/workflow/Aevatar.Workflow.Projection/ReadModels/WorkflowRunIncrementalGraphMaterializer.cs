@@ -51,7 +51,14 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
         ArgumentNullException.ThrowIfNull(stateEvent);
         var delta = CreateDelta(report, stateEvent, projectionKind, route, ProjectionGraphDeltaMode.Normal);
         var updatedAt = ResolveUpdatedAt(report);
+        // The owner graph is per run, but the root actor node is shared across that actor's
+        // runs and the OWNS edge is what makes a new run reachable from it. Neither is tied
+        // to a step or topology event, so a run that starts on the incremental route (after
+        // its scope already cut over) only ever sees them here; upserting them with the run
+        // node is idempotent and keeps the incremental graph equivalent to the golden one.
+        delta.UpsertNodes.Add(ToMutation(CreateRootActorNode(report, updatedAt)));
         delta.UpsertNodes.Add(ToMutation(CreateRunNode(report, updatedAt)));
+        delta.UpsertEdges.Add(ToMutation(CreateOwnsEdge(report, updatedAt)));
 
         var payload = stateEvent.EventData;
         var stepId = ResolveChangedStepId(payload);
@@ -161,6 +168,19 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
         return fingerprint;
     }
 
+    /// <summary>
+    /// The report is keyed by the run actor and re-keys every step node under the latest
+    /// command id, so a new command on the same actor changes the whole owner graph rather
+    /// than one bounded neighbourhood. The typed command-observed event is the only fact
+    /// that changes <c>LastCommandId</c>, so it is the only event that requires a bounded full
+    /// replacement of the owner graph on the incremental route.
+    /// </summary>
+    public static bool RequiresOwnerGraphReplacement(StateEvent stateEvent)
+    {
+        ArgumentNullException.ThrowIfNull(stateEvent);
+        return stateEvent.EventData?.Is(WorkflowCommandObservedEvent.Descriptor) == true;
+    }
+
     public static bool IsIncrementalRoute(ProjectionMaterializationRouteFingerprint? route) =>
         route is
         {
@@ -221,6 +241,28 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
             branchKey,
             updatedAt)));
     }
+
+    private static ProjectionGraphNode CreateRootActorNode(
+        WorkflowRunInsightReportDocument report,
+        DateTimeOffset updatedAt)
+    {
+        var rootActorId = NormalizeToken(report.RootActorId);
+        return WorkflowRunGraphArtifactMaterializer.CreateActorNode(
+            rootActorId,
+            rootActorId,
+            report.WorkflowName,
+            updatedAt);
+    }
+
+    private static ProjectionGraphEdge CreateOwnsEdge(
+        WorkflowRunInsightReportDocument report,
+        DateTimeOffset updatedAt) =>
+        WorkflowRunGraphArtifactMaterializer.CreateEdge(
+            WorkflowExecutionGraphConstants.EdgeTypeOwns,
+            NormalizeToken(report.RootActorId),
+            WorkflowRunGraphArtifactMaterializer.BuildRunNodeId(report.RootActorId, report.CommandId),
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            updatedAt);
 
     private static ProjectionGraphNode CreateRunNode(
         WorkflowRunInsightReportDocument report,

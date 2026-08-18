@@ -15,6 +15,7 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
     private readonly IProjectionDocumentReader<ProjectionScopeStatusDocument, string>? _scopeStatusReader;
     private readonly IVersionedProjectionGraphStore? _versionedGraphStore;
     private readonly WorkflowRunIncrementalGraphMaterializer? _incrementalGraphMaterializer;
+    private readonly IProjectionGraphStore? _legacyGraphStore;
     private readonly bool _workflowArtifactQueryEnabled;
 
     public WorkflowExecutionArtifactQueryPort(
@@ -23,13 +24,15 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         WorkflowExecutionProjectionOptions? options = null,
         IProjectionDocumentReader<ProjectionScopeStatusDocument, string>? scopeStatusReader = null,
         IVersionedProjectionGraphStore? versionedGraphStore = null,
-        WorkflowRunIncrementalGraphMaterializer? incrementalGraphMaterializer = null)
+        WorkflowRunIncrementalGraphMaterializer? incrementalGraphMaterializer = null,
+        IProjectionGraphStore? legacyGraphStore = null)
     {
         _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _scopeStatusReader = scopeStatusReader;
         _versionedGraphStore = versionedGraphStore;
         _incrementalGraphMaterializer = incrementalGraphMaterializer;
+        _legacyGraphStore = legacyGraphStore;
         _workflowArtifactQueryEnabled = options == null || (options.Enabled && options.WorkflowArtifactQueryEnabled);
     }
 
@@ -79,7 +82,24 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         if (ownerId.Length == 0)
             return [];
 
-        var consistent = await ReadConsistentSnapshotAsync(ownerId, ct);
+        var boundedTake = Math.Clamp(take, 1, 1000);
+        var route = await ResolveGraphRouteAsync(ownerId, ct);
+        if (route.Kind == GraphRouteKind.Legacy)
+        {
+            var edges = await _legacyGraphStore!.GetNeighborsAsync(
+                new ProjectionGraphQuery
+                {
+                    Scope = WorkflowExecutionGraphConstants.Scope,
+                    RootNodeId = ownerId,
+                    Direction = MapDirection(options?.Direction ?? WorkflowRunGraphExportDirection.Both),
+                    EdgeTypes = NormalizeEdgeTypes(options?.EdgeTypes).ToArray(),
+                    Take = boundedTake,
+                },
+                ct);
+            return edges.Select(_mapper.ToWorkflowRunGraphExportEdge).ToList();
+        }
+
+        var consistent = await ReadConsistentSnapshotAsync(ownerId, route, ct);
         if (consistent == null)
             return [];
 
@@ -87,7 +107,7 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
             consistent.Snapshot,
             ownerId,
             depth: 1,
-            Math.Clamp(take, 1, 1000),
+            boundedTake,
             options);
         return filtered.Edges.Select(_mapper.ToWorkflowRunGraphExportEdge).ToList();
     }
@@ -103,15 +123,35 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         if (!_workflowArtifactQueryEnabled || ownerId.Length == 0)
             return Unavailable(ownerId);
 
-        var consistent = await ReadConsistentSnapshotAsync(ownerId, ct);
+        var boundedDepth = Math.Clamp(depth, 1, 8);
+        var boundedTake = Math.Clamp(take, 1, 2000);
+        var route = await ResolveGraphRouteAsync(ownerId, ct);
+        if (route.Kind == GraphRouteKind.Legacy)
+        {
+            var legacySourceStateVersion = await ResolveLegacyGraphSourceStateVersionAsync(ownerId, ct);
+            var legacySubgraph = await _legacyGraphStore!.GetSubgraphAsync(
+                new ProjectionGraphQuery
+                {
+                    Scope = WorkflowExecutionGraphConstants.Scope,
+                    RootNodeId = ownerId,
+                    Direction = MapDirection(options?.Direction ?? WorkflowRunGraphExportDirection.Both),
+                    EdgeTypes = NormalizeEdgeTypes(options?.EdgeTypes).ToArray(),
+                    Depth = boundedDepth,
+                    Take = boundedTake,
+                },
+                ct);
+            return _mapper.ToWorkflowRunGraphExportSubgraph(ownerId, legacySubgraph, legacySourceStateVersion);
+        }
+
+        var consistent = await ReadConsistentSnapshotAsync(ownerId, route, ct);
         if (consistent == null)
             return Unavailable(ownerId);
 
         var filtered = FilterSnapshot(
             consistent.Snapshot,
             ownerId,
-            Math.Clamp(depth, 1, 8),
-            Math.Clamp(take, 1, 2000),
+            boundedDepth,
+            boundedTake,
             options);
         var result = _mapper.ToWorkflowRunGraphExportSubgraph(
             ownerId,
@@ -133,30 +173,57 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         return result;
     }
 
-    private async Task<ConsistentGraphSnapshot?> ReadConsistentSnapshotAsync(
-        string ownerId,
-        CancellationToken ct)
+    /// <summary>
+    /// The scope actor's committed route (materialized on the scope status document) decides
+    /// which store is authoritative for an owner's graph. A missing status document or a
+    /// compatibility route means the owner never cut over: its graph lives in the legacy scope
+    /// graph store and is read there, exactly as before the incremental route existed. An
+    /// incremental route reads only the versioned owner snapshot and never falls back.
+    /// </summary>
+    private async Task<GraphRoute> ResolveGraphRouteAsync(string ownerId, CancellationToken ct)
     {
         if (_scopeStatusReader == null ||
+            _versionedGraphStore == null ||
+            _incrementalGraphMaterializer == null)
+        {
+            return _legacyGraphStore == null
+                ? GraphRoute.Unavailable
+                : GraphRoute.Legacy;
+        }
+
+        var statusId = BuildStatusId(ownerId);
+        var status = await _scopeStatusReader.GetAsync(statusId, ct);
+        var route = status?.ActiveMaterializationRoute;
+        if (WorkflowRunIncrementalGraphMaterializer.IsIncrementalRoute(route))
+        {
+            return IsReadableIncrementalStatus(status, route)
+                ? new GraphRoute(GraphRouteKind.Incremental, statusId, route!.Clone())
+                : GraphRoute.Unavailable;
+        }
+
+        return _legacyGraphStore == null
+            ? GraphRoute.Unavailable
+            : GraphRoute.Legacy;
+    }
+
+    private async Task<ConsistentGraphSnapshot?> ReadConsistentSnapshotAsync(
+        string ownerId,
+        GraphRoute graphRoute,
+        CancellationToken ct)
+    {
+        if (graphRoute.Kind != GraphRouteKind.Incremental ||
+            _scopeStatusReader == null ||
             _versionedGraphStore == null ||
             _incrementalGraphMaterializer == null)
         {
             return null;
         }
 
-        var statusId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
-            ownerId,
-            WorkflowProjectionKinds.ExecutionMaterialization,
-            ProjectionRuntimeMode.DurableMaterialization));
-        var before = await _scopeStatusReader.GetAsync(statusId, ct);
-        var route = before?.ActiveMaterializationRoute;
-        if (!IsReadableIncrementalStatus(before, route))
-            return null;
-
+        var route = graphRoute.Route!;
         var storeRoute = _incrementalGraphMaterializer.ResolveStoreRoute(
             WorkflowProjectionKinds.ExecutionMaterialization,
             ownerId,
-            route!);
+            route);
         var read = await _versionedGraphStore.ReadOwnerSnapshotAsync(storeRoute, ct);
         if (read.Disposition != ProjectionGraphOwnerSnapshotReadDisposition.Found ||
             read.Snapshot?.Source == null ||
@@ -168,15 +235,63 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
             return null;
         }
 
-        var after = await _scopeStatusReader.GetAsync(statusId, ct);
+        var after = await _scopeStatusReader.GetAsync(graphRoute.StatusId, ct);
         if (!IsReadableIncrementalStatus(after, after?.ActiveMaterializationRoute) ||
-            !RouteEquals(route!, after!.ActiveMaterializationRoute!))
+            !RouteEquals(route, after!.ActiveMaterializationRoute!))
         {
             return null;
         }
 
-        return new ConsistentGraphSnapshot(route!.Clone(), read.Snapshot);
+        return new ConsistentGraphSnapshot(route.Clone(), read.Snapshot);
     }
+
+    private static string BuildStatusId(string ownerId) =>
+        ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            ownerId,
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            ProjectionRuntimeMode.DurableMaterialization));
+
+    private async Task<long> ResolveLegacyGraphSourceStateVersionAsync(string workflowRunId, CancellationToken ct)
+    {
+        var sourceSubgraph = await _legacyGraphStore!.GetSubgraphAsync(
+            new ProjectionGraphQuery
+            {
+                Scope = WorkflowExecutionGraphConstants.Scope,
+                RootNodeId = workflowRunId,
+                Direction = ProjectionGraphDirection.Outbound,
+                EdgeTypes = [WorkflowExecutionGraphConstants.EdgeTypeOwns],
+                Depth = 1,
+                Take = 2000,
+            },
+            ct);
+
+        var sourceVersions = sourceSubgraph.Nodes
+            .Where(node => string.Equals(node.NodeType, WorkflowExecutionGraphConstants.RunNodeType, StringComparison.Ordinal))
+            .Where(node =>
+                node.Properties.TryGetValue(WorkflowExecutionGraphConstants.RootActorIdPropertyKey, out var rootActorId) &&
+                string.Equals(rootActorId, workflowRunId, StringComparison.Ordinal))
+            .Select(ReadSourceStateVersion)
+            .Where(version => version > 0)
+            .Distinct()
+            .ToList();
+
+        return sourceVersions.Count == 1 ? sourceVersions[0] : 0;
+    }
+
+    private static long ReadSourceStateVersion(ProjectionGraphNode node) =>
+        node.Properties.TryGetValue(WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey, out var value) &&
+        long.TryParse(value, out var parsed) &&
+        parsed > 0
+            ? parsed
+            : 0;
+
+    private static ProjectionGraphDirection MapDirection(WorkflowRunGraphExportDirection direction) =>
+        direction switch
+        {
+            WorkflowRunGraphExportDirection.Outbound => ProjectionGraphDirection.Outbound,
+            WorkflowRunGraphExportDirection.Inbound => ProjectionGraphDirection.Inbound,
+            _ => ProjectionGraphDirection.Both,
+        };
 
     private static bool IsReadableIncrementalStatus(
         ProjectionScopeStatusDocument? status,
@@ -301,4 +416,21 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
     private sealed record ConsistentGraphSnapshot(
         ProjectionMaterializationRouteFingerprint Route,
         ProjectionGraphOwnerSnapshot Snapshot);
+
+    private enum GraphRouteKind
+    {
+        Unavailable = 0,
+        Legacy = 1,
+        Incremental = 2,
+    }
+
+    private sealed record GraphRoute(
+        GraphRouteKind Kind,
+        string StatusId,
+        ProjectionMaterializationRouteFingerprint? Route)
+    {
+        public static readonly GraphRoute Unavailable = new(GraphRouteKind.Unavailable, string.Empty, null);
+
+        public static readonly GraphRoute Legacy = new(GraphRouteKind.Legacy, string.Empty, null);
+    }
 }
