@@ -8,19 +8,26 @@ public sealed class ProjectionRuntimeFleetCapabilityAdmissionReader
 {
     private readonly IProjectionDocumentReader<
         RuntimeFleetCapabilityAuthorityCurrentStateDocument,
-        string> _documents;
+        string>? _documentReader;
 
     public ProjectionRuntimeFleetCapabilityAdmissionReader(
-        IProjectionDocumentReader<RuntimeFleetCapabilityAuthorityCurrentStateDocument, string> documents)
+        IEnumerable<IProjectionDocumentReader<
+            RuntimeFleetCapabilityAuthorityCurrentStateDocument,
+            string>>? documentReaders)
     {
-        _documents = documents ?? throw new ArgumentNullException(nameof(documents));
+        var candidates = documentReaders?.Take(2).ToArray() ?? [];
+        _documentReader = candidates.Length == 1 ? candidates[0] : null;
     }
 
     public async Task<RuntimeFleetCapabilityAdmission?> GetAsync(
         RuntimeFleetCapability capability,
         CancellationToken ct = default)
     {
-        var document = await _documents.GetAsync(
+        ct.ThrowIfCancellationRequested();
+        if (_documentReader == null)
+            return null;
+
+        var document = await _documentReader.GetAsync(
             RuntimeFleetCapabilityAuthorityIdentity.ActorId,
             ct);
         if (document == null ||
