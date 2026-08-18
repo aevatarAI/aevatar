@@ -25,6 +25,8 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 
     protected abstract ProjectionRuntimeMode RuntimeMode { get; }
 
+    protected virtual bool EnablesDurableObservationRecovery => false;
+
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         _logger = Services.GetService<ILoggerFactory>()?.CreateLogger(GetType()) ?? NullLogger.Instance;
@@ -42,7 +44,10 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             return;
 
         await EnsureObservationRelayAsync(State.RootActorId, ct);
-        await ScheduleFailureRecoveryAsync(ct);
+        if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
+            await ScheduleInFlightObservationRecoveryAsync(ct);
+        else
+            await ScheduleFailureRecoveryAsync(ct);
     }
 
     protected override async Task OnCommittedStatePublicationRecoveredAsync(
@@ -158,8 +163,37 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         await _failureTracker!.ReplayAsync(
             State,
             command.MaxItems,
-            (envelope, ct) => DispatchObservationAsync(envelope, ct, bypassSuccessfulVersionFence: true),
+            (envelope, ct) => DispatchObservationAsync(
+                envelope,
+                ct,
+                ProjectionObservationDispatchOrigin.FailureReplay),
             includeRetryExhausted: !command.AutomaticRecovery);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleResumeInFlightObservationAsync(
+        ResumeProjectionInFlightObservationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        if (!EnablesDurableObservationRecovery || !State.Active || State.Released)
+            return;
+
+        var pending = State.InFlightObservation;
+        if (pending?.Source == null || pending.Envelope == null)
+            return;
+
+        if (command.ExpectedSource == null ||
+            !HasSameSource(command.ExpectedSource, pending.Source))
+        {
+            return;
+        }
+
+        await DispatchObservationAsync(
+            pending.Envelope,
+            CancellationToken.None,
+            ProjectionObservationDispatchOrigin.InFlightRecovery);
+        await ScheduleFailureRecoveryAsync(CancellationToken.None);
     }
 
     private Task ScheduleFailureRecoveryAsync(CancellationToken ct)
@@ -177,6 +211,26 @@ public abstract class ProjectionScopeGAgentBase<TContext>
                 MaxItems = pendingCount,
                 AutomaticRecovery = true,
                 ObservedScopeStateVersion = Math.Max(1, EventSourcing?.CurrentVersion ?? 0),
+            },
+            TopologyAudience.Self,
+            ct);
+    }
+
+    private Task ScheduleInFlightObservationRecoveryAsync(CancellationToken ct)
+    {
+        var source = State.InFlightObservation?.Source;
+        if (!EnablesDurableObservationRecovery ||
+            !State.Active ||
+            State.Released ||
+            source == null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return PublishAsync(
+            new ResumeProjectionInFlightObservationCommand
+            {
+                ExpectedSource = source.Clone(),
             },
             TopologyAudience.Self,
             ct);
@@ -203,11 +257,12 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         }
         catch (Exception ex)
         {
-            if (ProjectionObservationFailurePolicy.ShouldPropagate(ex))
+            var durableRecoveryBlocked =
+                EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null;
+            if (ProjectionObservationFailurePolicy.ShouldPropagate(ex) || durableRecoveryBlocked)
             {
-                // ShouldPropagate currently only returns true for OCC (direct or
-                // wrapped). Discard stale pending events so the grain can deactivate
-                // cleanly; state will rebuild from the event store on next activation.
+                // Discard only uncommitted OCC suffixes. Durable observation staging
+                // is already committed and must survive retry or actor reactivation.
                 if (ProjectionObservationFailurePolicy.ContainsOcc(ex))
                     EventSourcing?.DiscardPendingEvents();
 
@@ -238,11 +293,22 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             .On<ProjectionScopeReleasedEvent>(ProjectionScopeStateApplier.ApplyReleased)
             .On<ProjectionScopeEnvelopeReceivedEvent>(ProjectionScopeStateApplier.ApplyEnvelopeReceived)
             .On<ProjectionScopeEnvelopeAttemptedEvent>(ProjectionScopeStateApplier.ApplyEnvelopeAttempted)
+            .On<ProjectionScopeObservationStagedEvent>(ProjectionScopeStateApplier.ApplyObservationStaged)
             .On<ProjectionScopeWatermarkAdvancedEvent>(ProjectionScopeStateApplier.ApplyWatermarkAdvanced)
             .On<ProjectionScopeDispatchFailedEvent>(ProjectionScopeStateApplier.ApplyDispatchFailed)
             .On<ProjectionScopeFailureReplayedEvent>(ProjectionScopeStateApplier.ApplyFailureReplayed)
             .On<ProjectionScopeAutomaticRecoveryRequestedEvent>(
                 ProjectionScopeStateApplier.ApplyAutomaticRecoveryRequested)
+            .On<ProjectionMaterializationRouteInitializedEvent>(
+                ProjectionScopeStateApplier.ApplyMaterializationRouteInitialized)
+            .On<ProjectionMaterializationCutoverRequestedEvent>(
+                ProjectionScopeStateApplier.ApplyMaterializationCutoverRequested)
+            .On<ProjectionMaterializationCutoverCandidateBuiltEvent>(
+                ProjectionScopeStateApplier.ApplyMaterializationCutoverCandidateBuilt)
+            .On<ProjectionMaterializationCutoverGoldenVerifiedEvent>(
+                ProjectionScopeStateApplier.ApplyMaterializationCutoverGoldenVerified)
+            .On<ProjectionMaterializationCutoverActivatedEvent>(
+                ProjectionScopeStateApplier.ApplyMaterializationCutoverActivated)
             .OrCurrent();
 
     protected ProjectionRuntimeScopeKey BuildScopeKey() =>
@@ -260,12 +326,16 @@ public abstract class ProjectionScopeGAgentBase<TContext>
     private async Task<ProjectionScopeDispatchResult> DispatchObservationAsync(
         EventEnvelope envelope,
         CancellationToken ct,
-        bool bypassSuccessfulVersionFence = false)
+        ProjectionObservationDispatchOrigin origin = ProjectionObservationDispatchOrigin.Observed)
     {
         var context = ResolveScopeContext();
         var sourceActorId = ResolveSourceActorId(envelope);
         var eventKind = ResolveEventKind(envelope);
-        if (!bypassSuccessfulVersionFence)
+        var observedMetadata = BuildObservedEnvelopeMetadata(envelope);
+        var durableSource = EnablesDurableObservationRecovery
+            ? BuildRequiredSourceCoordinate(sourceActorId, observedMetadata)
+            : null;
+        if (origin == ProjectionObservationDispatchOrigin.Observed)
         {
             await PersistDomainEventAsync(new ProjectionScopeEnvelopeReceivedEvent
             {
@@ -275,8 +345,22 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             ProjectionProcessingMetrics.RecordReceived(State.ProjectionKind, eventKind);
         }
 
-        if (!bypassSuccessfulVersionFence && IsAlreadyProjected(sourceActorId, envelope))
+        if (durableSource != null)
+        {
+            var admission = AdmitDurableSource(durableSource);
+            if (admission == DurableSourceAdmission.ExactDuplicate)
+            {
+                if (origin != ProjectionObservationDispatchOrigin.FailureReplay)
+                    await _failureTracker!.ResolveMatchingAsync(State, durableSource);
+
+                return ProjectionScopeDispatchResult.Success(durableSource.StateVersion, eventKind);
+            }
+        }
+        else if (origin == ProjectionObservationDispatchOrigin.Observed &&
+                 IsAlreadyProjected(sourceActorId, envelope))
+        {
             return ProjectionScopeDispatchResult.Skip(envelope.Payload?.TypeUrl ?? string.Empty);
+        }
 
         var sourceVersion = ResolveSourceVersion(envelope);
         await PersistDomainEventAsync(new ProjectionScopeEnvelopeAttemptedEvent
@@ -284,14 +368,28 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             HighestSeenVersion = sourceVersion,
             OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             SourceActorId = sourceActorId,
-            ObservedEnvelope = BuildObservedEnvelopeMetadata(envelope),
+            ObservedEnvelope = observedMetadata,
             EventKind = eventKind,
         });
         ProjectionProcessingMetrics.RecordAttempted(State.ProjectionKind, eventKind);
 
+        if (durableSource != null && State.InFlightObservation?.Source == null)
+        {
+            await PersistDomainEventAsync(new ProjectionScopeObservationStagedEvent
+            {
+                Observation = new ProjectionScopeInFlightObservation
+                {
+                    Source = durableSource.Clone(),
+                    Envelope = envelope.Clone(),
+                    EventKind = eventKind,
+                    StagedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+                },
+            });
+        }
+
         var startedAt = Stopwatch.GetTimestamp();
         var previousReplayState = _isReplayingFailure;
-        _isReplayingFailure = bypassSuccessfulVersionFence;
+        _isReplayingFailure = origin == ProjectionObservationDispatchOrigin.FailureReplay;
         ProjectionScopeDispatchResult result;
         try
         {
@@ -309,13 +407,65 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             LastSuccessfulVersion = result.SuccessfulVersion,
             OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             SourceActorId = sourceActorId,
+            ObservedEnvelope = observedMetadata,
         });
+        if (durableSource != null && origin != ProjectionObservationDispatchOrigin.FailureReplay)
+            await _failureTracker!.ResolveMatchingAsync(State, durableSource);
         ProjectionProcessingMetrics.RecordSucceeded(
             State.ProjectionKind,
             result.EventType,
             Stopwatch.GetElapsedTime(startedAt));
         return result;
     }
+
+    private DurableSourceAdmission AdmitDurableSource(ProjectionSourceCoordinate received)
+    {
+        if (State.LastSuccessfulSourceCoordinatesByActor.TryGetValue(received.ActorId, out var committed) &&
+            committed.StateVersion == received.StateVersion)
+        {
+            if (!string.Equals(committed.EventId, received.EventId, StringComparison.Ordinal))
+                throw new ProjectionSourceCoordinateConflictException(committed, received);
+
+            return DurableSourceAdmission.ExactDuplicate;
+        }
+
+        var pending = State.InFlightObservation?.Source;
+        if (pending == null)
+            return DurableSourceAdmission.Admitted;
+
+        if (!HasSameSource(pending, received))
+            throw new ProjectionScopeInFlightObservationPendingException(pending, received);
+
+        return DurableSourceAdmission.InFlightResume;
+    }
+
+    private static ProjectionSourceCoordinate BuildRequiredSourceCoordinate(
+        string sourceActorId,
+        ProjectionObservedEnvelopeMetadata? observed)
+    {
+        if (string.IsNullOrWhiteSpace(sourceActorId))
+            throw new ProjectionSourceCoordinateInvalidException("source actor id is missing");
+        if (observed == null)
+            throw new ProjectionSourceCoordinateInvalidException("committed observation metadata is missing");
+        if (observed.StateVersion <= 0)
+            throw new ProjectionSourceCoordinateInvalidException("state version must be positive");
+        if (string.IsNullOrWhiteSpace(observed.EventId))
+            throw new ProjectionSourceCoordinateInvalidException("event id is missing");
+
+        return new ProjectionSourceCoordinate
+        {
+            ActorId = sourceActorId,
+            StateVersion = observed.StateVersion,
+            EventId = observed.EventId,
+        };
+    }
+
+    private static bool HasSameSource(
+        ProjectionSourceCoordinate left,
+        ProjectionSourceCoordinate right) =>
+        left.StateVersion == right.StateVersion &&
+        string.Equals(left.ActorId, right.ActorId, StringComparison.Ordinal) &&
+        string.Equals(left.EventId, right.EventId, StringComparison.Ordinal);
 
     private static ProjectionObservedEnvelopeMetadata? BuildObservedEnvelopeMetadata(EventEnvelope envelope)
     {
@@ -433,6 +583,20 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 
         return _failureTracker!.RecordAsync(stage, eventId, eventType, sourceVersion, reason, envelope, _logger);
     }
+}
+
+internal enum ProjectionObservationDispatchOrigin
+{
+    Observed = 0,
+    FailureReplay = 1,
+    InFlightRecovery = 2,
+}
+
+internal enum DurableSourceAdmission
+{
+    Admitted = 0,
+    InFlightResume = 1,
+    ExactDuplicate = 2,
 }
 
 public readonly record struct ProjectionScopeDispatchResult(

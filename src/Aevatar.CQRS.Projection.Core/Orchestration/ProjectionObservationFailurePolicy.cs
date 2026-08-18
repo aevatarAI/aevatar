@@ -11,6 +11,9 @@ internal static class ProjectionObservationFailurePolicy
         return exception switch
         {
             EventStoreOptimisticConcurrencyException => true,
+            ProjectionScopeInFlightObservationPendingException => true,
+            ProjectionSourceCoordinateConflictException => true,
+            ProjectionSourceCoordinateInvalidException => true,
             ProjectionDispatchAggregateException aggregate =>
                 aggregate.Failures.Any(static failure => ShouldPropagate(failure.Exception)),
             AggregateException aggregate =>

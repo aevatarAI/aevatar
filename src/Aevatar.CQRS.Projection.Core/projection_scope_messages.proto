@@ -43,6 +43,17 @@ message ProjectionScopeState {
   // The actor owns this monotonic fence so multiple host replicas cannot
   // replay the same observed failure snapshot more than once.
   int64 last_automatic_recovery_observed_state_version = 24;
+  // Exact committed coordinates are the durable idempotency authority. A
+  // version without its source actor and event id is never treated as proof
+  // of an exact duplicate.
+  map<string, ProjectionSourceCoordinate> last_successful_source_coordinates_by_actor = 25;
+  // Persisted before invoking an external materializer and cleared by the
+  // same watermark transition that records successful materialization.
+  ProjectionScopeInFlightObservation in_flight_observation = 26;
+  // Actor-owned write/query route. Eventual status documents only replicate
+  // this value and must never choose or advance it.
+  ProjectionMaterializationRouteFingerprint active_materialization_route = 27;
+  ProjectionMaterializationCutoverState materialization_cutover = 28;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -50,6 +61,42 @@ message ProjectionObservedEnvelopeMetadata {
   string type_url = 2;
   int64 state_version = 3;
   google.protobuf.Timestamp timestamp_utc = 4;
+}
+
+message ProjectionSourceCoordinate {
+  string actor_id = 1;
+  int64 state_version = 2;
+  string event_id = 3;
+}
+
+message ProjectionScopeInFlightObservation {
+  ProjectionSourceCoordinate source = 1;
+  aevatar.EventEnvelope envelope = 2;
+  string event_kind = 3;
+  google.protobuf.Timestamp staged_at_utc = 4;
+}
+
+message ProjectionMaterializationRouteFingerprint {
+  string contract_id = 1;
+  int64 contract_version = 2;
+  string physical_namespace = 3;
+  int64 route_epoch = 4;
+}
+
+enum ProjectionMaterializationCutoverPhase {
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_UNSPECIFIED = 0;
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_REQUESTED = 1;
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_CANDIDATE_BUILT = 2;
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_GOLDEN_VERIFIED = 3;
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_ACTIVATED = 4;
+}
+
+message ProjectionMaterializationCutoverState {
+  ProjectionMaterializationCutoverPhase phase = 1;
+  ProjectionMaterializationRouteFingerprint candidate_route = 2;
+  ProjectionSourceCoordinate candidate_source = 3;
+  string candidate_fingerprint = 4;
+  google.protobuf.Timestamp updated_at_utc = 5;
 }
 
 message ProjectionScopeFailure {
@@ -102,6 +149,14 @@ message ReplayProjectionFailuresCommand {
   int64 observed_scope_state_version = 3;
 }
 
+message ResumeProjectionInFlightObservationCommand {
+  ProjectionSourceCoordinate expected_source = 1;
+}
+
+message ContinueProjectionMaterializationCutoverCommand {
+  int64 expected_route_epoch = 1;
+}
+
 message ProjectionScopeStartedEvent {
   string root_actor_id = 1;
   string projection_kind = 2;
@@ -138,6 +193,10 @@ message ProjectionScopeEnvelopeAttemptedEvent {
   string event_kind = 5;
 }
 
+message ProjectionScopeObservationStagedEvent {
+  ProjectionScopeInFlightObservation observation = 1;
+}
+
 message ProjectionScopeWatermarkAdvancedEvent {
   reserved 1;
   int64 last_successful_version = 2;
@@ -168,4 +227,35 @@ message ProjectionScopeFailureReplayedEvent {
 message ProjectionScopeAutomaticRecoveryRequestedEvent {
   int64 observed_scope_state_version = 1;
   google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionMaterializationRouteInitializedEvent {
+  ProjectionMaterializationRouteFingerprint route = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionMaterializationCutoverRequestedEvent {
+  ProjectionMaterializationRouteFingerprint candidate_route = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionMaterializationCutoverCandidateBuiltEvent {
+  ProjectionMaterializationRouteFingerprint candidate_route = 1;
+  ProjectionSourceCoordinate candidate_source = 2;
+  string candidate_fingerprint = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
+}
+
+message ProjectionMaterializationCutoverGoldenVerifiedEvent {
+  ProjectionMaterializationRouteFingerprint candidate_route = 1;
+  ProjectionSourceCoordinate candidate_source = 2;
+  string candidate_fingerprint = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
+}
+
+message ProjectionMaterializationCutoverActivatedEvent {
+  ProjectionMaterializationRouteFingerprint route = 1;
+  ProjectionSourceCoordinate source = 2;
+  string candidate_fingerprint = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
 }

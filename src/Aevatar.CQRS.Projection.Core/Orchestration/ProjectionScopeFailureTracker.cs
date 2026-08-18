@@ -148,6 +148,34 @@ internal sealed class ProjectionScopeFailureTracker
         }
     }
 
+    public async Task ResolveMatchingAsync(
+        ProjectionScopeState state,
+        ProjectionSourceCoordinate source)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(source);
+
+        var matchingFailureIds = state.Failures
+            .Where(failure =>
+                failure.SourceVersion == source.StateVersion &&
+                string.Equals(failure.SourceActorId, source.ActorId, StringComparison.Ordinal) &&
+                string.Equals(failure.EventId, source.EventId, StringComparison.Ordinal))
+            .Select(static failure => failure.FailureId)
+            .Where(static failureId => !string.IsNullOrWhiteSpace(failureId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var failureId in matchingFailureIds)
+        {
+            await _persistAsync(
+                ProjectionScopeFailureLog.BuildReplayResultEvent(failureId, true));
+            ProjectionProcessingMetrics.RecordResolved(
+                _scopeKeyResolver().ProjectionKind,
+                _failureCountAccessor(),
+                _oldestFailureAtAccessor());
+        }
+    }
+
     private async Task RecordReplayFailureAsync(ProjectionScopeFailure failure, string reason)
     {
         var becomesExhausted = !failure.RetryExhausted &&

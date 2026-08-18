@@ -31,6 +31,10 @@ message ProjectionScopeStatusDocument {
   int64 failure_diagnostic_dropped_total = 23;
   repeated ProjectionSourceVersionStatus source_versions = 24;
   int32 retry_exhausted_failure_count = 25;
+  repeated ProjectionSourceCoordinate last_successful_source_coordinates = 26;
+  ProjectionScopeInFlightObservation in_flight_observation = 27;
+  ProjectionMaterializationRouteFingerprint active_materialization_route = 28;
+  ProjectionMaterializationCutoverState materialization_cutover = 29;
 }
 
 message ProjectionSourceVersionStatus {

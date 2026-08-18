@@ -76,9 +76,16 @@ public sealed class ProjectionScopeStatusProjector
             RetryExhaustedTotal = state.RetryExhaustedTotal,
             RetryExhaustedFailureCount = failureSummary.RetryExhaustedFailureCount,
             FailureDiagnosticDroppedTotal = state.FailureDiagnosticDroppedTotal,
+            InFlightObservation = state.InFlightObservation?.Clone(),
+            ActiveMaterializationRoute = state.ActiveMaterializationRoute?.Clone(),
+            MaterializationCutover = state.MaterializationCutover?.Clone(),
         };
         document.OldestUnresolvedFailureAtUtc = failureSummary.OldestUnresolvedFailureAtUtc?.Clone();
         document.RecentObservedEnvelopes.Add(state.RecentObservedEnvelopes);
+        document.LastSuccessfulSourceCoordinates.Add(
+            state.LastSuccessfulSourceCoordinatesByActor.Values
+                .OrderBy(static source => source.ActorId, StringComparer.Ordinal)
+                .Select(static source => source.Clone()));
         foreach (var sourceActorId in state.HighestSeenVersionsByActor.Keys
                      .Union(state.LastSuccessfulVersionsByActor.Keys, StringComparer.Ordinal)
                      .OrderBy(sourceActorId => sourceActorId, StringComparer.Ordinal))

@@ -83,6 +83,16 @@ internal static class ProjectionScopeStateApplier
         return next;
     }
 
+    public static ProjectionScopeState ApplyObservationStaged(
+        ProjectionScopeState current,
+        ProjectionScopeObservationStagedEvent evt)
+    {
+        var next = current.Clone();
+        next.InFlightObservation = evt.Observation?.Clone();
+        next.UpdatedAtUtc = evt.Observation?.StagedAtUtc?.Clone();
+        return next;
+    }
+
     public static ProjectionScopeState ApplyWatermarkAdvanced(
         ProjectionScopeState current,
         ProjectionScopeWatermarkAdvancedEvent evt)
@@ -96,6 +106,18 @@ internal static class ProjectionScopeStateApplier
                 ? version
                 : 0;
             next.LastSuccessfulVersionsByActor[evt.SourceActorId] = Math.Max(previous, evt.LastSuccessfulVersion);
+        }
+        var coordinate = BuildSourceCoordinate(evt);
+        if (coordinate != null)
+        {
+            if (HasSameSource(next.InFlightObservation?.Source, coordinate))
+                next.InFlightObservation = null;
+
+            if (!next.LastSuccessfulSourceCoordinatesByActor.TryGetValue(coordinate.ActorId, out var previous) ||
+                coordinate.StateVersion >= previous.StateVersion)
+            {
+                next.LastSuccessfulSourceCoordinatesByActor[coordinate.ActorId] = coordinate;
+            }
         }
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
@@ -180,4 +202,115 @@ internal static class ProjectionScopeStateApplier
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }
+
+    public static ProjectionScopeState ApplyMaterializationRouteInitialized(
+        ProjectionScopeState current,
+        ProjectionMaterializationRouteInitializedEvent evt)
+    {
+        var next = current.Clone();
+        next.ActiveMaterializationRoute = evt.Route?.Clone();
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyMaterializationCutoverRequested(
+        ProjectionScopeState current,
+        ProjectionMaterializationCutoverRequestedEvent evt)
+    {
+        var next = current.Clone();
+        next.MaterializationCutover = new ProjectionMaterializationCutoverState
+        {
+            Phase = ProjectionMaterializationCutoverPhase.Requested,
+            CandidateRoute = evt.CandidateRoute?.Clone(),
+            UpdatedAtUtc = evt.OccurredAtUtc?.Clone(),
+        };
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyMaterializationCutoverCandidateBuilt(
+        ProjectionScopeState current,
+        ProjectionMaterializationCutoverCandidateBuiltEvent evt) =>
+        ApplyCutoverProgress(
+            current,
+            ProjectionMaterializationCutoverPhase.CandidateBuilt,
+            evt.CandidateRoute,
+            evt.CandidateSource,
+            evt.CandidateFingerprint,
+            evt.OccurredAtUtc);
+
+    public static ProjectionScopeState ApplyMaterializationCutoverGoldenVerified(
+        ProjectionScopeState current,
+        ProjectionMaterializationCutoverGoldenVerifiedEvent evt) =>
+        ApplyCutoverProgress(
+            current,
+            ProjectionMaterializationCutoverPhase.GoldenVerified,
+            evt.CandidateRoute,
+            evt.CandidateSource,
+            evt.CandidateFingerprint,
+            evt.OccurredAtUtc);
+
+    public static ProjectionScopeState ApplyMaterializationCutoverActivated(
+        ProjectionScopeState current,
+        ProjectionMaterializationCutoverActivatedEvent evt)
+    {
+        var next = ApplyCutoverProgress(
+            current,
+            ProjectionMaterializationCutoverPhase.Activated,
+            evt.Route,
+            evt.Source,
+            evt.CandidateFingerprint,
+            evt.OccurredAtUtc);
+        next.ActiveMaterializationRoute = evt.Route?.Clone();
+        return next;
+    }
+
+    private static ProjectionScopeState ApplyCutoverProgress(
+        ProjectionScopeState current,
+        ProjectionMaterializationCutoverPhase phase,
+        ProjectionMaterializationRouteFingerprint? route,
+        ProjectionSourceCoordinate? source,
+        string? candidateFingerprint,
+        Google.Protobuf.WellKnownTypes.Timestamp? occurredAtUtc)
+    {
+        var next = current.Clone();
+        next.MaterializationCutover = new ProjectionMaterializationCutoverState
+        {
+            Phase = phase,
+            CandidateRoute = route?.Clone(),
+            CandidateSource = source?.Clone(),
+            CandidateFingerprint = candidateFingerprint ?? string.Empty,
+            UpdatedAtUtc = occurredAtUtc?.Clone(),
+        };
+        next.UpdatedAtUtc = occurredAtUtc?.Clone();
+        return next;
+    }
+
+    private static ProjectionSourceCoordinate? BuildSourceCoordinate(
+        ProjectionScopeWatermarkAdvancedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.SourceActorId) ||
+            evt.ObservedEnvelope == null ||
+            evt.ObservedEnvelope.StateVersion <= 0 ||
+            string.IsNullOrWhiteSpace(evt.ObservedEnvelope.EventId))
+        {
+            return null;
+        }
+
+        return new ProjectionSourceCoordinate
+        {
+            ActorId = evt.SourceActorId,
+            StateVersion = evt.ObservedEnvelope.StateVersion,
+            EventId = evt.ObservedEnvelope.EventId,
+        };
+    }
+
+    private static bool HasSameSource(
+        ProjectionSourceCoordinate? left,
+        ProjectionSourceCoordinate? right) =>
+        left != null &&
+        right != null &&
+        left.StateVersion == right.StateVersion &&
+        string.Equals(left.ActorId, right.ActorId, StringComparison.Ordinal) &&
+        string.Equals(left.EventId, right.EventId, StringComparison.Ordinal);
 }
