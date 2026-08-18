@@ -20,6 +20,8 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Projection.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -39,7 +41,12 @@ public static class ServiceCollectionExtensions
         var options = new WorkflowExecutionProjectionOptions();
         configure?.Invoke(options);
         services.Replace(ServiceDescriptor.Singleton(options));
+        services.AddAevatarAgentKindRegistry(builder =>
+            builder.ScanAssemblies(typeof(WorkflowExecutionMaterializationScopeGAgent).Assembly));
         services.AddRuntimeFleetCapabilityProjection();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IRuntimeFleetCapabilityAdvertisement,
+            WorkflowProjectionIncrementalGraphCapabilityAdvertisement>());
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
         services.AddProjectionReadModelRuntime();
@@ -64,7 +71,7 @@ public static class ServiceCollectionExtensions
         services.AddProjectionMaterializationRuntimeCore<
             WorkflowExecutionMaterializationContext,
             WorkflowExecutionMaterializationRuntimeLease,
-            ProjectionMaterializationScopeGAgent<WorkflowExecutionMaterializationContext>>(
+            WorkflowExecutionMaterializationScopeGAgent>(
             scopeKey => new WorkflowExecutionMaterializationContext
             {
                 RootActorId = scopeKey.RootActorId,

@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
@@ -629,6 +630,17 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
+    public void ProjectionScopeAgentRegistration_ShouldRespectExplicitConcreteScopeDeclaration()
+    {
+        var registration = ProjectionScopeAgentRegistration.Create<ExplicitScopeAgent>();
+
+        registration.Kind.Should().Be("projection.materialization-scope.explicit-test");
+        registration.ImplementationType.Should().Be(typeof(ExplicitScopeAgent));
+        registration.StateContractType.Should().Be(typeof(ProjectionScopeState));
+        registration.StateSchemaVersion.Should().Be(3);
+    }
+
+    [Fact]
     public void ProjectionScopeAgentRegistration_ShouldGenerateFallbackGenericPrimaryKind()
     {
         var registration = ProjectionScopeAgentRegistration.Create<FallbackScopeAgent<TestFallbackScopeContext>>();
@@ -987,6 +999,10 @@ public sealed class ProjectionRuntimeRegistrationTests
         public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
             Task.FromResult<IReadOnlyList<System.Type>>([]);
     }
+
+    [GAgent("projection.materialization-scope.explicit-test", StateSchemaVersion = 3)]
+    private sealed class ExplicitScopeAgent
+        : ProjectionMaterializationScopeGAgentBase<TestMaterializationContext>;
 
     private sealed class FallbackScopeAgent<TContext> : IAgent
     {

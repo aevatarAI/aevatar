@@ -177,6 +177,7 @@ v1 non-goal：复杂 owner-change bootstrap（split / merge / re-key / replace �
    `ProjectionSessionEventHub<WorkflowRunEventEnvelope>`（session stream hub） +  
    `WorkflowProjectionReadModelUpdater`（读模型元信息） +  
    `WorkflowExecutionCurrentStateQueryPort` / `WorkflowExecutionArtifactQueryPort`（查询映射；query 直接实现 read adapter，不再复用通用 query-port 基类）。
+   `WorkflowExecutionMaterializationScopeGAgent` 保持既有 materialization kind，并以 schema v1 的纯 clone migration 绑定 `ProjectionIncrementalGraphV1` fleet admission；durable in-flight observation recovery 只在 runtime-owned schema context 含唯一 exact v1 adoption receipt 时启用。该 adoption 仅是 activation fence，不选择 graph namespace，也不执行 route cutover。
 5. CI 增加编排类体量守卫与 capability 边界守卫：关键编排类的非空行数与直接依赖数有上限，`workflow/scripting` 外部入口不得回退到私有 lifecycle 主链。
 
 ## 5.3 Envelope / Annotation 口径（防理解偏差）

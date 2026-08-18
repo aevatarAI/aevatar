@@ -183,6 +183,7 @@ Orleans 的 `LinkAsync(parentId, childId)` 必须区分当前 grain 与其他 pa
   - `ProjectionSessionScopeReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionSessionScopeGAgent>` 负责 session scope actor 释放
   - `ProjectionMaterializationScopeActivationService<WorkflowExecutionMaterializationRuntimeLease, WorkflowExecutionMaterializationContext, WorkflowExecutionMaterializationScopeGAgent>` 负责 durable scope actor 激活
   - `ProjectionMaterializationScopeReleaseService<WorkflowExecutionMaterializationRuntimeLease, WorkflowExecutionMaterializationScopeGAgent>` 负责 durable scope actor 释放
+  - `WorkflowExecutionMaterializationScopeGAgent` 保持既有 durable scope kind；schema v1 adoption 只在 `ProjectionIncrementalGraphV1` fleet proof 有效时开放，durable in-flight observation recovery 只由 runtime-owned exact adoption receipt 解锁，且 adoption 本身不切换 graph route
   - `ProjectionSessionEventHub<WorkflowRunEventEnvelope>` 负责 session stream 分发
   - `WorkflowExecutionCurrentStateQueryPort` 负责 authority current-state 查询映射
   - `WorkflowExecutionArtifactQueryPort` 负责 artifact 查询映射
