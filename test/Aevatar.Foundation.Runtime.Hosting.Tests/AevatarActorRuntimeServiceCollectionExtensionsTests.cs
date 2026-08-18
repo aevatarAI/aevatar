@@ -90,10 +90,15 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
 
         services.AddAevatarActorRuntime(configuration);
 
-        var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IStreamForwardingRegistry));
-        descriptor.Should().NotBeNull();
-        descriptor!.ImplementationType.Should().Be(typeof(OrleansDistributedStreamForwardingRegistry));
-        descriptor.ImplementationType.Should().NotBe(typeof(InMemoryStreamForwardingRegistry));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(OrleansDistributedStreamForwardingRegistry) &&
+            x.ImplementationType == typeof(OrleansDistributedStreamForwardingRegistry));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IStreamForwardingRegistry) &&
+            x.ImplementationFactory != null);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IStreamForwardingBindingAuthority) &&
+            x.ImplementationFactory != null);
     }
 
     [Fact]
