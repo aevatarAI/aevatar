@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -2699,6 +2700,112 @@ public sealed class ToolCallModuleContextTests
         ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
             .PendingOperations.Should().ContainSingle().Subject.Value.ExpiresAtUnixMs
             .Should().Be(now.AddMinutes(14).ToUnixTimeMilliseconds());
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenV4SubmissionUncertainRecoversCatalogRoute_ShouldRefinePendingReceipt()
+    {
+        var now = new DateTimeOffset(2026, 8, 17, 0, 0, 0, TimeSpan.Zero);
+        var providerReceipt = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-catalog") with
+        {
+            ServiceSlug = CodeExecutionContract.ServiceSlug,
+            UserServiceId = "catalog-service",
+            RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog,
+            ExpiresAtUnixMs = now.AddMinutes(10).ToUnixTimeMilliseconds(),
+        };
+        var submitted = providerReceipt with
+        {
+            ProviderOperationId = string.Empty,
+            StatusPath = string.Empty,
+            ResultPath = string.Empty,
+            CancelPath = string.Empty,
+            Status = WorkflowToolPendingOperationStatus.SubmissionUncertain,
+            ETag = null,
+            UserServiceId = null,
+            RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract,
+            ExpiresAtUnixMs = now.AddMinutes(12).ToUnixTimeMilliseconds(),
+        };
+        var tool = new ScriptedDurableOperationTool(
+            WorkflowAuthorizationDependencyEvaluator.CodeExecuteToolName,
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: providerReceipt));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext
+        {
+            UtcNowOverride = now,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.PreviousSchemaVersion,
+            },
+        };
+
+        await ExecuteToolCallAsync(
+            module,
+            ctx,
+            tool.Name,
+            stepId: "call_code",
+            executionId: "exec-v4-route-refinement",
+            externalInvocation: CodeExecutionInvocation("wf-alpha/call_code"));
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        await module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        var pending = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().ContainSingle().Subject.Value;
+        pending.ProviderOperationId.Should().Be(providerReceipt.ProviderOperationId);
+        pending.ServiceSlug.Should().Be(CodeExecutionContract.ServiceSlug);
+        pending.UserServiceId.Should().Be("catalog-service");
+        pending.RouteIdentitySource.Should()
+            .Be(WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog);
+        tool.ReconcileCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenNonCodeToolAttemptsV4RouteRefinement_ShouldRejectReceipt()
+    {
+        var providerReceipt = DurableOperation(
+            status: WorkflowToolPendingOperationStatus.Running,
+            etag: "etag-catalog") with
+        {
+            ServiceSlug = CodeExecutionContract.ServiceSlug,
+            UserServiceId = "catalog-service",
+            RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog,
+        };
+        var submitted = providerReceipt with
+        {
+            ProviderOperationId = string.Empty,
+            StatusPath = string.Empty,
+            ResultPath = string.Empty,
+            CancelPath = string.Empty,
+            Status = WorkflowToolPendingOperationStatus.SubmissionUncertain,
+            ETag = null,
+            UserServiceId = null,
+            RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract,
+        };
+        var tool = new ScriptedDurableOperationTool(
+            "durable_tool",
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: submitted),
+            new WorkflowToolExecutionResult(string.Empty, PendingOperation: providerReceipt));
+        var module = CreateModule(tool);
+        var ctx = new RecordingWorkflowContext();
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, executionId: "exec-non-code-refinement");
+        var poll = ctx.Scheduled.Select(static callback => callback.Event)
+            .OfType<WorkflowToolCallOperationPollFiredEvent>()
+            .Should().ContainSingle().Which;
+
+        await module.HandleAsync(OperationPollEnvelope(poll, ctx), ctx, CancellationToken.None);
+
+        ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
+            .PendingOperations.Should().BeEmpty();
+        ctx.Published.Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle()
+            .Which.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
     }
 
     [Fact]

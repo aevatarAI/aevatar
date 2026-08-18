@@ -9,6 +9,8 @@
     <RootNamespace>Aevatar.Capabilities.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.AIWorkspace.Application.Abstractions\Aevatar.AIWorkspace.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AIWorkspace.Application\Aevatar.AIWorkspace.Application.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Infrastructure.ToolExecution\Aevatar.AI.Infrastructure.ToolExecution.csproj" />
