@@ -254,6 +254,29 @@ internal static class ProjectionScopeStateApplier
         ProjectionScopeState current,
         ProjectionMaterializationCutoverActivatedEvent evt)
     {
+        if (evt.Route == null || evt.Route.RouteEpoch <= 0)
+            throw new InvalidOperationException("An activated materialization route requires a positive route epoch.");
+        if (current.ActiveMaterializationRoute != null &&
+            evt.Route.RouteEpoch <= current.ActiveMaterializationRoute.RouteEpoch)
+        {
+            throw new InvalidOperationException(
+                "A materialization route activation must advance the actor-owned route epoch.");
+        }
+        var cutover = current.MaterializationCutover;
+        if (cutover?.Phase != ProjectionMaterializationCutoverPhase.GoldenVerified ||
+            !HasSameRoute(cutover.CandidateRoute, evt.Route) ||
+            !HasSameSource(cutover.CandidateSource, evt.Source) ||
+            !string.Equals(
+                cutover.CandidateFingerprint,
+                evt.CandidateFingerprint,
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(evt.CandidateFingerprint) ||
+            evt.ActivationProof == null)
+        {
+            throw new InvalidOperationException(
+                "A materialization route can activate only from matching golden-verified candidate evidence.");
+        }
+
         var next = ApplyCutoverProgress(
             current,
             ProjectionMaterializationCutoverPhase.Activated,
@@ -262,8 +285,19 @@ internal static class ProjectionScopeStateApplier
             evt.CandidateFingerprint,
             evt.OccurredAtUtc);
         next.ActiveMaterializationRoute = evt.Route?.Clone();
+        next.MaterializationCutover.ActivationProof = evt.ActivationProof?.Clone();
         return next;
     }
+
+    private static bool HasSameRoute(
+        ProjectionMaterializationRouteFingerprint? left,
+        ProjectionMaterializationRouteFingerprint? right) =>
+        left != null &&
+        right != null &&
+        left.RouteEpoch == right.RouteEpoch &&
+        left.ContractVersion == right.ContractVersion &&
+        string.Equals(left.ContractId, right.ContractId, StringComparison.Ordinal) &&
+        string.Equals(left.PhysicalNamespace, right.PhysicalNamespace, StringComparison.Ordinal);
 
     private static ProjectionScopeState ApplyCutoverProgress(
         ProjectionScopeState current,

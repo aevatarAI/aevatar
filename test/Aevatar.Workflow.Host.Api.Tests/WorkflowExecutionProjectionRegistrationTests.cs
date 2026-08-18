@@ -11,6 +11,7 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
+using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
@@ -54,6 +55,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
         var continuationDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExternalApprovalContinuationDocument>>();
         var graphWriter = provider.GetRequiredService<IProjectionGraphWriter<WorkflowRunInsightReportDocument>>();
+        var versionedGraphStore = provider.GetRequiredService<IVersionedProjectionGraphStore>();
         var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
         var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
         currentStateStore.Should().NotBeNull();
@@ -64,12 +66,16 @@ public class WorkflowExecutionProjectionRegistrationTests
         dispatcher.Should().NotBeNull();
         continuationDispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
+        versionedGraphStore.Should().BeSameAs(relationStore);
         currentStateMaterializers.Should().ContainSingle();
         // Continuation projector, insight report projector, and the committed-fact audit materializer.
         artifactMaterializers.Should().HaveCount(3);
         provider.GetRequiredService<WorkflowExecutionCurrentStateProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowExternalApprovalContinuationProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowRunIncrementalGraphMaterializer>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowProjectionGraphCutoverOrchestrator>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowExecutionArtifactQueryPort>().Should().NotBeNull();
 
         // The binding write path is decorated with the heal/guard dispatcher (Definition supersedes a
         // clobbered Run-kind slot) and the binding projector consumes it.

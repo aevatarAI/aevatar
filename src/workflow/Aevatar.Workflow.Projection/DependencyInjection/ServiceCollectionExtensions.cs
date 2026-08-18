@@ -65,6 +65,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExternalApprovalContinuationDocument>, WorkflowExternalApprovalContinuationDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
+        services.TryAddSingleton<WorkflowRunIncrementalGraphMaterializer>();
+        services.TryAddSingleton<WorkflowProjectionGraphCutoverOrchestrator>();
         services.TryAddSingleton<WorkflowCatalogReadModelMapper>();
         services.TryAddSingleton<WorkflowCatalogReadModelQueryPort>();
         services.TryAddSingleton<IProjectionGraphMaterializer<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportGraphMaterializer>();

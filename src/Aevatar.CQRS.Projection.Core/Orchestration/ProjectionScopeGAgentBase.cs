@@ -48,6 +48,8 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             await ScheduleInFlightObservationRecoveryAsync(ct);
         else
             await ScheduleFailureRecoveryAsync(ct);
+
+        await OnScopeReadyAsync(ct);
     }
 
     protected override async Task OnCommittedStatePublicationRecoveredAsync(
@@ -107,6 +109,8 @@ public abstract class ProjectionScopeGAgentBase<TContext>
                 OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             });
         }
+
+        await OnScopeReadyAsync(CancellationToken.None);
     }
 
     [EventHandler]
@@ -333,6 +337,9 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         EventEnvelope envelope,
         ProjectionScopeDispatchResult result,
         CancellationToken ct) => ValueTask.CompletedTask;
+
+    protected virtual ValueTask OnScopeReadyAsync(CancellationToken ct) =>
+        ValueTask.CompletedTask;
 
     private async Task<ProjectionScopeDispatchResult> DispatchObservationAsync(
         EventEnvelope envelope,

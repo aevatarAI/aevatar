@@ -97,6 +97,17 @@ message ProjectionMaterializationCutoverState {
   ProjectionSourceCoordinate candidate_source = 3;
   string candidate_fingerprint = 4;
   google.protobuf.Timestamp updated_at_utc = 5;
+  ProjectionMaterializationActivationProof activation_proof = 6;
+}
+
+message ProjectionMaterializationActivationProof {
+  int64 authority_state_version = 1;
+  int64 capability_epoch = 2;
+  int64 membership_epoch = 3;
+  string membership_digest = 4;
+  string deployment_revision = 5;
+  google.protobuf.Timestamp validated_at_utc = 6;
+  google.protobuf.Timestamp valid_until_utc = 7;
 }
 
 message ProjectionScopeFailure {
@@ -155,6 +166,11 @@ message ResumeProjectionInFlightObservationCommand {
 
 message ContinueProjectionMaterializationCutoverCommand {
   int64 expected_route_epoch = 1;
+}
+
+message RequestProjectionMaterializationCutoverCommand {
+  int64 expected_active_route_epoch = 1;
+  ProjectionMaterializationRouteFingerprint candidate_route = 2;
 }
 
 message ProjectionScopeStartedEvent {
@@ -258,4 +274,5 @@ message ProjectionMaterializationCutoverActivatedEvent {
   ProjectionSourceCoordinate source = 2;
   string candidate_fingerprint = 3;
   google.protobuf.Timestamp occurred_at_utc = 4;
+  ProjectionMaterializationActivationProof activation_proof = 5;
 }

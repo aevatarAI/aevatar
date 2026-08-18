@@ -689,7 +689,7 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
-    public async Task WorkflowArtifactProjector_ShouldTrackStepAndTopologyEvents_AndSkipDuplicates()
+    public async Task WorkflowArtifactProjector_ShouldTrackEvents_AndRetryGraphAfterReportDuplicate()
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
@@ -773,7 +773,7 @@ public sealed class WorkflowProjectionMaterializationTests
                 eventId: "evt-5"));
 
         reportStore.UpsertCount.Should().Be(5);
-        graphWriter.UpsertCount.Should().Be(5);
+        graphWriter.UpsertCount.Should().Be(6);
         graphWriter.LastProjectionKind.Should().Be(context.ProjectionKind);
         reportStore.Stored["actor-1"].Timeline.Select(x => x.Stage).Should().Contain(["step.request", "step.completed"]);
         graphWriter.Stored["actor-1"].Steps.Should().ContainSingle();

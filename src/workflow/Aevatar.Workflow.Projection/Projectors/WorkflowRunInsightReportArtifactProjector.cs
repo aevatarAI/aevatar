@@ -12,6 +12,8 @@ public sealed class WorkflowRunInsightReportArtifactProjector
     private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _reportReader;
     private readonly IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> _reportWriter;
     private readonly IProjectionGraphWriter<WorkflowRunInsightReportDocument> _graphWriter;
+    private readonly IVersionedProjectionGraphStore? _versionedGraphStore;
+    private readonly WorkflowRunIncrementalGraphMaterializer? _incrementalGraphMaterializer;
 
     // Refactor (iter29/cluster-029-workflow-history-artifact):
     //   Old pattern: workflow history / report / graph are treated as current-state readmodels (current-state query path enriches actor snapshots by reading report artifacts; duplicate WorkflowRunTimelineDocument and WorkflowRunGraphArtifactDocument shells copy WorkflowRunInsightReportDocument; public application/query/tool/HTTP surfaces expose them as actor current-state queries instead of workflow-run artifacts)
@@ -21,10 +23,22 @@ public sealed class WorkflowRunInsightReportArtifactProjector
         IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
         IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> reportWriter,
         IProjectionGraphWriter<WorkflowRunInsightReportDocument> graphWriter)
+        : this(reportReader, reportWriter, graphWriter, null, null)
+    {
+    }
+
+    public WorkflowRunInsightReportArtifactProjector(
+        IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
+        IProjectionWriteDispatcher<WorkflowRunInsightReportDocument> reportWriter,
+        IProjectionGraphWriter<WorkflowRunInsightReportDocument> graphWriter,
+        IVersionedProjectionGraphStore? versionedGraphStore,
+        WorkflowRunIncrementalGraphMaterializer? incrementalGraphMaterializer)
     {
         _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
         _reportWriter = reportWriter ?? throw new ArgumentNullException(nameof(reportWriter));
         _graphWriter = graphWriter ?? throw new ArgumentNullException(nameof(graphWriter));
+        _versionedGraphStore = versionedGraphStore;
+        _incrementalGraphMaterializer = incrementalGraphMaterializer;
     }
 
     public async ValueTask ProjectAsync(
@@ -45,20 +59,70 @@ public sealed class WorkflowRunInsightReportArtifactProjector
             return;
 
         var existing = await _reportReader.GetAsync(context.RootActorId, ct);
-        if (existing != null && WorkflowExecutionArtifactMaterializationSupport.ShouldSkip(existing, stateEvent))
+        if (existing != null && existing.StateVersion > stateEvent.Version)
             return;
+        if (existing != null &&
+            existing.StateVersion == stateEvent.Version &&
+            !string.Equals(existing.LastEventId, stateEvent.EventId ?? string.Empty, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Workflow report version {stateEvent.Version} is already bound to event '{existing.LastEventId}'.");
+        }
 
-        var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, DateTimeOffset.UtcNow);
-        var readModel = existing?.Clone() ??
+        var exactReportDuplicate = existing != null &&
+                                   WorkflowExecutionArtifactMaterializationSupport.ShouldSkip(existing, stateEvent);
+        var readModel = existing;
+        if (!exactReportDuplicate)
+        {
+            var observedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, DateTimeOffset.UtcNow);
+            readModel = existing?.Clone() ??
                         WorkflowExecutionArtifactMaterializationSupport.CreateReportDocument(
                             context,
                             state,
                             stateEvent,
                             observedAt);
 
-        WorkflowExecutionArtifactMaterializationSupport.ApplyReportBase(readModel, context, state, stateEvent, observedAt);
-        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(readModel, stateEvent, observedAt);
-        await _reportWriter.UpsertAsync(readModel, ct);
-        await _graphWriter.UpsertAsync(readModel, context.ProjectionKind, ct);
+            WorkflowExecutionArtifactMaterializationSupport.ApplyReportBase(
+                readModel,
+                context,
+                state,
+                stateEvent,
+                observedAt);
+            WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+                readModel,
+                stateEvent,
+                observedAt);
+            await _reportWriter.UpsertAsync(readModel, ct);
+        }
+
+        if (readModel == null)
+            throw new InvalidOperationException("Workflow report materialization produced no document.");
+
+        if (!WorkflowRunIncrementalGraphMaterializer.IsIncrementalRoute(context.MaterializationRoute))
+        {
+            await _graphWriter.UpsertAsync(readModel, context.ProjectionKind, ct);
+            return;
+        }
+
+        if (_versionedGraphStore == null || _incrementalGraphMaterializer == null)
+        {
+            throw new InvalidOperationException(
+                "The active workflow graph route requires the versioned incremental graph runtime.");
+        }
+
+        var delta = _incrementalGraphMaterializer.BuildIncrementalDelta(
+            readModel,
+            stateEvent,
+            context.ProjectionKind,
+            context.MaterializationRoute!);
+        var result = await _versionedGraphStore.ApplyDeltaAsync(delta, ct);
+        if (result.Disposition is ProjectionGraphDeltaApplyDisposition.Applied or
+            ProjectionGraphDeltaApplyDisposition.ExactDuplicate)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Workflow graph delta was rejected with {result.Disposition}: {result.Detail}");
     }
 }
