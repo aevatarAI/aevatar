@@ -205,8 +205,14 @@ public sealed class LocalActor : IActor
         {
             scope = EventHandleScope.Begin(_logger, Id, item.Envelope, Agent.GetType().FullName ?? Agent.GetType().Name);
             scopeCreated = true;
-            using var reconcileAttestation = await BindFleetReconcileAttestationAsync(
+            // Verify asynchronously, but bind the attestation synchronously in this frame:
+            // an AsyncLocal assigned inside an awaited helper does not flow back to the
+            // caller, so the actor handler would observe no attestation and fail closed.
+            var reconcileAttestation = await VerifyFleetReconcileAttestationAsync(
                 item.Envelope);
+            using var reconcileAttestationBinding = reconcileAttestation == null
+                ? null
+                : _fleetReconcileAttestationBinder!.Bind(reconcileAttestation);
             using var schemaContext = BindStateSchemaContext();
             await Agent.HandleEventAsync(item.Envelope);
             item.Completion.SetResult();
@@ -248,7 +254,7 @@ public sealed class LocalActor : IActor
     private IDisposable? BindStateSchemaContext() =>
         _identity == null ? null : _stateSchemaContextBinder?.Bind(_identity);
 
-    private async Task<IDisposable?> BindFleetReconcileAttestationAsync(
+    private async Task<RuntimeFleetReconcileDeliveryAttestation?> VerifyFleetReconcileAttestationAsync(
         EventEnvelope envelope)
     {
         if (envelope.Payload?.Is(RuntimeFleetReconcileRequested.Descriptor) != true)
@@ -273,6 +279,6 @@ public sealed class LocalActor : IActor
                 "Runtime fleet reconcile callback delivery is not current in scheduler-owned state.");
         }
 
-        return _fleetReconcileAttestationBinder.Bind(attestation);
+        return attestation;
     }
 }
