@@ -1486,28 +1486,28 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
         }
 
         [Fact]
-        public async Task TransformModule_Template_ShouldProduceBudgetVarianceReport()
+        public async Task TransformModule_Template_ShouldAggregateAndClassifyGroupedValues()
         {
             var module = new TransformModule();
             var ctx = CreateContext();
             const string template =
-                "{{~ actual = {}; budget = {}; seen = {}; rows = [] ~}}" +
-                "{{~ for item in data.actual_items ~}}" +
-                "{{~ actual[item.category] = get(actual, item.category, 0) + number(item.amount) ~}}" +
+                "{{~ observed = {}; baseline = {}; seen = {}; rows = [] ~}}" +
+                "{{~ for item in data.observed_items ~}}" +
+                "{{~ observed[item.group] = get(observed, item.group, 0) + number(item.value) ~}}" +
                 "{{~ end ~}}" +
-                "{{~ for item in data.budget_items ~}}" +
-                "{{~ budget[item.category] = get(budget, item.category, 0) + number(item.amount) ~}}" +
+                "{{~ for item in data.baseline_items ~}}" +
+                "{{~ baseline[item.group] = get(baseline, item.group, 0) + number(item.value) ~}}" +
                 "{{~ end ~}}" +
-                "{{~ for category in keys(actual) ~}}" +
-                "{{~ seen[category] = true; a = get(actual, category, 0); b = get(budget, category, 0) ~}}" +
-                "{{~ if b > 0; pct = round(a / b * 100, 1); else if a > 0; pct = -1; else; pct = 0; end ~}}" +
-                "{{~ if pct == -1 || pct >= 120; level = 'over'; else if pct >= 100; level = 'warning'; else if pct >= 80; level = 'watch'; else; level = 'ok'; end ~}}" +
-                "{{~ rows = append(rows, { category: category, budget: round(b, 2), actual: round(a, 2), pct: pct, level: level }) ~}}" +
+                "{{~ for group in keys(observed) ~}}" +
+                "{{~ seen[group] = true; o = get(observed, group, 0); b = get(baseline, group, 0) ~}}" +
+                "{{~ if b > 0; ratio = round(o / b * 100, 1); else if o > 0; ratio = -1; else; ratio = 0; end ~}}" +
+                "{{~ if ratio == -1 || ratio >= 120; band = 'high'; else if ratio >= 100; band = 'elevated'; else if ratio >= 80; band = 'near'; else; band = 'within'; end ~}}" +
+                "{{~ rows = append(rows, { group: group, baseline: round(b, 2), observed: round(o, 2), ratio: ratio, band: band }) ~}}" +
                 "{{~ end ~}}" +
-                "{{~ for category in keys(budget) ~}}" +
-                "{{~ if !get(seen, category, false) ~}}" +
-                "{{~ b = get(budget, category, 0) ~}}" +
-                "{{~ rows = append(rows, { category: category, budget: round(b, 2), actual: 0, pct: 0, level: 'ok' }) ~}}" +
+                "{{~ for group in keys(baseline) ~}}" +
+                "{{~ if !get(seen, group, false) ~}}" +
+                "{{~ b = get(baseline, group, 0) ~}}" +
+                "{{~ rows = append(rows, { group: group, baseline: round(b, 2), observed: 0, ratio: 0, band: 'within' }) ~}}" +
                 "{{~ end ~}}" +
                 "{{~ end ~}}" +
                 "{{ json({ rows: rows, truncated: data.truncated }) }}";
@@ -1515,19 +1515,19 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             await module.HandleAsync(
                 Envelope(new StepRequestEvent
                 {
-                    StepId = "template-budget-variance",
+                    StepId = "template-grouped-values",
                     StepType = "transform",
                     Input =
                         """
                         {
-                          "actual_items": [
-                            { "category": "ops", "amount": "80" },
-                            { "category": "ops", "amount": "50" },
-                            { "category": "sales", "amount": "20" }
+                          "observed_items": [
+                            { "group": "alpha", "value": "80" },
+                            { "group": "alpha", "value": "50" },
+                            { "group": "beta", "value": "20" }
                           ],
-                          "budget_items": [
-                            { "category": "ops", "amount": "100" },
-                            { "category": "research", "amount": "40" }
+                          "baseline_items": [
+                            { "group": "alpha", "value": "100" },
+                            { "group": "gamma", "value": "40" }
                           ],
                           "truncated": false
                         }
@@ -1546,10 +1546,10 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             using var output = JsonDocument.Parse(completion.Output);
             var rows = output.RootElement.GetProperty("rows");
             rows.GetArrayLength().Should().Be(3);
-            rows[0].GetProperty("category").GetString().Should().Be("ops");
-            rows[0].GetProperty("pct").GetDecimal().Should().Be(130m);
-            rows[0].GetProperty("level").GetString().Should().Be("over");
-            rows[2].GetProperty("category").GetString().Should().Be("research");
+            rows[0].GetProperty("group").GetString().Should().Be("alpha");
+            rows[0].GetProperty("ratio").GetDecimal().Should().Be(130m);
+            rows[0].GetProperty("band").GetString().Should().Be("high");
+            rows[2].GetProperty("group").GetString().Should().Be("gamma");
             output.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
         }
 

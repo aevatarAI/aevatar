@@ -24,6 +24,13 @@ describe("getNavigationSelectedKeys", () => {
     ]);
   });
 
+  it("maps AI workspace pages and the compatibility Chat route back to AI", () => {
+    expect(getNavigationSelectedKeys("/ai/chat")).toEqual(["/ai"]);
+    expect(getNavigationSelectedKeys("/ai/agents")).toEqual(["/ai"]);
+    expect(getNavigationSelectedKeys("/ai/models")).toEqual(["/ai"]);
+    expect(getNavigationSelectedKeys("/chat")).toEqual(["/ai"]);
+  });
+
   it("returns no selected key for hidden routes without a menu parent", () => {
     expect(getNavigationSelectedKeys("/studio")).toEqual([]);
   });

@@ -471,6 +471,8 @@ failure、当前 `retryExhaustedFailureCount`、处理计数和 oldest age，不
 | `aevatar.projection.materializer.duration` | Histogram | ms | `projection.kind`, `materializer.kind`, `result` |
 | `aevatar.projection.materializer.total` | Counter | count | `projection.kind`, `materializer.kind`, `result` |
 | `aevatar.projection.failure_diagnostic.dropped` | Counter | count | `projection.kind` |
+| `aevatar.projection.activation.stage.duration` | Histogram | ms | `stage`, `outcome`, `mode` |
+| `aevatar.projection.activation.result.total` | Counter | count | `path`, `outcome`, `mode` |
 
 `Aevatar.CQRS.Projection.Providers.Neo4j`：
 
@@ -527,6 +529,12 @@ OTLP exporter 才会采集上述 instrument。Projection/Neo4j duration 使用�
 进程重启可恢复的权威 current count。`oldest_unresolved_failure.age` 也只在 backlog 变化时
 产生年龄样本。当前 unresolved 数量与最旧发生时间始终读取
 `ProjectionScopeStatusDocument`，不得用 Meter 聚合值反向定义事实。
+
+Projection activation labels are deliberately low-cardinality. `stage` is limited to
+`authority_lookup / existence_lookup / kind_verification / dispatch_admission / relay_readiness / release_readiness`;
+`path` is `warm / cold`; `mode` is `durable / session / unknown`; and `outcome` is limited to
+`hit / miss / mismatch / success / failure / cancelled / timeout`. Actor ids, scope ids and projection
+kinds must remain log fields and must not be added as activation metric labels.
 
 ## 13. 参考
 

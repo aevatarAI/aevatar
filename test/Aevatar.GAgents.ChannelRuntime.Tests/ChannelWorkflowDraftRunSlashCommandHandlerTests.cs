@@ -16,8 +16,8 @@ public sealed class ChannelWorkflowDraftRunSlashCommandHandlerTests
         var queryPort = new StubScopeWorkflowQueryPort(
             "scope-alpha",
             [
-                Summary("wf-alpha", "HR onboarding email approval [delivery-alpha]"),
-                Summary("wf-beta", "Budget variance monitor [delivery-beta]"),
+                Summary("wf-alpha", "Resource status watcher [delivery-alpha]"),
+                Summary("wf-beta", "Document archive sync [delivery-beta]"),
             ],
             new Dictionary<string, ScopeWorkflowLookupStatus>
             {
@@ -31,9 +31,9 @@ public sealed class ChannelWorkflowDraftRunSlashCommandHandlerTests
         var reply = await handler.HandleAsync(Context("list"), CancellationToken.None);
 
         reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("HR onboarding email approval [delivery-alpha]");
+        reply!.Text.Should().Contain("Resource status watcher [delivery-alpha]");
         reply.Text.Should().Contain("/workflow run wf-alpha");
-        reply.Text.Should().NotContain("Budget variance monitor [delivery-beta]");
+        reply.Text.Should().NotContain("Document archive sync [delivery-beta]");
         reply.Text.Should().NotContain("/workflow run wf-beta");
         queryPort.LookupRequests.Should().Equal(
             ("scope-alpha", "wf-alpha"),

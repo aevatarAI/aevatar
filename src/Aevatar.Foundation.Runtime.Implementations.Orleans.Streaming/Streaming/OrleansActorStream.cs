@@ -208,6 +208,8 @@ internal sealed class OrleansActorStream : IStream
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,
+            TargetActorKind = binding.TargetActorKind,
+            ActivationGeneration = binding.ActivationGeneration,
         };
 
     private sealed class OrleansSubscriptionLease : IAsyncDisposable

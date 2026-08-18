@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +22,9 @@ public static class ProjectionScopeStatusRuntimeRegistration
         services.AddAevatarAgentKindRegistry(builder =>
             builder.Register(ProjectionScopeAgentRegistration
                 .Create<ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            ProjectionScopeCommittedStateRedactionHook>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>,
             ProjectionScopeStatusDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, ProjectionScopeStatusQueryPort>();
@@ -61,7 +65,9 @@ public static class ProjectionScopeStatusRuntimeRegistration
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindVerifier>(),
                 sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
                 sp.GetService<IStreamPubSubMaintenance>(),
-                sp.GetService<ILoggerFactory>()));
+                sp.GetService<ILoggerFactory>(),
+                sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
+                sp.GetRequiredService<IStreamForwardingRegistry>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<ProjectionScopeStatusRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<
                 ProjectionScopeStatusRuntimeLease,
@@ -73,7 +79,9 @@ public static class ProjectionScopeStatusRuntimeRegistration
                     lease.Context.ProjectionKind,
                     ProjectionRuntimeMode.DurableMaterialization),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindVerifier>(),
-                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>()));
+                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
+                sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
+                sp.GetRequiredService<IStreamForwardingRegistry>()));
         return services;
     }
 

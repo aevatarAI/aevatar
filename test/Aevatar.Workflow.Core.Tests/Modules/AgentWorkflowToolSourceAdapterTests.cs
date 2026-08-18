@@ -322,7 +322,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                         FileId = "wf-file-1",
                         ArtifactId = "workflow-file://wf-file-1",
                         SourceKind = WorkflowFileSourceKind.ChatInput,
-                        FileName = "invoice.pdf",
+                        FileName = "document.pdf",
                         MediaType = "application/pdf",
                         OwnerRunId = "run-1",
                         OwnerScopeId = "scope-1",
@@ -355,7 +355,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
             FileId = "wf-file-1",
             ArtifactId = "workflow-file://wf-file-1",
             SourceKind = ChatFileSourceKind.ChatInput,
-            FileName = "invoice.pdf",
+            FileName = "document.pdf",
             MediaType = "application/pdf",
             OwnerRunId = "run-1",
             OwnerScopeId = "scope-1",
@@ -441,7 +441,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         var result = await tool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: """{"format":"preview"}""",
-                RunId: "run-finance-alpha",
+                RunId: "run-generic-alpha",
                 StepId: "present-preview",
                 ExecutionId: "exec-recovery-zeta",
                 CallId: "call-presentation-kappa",
@@ -455,7 +455,7 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         executionPort.Requests[0].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.Initial);
         executionPort.Requests[1].ExecutionAttemptKind.Should().Be(AgentToolExecutionAttemptKind.ActorRecovery);
         executionPort.Requests.Select(request => request.ExecutionContext.Request.RequestId)
-            .Should().OnlyContain(requestId => requestId == "run-finance-alpha");
+            .Should().OnlyContain(requestId => requestId == "run-generic-alpha");
         executionPort.Requests.Select(request => request.ExecutionContext.Request.CallId)
             .Should().OnlyContain(callId => callId == "call-presentation-kappa");
     }

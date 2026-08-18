@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -24,7 +25,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 
     protected abstract ProjectionRuntimeMode RuntimeMode { get; }
 
-    protected override Task OnActivateAsync(CancellationToken ct)
+    protected override async Task OnActivateAsync(CancellationToken ct)
     {
         _logger = Services.GetService<ILoggerFactory>()?.CreateLogger(GetType()) ?? NullLogger.Instance;
         _failureTracker = new ProjectionScopeFailureTracker(
@@ -38,9 +39,18 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             () => State.FailureDiagnosticDroppedTotal);
 
         if (!State.Active || State.Released)
-            return Task.CompletedTask;
+            return;
 
-        return EnsureObservationRelayAsync(State.RootActorId, ct);
+        await EnsureObservationRelayAsync(State.RootActorId, ct);
+        await ScheduleFailureRecoveryAsync(ct);
+    }
+
+    protected override async Task OnCommittedStatePublicationRecoveredAsync(
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        await base.OnCommittedStatePublicationRecoveredAsync(envelope, ct);
+        await ScheduleFailureRecoveryAsync(ct);
     }
 
     protected override async Task OnDeactivateAsync(CancellationToken ct)
@@ -70,6 +80,15 @@ public abstract class ProjectionScopeGAgentBase<TContext>
                 ProjectionKind = command.ProjectionKind ?? string.Empty,
                 SessionId = command.SessionId ?? string.Empty,
                 Mode = command.Mode,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+                ActivationGeneration = Math.Max(1, State.ActivationGeneration + 1),
+            });
+        }
+        else if (State.ActivationGeneration == 0)
+        {
+            await PersistDomainEventAsync(new ProjectionScopeActivationGenerationMigratedEvent
+            {
+                ActivationGeneration = 1,
                 OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             });
         }
@@ -110,7 +129,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         await RemoveObservationRelayAsync(State.RootActorId, CancellationToken.None);
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleReplayAsync(ReplayProjectionFailuresCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -121,7 +140,27 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         await _failureTracker!.ReplayAsync(
             State,
             command.MaxItems,
-            (envelope, ct) => DispatchObservationAsync(envelope, ct, bypassSuccessfulVersionFence: true));
+            (envelope, ct) => DispatchObservationAsync(envelope, ct, bypassSuccessfulVersionFence: true),
+            includeRetryExhausted: !command.AutomaticRecovery);
+    }
+
+    private Task ScheduleFailureRecoveryAsync(CancellationToken ct)
+    {
+        if (!State.Active || State.Released)
+            return Task.CompletedTask;
+
+        var pendingCount = State.Failures.Count(static failure => !failure.RetryExhausted);
+        if (pendingCount == 0)
+            return Task.CompletedTask;
+
+        return PublishAsync(
+            new ReplayProjectionFailuresCommand
+            {
+                MaxItems = pendingCount,
+                AutomaticRecovery = true,
+            },
+            TopologyAudience.Self,
+            ct);
     }
 
     [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
@@ -174,6 +213,8 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         StateTransitionMatcher
             .Match(current, evt)
             .On<ProjectionScopeStartedEvent>(ProjectionScopeStateApplier.ApplyStarted)
+            .On<ProjectionScopeActivationGenerationMigratedEvent>(
+                ProjectionScopeStateApplier.ApplyActivationGenerationMigrated)
             .On<ProjectionObservationAttachmentUpdatedEvent>(ProjectionScopeStateApplier.ApplyAttachmentUpdated)
             .On<ProjectionScopeReleasedEvent>(ProjectionScopeStateApplier.ApplyReleased)
             .On<ProjectionScopeEnvelopeReceivedEvent>(ProjectionScopeStateApplier.ApplyEnvelopeReceived)
@@ -344,7 +385,18 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 
     private StreamForwardingBinding BuildObservationRelayBinding(string rootActorId)
     {
-        return ProjectionScopeObservationRelayBinding.Create(rootActorId, Id);
+        var registry = Services.GetRequiredService<IAgentKindRegistry>();
+        if (!registry.TryGetKindForAgentType(GetType(), out var targetActorKind))
+        {
+            throw new InvalidOperationException(
+                $"Projection scope actor type {GetType().FullName} is not registered with a primary agent kind.");
+        }
+
+        return ProjectionScopeObservationRelayBinding.Create(
+            rootActorId,
+            Id,
+            targetActorKind,
+            State.ActivationGeneration);
     }
 
     protected ValueTask RecordDispatchFailureAsync(

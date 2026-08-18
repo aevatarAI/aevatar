@@ -183,6 +183,8 @@ public sealed class ObservatoryRunSummary
 {
     public string RunId { get; init; } = string.Empty;
 
+    public string WorkflowId { get; init; } = string.Empty;
+
     public string WorkflowName { get; init; } = string.Empty;
 
     public string Status { get; init; } = string.Empty;
@@ -190,6 +192,10 @@ public sealed class ObservatoryRunSummary
     public bool? Success { get; init; }
 
     public DateTimeOffset? StartedAtUtc { get; init; }
+
+    public DateTimeOffset? CompletedAtUtc { get; init; }
+
+    public double? DurationMs { get; init; }
 
     public DateTimeOffset UpdatedAtUtc { get; init; }
 

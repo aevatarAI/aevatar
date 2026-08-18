@@ -35,10 +35,6 @@ public sealed class ConditionEvaluateTool : IAgentTool
             "guarded_tool_name": {
               "type": "string",
               "description": "Exact tool name that may run only when the condition is true."
-            },
-            "source_evidence_id": {
-              "type": "string",
-              "description": "Actor-issued numeric evidence id when the observation came from a committed scoring evidence tool."
             }
           },
           "required": ["source_input_request_id", "observed_value", "guarded_tool_name"]

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.GAgents.WorkflowDelivery;
@@ -5,7 +6,11 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Options;
+using ActorAcceptanceDateProjection = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceDateProjection;
+using ActorAcceptanceInputBinding = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputBinding;
+using ActorAcceptanceInputRecipe = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputRecipe;
 using ContractAcceptanceMode = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceMode;
+using ContractVariableKind = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryVariableKind;
 
 namespace Aevatar.Studio.Application.Delivery;
 
@@ -30,8 +35,9 @@ public interface IWorkflowDeliveryPackageSource
 
 public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCatalog
 {
-    private static readonly IReadOnlyDictionary<string, PackageDefinition> Definitions =
-        BuildDefinitions();
+    private const int MaximumAcceptanceInputFields = 32;
+    private const int MaximumAcceptanceStringLength = 4096;
+    private const long MaximumExactJsonInteger = 9_007_199_254_740_991;
 
     private readonly IWorkflowDeliveryPackageSource _packageSource;
     private readonly IWorkflowDefinitionParser _parser;
@@ -54,10 +60,10 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
         string createdBy,
         CancellationToken ct = default)
     {
-        var names = GetAllowedWorkflowNames();
-        var packages = new List<WorkflowPackageVersionSnapshot>(names.Count);
-        foreach (var name in names)
-            packages.Add(await GetAsync(name, createdBy, ct));
+        var definitions = GetDefinitions();
+        var packages = new List<WorkflowPackageVersionSnapshot>(definitions.Count);
+        foreach (var definition in definitions)
+            packages.Add(await CreatePackageAsync(definition, createdBy, ct));
         return packages;
     }
 
@@ -67,11 +73,20 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
         CancellationToken ct = default)
     {
         var normalizedName = NormalizeRequired(workflowName, nameof(workflowName));
-        if (!GetAllowedWorkflowNames().Contains(normalizedName, StringComparer.Ordinal))
-            throw new WorkflowDeliveryPackageNotAllowedException(normalizedName);
-        if (!Definitions.TryGetValue(normalizedName, out var definition))
+        var definition = GetDefinitions().SingleOrDefault(value =>
+            string.Equals(value.WorkflowName, normalizedName, StringComparison.Ordinal));
+        if (definition == null)
             throw new WorkflowDeliveryPackageNotAllowedException(normalizedName);
 
+        return await CreatePackageAsync(definition, createdBy, ct);
+    }
+
+    private async Task<WorkflowPackageVersionSnapshot> CreatePackageAsync(
+        PackageDefinition definition,
+        string createdBy,
+        CancellationToken ct)
+    {
+        var normalizedName = definition.WorkflowName;
         var sourceYaml = await _packageSource.ReadSourceYamlAsync(normalizedName, ct)
             ?? throw new WorkflowDeliveryPackageUnavailableException(
                 normalizedName,
@@ -87,7 +102,6 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
         }
 
         var sourceHash = ComputeHash(sourceYaml);
-        var acceptancePolicy = WorkflowDeliveryAcceptancePolicies.Resolve(normalizedName);
         var now = _timeProvider.GetUtcNow();
         var package = new WorkflowPackageVersionSnapshot
         {
@@ -100,13 +114,14 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
             RiskSummary = definition.RiskSummary,
             AcceptancePolicy = new WorkflowDeliveryAcceptancePolicy
             {
-                Mode = acceptancePolicy.Mode switch
+                Mode = definition.AcceptanceMode switch
                 {
                     ContractAcceptanceMode.AutomaticPreview => WorkflowDeliveryAcceptanceMode.AutomaticPreview,
                     ContractAcceptanceMode.Manual => WorkflowDeliveryAcceptanceMode.Manual,
                     _ => WorkflowDeliveryAcceptanceMode.Unspecified,
                 },
-                Limitation = acceptancePolicy.Limitation ?? string.Empty,
+                Limitation = definition.AcceptanceLimitation ?? string.Empty,
+                Input = definition.AcceptanceInput.Clone(),
             },
             CreatedBy = NormalizeRequired(createdBy, nameof(createdBy)),
             CreatedAtUtc = Timestamp.FromDateTimeOffset(now),
@@ -125,18 +140,18 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
     internal static string ComputeHash(string value) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value ?? string.Empty)));
 
-    private IReadOnlyList<string> GetAllowedWorkflowNames()
+    private IReadOnlyList<PackageDefinition> GetDefinitions()
     {
-        var names = (_options.Value.AllowedWorkflowNames ?? [])
-            .Select(static value => value?.Trim() ?? string.Empty)
-            .Where(static value => value.Length != 0)
-            .Distinct(StringComparer.Ordinal)
+        var definitions = (_options.Value.Packages ?? [])
+            .Select(ToDefinition)
             .ToArray();
-        if (names.Length == 0)
-            throw new InvalidOperationException("Aevatar:Delivery:AllowedWorkflowNames must not be empty.");
-        if (names.Any(name => !Definitions.ContainsKey(name)))
-            throw new InvalidOperationException("Delivery allowlist contains an unsupported workflow package.");
-        return names;
+        if (definitions.Select(static value => value.WorkflowName)
+            .Distinct(StringComparer.Ordinal).Count() != definitions.Length)
+        {
+            throw new InvalidOperationException("Delivery package workflow names must be unique.");
+        }
+
+        return definitions;
     }
 
     private static WorkflowDeliveryVariableDefinition ToProto(VariableDefinition value) =>
@@ -145,10 +160,10 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
             Key = value.Key,
             Label = value.Label,
             Description = value.Description,
-            Kind = value.Kind,
+            Kind = (WorkflowDeliveryVariableKind)(int)value.Kind,
             Required = value.Required,
             YamlPointer = value.YamlPointer,
-            JsonPointer = value.JsonPointer,
+            JsonPointer = value.JsonPointer ?? string.Empty,
             DefaultValue = value.DefaultValue,
         };
 
@@ -161,86 +176,205 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
             Required = value.Required,
         };
 
-    private static IReadOnlyDictionary<string, PackageDefinition> BuildDefinitions()
+    private static PackageDefinition ToDefinition(WorkflowDeliveryPackageOptions options)
     {
-        var lark = new[] { new ConnectionSlotDefinition("lark", "Lark workspace", "api-lark-bot", true) };
-        return new Dictionary<string, PackageDefinition>(StringComparer.Ordinal)
+        ArgumentNullException.ThrowIfNull(options);
+        var variables = (options.Variables ?? []).Select(static value => new VariableDefinition(
+            NormalizeRequired(value.Key, "delivery variable key"),
+            NormalizeRequired(value.Label, "delivery variable label"),
+            NormalizeRequired(value.Description, "delivery variable description"),
+            RequireVariableKind(value.Kind),
+            value.Required,
+            NormalizeRequired(value.YamlPointer, "delivery variable yaml pointer"),
+            NormalizeOptional(value.JsonPointer),
+            value.DefaultValue ?? string.Empty)).ToArray();
+        if (variables.Select(static value => value.Key).Distinct(StringComparer.Ordinal).Count() != variables.Length)
+            throw new InvalidOperationException("Delivery package variable keys must be unique.");
+
+        var connectionSlots = (options.ConnectionSlots ?? []).Select(static value => new ConnectionSlotDefinition(
+            NormalizeRequired(value.Key, "delivery connection slot key"),
+            NormalizeRequired(value.Label, "delivery connection slot label"),
+            NormalizeRequired(value.ServiceSlug, "delivery connection service slug"),
+            value.Required)).ToArray();
+        if (connectionSlots.Select(static value => value.Key).Distinct(StringComparer.Ordinal).Count() != connectionSlots.Length)
+            throw new InvalidOperationException("Delivery package connection slot keys must be unique.");
+
+        var acceptance = options.Acceptance ?? throw new InvalidOperationException(
+            "Delivery package acceptance policy is required.");
+        if (acceptance.Mode is not (ContractAcceptanceMode.AutomaticPreview or ContractAcceptanceMode.Manual))
         {
-            ["hr_onboarding_email_approval"] = new(
-                "HR onboarding email approval",
-                "Create an onboarding mailbox approval with duplicate checks and deterministic evidence.",
-                "Writes an approval only when the installed workflow is run in submit mode.",
-                ["lark.base.read", "lark.approval.read", "lark.approval.write"],
-                [
-                    V("companyDomain", "Company domain", "Domain used for generated mailboxes.", "/steps/2/parameters/value", "/company_domain", "aelf.io"),
-                    V("approvalCode", "Approval code", "Lark approval definition code.", "/steps/2/parameters/value", "/approval_code", "9C330885-C70A-4A5D-913A-CBA9A142FFD4"),
-                    V("onboardingAppToken", "Employee Base app", "Employee Master Base app token.", "/steps/2/parameters/value", "/onboarding_app_token", "Xb5wb7YFqaCf4Ysuq2el3bVPgNe"),
-                    V("onboardingTableId", "Employee table", "Employee Master table ID.", "/steps/2/parameters/value", "/onboarding_table_id", "tblxilSWWYTzV7al"),
-                ],
-                lark),
-            ["hr_monthly_attendance_approval"] = new(
-                "Monthly attendance approval",
-                "Aggregate the monthly attendance Base and create the reviewed approval and notification.",
-                "Reads attendance data and can create an approval and notification in submit mode.",
-                ["lark.base.read", "lark.approval.write", "lark.message.write"],
-                [
-                    V("attendanceAppToken", "Attendance Base app", "Attendance Base app token.", "/steps/1/parameters/value", "/attendance_app_token", "MwIRb3h5hauYvcsA28kl8FGfgjg"),
-                    V("attendanceTableId", "Attendance table", "Attendance table ID.", "/steps/1/parameters/value", "/attendance_table_id", "tblTDqjSDKffQ7cm"),
-                    V("approvalCode", "Approval code", "Monthly attendance approval definition code.", "/steps/1/parameters/value", "/approval_code", "3F02FB04-3919-4089-B42B-B1B557820EB5"),
-                    V("submitterUserId", "Submitter user", "Lark user ID that submits the approval.", "/steps/1/parameters/value", "/submitter_user_id", "ee689459"),
-                    V("notifyUserId", "Notification user", "Lark user ID that receives the completion card.", "/steps/1/parameters/value", "/notify_user_id", "831cg5af"),
-                ],
-                lark),
-            ["hr_attendance_fill_reminder"] = new(
-                "Attendance completion reminder",
-                "Send a reviewed attendance completion reminder card before month end.",
-                "Sends one Lark message only when the installed workflow is run in submit mode.",
-                ["lark.message.write"],
-                [
-                    V("notifyUserId", "Notification user", "Lark user ID that receives the reminder.", "/steps/1/parameters/value", "/notify_user_id", "831cg5af"),
-                    V("documentUrl", "Attendance document", "URL opened from the reminder card.", "/steps/1/parameters/value", "/doc_url", "https://aelfblockchain.sg.larksuite.com/base/MwIRb3h5hauYvcsA28kl8FGfgjg?table=tblTDqjSDKffQ7cm&view=vewfR8fiQS"),
-                    V("submitTimeNote", "Reminder note", "Deadline note displayed in the reminder card.", "/steps/1/parameters/value", "/submit_time_note", "月末最后一天 10:00 前请完成核对并运行月度考勤审批"),
-                ],
-                lark),
-            ["fin_invoice_precheck_approval"] = new(
-                "Invoice precheck and approval",
-                "Extract invoice evidence, validate it, check duplicates, and prepare the payment approval.",
-                "Uses document extraction and can create a payment approval in submit mode.",
-                ["document.extract", "lark.approval.read", "lark.approval.write"],
-                [
-                    V("approvalCode", "Approval code", "Payment approval definition code.", "/steps/1/parameters/value", "/approval_code", "F640097D-0A68-47C1-A7BC-86659BC4B06F"),
-                    V("defaultSubmitterEmail", "Default submitter", "Fallback submitter email.", "/steps/1/parameters/value", "/default_submitter_email", "jianwei.su@aelf.io"),
-                ],
-                [new ConnectionSlotDefinition("lark", "Lark workspace", "api-lark-bot-2", true)]),
-            ["fin_budget_variance_monitor"] = new(
-                "Budget variance monitor",
-                "Read four finance tables, compute deterministic variance bands, and optionally notify Lark.",
-                "Reads finance Base tables and can send a summary card in submit mode.",
-                ["lark.base.read", "lark.message.write"],
-                [
-                    V("appToken", "Finance Base app", "Finance Base app token.", "/steps/2/parameters/value", "/app_token", "L80RbTPAjaiZpOsaYo3lnmYCg3s"),
-                    V("coreActualTableId", "Core actuals table", "Core business actual-spend table ID.", "/steps/2/parameters/value", "/core_actual_table_id", "tblVuALMhd7WGu9k"),
-                    V("coreBudgetTableId", "Core budget table", "Core business budget table ID.", "/steps/2/parameters/value", "/core_budget_table_id", "tblMtwgzEhW7yWTq"),
-                    V("aelfActualTableId", "aelf actuals table", "aelf BU actual-spend table ID.", "/steps/2/parameters/value", "/aelf_actual_table_id", "tbl3lXCuWOSlaiR5"),
-                    V("aelfBudgetTableId", "aelf budget table", "aelf BU budget table ID.", "/steps/2/parameters/value", "/aelf_budget_table_id", "tblVkaJLvAjLHARJ"),
-                    V("watchPercent", "Watch threshold", "Budget utilization percentage for watch status.", "/steps/2/parameters/value", "/watch_pct", "80", WorkflowDeliveryVariableKind.Number),
-                    V("warningPercent", "Warning threshold", "Budget utilization percentage for warning status.", "/steps/2/parameters/value", "/warning_pct", "100", WorkflowDeliveryVariableKind.Number),
-                    V("overPercent", "Over threshold", "Budget utilization percentage for over status.", "/steps/2/parameters/value", "/over_pct", "120", WorkflowDeliveryVariableKind.Number),
-                    V("notifyOpenId", "Notification recipient", "Lark open ID that receives the summary.", "/steps/2/parameters/value", "/notify_open_id", "ou_3d9067006e9fb8eb8e5fc7b2bb4c6264"),
-                ],
-                lark),
+            throw new InvalidOperationException(
+                "Delivery package acceptance mode must be AutomaticPreview or Manual.");
+        }
+        var limitation = NormalizeOptional(acceptance.Limitation);
+        if (acceptance.Mode == ContractAcceptanceMode.Manual && limitation == null)
+            throw new InvalidOperationException("Manual delivery package acceptance requires a limitation.");
+
+        var acceptanceInput = BuildAcceptanceInput(acceptance.Input);
+        return new PackageDefinition(
+            NormalizeRequired(options.WorkflowName, "delivery workflow name"),
+            NormalizeRequired(options.DisplayName, "delivery display name"),
+            NormalizeRequired(options.Description, "delivery description"),
+            NormalizeRequired(options.RiskSummary, "delivery risk summary"),
+            (options.Capabilities ?? [])
+                .Select(static value => NormalizeRequired(value, "delivery capability"))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(static value => value, StringComparer.Ordinal)
+                .ToArray(),
+            variables,
+            connectionSlots,
+            acceptance.Mode,
+            limitation,
+            acceptanceInput);
+    }
+
+    private static ActorAcceptanceInputRecipe BuildAcceptanceInput(
+        IList<WorkflowDeliveryAcceptanceInputValueOptions>? configuredValues)
+    {
+        var values = configuredValues ?? [];
+        if (values.Count > MaximumAcceptanceInputFields)
+        {
+            throw new InvalidOperationException(
+                $"Delivery acceptance input cannot contain more than {MaximumAcceptanceInputFields} fields.");
+        }
+
+        var normalized = values.Select(static item => new
+        {
+            Key = NormalizeRequired(item.Key, "delivery acceptance input key"),
+            item.Kind,
+            item.Source,
+            Value = item.Value ?? string.Empty,
+            item.DateProjection,
+            item.DayOffset,
+            Prefix = item.Prefix ?? string.Empty,
+            Suffix = item.Suffix ?? string.Empty,
+        }).OrderBy(static item => item.Key, StringComparer.Ordinal).ToArray();
+        if (normalized.Select(static item => item.Key).Distinct(StringComparer.Ordinal).Count() != normalized.Length)
+            throw new InvalidOperationException("Delivery acceptance input keys must be unique.");
+
+        var recipe = new ActorAcceptanceInputRecipe
+        {
+            Literals = new Struct(),
+        };
+        foreach (var item in normalized)
+        {
+            if (item.Source == WorkflowDeliveryAcceptanceInputValueSource.Literal)
+            {
+                if (item.DateProjection != WorkflowDeliveryAcceptanceDateProjection.Unspecified ||
+                    item.DayOffset != 0 ||
+                    item.Prefix.Length != 0 ||
+                    item.Suffix.Length != 0)
+                {
+                    throw new InvalidOperationException(
+                        "Literal delivery acceptance input cannot declare binding options.");
+                }
+                recipe.Literals.Fields.Add(item.Key, ToProtoValue(item.Kind, item.Value));
+                continue;
+            }
+
+            if (item.Kind != WorkflowDeliveryAcceptanceInputValueKind.String || item.Value.Length != 0)
+            {
+                throw new InvalidOperationException(
+                    "Dynamic delivery acceptance input must be String and cannot declare a literal value.");
+            }
+            recipe.Bindings.Add(BuildInputBinding(
+                item.Key,
+                item.Source,
+                item.DateProjection,
+                item.DayOffset,
+                item.Prefix,
+                item.Suffix));
+        }
+        WorkflowDeliveryConventions.ValidateAcceptanceInput(recipe);
+        return recipe;
+    }
+
+    private static ActorAcceptanceInputBinding BuildInputBinding(
+        string key,
+        WorkflowDeliveryAcceptanceInputValueSource source,
+        WorkflowDeliveryAcceptanceDateProjection dateProjection,
+        int dayOffset,
+        string prefix,
+        string suffix)
+    {
+        var binding = new ActorAcceptanceInputBinding
+        {
+            Key = key,
+            Prefix = prefix,
+            Suffix = suffix,
+        };
+
+        switch (source)
+        {
+            case WorkflowDeliveryAcceptanceInputValueSource.InstallationCreatedAtUtc:
+                binding.InstallationCreatedAtUtc = new WorkflowDeliveryInstallationCreatedAtUtcInput
+                {
+                    DateProjection = MapDateProjection(dateProjection),
+                    DayOffset = dayOffset,
+                };
+                break;
+            case WorkflowDeliveryAcceptanceInputValueSource.AuthenticatedOwnerExternalUserId:
+                if (dateProjection != WorkflowDeliveryAcceptanceDateProjection.Unspecified || dayOffset != 0)
+                {
+                    throw new InvalidOperationException(
+                        "Authenticated owner delivery acceptance input cannot declare date options.");
+                }
+                binding.AuthenticatedOwnerExternalUserId =
+                    new WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput();
+                break;
+            default:
+                throw new InvalidOperationException(
+                    "Delivery acceptance input source must be Literal, InstallationCreatedAtUtc, or AuthenticatedOwnerExternalUserId.");
+        }
+
+        return binding;
+    }
+
+    private static ActorAcceptanceDateProjection MapDateProjection(
+        WorkflowDeliveryAcceptanceDateProjection projection) => projection switch
+        {
+            WorkflowDeliveryAcceptanceDateProjection.UtcDate => ActorAcceptanceDateProjection.UtcDate,
+            WorkflowDeliveryAcceptanceDateProjection.UtcYearMonth => ActorAcceptanceDateProjection.UtcYearMonth,
+            WorkflowDeliveryAcceptanceDateProjection.UtcIsoWeek => ActorAcceptanceDateProjection.UtcIsoWeek,
+            WorkflowDeliveryAcceptanceDateProjection.UtcCompactDate => ActorAcceptanceDateProjection.UtcCompactDate,
+            _ => throw new InvalidOperationException(
+                "Installation-created UTC delivery acceptance input requires a supported date projection."),
+        };
+
+    private static Value ToProtoValue(
+        WorkflowDeliveryAcceptanceInputValueKind kind,
+        string? value)
+    {
+        var normalized = value ?? string.Empty;
+        return kind switch
+        {
+            WorkflowDeliveryAcceptanceInputValueKind.String when normalized.Length <= MaximumAcceptanceStringLength =>
+                Value.ForString(normalized),
+            WorkflowDeliveryAcceptanceInputValueKind.Integer when
+                long.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer) &&
+                integer is >= -MaximumExactJsonInteger and <= MaximumExactJsonInteger =>
+                Value.ForNumber(integer),
+            WorkflowDeliveryAcceptanceInputValueKind.Number when
+                double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) &&
+                double.IsFinite(number) => Value.ForNumber(number),
+            WorkflowDeliveryAcceptanceInputValueKind.Boolean when bool.TryParse(normalized, out var boolean) =>
+                Value.ForBool(boolean),
+            WorkflowDeliveryAcceptanceInputValueKind.String =>
+                throw new InvalidOperationException(
+                    $"Delivery acceptance string values cannot exceed {MaximumAcceptanceStringLength} characters."),
+            _ => throw new InvalidOperationException("Delivery acceptance input contains an invalid typed scalar value."),
         };
     }
 
-    private static VariableDefinition V(
-        string key,
-        string label,
-        string description,
-        string yamlPointer,
-        string jsonPointer,
-        string defaultValue,
-        WorkflowDeliveryVariableKind kind = WorkflowDeliveryVariableKind.String) =>
-        new(key, label, description, kind, true, yamlPointer, jsonPointer, defaultValue);
+    private static ContractVariableKind RequireVariableKind(ContractVariableKind kind) => kind switch
+    {
+        ContractVariableKind.String or
+        ContractVariableKind.Integer or
+        ContractVariableKind.Number or
+        ContractVariableKind.Boolean => kind,
+        _ => throw new InvalidOperationException(
+            "Delivery package variable kind must be String, Integer, Number, or Boolean."),
+    };
 
     private static string NormalizeRequired(string? value, string name)
     {
@@ -250,22 +384,29 @@ public sealed class WorkflowDeliveryPackageCatalog : IWorkflowDeliveryPackageCat
             : normalized;
     }
 
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private sealed record PackageDefinition(
+        string WorkflowName,
         string DisplayName,
         string Description,
         string RiskSummary,
         IReadOnlyList<string> Capabilities,
         IReadOnlyList<VariableDefinition> Variables,
-        IReadOnlyList<ConnectionSlotDefinition> ConnectionSlots);
+        IReadOnlyList<ConnectionSlotDefinition> ConnectionSlots,
+        ContractAcceptanceMode AcceptanceMode,
+        string? AcceptanceLimitation,
+        ActorAcceptanceInputRecipe AcceptanceInput);
 
     private sealed record VariableDefinition(
         string Key,
         string Label,
         string Description,
-        WorkflowDeliveryVariableKind Kind,
+        ContractVariableKind Kind,
         bool Required,
         string YamlPointer,
-        string JsonPointer,
+        string? JsonPointer,
         string DefaultValue);
 
     private sealed record ConnectionSlotDefinition(

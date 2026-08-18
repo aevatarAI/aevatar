@@ -10,7 +10,10 @@ internal interface IStreamForwardingBindingSource
     void RemoveByActor(string actorId);
 }
 
-public sealed class InMemoryStreamForwardingRegistry : IStreamForwardingRegistry, IStreamForwardingBindingSource
+public sealed class InMemoryStreamForwardingRegistry
+    : IStreamForwardingRegistry,
+      IStreamForwardingBindingAuthority,
+      IStreamForwardingBindingSource
 {
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, StreamForwardingBinding>> _bindingsBySource =
         new(StringComparer.Ordinal);
@@ -57,6 +60,22 @@ public sealed class InMemoryStreamForwardingRegistry : IStreamForwardingRegistry
             byTarget.Values.Select(CloneBinding).ToList());
     }
 
+    public Task<StreamForwardingBinding?> GetAsync(
+        string sourceStreamId,
+        string targetStreamId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceStreamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetStreamId);
+        ct.ThrowIfCancellationRequested();
+
+        var binding = _bindingsBySource.TryGetValue(sourceStreamId, out var byTarget) &&
+                      byTarget.TryGetValue(targetStreamId, out var existing)
+            ? CloneBinding(existing)
+            : null;
+        return Task.FromResult(binding);
+    }
+
     public IEnumerable<StreamForwardingBinding> GetBindings(string sourceStreamId)
     {
         if (_bindingsBySource.TryGetValue(sourceStreamId, out var byTarget) && !byTarget.IsEmpty)
@@ -82,5 +101,7 @@ public sealed class InMemoryStreamForwardingRegistry : IStreamForwardingRegistry
             EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
             Version = binding.Version,
             LeaseId = binding.LeaseId,
+            TargetActorKind = binding.TargetActorKind,
+            ActivationGeneration = binding.ActivationGeneration,
         };
 }

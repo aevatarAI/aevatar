@@ -107,12 +107,16 @@ internal sealed class ProjectionScopeFailureTracker
     public async Task ReplayAsync(
         ProjectionScopeState state,
         int maxItems,
-        Func<EventEnvelope, CancellationToken, Task<ProjectionScopeDispatchResult>> dispatchAsync)
+        Func<EventEnvelope, CancellationToken, Task<ProjectionScopeDispatchResult>> dispatchAsync,
+        bool includeRetryExhausted = true)
     {
         if (state.Failures.Count == 0)
             return;
 
-        var failures = ProjectionScopeFailureLog.GetPendingFailures(state, maxItems);
+        var failures = ProjectionScopeFailureLog.GetPendingFailures(
+            state,
+            maxItems,
+            includeRetryExhausted);
         foreach (var failure in failures)
         {
             if (failure.Envelope == null)

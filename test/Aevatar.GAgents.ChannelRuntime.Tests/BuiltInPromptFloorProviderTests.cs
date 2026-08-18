@@ -82,42 +82,37 @@ public sealed class BuiltInPromptFloorProviderTests
     }
 
     [Fact]
-    public void Floor_RoutesFinanceIntentsThroughExactWorkflowSkills()
+    public void Floor_DiscoversAndExecutesSkillWorkflowsThroughGenericLifecycle()
     {
         var floor = FloorContent();
 
-        floor.Should().Contain("`ornn_search_skills` with query `发票预检`");
-        floor.Should().Contain("exact slug\n  `fin-invoice-precheck-approval`");
-        floor.Should().Contain("`use_skill(skill=\"fin-invoice-precheck-approval\")`");
-        floor.Should().Contain("`fin_invoice_precheck_approval`");
-        floor.Should().Contain("`ornn_search_skills` with query `预算差异`");
-        floor.Should().Contain("exact slug\n  `fin-budget-variance-monitor`");
-        floor.Should().Contain("`use_skill(skill=\"fin-budget-variance-monitor\")`");
-        floor.Should().Contain("`fin_budget_variance_monitor`");
-        floor.Should().Contain("A submission request matches this route only when it explicitly names or refers back");
-        floor.Should().Contain("generic submission request");
-        floor.Should().Contain("does not match it");
-        floor.Should().Contain("returned `workflow.workflow_id` unchanged");
+        var searchCall = floor.IndexOf(
+            "call `ornn_search_skills` to find a matching skill",
+            StringComparison.Ordinal);
+        var loadCall = floor.IndexOf(
+            "then `use_skill` to load it",
+            StringComparison.Ordinal);
+        var workflowExecution = floor.IndexOf(
+            "When the loaded skill identifies a runnable Scope Workflow",
+            StringComparison.Ordinal);
+
+        searchCall.Should().BeGreaterThanOrEqualTo(0);
+        loadCall.Should().BeGreaterThan(searchCall);
+        workflowExecution.Should().BeGreaterThan(loadCall);
+        floor.Should().Contain("exact workflow identity from the loaded skill");
+        floor.Should().NotContain("`scope_workflows_get`");
         floor.Should().Contain("`aevatar_start_workflow.workflow_id`");
+        floor.Should().Contain("Build workflow inputs only from the loaded skill's contract");
+        floor.Should().Contain("do not encode or override those rules in this built-in overlay");
         floor.Should().Contain("once with `wait=\"stream\"`");
         floor.Should().Contain("`workflow_current_state.actor_id`");
         floor.Should().Contain("`workflow_current_state.command_id`");
         floor.Should().Contain("that `run_id` as `workflow_run_id`");
         floor.Should().Contain("`actor_id` as `actor_id`");
-        floor.Should().Contain("outer `workflow_name` to equal the");
-        floor.Should().Contain("matching canonical value (`fin_invoice_precheck_approval` or `fin_budget_variance_monitor`)");
-        floor.Should().Contain("exactly, with `status=Completed`");
-        floor.Should().Contain("`final_output` as complete JSON");
-        floor.Should().Contain("If `final_output` is truncated");
-        floor.Should().Contain("result is unproven");
-        floor.Should().Contain("current sender's delegated account");
-        floor.Should().Contain("test-data boundaries");
-        floor.Should().Contain("always use `submit:false` and never set `submit:true`");
-        floor.Should().NotContain("post-preview confirmation contract");
-        floor.Should().NotContain("explicitly confirms submission");
-
-        floor.IndexOf("Route these reviewed FIN preview intents", StringComparison.Ordinal)
-            .Should().BeLessThan(floor.IndexOf("When the user mentions a named skill", StringComparison.Ordinal));
+        floor.Should().Contain("Claim completion only from the committed report");
+        floor.Should().Contain("workflow and matching command");
+        floor.Should().Contain("If the artifact is pending, retry the read");
+        floor.Should().Contain("report that limitation instead of inferring the missing content");
     }
 
     [Fact]

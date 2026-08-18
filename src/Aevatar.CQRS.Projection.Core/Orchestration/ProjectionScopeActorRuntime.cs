@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Aevatar.CQRS.Projection.Core.Observability;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
@@ -31,20 +32,87 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         _logger = logger ?? NullLogger<ProjectionScopeActorRuntime<TScopeAgent>>.Instance;
     }
 
-    public async Task EnsureExistsAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
+    public async Task<ProjectionScopeActorEnsureResult> EnsureExistsAsync(
+        ProjectionRuntimeScopeKey scopeKey,
+        CancellationToken ct)
     {
         var actorId = ProjectionScopeActorId.Build(scopeKey);
-        if (!await _runtime.ExistsAsync(actorId).ConfigureAwait(false))
+        var existenceStartedAt = ProjectionActivationMetrics.StartTimestamp();
+        bool exists;
+        try
+        {
+            exists = await _runtime.ExistsAsync(actorId).ConfigureAwait(false);
+            ProjectionActivationMetrics.RecordStage(
+                ProjectionActivationMetrics.ExistenceLookupStage,
+                existenceStartedAt,
+                scopeKey.Mode,
+                "success");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            ProjectionActivationMetrics.RecordStage(
+                ProjectionActivationMetrics.ExistenceLookupStage,
+                existenceStartedAt,
+                scopeKey.Mode,
+                "cancelled");
+            throw;
+        }
+        catch
+        {
+            ProjectionActivationMetrics.RecordStage(
+                ProjectionActivationMetrics.ExistenceLookupStage,
+                existenceStartedAt,
+                scopeKey.Mode,
+                "failure");
+            throw;
+        }
+
+        if (!exists)
         {
             _ = await _runtime.CreateByKindAsync(_scopeAgentKind, actorId, ct).ConfigureAwait(false);
-            return;
+            return ProjectionScopeActorEnsureResult.Proven;
         }
 
         if (_agentKindVerifier == null)
-            return;
+            return ProjectionScopeActorEnsureResult.Unverified;
 
-        if (await _agentKindVerifier.IsExpectedKindAsync(actorId, _scopeAgentKind, ct).ConfigureAwait(false))
-            return;
+        var kindStartedAt = ProjectionActivationMetrics.StartTimestamp();
+        try
+        {
+            if (await _agentKindVerifier.IsExpectedKindAsync(actorId, _scopeAgentKind, ct).ConfigureAwait(false))
+            {
+                ProjectionActivationMetrics.RecordStage(
+                    ProjectionActivationMetrics.KindVerificationStage,
+                    kindStartedAt,
+                    scopeKey.Mode,
+                    "success");
+                return ProjectionScopeActorEnsureResult.Proven;
+            }
+
+            ProjectionActivationMetrics.RecordStage(
+                ProjectionActivationMetrics.KindVerificationStage,
+                kindStartedAt,
+                scopeKey.Mode,
+                "mismatch");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            ProjectionActivationMetrics.RecordStage(
+                ProjectionActivationMetrics.KindVerificationStage,
+                kindStartedAt,
+                scopeKey.Mode,
+                "cancelled");
+            throw;
+        }
+        catch
+        {
+            ProjectionActivationMetrics.RecordStage(
+                ProjectionActivationMetrics.KindVerificationStage,
+                kindStartedAt,
+                scopeKey.Mode,
+                "failure");
+            throw;
+        }
 
         // Stale runtime kind at this scope key — most often after an actor kind
         // migration where a retired-cleanup pass missed the new scope key.
@@ -86,12 +154,15 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
         }
 
         _ = await _runtime.CreateByKindAsync(_scopeAgentKind, actorId, ct).ConfigureAwait(false);
+        return ProjectionScopeActorEnsureResult.Proven;
     }
 
     public async Task<bool> ExistsAsync(ProjectionRuntimeScopeKey scopeKey, CancellationToken ct)
     {
         return await _runtime.ExistsAsync(ProjectionScopeActorId.Build(scopeKey)).ConfigureAwait(false);
     }
+
+    public string ScopeAgentKind => _scopeAgentKind;
 
     public async Task DispatchAsync(
         ProjectionRuntimeScopeKey scopeKey,
@@ -118,4 +189,11 @@ internal sealed class ProjectionScopeActorRuntime<TScopeAgent>
 
         return kind;
     }
+}
+
+internal readonly record struct ProjectionScopeActorEnsureResult(bool ExpectedKindProven)
+{
+    public static ProjectionScopeActorEnsureResult Proven { get; } = new(true);
+
+    public static ProjectionScopeActorEnsureResult Unverified { get; } = new(false);
 }

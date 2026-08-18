@@ -15,6 +15,17 @@ internal static class ProjectionScopeStateApplier
         next.Mode = evt.Mode;
         next.Active = true;
         next.Released = false;
+        next.ActivationGeneration = evt.ActivationGeneration;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyActivationGenerationMigrated(
+        ProjectionScopeState current,
+        ProjectionScopeActivationGenerationMigratedEvent evt)
+    {
+        var next = current.Clone();
+        next.ActivationGeneration = evt.ActivationGeneration;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }
@@ -108,6 +119,7 @@ internal static class ProjectionScopeStateApplier
             OccurredAtUtc = evt.OccurredAtUtc?.Clone(),
             SourceActorId = evt.SourceActorId,
         });
+        next.FailureSummary = ProjectionScopeFailureLog.BuildSummary(next.Failures);
         next.RetainedFailureDiagnostics.Add(new ProjectionFailureDiagnostic
         {
             FailureId = evt.FailureId,
@@ -150,6 +162,8 @@ internal static class ProjectionScopeStateApplier
                 next.RetryExhaustedTotal += 1;
             }
         }
+
+        next.FailureSummary = ProjectionScopeFailureLog.BuildSummary(next.Failures);
 
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;

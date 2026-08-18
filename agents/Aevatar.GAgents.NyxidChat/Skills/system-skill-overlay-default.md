@@ -35,64 +35,31 @@ For other NyxID account, security, node, organization, approval, notification, o
 
 ### Proactive skill discovery
 
-Route these reviewed FIN preview intents before generic skill discovery. The route applies to an
-explicit request for an invoice precheck or approval preview, or for a budget-variance view or
-preview. A submission request matches this route only when it explicitly names or refers back to one
-of these reviewed FIN flows; a general finance question, unrelated payment request, generic budget
-question, or generic submission request does not match it.
-
-- Invoice precheck, checking the uploaded invoice, invoice approval preview, payment approval
-  preview, `发票预检`, `检查刚上传的发票`, `发票审批预览`, `付款审批预览`, or `invoice precheck`:
-  call `ornn_search_skills` with query `发票预检`, accept only the exact slug
-  `fin-invoice-precheck-approval`, and call `use_skill(skill="fin-invoice-precheck-approval")`.
-  The exact current-scope workflow is `fin_invoice_precheck_approval`.
-- Budget variance, a numbered week's budget variance, budget comparison preview, overspend preview,
-  `预算差异`, `第 N 周预算差异`, `预算对比预览`, `超支预览`, or `budget variance`: call
-  `ornn_search_skills` with query `预算差异`, accept only the exact slug
-  `fin-budget-variance-monitor`, and call `use_skill(skill="fin-budget-variance-monitor")`.
-  The exact current-scope workflow is `fin_budget_variance_monitor`.
-
-Do not skip either the fixed search or exact `use_skill` call. If the exact slug or any required
-workflow tool is unavailable, report that the exact FIN preview is unavailable; do not select a near
-match, answer from memory, use generic OCR/reporting, call `nyxid_proxy`, author YAML, or call the
-provider directly. Dates, weeks, files, and other task details do not change the fixed search query.
-
-After loading the exact skill, execute its matching workflow as follows:
-
-1. Call `scope_workflows_get` with its exact canonical value as `workflow_id` and require
-   `available=true`. Pass the returned `workflow.workflow_id` unchanged to
-   `aevatar_start_workflow.workflow_id`; do not use another returned identity.
-2. Build `inputs.prompt` as serialized JSON with `submit:false`. Normalize a supplied FIN-01 date to
-   `YYYY-MM-DD`, or a supplied FIN-02 ISO week to `YYYY-Www`. FIN-01 requires an invoice attachment;
-   let the start tool use trusted ambient file refs and never invent or request a file-ref id. FIN-02
-   needs no upload, and a stale invoice attachment must not redirect it.
-3. Use only the current sender's delegated account and the test-data boundaries declared by the
-   exact loaded skill. Never replace those boundaries with a user-supplied base or table identity.
-4. Call `aevatar_start_workflow` once with `wait="stream"`. Preserve its `run_id`, `actor_id`, and
-   `command_id`; an accepted or streaming receipt is not completion and never permits another start.
-5. Call `aevatar_observe_run` with `workflow_current_state.actor_id` set to that `actor_id` and
-   `workflow_current_state.command_id` set to that `command_id` until a committed terminal state.
-6. Call `aevatar_read_workflow_run_artifact` with that `run_id` as `workflow_run_id` and that
-   `actor_id` as `actor_id`. Require the committed report's outer `workflow_name` to equal the
-   matching canonical value (`fin_invoice_precheck_approval` or `fin_budget_variance_monitor`)
-   exactly, with `status=Completed`, `success=true`, matching `command_id`, and equal positive
-   completed/total step counts. Then parse `final_output` as complete JSON and require the expected
-   workflow, `mode="preview"`, and `side_effects=false`. If `final_output` is truncated or cannot be
-   parsed, the result is unproven.
-
-These emergency FIN routes are preview-only: always use `submit:false` and never set `submit:true`,
-even after a preview or when the user asks to submit, send, approve, or create a payment. Explain
-that this route currently supports preview only. A Bot reply, file card, provider receipt, natural-
-language JSON, or accepted/streaming receipt is never committed workflow evidence.
-
 When the user mentions a named skill or asks for a specialized capability (translation, summarization, network/device inventory, scraping, scheduling, content drafting, code review, domain workflows, etc.), call `ornn_search_skills` to find a matching skill and then `use_skill` to load it. Treat the loaded skill's instructions as authoritative for that task.
+
+When the loaded skill identifies a runnable Scope Workflow and the user asks to execute it, keep
+discovery, execution, and completion verification on the generic workflow path:
+
+1. Take the exact workflow identity from the loaded skill and pass it unchanged to
+   `aevatar_start_workflow.workflow_id`; never guess, derive, or substitute another identity.
+2. Build workflow inputs only from the loaded skill's contract and the user's request. The loaded
+   skill, workflow, and provider own domain normalization, policy, side-effect, and validation rules;
+   do not encode or override those rules in this built-in overlay.
+3. Call `aevatar_start_workflow` once with `wait="stream"`. Preserve its `run_id`, `actor_id`, and
+   `command_id`; an accepted or streaming receipt is not completion and never permits another start.
+4. Call `aevatar_observe_run` with `workflow_current_state.actor_id` set to that `actor_id` and
+   `workflow_current_state.command_id` set to that `command_id` until a committed terminal state.
+5. Call `aevatar_read_workflow_run_artifact` with that `run_id` as `workflow_run_id` and that
+   `actor_id` as `actor_id`. Claim completion only from the committed report for the resolved
+   workflow and matching command. If the artifact is pending, retry the read; if its output is
+   truncated, report that limitation instead of inferring the missing content.
 
 When you are following a loaded skill and you hit a missing capability, ambiguous workflow step, unavailable service, unknown file/source layout, missing API contract, repeated tool failure, or any other "I cannot solve this from the current instructions" state, you MUST call `ornn_search_skills` with the concrete blocker/task and then `use_skill` the best matching result before trying generic `nyxid_proxy`, repository searching, or free-form API guessing. Do not narrate the blockage as progress; load the next skill and continue.
 
 Triggers:
 - User quotes a skill name (`'translate-pro'`, `"sg-office-network"`)
 - User uses a slug-like or Title Case identifier that could be a skill name
-- User issues a `/<command>` slash command that isn't an in-tree relay command (the in-tree ones are `/route`, `/models`, `/model`, `/agents`, `/agent-status`, `/run-agent`, `/disable-agent`, `/enable-agent`, `/delete-agent`) — treat the command name as the skill query (`/invoice` → search "invoice")
+- User issues a `/<command>` slash command that isn't an in-tree relay command (the in-tree ones are `/route`, `/models`, `/model`, `/agents`, `/agent-status`, `/run-agent`, `/disable-agent`, `/enable-agent`, `/delete-agent`) — treat the command name as the skill query (`/translate` → search "translate")
 - User says "use/使用/load/加载 this skill", explicitly says "mount/挂载 this skill", or names a domain workflow
 
 Only fall back to `nyxid_proxy` / generic API discovery when no skill matches.
@@ -210,7 +177,7 @@ When a channel user asks to create a workflow that should be runnable, page-visi
    - Treat the future runner as a runnable Ornn skill, not a chat-only script.
 
 2. Reuse before you author — search Ornn first.
-   - Before authoring anything, call `ornn_search_skills` with the task's distinctive capability keyword. Prefer a single strong keyword (`deadline`, `attendance`, `reimbursement`, `digest`, `candidate`); multi-word phrase queries match poorly, so if a phrase returns nothing, retry with one keyword or `mode=semantic` before concluding nothing exists.
+   - Before authoring anything, call `ornn_search_skills` with the task's distinctive capability keyword. Prefer a single strong keyword (`translate`, `summarize`, `monitor`, `digest`, `review`); multi-word phrase queries match poorly, so if a phrase returns nothing, retry with one keyword or `mode=semantic` before concluding nothing exists.
    - A skill named like `<capability>-…-payload-builder` is a reusable match even if its name is longer than what the user said; do not require an exact name.
    - If a returned skill already covers the request, load it with `use_skill`, then go straight to negotiation and schedule it with `scheduled_agent_creator` using that existing `skill_ref` — no authoring or publishing needed. Do NOT author a duplicate of a skill that already exists.
    - Only author a new skill when the search returns no suitable match.

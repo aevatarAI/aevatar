@@ -26,7 +26,7 @@ runbook is completed.
 | UC1b | Accepted | `origin/feature/integrate@4c3b33ad272807430ca3ba6bc753f849f8c8fe5b` | A connected-ready start produced one confirmed actor-owned `service.connected` postcondition, preserved it across reload, and cleaned up the conversation and disposable OAuth service. |
 | UC2 | Accepted | `origin/feature/integrate@87daa99e641533f25ea0ddc67396e1a0dc52bd59` | Steer, authoritative stop, new task, reload, and deletion were committed on one exact healthy image with no external effect. |
 | UC3 | Accepted | `origin/feature/integrate@b5f32cbbeb09f150b9d32ba8684926f61d40bfc9` | Rejection, uncertainty, exact reconciliation, fresh approved retry, provider verification, reload, cancel, and cleanup were proved with no grant. |
-| UC4 | Accepted | `origin/feature/integrate@4c3b33ad272807430ca3ba6bc753f849f8c8fe5b` | Both condition branches were proved; only score 80 wrote a row, and the exact row, conversations, grants, and service overlay were cleaned up. |
+| UC4 | Accepted | `origin/feature/integrate@4c3b33ad272807430ca3ba6bc753f849f8c8fe5b` | Both condition branches were proved; only observed value 80 wrote a row, and the exact row, conversations, grants, and service overlay were cleaned up. |
 
 ### UC1a: Disconnected Start
 
@@ -158,16 +158,16 @@ runbook is completed.
   `9/9`.
 - Bounded UTC evidence: started `2026-08-09T23:57:26Z`; finished
   `2026-08-10T00:12:49Z`.
-- Score `72`: conversation `nyxid-chat-9370f82e717b838564fcb28226dbb046`;
+- Observed value `72`: conversation `nyxid-chat-9370f82e717b838564fcb28226dbb046`;
   turn `turn-f84c89859c65d5acbeca67a176eb7e2c`; task
   `task-6d77eaf37a14049f69e98573edcf121b`; StateVersion `19`; plan revision `4`.
-  Threshold `75` observed score `72`, so the condition committed false. The
+  Threshold `75` compared with observed value `72`, so the condition committed false. The
   guarded write and postcondition were skipped, no approval was created, and no
   effect was applied. The conversation was deleted.
-- Score `80`: conversation `nyxid-chat-25d486381c0bb02db188e214e424fcdd`;
+- Observed value `80`: conversation `nyxid-chat-25d486381c0bb02db188e214e424fcdd`;
   turn `turn-6524bd6133728a1ab4cf82927100c275`; task
   `task-8e8d96ffd4aa5f90fd6aa2d45da22b68`; StateVersion `28`; plan revision `5`;
-  gate `satisfied`. Threshold `75` observed score `80`, so the condition
+  gate `satisfied`. Threshold `75` compared with observed value `80`, so the condition
   committed true.
 - The create used NyxID approval request
   `33ecb863-8118-405f-9158-626e0e30eb1f`; provider record
@@ -224,13 +224,13 @@ Canary key field:              Attestation Key
 Canary control field:          Control
 Canary owner field:            Owner
 Canary status field:           Status
-Candidate score field:         Sequence
+Observed value field:          Sequence
 Canary timestamp field:        Reviewed At
 ```
 
 The Bitable row uses a unique `Attestation Key` beginning with `m40-canary-`.
-`Control` is `candidate-screening`, `Owner` is `eancuznaivy@gmail.com`, `Status` is
-`accepted`, `Sequence` carries the candidate score, and `Reviewed At` carries
+`Control` is `conditional-write`, `Owner` is `eancuznaivy@gmail.com`, `Status` is
+`accepted`, `Sequence` carries the observed value, and `Reviewed At` carries
 the run timestamp. Do not write to any other table or Approval definition.
 
 The organization-owned UserService
@@ -550,13 +550,13 @@ cannot be proved from the typed read model.
 
 Run two independent conversations with unique canary keys:
 
-1. Score 72 with threshold 75. The condition is committed false; write and
+1. Observed value 72 with threshold 75. The condition is committed false; write and
    read-back steps are `skipped/not_applied`; no NyxID approval request and no
    Bitable row may exist.
-2. Score 80 with threshold 75. The condition is committed true; the exact
+2. Observed value 80 with threshold 75. The condition is committed true; the exact
    Bitable create operation receives a fresh per-request NyxID decision, returns
    a provider-generated record ID, and an exact read/search verifies the unique
-   `Attestation Key`, score, owner, status, control, and timestamp.
+   `Attestation Key`, observed value, owner, status, control, and timestamp.
 3. Reload preserves the threshold override, branch choice, provider-generated
    record identity, verification, and exactly one terminal. Under Tier B, the
    successful synchronous operation's exact approval ID remains NyxID decision

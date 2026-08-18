@@ -22,8 +22,18 @@ using ContractVariableDefinition = Aevatar.Studio.Application.Studio.Abstraction
 using ContractConnectionSlotDefinition = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryConnectionSlotDefinition;
 using ContractAcceptanceMode = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceMode;
 using ContractAcceptancePolicy = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptancePolicy;
+using ContractAcceptanceDateProjection = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceDateProjection;
+using ContractAcceptanceInputBinding = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceInputBinding;
+using ContractAcceptanceInputRecipe = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceInputRecipe;
+using ContractInstallationCreatedAtUtcInput = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryInstallationCreatedAtUtcInput;
+using ContractAuthenticatedOwnerExternalUserIdInput = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput;
 using ActorAcceptanceMode = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceMode;
 using ActorAcceptancePolicy = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptancePolicy;
+using ActorAcceptanceDateProjection = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceDateProjection;
+using ActorAcceptanceInputBinding = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputBinding;
+using ActorAcceptanceInputRecipe = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputRecipe;
+using ActorInstallationCreatedAtUtcInput = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryInstallationCreatedAtUtcInput;
+using ActorAuthenticatedOwnerExternalUserIdInput = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput;
 
 namespace Aevatar.Studio.Application.Delivery;
 
@@ -1001,7 +1011,9 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
 
     private static IReadOnlyList<WorkflowDeliveryTriggerOptionView> AvailableTriggerIntentsFor(
         ContractAcceptancePolicy policy) =>
-        policy.Mode == ContractAcceptanceMode.AutomaticPreview
+        !policy.InputDeclared
+            ? []
+            : policy.Mode == ContractAcceptanceMode.AutomaticPreview
             ? AutomaticAcceptanceTriggerIntents
             : ManualAcceptanceTriggerIntents;
 
@@ -1016,13 +1028,17 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
                 ActorAcceptanceMode.Manual => ContractAcceptanceMode.Manual,
                 _ => ContractAcceptanceMode.Unspecified,
             },
-            NormalizeOptional(policy.Limitation));
+            NormalizeOptional(policy.Limitation),
+            policy.Input == null
+                ? new ContractAcceptanceInputRecipe(new Struct(), [])
+                : ToContractInputRecipe(policy.Input),
+            InputDeclared: policy.Input != null);
     }
 
     private static ActorAcceptancePolicy ToActorAcceptancePolicy(ContractAcceptancePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(policy);
-        return new ActorAcceptancePolicy
+        var result = new ActorAcceptancePolicy
         {
             Mode = policy.Mode switch
             {
@@ -1032,7 +1048,104 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             },
             Limitation = policy.Limitation ?? string.Empty,
         };
+        if (policy.InputDeclared)
+            result.Input = ToActorInputRecipe(policy.Input);
+        return result;
     }
+
+    private static ContractAcceptanceInputRecipe ToContractInputRecipe(
+        ActorAcceptanceInputRecipe recipe)
+    {
+        WorkflowDeliveryConventions.ValidateAcceptanceInput(recipe);
+        return new ContractAcceptanceInputRecipe(
+            recipe.Literals.Clone(),
+            recipe.Bindings.Select(ToContractInputBinding).ToArray());
+    }
+
+    private static ActorAcceptanceInputRecipe ToActorInputRecipe(
+        ContractAcceptanceInputRecipe recipe)
+    {
+        ArgumentNullException.ThrowIfNull(recipe);
+        ArgumentNullException.ThrowIfNull(recipe.Literals);
+        ArgumentNullException.ThrowIfNull(recipe.Bindings);
+        var result = new ActorAcceptanceInputRecipe
+        {
+            Literals = recipe.Literals.Clone(),
+        };
+        result.Bindings.Add(recipe.Bindings.Select(ToActorInputBinding));
+        WorkflowDeliveryConventions.ValidateAcceptanceInput(result);
+        return result;
+    }
+
+    private static ContractAcceptanceInputBinding ToContractInputBinding(
+        ActorAcceptanceInputBinding binding) =>
+        new(
+            binding.Key,
+            binding.Prefix,
+            binding.Suffix,
+            binding.SourceCase switch
+            {
+                ActorAcceptanceInputBinding.SourceOneofCase.InstallationCreatedAtUtc =>
+                    new ContractInstallationCreatedAtUtcInput(
+                        ToContractDateProjection(binding.InstallationCreatedAtUtc.DateProjection),
+                        binding.InstallationCreatedAtUtc.DayOffset),
+                ActorAcceptanceInputBinding.SourceOneofCase.AuthenticatedOwnerExternalUserId =>
+                    new ContractAuthenticatedOwnerExternalUserIdInput(),
+                _ => throw new InvalidOperationException(
+                    "Workflow package acceptance input binding source is unsupported."),
+            });
+
+    private static ActorAcceptanceInputBinding ToActorInputBinding(
+        ContractAcceptanceInputBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        var result = new ActorAcceptanceInputBinding
+        {
+            Key = binding.Key,
+            Prefix = binding.Prefix,
+            Suffix = binding.Suffix,
+        };
+        switch (binding.Source)
+        {
+            case ContractInstallationCreatedAtUtcInput source:
+                result.InstallationCreatedAtUtc = new ActorInstallationCreatedAtUtcInput
+                {
+                    DateProjection = ToActorDateProjection(source.DateProjection),
+                    DayOffset = source.DayOffset,
+                };
+                break;
+            case ContractAuthenticatedOwnerExternalUserIdInput:
+                result.AuthenticatedOwnerExternalUserId =
+                    new ActorAuthenticatedOwnerExternalUserIdInput();
+                break;
+            default:
+                throw new InvalidOperationException(
+                    "Workflow package acceptance input binding source is unsupported.");
+        }
+        return result;
+    }
+
+    private static ContractAcceptanceDateProjection ToContractDateProjection(
+        ActorAcceptanceDateProjection projection) => projection switch
+        {
+            ActorAcceptanceDateProjection.UtcDate => ContractAcceptanceDateProjection.UtcDate,
+            ActorAcceptanceDateProjection.UtcYearMonth => ContractAcceptanceDateProjection.UtcYearMonth,
+            ActorAcceptanceDateProjection.UtcIsoWeek => ContractAcceptanceDateProjection.UtcIsoWeek,
+            ActorAcceptanceDateProjection.UtcCompactDate => ContractAcceptanceDateProjection.UtcCompactDate,
+            _ => throw new InvalidOperationException(
+                "Workflow package acceptance input date projection is unsupported."),
+        };
+
+    private static ActorAcceptanceDateProjection ToActorDateProjection(
+        ContractAcceptanceDateProjection projection) => projection switch
+        {
+            ContractAcceptanceDateProjection.UtcDate => ActorAcceptanceDateProjection.UtcDate,
+            ContractAcceptanceDateProjection.UtcYearMonth => ActorAcceptanceDateProjection.UtcYearMonth,
+            ContractAcceptanceDateProjection.UtcIsoWeek => ActorAcceptanceDateProjection.UtcIsoWeek,
+            ContractAcceptanceDateProjection.UtcCompactDate => ActorAcceptanceDateProjection.UtcCompactDate,
+            _ => throw new InvalidOperationException(
+                "Workflow package acceptance input date projection is unsupported."),
+        };
 
     private static WorkflowDeliveryPackageAcceptancePolicyView ToAcceptancePolicyView(
         ContractAcceptancePolicy policy)
@@ -1041,8 +1154,11 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
         if (policy.Mode == ContractAcceptanceMode.Unspecified)
             throw new WorkflowDeliveryException("INVALID_PACKAGE_ACCEPTANCE_POLICY", "Workflow package acceptance policy is unspecified.");
         return new WorkflowDeliveryPackageAcceptancePolicyView(
-            policy.Mode == ContractAcceptanceMode.AutomaticPreview,
-            policy.Limitation);
+            policy.InputDeclared && policy.Mode == ContractAcceptanceMode.AutomaticPreview,
+            policy.InputDeclared
+                ? policy.Limitation
+                : WorkflowDeliveryAcceptancePolicies.InputMigrationRequiredMessage,
+            policy.InputDeclared);
     }
 
     private WorkflowInstallationView ToInstallationView(
@@ -1181,32 +1297,20 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
 
 internal static class WorkflowDeliveryAcceptancePolicies
 {
-    internal const string BudgetVarianceMonitor = "fin_budget_variance_monitor";
-    internal const string InvoicePrecheckApproval = "fin_invoice_precheck_approval";
-    internal const string AttendanceFillReminder = "hr_attendance_fill_reminder";
-    internal const string MonthlyAttendanceApproval = "hr_monthly_attendance_approval";
-    internal const string OnboardingEmailApproval = "hr_onboarding_email_approval";
+    internal const string InputMigrationRequiredCode = "DELIVERY_ACCEPTANCE_INPUT_MIGRATION_REQUIRED";
+    internal const string InputMigrationRequiredMessage =
+        "This legacy workflow delivery must be revoked and recreated from a typed package, and the customer must reinstall it.";
 
-    private const string InvoiceAttachmentReason =
-        "Automatic acceptance is unavailable because invoice input_file_refs attachments are required and Workflow Delivery does not transport run attachments.";
-
-    private const string UnknownPackageReason =
-        "Automatic acceptance is unavailable because this package has no registered acceptance input contract.";
-
-    private static readonly ContractAcceptancePolicy AutomaticPreview =
-        new(ContractAcceptanceMode.AutomaticPreview, null);
-    private static readonly ContractAcceptancePolicy InvoiceManualOnly =
-        new(ContractAcceptanceMode.Manual, InvoiceAttachmentReason);
-    private static readonly ContractAcceptancePolicy Unknown =
-        new(ContractAcceptanceMode.Unspecified, UnknownPackageReason);
-
-    internal static ContractAcceptancePolicy Resolve(string? workflowName) => workflowName switch
+    internal static void EnsureInputDeclared(ContractAcceptancePolicy policy)
     {
-        BudgetVarianceMonitor or AttendanceFillReminder or MonthlyAttendanceApproval or OnboardingEmailApproval =>
-            AutomaticPreview,
-        InvoicePrecheckApproval => InvoiceManualOnly,
-        _ => Unknown,
-    };
+        ArgumentNullException.ThrowIfNull(policy);
+        if (!policy.InputDeclared)
+        {
+            throw new WorkflowDeliveryException(
+                InputMigrationRequiredCode,
+                InputMigrationRequiredMessage);
+        }
+    }
 
     internal static void EnsureTriggerSupported(
         PackageSnapshot package,
@@ -1220,6 +1324,8 @@ internal static class WorkflowDeliveryAcceptancePolicies
                 "UNSUPPORTED_DELIVERY_PACKAGE",
                 "The workflow package has no registered acceptance input contract.");
         }
+
+        EnsureInputDeclared(policy);
 
         if (triggerKind != DeliveryTriggerKind.None && policy.Mode != ContractAcceptanceMode.AutomaticPreview)
         {

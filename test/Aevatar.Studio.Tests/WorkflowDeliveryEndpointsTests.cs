@@ -72,6 +72,31 @@ public sealed class WorkflowDeliveryEndpointsTests
         authorizer.ResolveCalls.Should().Be(1);
     }
 
+    [Fact]
+    public async Task ListPackages_WhenDeploymentCatalogIsEmpty_ShouldReturnHonestEmptyList()
+    {
+        var service = new RecordingWorkflowDeliveryService
+        {
+            PackageListResponse = new WorkflowDeliveryPackageListResponse([]),
+        };
+        var authorizer = new FixedPlatformAdminAuthorizer(new PlatformCaller(
+            IsElevated: true,
+            Role: "admin",
+            Email: "admin@example.test",
+            UserId: "admin-allowed",
+            GrantSource: PlatformAdminGrantSources.AllowedUserId));
+
+        var result = await WorkflowDeliveryEndpoints.ListPackagesAsync(
+            CreateContext("scope-admin-view", "user-admin-view"),
+            service,
+            authorizer,
+            CancellationToken.None);
+
+        result.Should().BeOfType<Ok<WorkflowDeliveryPackageListResponse>>()
+            .Which.Value!.Items.Should().BeEmpty();
+        service.InvocationCount.Should().Be(1);
+    }
+
     [Theory]
     [InlineData(true, "admin-allowed-alpha", PlatformAdminGrantSources.AllowedUserId, true)]
     [InlineData(false, "admin-not-elevated", PlatformAdminGrantSources.AllowedUserId, false)]
@@ -606,11 +631,16 @@ public sealed class WorkflowDeliveryEndpointsTests
         public WorkflowDeliveryAttachConnectionRequest? AttachedRequest { get; private set; }
         public WorkflowDeliveryException? ConnectLinkException { get; init; }
         public NyxIdUserServiceInventoryException? ExistingConnectionsException { get; init; }
+        public WorkflowDeliveryPackageListResponse PackageListResponse { get; init; } =
+            new([]);
 
         public Task<WorkflowDeliveryPackageListResponse> ListPackagesAsync(
             string principalId,
-            CancellationToken ct = default) =>
-            Unexpected<WorkflowDeliveryPackageListResponse>();
+            CancellationToken ct = default)
+        {
+            InvocationCount++;
+            return Task.FromResult(PackageListResponse);
+        }
 
         public Task<WorkflowDeliveryPackageView> GetPackageAsync(
             string workflowName,

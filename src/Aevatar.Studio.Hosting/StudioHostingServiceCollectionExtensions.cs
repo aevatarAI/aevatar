@@ -28,6 +28,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 
 namespace Aevatar.Studio.Hosting;
@@ -41,27 +42,17 @@ internal static class StudioHostingServiceCollectionExtensions
         services.TryAddSingleton(configuration);
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
         var deliverySection = configuration.GetSection(WorkflowDeliveryOptions.SectionName);
-        var allowedWorkflowNamesSection = deliverySection.GetSection(
-            nameof(WorkflowDeliveryOptions.AllowedWorkflowNames));
-        services.Configure<WorkflowDeliveryOptions>(deliverySection);
-        services.PostConfigure<WorkflowDeliveryOptions>(options =>
-        {
-            if (!deliverySection.Exists() ||
-                (!allowedWorkflowNamesSection.Exists() && options.UseShippedWorkflowAllowlist))
-            {
-                options.AllowedWorkflowNames = [.. WorkflowDeliveryOptions.ShippedWorkflowNames];
-            }
-
-            // A misconfigured console-web origin would silently degrade to "no console link"
-            // for every customer, so a present-but-invalid value fails the host instead.
-            if (!string.IsNullOrWhiteSpace(options.ConsoleWebBaseUrl) &&
-                !WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl(options.ConsoleWebBaseUrl, out _))
-            {
-                throw new InvalidOperationException(
-                    $"{WorkflowDeliveryOptions.SectionName}:{nameof(WorkflowDeliveryOptions.ConsoleWebBaseUrl)} " +
-                    "must be an absolute HTTPS origin (or a loopback HTTP origin) without userinfo, query, or fragment.");
-            }
-        });
+        services.AddOptions<WorkflowDeliveryOptions>()
+            .Bind(
+                deliverySection,
+                binder => binder.ErrorOnUnknownConfiguration = true)
+            // A present-but-invalid console origin would silently remove every customer link.
+            .Validate(
+                options => string.IsNullOrWhiteSpace(options.ConsoleWebBaseUrl) ||
+                    WorkflowDeliveryConsoleLink.TryNormalizeBaseUrl(options.ConsoleWebBaseUrl, out _),
+                $"{WorkflowDeliveryOptions.SectionName}:{nameof(WorkflowDeliveryOptions.ConsoleWebBaseUrl)} " +
+                "must be an absolute HTTPS origin (or a loopback HTTP origin) without userinfo, query, or fragment.")
+            .ValidateOnStart();
         services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()
             .AddApplicationPart(typeof(EditorController).Assembly)
@@ -76,6 +67,7 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddHttpClient();
         services.TryAddScoped<IAppAuthProfileResolver, NyxIdAppAuthProfileResolver>();
         services.TryAddSingleton(TimeProvider.System);
+        services.AddHostedService<WorkflowDeliveryPackageCatalogStartupProbe>();
         services.TryAddSingleton<
             IContentArtifactBackingContentPort,
             WorkflowFileContentArtifactBackingContentPort>();

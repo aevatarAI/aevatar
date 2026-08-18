@@ -38,4 +38,10 @@ public sealed class StreamForwardingBindingEntry
 
     [Id(6)]
     public string? LeaseId { get; set; }
+
+    [Id(7)]
+    public string TargetActorKind { get; set; } = string.Empty;
+
+    [Id(8)]
+    public long ActivationGeneration { get; set; }
 }

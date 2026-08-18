@@ -27,8 +27,6 @@ internal static class NyxIdChatTaskPlanWireMapper
             PlanRevision = task.PlanRevision,
             PlanRevisionHistoryStart = task.PlanRevisionHistoryStart,
             Title = task.Title,
-            Domain = task.Domain?.Clone(),
-            Artifact = task.Artifact?.Clone(),
         };
         plan.Steps.AddRange(task.Steps
             .OrderBy(static step => step.Order)
@@ -59,8 +57,6 @@ internal static class NyxIdChatTaskPlanWireMapper
             PlanRevision = task.PlanRevision,
             PlanRevisionHistoryStart = task.PlanRevisionHistoryStart,
             Title = task.Title ?? string.Empty,
-            Domain = FromDomainSnapshot(task.Domain),
-            Artifact = FromArtifactSnapshot(task.Artifact),
         };
         plan.Steps.AddRange(task.Steps
             .OrderBy(static step => step.Order)
@@ -82,116 +78,6 @@ internal static class NyxIdChatTaskPlanWireMapper
             }));
         }
         return plan;
-    }
-
-    private static NyxIdChatTaskDomainState? FromDomainSnapshot(
-        NyxIdChatTaskDomainSnapshot? domain)
-    {
-        if (domain?.Reimbursement is { } reimbursement)
-        {
-            var evidence = new NyxIdChatReimbursementEvidence
-            {
-                EvidenceId = reimbursement.EvidenceId,
-                SourceInputRequestId = reimbursement.SourceInputRequestId,
-                ExpenseCategory = reimbursement.ExpenseCategory,
-                CostCenter = reimbursement.CostCenter,
-                ReimbursementCurrencyInstruction =
-                    reimbursement.ReimbursementCurrencyInstruction,
-                CommittedAt = ToTimestamp(reimbursement.CommittedAt),
-                GuardedToolName = reimbursement.GuardedToolName,
-            };
-            evidence.SourceInvoices.AddRange(reimbursement.SourceInvoices.Select(static invoice =>
-                new NyxIdChatInvoiceEvidence
-                {
-                    SourceOrdinal = invoice.SourceOrdinal,
-                    Vendor = invoice.Vendor,
-                    InvoiceNumber = invoice.InvoiceNumber,
-                    InvoiceDate = invoice.InvoiceDate,
-                    Amount = new NyxIdChatMoneyValue
-                    {
-                        CurrencyCode = invoice.Amount.CurrencyCode,
-                        MinorUnits = invoice.Amount.MinorUnits,
-                        FractionDigits = invoice.Amount.FractionDigits,
-                    },
-                }));
-            evidence.RetainedSourceOrdinals.AddRange(reimbursement.RetainedSourceOrdinals);
-            evidence.DuplicateInvoices.AddRange(reimbursement.DuplicateInvoices.Select(
-                static duplicate => new NyxIdChatInvoiceDuplicateEvidence
-                {
-                    DuplicateSourceOrdinal = duplicate.DuplicateSourceOrdinal,
-                    RetainedSourceOrdinal = duplicate.RetainedSourceOrdinal,
-                }));
-            return new NyxIdChatTaskDomainState { Reimbursement = evidence };
-        }
-
-        if (domain?.CandidateScreening is not { } candidate)
-            return null;
-        var screening = new NyxIdChatCandidateScreeningEvidence
-        {
-            EvidenceId = candidate.EvidenceId,
-            SourceInputRequestId = candidate.SourceInputRequestId,
-            CandidateName = candidate.CandidateName,
-            RoleTitle = candidate.RoleTitle,
-            TotalScore = candidate.TotalScore,
-            TrackerTable = candidate.TrackerTable,
-            TrackerTableId = candidate.TrackerTableId,
-            Stage = candidate.Stage,
-            GuardedToolName = candidate.GuardedToolName,
-            CommittedAt = ToTimestamp(candidate.CommittedAt),
-        };
-        screening.Rubric.AddRange(candidate.Rubric.Select(static criterion =>
-            new NyxIdChatCandidateRubricCriterion
-            {
-                CriterionId = criterion.CriterionId,
-                Title = criterion.Title,
-                MaximumPoints = criterion.MaximumPoints,
-            }));
-        screening.Scores.AddRange(candidate.Scores.Select(static score =>
-            new NyxIdChatCandidateCriterionScore
-            {
-                CriterionId = score.CriterionId,
-                AwardedPoints = score.AwardedPoints,
-                Evidence = score.Evidence,
-            }));
-        return new NyxIdChatTaskDomainState { CandidateScreening = screening };
-    }
-
-    private static NyxIdChatVerifiedArtifactState? FromArtifactSnapshot(
-        NyxIdChatVerifiedArtifactSnapshot? artifact)
-    {
-        if (artifact?.Reimbursement is { } reimbursement)
-        {
-            return new NyxIdChatVerifiedArtifactState
-            {
-                CheckName = artifact.CheckName,
-                VerifiedAt = ToTimestamp(artifact.VerifiedAt),
-                Reimbursement = new NyxIdChatReimbursementArtifact
-                {
-                    ProviderInstanceId = reimbursement.ProviderInstanceId,
-                    CostCenter = reimbursement.CostCenter,
-                    RetainedItemCount = reimbursement.RetainedItemCount,
-                    DuplicateItemCount = reimbursement.DuplicateItemCount,
-                },
-            };
-        }
-
-        if (artifact?.CandidateTracker is not { } candidate)
-            return null;
-        return new NyxIdChatVerifiedArtifactState
-        {
-            CheckName = artifact.CheckName,
-            VerifiedAt = ToTimestamp(artifact.VerifiedAt),
-            CandidateTracker = new NyxIdChatCandidateTrackerArtifact
-            {
-                ProviderRecordId = candidate.ProviderRecordId,
-                CandidateName = candidate.CandidateName,
-                Score = candidate.Score,
-                Threshold = candidate.Threshold,
-                TrackerTable = candidate.TrackerTable,
-                TrackerTableId = candidate.TrackerTableId,
-                Stage = candidate.Stage,
-            },
-        };
     }
 
     public static NyxIdChatTaskPlanStep FromState(NyxIdChatTaskStepState step)

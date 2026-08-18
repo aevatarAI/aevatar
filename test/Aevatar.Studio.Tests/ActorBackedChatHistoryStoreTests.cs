@@ -557,6 +557,36 @@ public sealed class ActorBackedChatHistoryStoreTests
     }
 
     [Fact]
+    public async Task GetIndexAsync_ShouldPreserveConversationAuthorityStateVersion()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var reader = new InMemoryProjectionDocumentStore<ChatConversationCurrentStateDocument, string>(
+            document => document.ActorId,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt);
+        await reader.UpsertAsync(new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            Title = "Conversation A",
+            StateVersion = 17,
+            UpdatedAtMs = 2,
+            CreatedAtMs = 1,
+        });
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor("unused")),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            reader,
+            new RecordingDeliveryDocumentReader());
+
+        var page = await store.GetIndexAsync(new ChatHistoryIndexPageRequest("scope-a"));
+
+        page.Conversations.Should().ContainSingle().Which.StateVersion.Should().Be(17);
+    }
+
+    [Fact]
     public async Task GetIndexAsync_ShouldPagePastTwoHundredFiftyConversationsWithStableOrdering()
     {
         var reader = new InMemoryProjectionDocumentStore<ChatConversationCurrentStateDocument, string>(

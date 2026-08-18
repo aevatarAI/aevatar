@@ -8,6 +8,7 @@ import {
   history,
   subscribeToLocationChanges,
 } from '@/shared/navigation/history';
+import { AI_CHAT_ROUTE } from '@/shared/navigation/aiRoutes';
 import {
   buildTeamDetailHref,
   buildTeamsHref,
@@ -11007,7 +11008,7 @@ const StudioPage: React.FC = () => {
           : undefined
       }
       dryRunBlockedReason={workflowDryRunBlockedReason || undefined}
-      onOpenRunSetup={() => history.push('/chat')}
+      onOpenRunSetup={() => history.push(AI_CHAT_ROUTE)}
       availableStepTypes={availableStepTypes}
       workflowRoles={workflowRoleOptions}
       onInsertStep={handleInsertWorkflowStep}
