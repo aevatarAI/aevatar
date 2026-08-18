@@ -150,6 +150,10 @@ internal static class Neo4jProjectionGraphStoreVersionedCypherSupport
         "edge.projectionOwnerId = $ownerId, edge.projectionGraphVersion = item.projectionGraphVersion " +
         "RETURN count(edge) AS appliedCount";
 
+    // The pending-edge selection (disjunction over edge/from/to ids) and the endpoint lookups are
+    // separated by explicit WITH boundaries: planning them as one query graph together with the
+    // relationship MERGE trips a Neo4j 5 planner assertion ("Expected: RegularSinglePlannerQuery")
+    // on the production database, which failed every promotion.
     internal static string BuildPromotePendingEdgesCypher(
         string nodeLabel,
         string edgeType,
@@ -159,9 +163,13 @@ internal static class Neo4jProjectionGraphStoreVersionedCypherSupport
         "WHERE identity.edgeId IN $promotableEdgeIds " +
         "OR identity.fromNodeId IN $promotableNodeIds " +
         "OR identity.toNodeId IN $promotableNodeIds " +
+        "WITH identity " +
         $"MATCH (from:{nodeLabel} {{scope: $physicalNamespace, nodeId: identity.fromNodeId}}) " +
+        "WHERE from.projectionOwnerId = $ownerId " +
+        "WITH identity, from " +
         $"MATCH (to:{nodeLabel} {{scope: $physicalNamespace, nodeId: identity.toNodeId}}) " +
-        "WHERE from.projectionOwnerId = $ownerId AND to.projectionOwnerId = $ownerId " +
+        "WHERE to.projectionOwnerId = $ownerId " +
+        "WITH identity, from, to " +
         $"MERGE (from)-[edge:{edgeType} {{scope: $physicalNamespace, edgeId: identity.edgeId}}]->(to) " +
         "SET edge.relationType = identity.relationType, edge.mutationPayload = identity.mutationPayload, " +
         "edge.updatedAtEpochMs = identity.updatedAtEpochMs, edge.projectionManaged = true, " +

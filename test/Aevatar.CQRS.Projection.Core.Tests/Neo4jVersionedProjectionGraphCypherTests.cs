@@ -101,6 +101,10 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
         promote.Should().Contain("identity.toNodeId IN $promotableNodeIds");
         promote.Should().Contain("identity.status = 'live'");
         promote.Should().NotContain("Unknown");
+        // Endpoint lookups and the relationship MERGE must be planned as separate query graphs.
+        promote.Should().Contain("WITH identity MATCH (from:");
+        promote.Should().Contain("WITH identity, from MATCH (to:");
+        promote.Should().Contain("WITH identity, from, to MERGE (from)-[edge:");
     }
 
     [Fact]
