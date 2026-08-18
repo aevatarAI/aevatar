@@ -7,6 +7,93 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class InMemoryProjectionDocumentStoreBehaviorTests
 {
     [Fact]
+    public async Task MutateAsync_ShouldAtomicallyReduceDetachedCurrentDocument()
+    {
+        var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(
+            keySelector: model => model.Id);
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "item-1",
+            ActorId = "actor-1",
+            StateVersion = 1,
+            LastEventId = "event-1",
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+            Value = "v1",
+        });
+        var reducerCalls = 0;
+
+        var result = await store.MutateAsync("item-1", current =>
+        {
+            reducerCalls++;
+            current.Should().NotBeNull();
+            current!.Value.Should().Be("v1");
+            current.StateVersion = 2;
+            current.LastEventId = "event-2";
+            current.Value = "v2";
+            return current;
+        });
+
+        reducerCalls.Should().Be(1);
+        result.WriteResult.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        result.Document.Should().NotBeNull();
+        result.Document!.Value = "caller-mutation";
+        var stored = await store.GetAsync("item-1");
+        stored!.StateVersion.Should().Be(2);
+        stored.LastEventId.Should().Be("event-2");
+        stored.Value.Should().Be("v2");
+    }
+
+    [Fact]
+    public async Task MutateAsync_WhenReducerReplaysExactDocument_ShouldReturnDuplicate()
+    {
+        var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(
+            keySelector: model => model.Id);
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "item-1",
+            ActorId = "actor-1",
+            StateVersion = 1,
+            LastEventId = "event-1",
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+            Value = "v1",
+        });
+
+        var result = await store.MutateAsync("item-1", current => current!);
+
+        result.WriteResult.Disposition.Should().Be(ProjectionWriteDisposition.Duplicate);
+        result.Document!.Value.Should().Be("v1");
+    }
+
+    [Fact]
+    public async Task MutateAsync_WhenReducerChangesKey_ShouldRejectWithoutWriting()
+    {
+        var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(
+            keySelector: model => model.Id);
+        await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "item-1",
+            ActorId = "actor-1",
+            StateVersion = 1,
+            LastEventId = "event-1",
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+            Value = "v1",
+        });
+
+        var act = () => store.MutateAsync("item-1", current =>
+        {
+            current!.Id = "item-2";
+            current.StateVersion = 2;
+            current.LastEventId = "event-2";
+            return current;
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*changed key*");
+        (await store.GetAsync("item-1"))!.Value.Should().Be("v1");
+        (await store.GetAsync("item-2")).Should().BeNull();
+    }
+
+    [Fact]
     public async Task QueryAsync_ShouldResolveProtoFieldNames()
     {
         var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(

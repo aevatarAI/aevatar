@@ -15,6 +15,7 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     : IProjectionDocumentReader<TReadModel, TKey>,
       IProjectionDocumentWriter<TReadModel>,
+      IProjectionDocumentMutator<TReadModel, TKey>,
       IProjectionIndexConsistencyProbe<TReadModel>,
       IProjectionIndexReconcileTarget,
       IDisposable
@@ -120,6 +121,40 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         await _indexManager.EnsureIndexAsync(indexTarget.IndexName, indexTarget.Metadata, ct);
         var keyValue = ResolveReadModelKey(readModel);
         return await _writer.UpsertAsync(indexTarget.IndexName, keyValue, readModel, ct);
+    }
+
+    public async Task<ProjectionDocumentMutationResult<TReadModel>> MutateAsync(
+        TKey key,
+        Func<TReadModel?, TReadModel> reducer,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(reducer);
+        ct.ThrowIfCancellationRequested();
+        ThrowIfDynamicReadModelMutationUnsupported();
+
+        var keyValue = FormatKey(key);
+        if (keyValue.Length == 0)
+            throw new ArgumentException("Projection mutation key must be non-empty.", nameof(key));
+
+        await _indexManager.EnsureIndexAsync(_indexName, _indexMetadata, ct);
+        return await _writer.MutateAsync(
+            _indexName,
+            keyValue,
+            existing =>
+            {
+                var incoming = reducer(existing)
+                               ?? throw new InvalidOperationException(
+                                   $"Projection mutation reducer returned null for read-model '{typeof(TReadModel).FullName}'.");
+                var incomingKey = ResolveReadModelKey(incoming);
+                if (!string.Equals(incomingKey, keyValue, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Projection mutation for read-model '{typeof(TReadModel).FullName}' changed key '{keyValue}' to '{incomingKey}'.");
+                }
+
+                return incoming;
+            },
+            ct);
     }
 
     public async Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
@@ -896,6 +931,16 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         throw new InvalidOperationException(
             $"Elasticsearch 'delete' by key is not supported for dynamically indexed read model '{typeof(TReadModel).FullName}'. " +
             "Dynamically indexed read models must delete via provider-native index-scoped operations.");
+    }
+
+    private void ThrowIfDynamicReadModelMutationUnsupported()
+    {
+        if (!_supportsDynamicIndexing)
+            return;
+
+        throw new InvalidOperationException(
+            $"Elasticsearch 'mutation' by key is not supported for dynamically indexed read model '{typeof(TReadModel).FullName}'. " +
+            "Use a provider contract with an explicit physical index selector.");
     }
 
     private async Task<ExistingProjectionState> TryGetExistingProjectionStateAsync(

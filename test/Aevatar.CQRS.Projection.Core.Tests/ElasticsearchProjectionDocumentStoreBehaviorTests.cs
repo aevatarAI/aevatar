@@ -22,6 +22,102 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IProjectionIndexReconcileTarget) &&
             descriptor.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType ==
+            typeof(IProjectionDocumentMutator<TestStoreReadModel, string>) &&
+            descriptor.Lifetime == ServiceLifetime.Singleton);
+    }
+
+    [Fact]
+    public async Task MutateAsync_WhenUncontended_ShouldUseOneReadAndOneConditionalCommit()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-03-16T00:00:00Z","value":"v1"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"updated"}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+        var reducerCalls = 0;
+
+        var result = await store.MutateAsync("actor-1", current =>
+        {
+            reducerCalls++;
+            current.Should().NotBeNull();
+            current!.StateVersion = 2;
+            current.LastEventId = "evt-2";
+            current.UpdatedAt = DateTimeOffset.Parse("2026-03-16T00:00:01Z");
+            current.Value = "v2";
+            return current;
+        });
+
+        reducerCalls.Should().Be(1);
+        result.WriteResult.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        result.Document!.Value.Should().Be("v2");
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "PUT");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_primary_term=3");
+    }
+
+    [Fact]
+    public async Task MutateAsync_WhenExactReplay_ShouldReadOnceAndNotWrite()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-03-16T00:00:00Z","value":"v1"}}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+
+        var result = await store.MutateAsync("actor-1", current => current!);
+
+        result.WriteResult.Disposition.Should().Be(ProjectionWriteDisposition.Duplicate);
+        result.Document!.Value.Should().Be("v1");
+        handler.CapturedRequests.Should().ContainSingle()
+            .Which.Method.Should().Be("GET");
+    }
+
+    [Fact]
+    public async Task MutateAsync_WhenOccConflicts_ShouldReapplyReducerToLatestDocument()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-03-16T00:00:00Z","value":"v1"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.Conflict,
+            """{"error":{"type":"version_conflict_engine_exception"},"status":409}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":8,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"2","last_event_id":"evt-other","updated_at_utc_value":"2026-03-16T00:00:01Z","value":"v2-other"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"updated"}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+        var reducerCalls = 0;
+
+        var result = await store.MutateAsync("actor-1", current =>
+        {
+            reducerCalls++;
+            current.Should().NotBeNull();
+            current!.StateVersion++;
+            current.LastEventId = $"evt-local-{current.StateVersion}";
+            current.Value += "|local";
+            return current;
+        });
+
+        reducerCalls.Should().Be(2);
+        result.WriteResult.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        result.Document!.StateVersion.Should().Be(3);
+        result.Document.Value.Should().Be("v2-other|local");
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "PUT", "GET", "PUT");
+        handler.CapturedRequests[3].PathAndQuery.Should().Contain("if_seq_no=8");
+        handler.CapturedRequests[3].Body.Should().Contain("\"value\":\"v2-other|local\"");
+        handler.CapturedRequests[3].Body.Should().NotContain("v1|local|local");
     }
 
     [Fact]
