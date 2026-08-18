@@ -674,8 +674,11 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         {
             return this.GetPrimaryKeyString();
         }
-        catch
+        catch (Exception exception)
         {
+            _logger.LogWarning(
+                exception,
+                "Runtime actor primary key lookup failed before actor identity was available.");
             return null;
         }
     }
