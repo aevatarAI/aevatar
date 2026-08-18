@@ -22,12 +22,20 @@ SCHEDULE_GENERATOR_NAME = "aevatar-workflow-schedule-design.gen.py"
 SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
-SCHEDULE_PAGE_PNG_NAME = "prototype-schedule.png"
-SCHEDULE_BOARD_PNG_NAME = "aevatar-workflow-schedule-design.png"
+SCHEDULE_PNG_SHA256 = {
+    "schedule-workflows-list-modal.png": "b5fb0e7e30e642f0aab33856a03267a06970cf5483c54bdc59adfbc64d16c594",
+    "schedule-workflow-editor-panel.png": "9e0fc671026786f999d76158d943e21e26ae7c0e911870d6a9415397ec62f95a",
+    "schedule-authorization-review.png": "d0220554a03f99b0fbc5ffeee9dc6d383c028a14ad9d8f50e239e4db253b29e6",
+    "schedule-creation-pending.png": "0e3191ac228b57b4082d62a1175eecc71d7a9601a9180775453e1b53de827071",
+    "schedule-detail.png": "fc78c4c7a6aa8d406be4ded881d494356ed8dfb65fcd01ebf124b079db29dc3c",
+    "schedule-edit.png": "d1059e49a54bb4f33757e424c45652f980f305639b66b4cd1e34a7b374527160",
+}
+OBSOLETE_SCHEDULE_PNGS = (
+    "prototype-schedule.png",
+    "aevatar-workflow-schedule-design.png",
+)
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "dae8f2038e6aede704219d4a129be97550d07f393edadf34e0e86007234000b5"
-EXPECTED_SCHEDULE_PAGE_PNG_SHA256 = "c46f2e35d4289a75173bfa6f27f720684d2d52f7e28c7aabe8076edb890339f9"
-EXPECTED_SCHEDULE_BOARD_PNG_SHA256 = "d2c9c94794881c051bc71b9a8f5212f88caf5ce7f1017f05eabc0fb5dcf6f7cb"
+EXPECTED_SCHEDULE_SHA256 = "84b05e328f28173b6e375653af800cd393a835b377b23b588166e7afa733c989"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -49,14 +57,11 @@ EXPECTED_FRAMES = (
 )
 EXPECTED_SCHEDULE_FRAMES = (
     "01 · Workflows — quick schedule modal",
-    "02 · Schedule — configure recurring work",
+    "02 · Workflow — schedule setup panel",
     "03 · Schedule — review authorization",
-    "04 · Activity — scheduled runs",
+    "04 · Schedule — creation pending",
     "05 · Workflow — schedule detail",
     "06 · Workflow — change schedule",
-    "SPEC · cadence control",
-    "SPEC · Workflow Schedule row states",
-    "REF · schedule lifecycle",
 )
 
 
@@ -179,6 +184,10 @@ def main() -> None:
     board_bytes = board_path.read_bytes()
     schedule_board_bytes = schedule_board_path.read_bytes()
 
+    for obsolete_png in OBSOLETE_SCHEDULE_PNGS:
+        if (BASELINE_DIR / obsolete_png).exists():
+            raise SystemExit(f"obsolete combined Schedule PNG must be removed: {obsolete_png}")
+
     actual_sha256 = hashlib.sha256(board_bytes).hexdigest()
     if actual_sha256 != EXPECTED_SHA256:
         raise SystemExit(
@@ -203,7 +212,7 @@ def main() -> None:
     schedule_visible_text_casefolded = schedule_visible_text.casefold()
     if "Schedule" not in schedule_visible_text:
         raise SystemExit("schedule entry point is missing from the schedule design board")
-    for required in ("Team member automation", "Published target", "Activities",
+    for required in ("Team member automation", "Pinned revision",
                      "Dedicated Agent Key", "write it as cron instead", "Time zone",
                      "NEXT FIVE FIRES", "Review authorization",
                      "Pause", "Delete"):
@@ -211,9 +220,10 @@ def main() -> None:
             raise SystemExit(f"schedule frame is missing required copy: {required}")
     if "prompt (optional)" not in schedule_visible_text_casefolded:
         raise SystemExit("schedule frame incorrectly hides optional recurring prompt semantics")
-    if "credential active · next fire observed" not in schedule_visible_text_casefolded:
-        raise SystemExit("schedule frame is missing observed credential state")
-    if "a schedule graph node" not in schedule_visible_text_casefolded:
+    for required_state in ("credential expired · owner review required", "not yet active"):
+        if required_state not in schedule_visible_text_casefolded:
+            raise SystemExit(f"schedule frames are missing honest credential state: {required_state}")
+    if "not a graph node" not in schedule_visible_text_casefolded:
         raise SystemExit("schedule board does not state that graph nodes are out of scope")
     if "trigger" in schedule_visible_text_casefolded:
         raise SystemExit("schedule board still contains unsupported trigger terminology")
@@ -229,7 +239,7 @@ def main() -> None:
             f"got      {schedule_frame_names!r}"
         )
     if len(schedule_frame_names) != len(EXPECTED_SCHEDULE_FRAMES):
-        raise SystemExit("schedule board must contain the complete configure-to-observe flow")
+        raise SystemExit("schedule board must contain exactly six standalone review scenes")
 
     schedule_frames_by_name = {
         element["name"]: element["id"]
@@ -245,15 +255,16 @@ def main() -> None:
             if element.get("type") == "text" and element.get("frameId") == frame_id
         )
 
-    activity_frame_text = schedule_frame_text("04 · Activity — scheduled runs")
-    activity_frame_text_casefolded = activity_frame_text.casefold()
-    for required in ("Every row is one immutable Run", "Run ID", "Source: Schedule",
-                     "Workflow > Schedule"):
-        if required.casefold() not in activity_frame_text_casefolded:
-            raise SystemExit(f"scheduled Run evidence frame is missing: {required}")
-    for forbidden in ("What will run", "Next fire", "Pause", "Delete", "Change cadence"):
-        if forbidden.casefold() in activity_frame_text_casefolded:
-            raise SystemExit(f"Activity still owns Schedule management: {forbidden}")
+    for forbidden in (
+        "scheduled runs",
+        "view scheduled runs",
+        "watch activity",
+        "next fire and activity",
+        "activity contains immutable runs",
+        "activity evidence",
+    ):
+        if forbidden in schedule_visible_text_casefolded:
+            raise SystemExit(f"Schedule design still links to Activity: {forbidden}")
 
     quick_modal_text = schedule_frame_text("01 · Workflows — quick schedule modal").casefold()
     for required in ("new schedule", "without leaving workflows", "review authorization"):
@@ -263,10 +274,12 @@ def main() -> None:
         raise SystemExit("Workflow catalogue frame does not preserve the optional editor path")
     for configure_frame_name in (
         "01 · Workflows — quick schedule modal",
-        "02 · Schedule — configure recurring work",
+        "02 · Workflow — schedule setup panel",
     ):
         configure_text = schedule_frame_text(configure_frame_name).casefold()
         for required in (
+            "schedule name",
+            "weekly feedback report recurring work",
             "repeat",
             "every weekday at 09:00",
             "write it as cron instead",
@@ -280,7 +293,15 @@ def main() -> None:
             raise SystemExit(f"{configure_frame_name} exposes raw cron as a default primary field")
 
     schedule_edit_text = schedule_frame_text("06 · Workflow — change schedule").casefold()
-    for required in ("repeat", "every weekday at 09:00", "write it as cron instead"):
+    for required in (
+        "schedule name",
+        "weekly review",
+        "repeat",
+        "every monday at 10:00",
+        "asia/shanghai",
+        "0 10 * * 1",
+        "write it as cron instead",
+    ):
         if required not in schedule_edit_text:
             raise SystemExit(f"Workflow Schedule edit is missing repeat-builder semantics: {required}")
     if "cron expression" in schedule_edit_text:
@@ -302,6 +323,11 @@ def main() -> None:
         if forbidden in authorization_text:
             raise SystemExit(f"Schedule authorization frame still contains unrelated sample access: {forbidden}")
 
+    pending_text = schedule_frame_text("04 · Schedule — creation pending").casefold()
+    for required in ("202 accepted", "not yet active", "waiting for schedule state"):
+        if required not in pending_text:
+            raise SystemExit(f"Schedule pending frame is missing honest accepted state: {required}")
+
     for workflow_frame_name in (
         "05 · Workflow — schedule detail",
         "06 · Workflow — change schedule",
@@ -313,15 +339,16 @@ def main() -> None:
             raise SystemExit(f"{workflow_frame_name} does not state its Workflow ownership")
 
     schedule_detail_text = schedule_frame_text("05 · Workflow — schedule detail").casefold()
-    if "view scheduled runs" not in schedule_detail_text:
-        raise SystemExit("Workflow Schedule detail does not link to its Activity run evidence")
+    for required in ("weekly review", "every monday at 10:00", "asia/shanghai"):
+        if required not in schedule_detail_text:
+            raise SystemExit(f"Workflow Schedule detail does not round-trip selected state: {required}")
+    if "authorization and next-fire state are returned by the schedule service" not in schedule_detail_text:
+        raise SystemExit("Workflow Schedule detail does not identify the Schedule state source")
     for required in ("Review and reauthorize", "Run now", "Change", "Pause", "Delete"):
         if required.casefold() not in schedule_detail_text:
             raise SystemExit(f"Workflow Schedule detail is missing lifecycle action: {required}")
-    if "every fire" in schedule_detail_text:
-        raise SystemExit("Workflow Schedule detail duplicates Activity Run history")
     if "what will run" in schedule_visible_text_casefolded:
-        raise SystemExit("Schedule board still presents a Schedule collection inside Activity")
+        raise SystemExit("Schedule board still presents the removed collection model")
 
     prototype_text = prototype_path.read_text(encoding="utf-8")
     creation_start = prototype_text.index("function resetScheduleCreation")
@@ -399,6 +426,29 @@ def main() -> None:
             raise SystemExit(f"prototype quick-create Schedule modal still contains optimistic or shared sample state: {forbidden}")
     if '<span class="field-label">Cron expression</span>' in configure_creation_text:
         raise SystemExit("prototype quick-create Schedule exposes raw cron as a default primary field")
+    for required in (
+        'id="quick-schedule-name"',
+        'name: content.querySelector("#quick-schedule-name").value.trim()',
+    ):
+        if required not in configure_creation_text and required not in creation_text:
+            raise SystemExit(f"prototype Schedule creation does not preserve its editable name: {required}")
+    for required in (
+        "function scheduleEditModel(schedule)",
+        'id="schedule-edit-name"',
+        'id="schedule-edit-repeat"',
+        'id="schedule-edit-repeat-time"',
+        'id="schedule-edit-time-zone"',
+        'id="schedule-edit-cron"',
+        'id="schedule-edit-prompt"',
+        'name: panel.querySelector("#schedule-edit-name").value.trim()',
+        'cadence: panel.querySelector("#schedule-edit-repeat").value',
+        'repeatTime: panel.querySelector("#schedule-edit-repeat-time").value',
+        'timeZone: panel.querySelector("#schedule-edit-time-zone").value.trim()',
+        'cronExpression: panel.querySelector("#schedule-edit-cron").value.trim()',
+        'prompt: panel.querySelector("#schedule-edit-prompt").value.trim()',
+    ):
+        if required not in prototype_text:
+            raise SystemExit(f"prototype Schedule edit does not round-trip observed state: {required}")
     for forbidden in ("const grants = workflow.steps.map", "schedules.unshift(", "enabled: true"):
         if forbidden in creation_text:
             raise SystemExit(f"prototype Schedule creation derives or invents observed state: {forbidden}")
@@ -416,12 +466,19 @@ def main() -> None:
         raise SystemExit("prototype does not reserve canvas layout for the Schedule panel")
     if "flex: 0 0 400px;" not in prototype_text:
         raise SystemExit("prototype Schedule panel does not reserve desktop width")
-    if 'data-activity-filter="Scheduled"' not in prototype_text:
-        raise SystemExit("prototype is missing the generic Scheduled runs Activity filter")
     if "What will run" in prototype_text:
         raise SystemExit("prototype still presents Schedule definitions inside Activity")
-    if 'activityFilter = "Scheduled"' not in prototype_text or "View scheduled runs" not in prototype_text:
-        raise SystemExit("prototype does not link Workflow Schedule management to Activity Run evidence")
+    for forbidden in (
+        "function openScheduledRuns",
+        'id="schedule-activity"',
+        "View scheduled runs",
+        "watch Activity",
+        "next fire and Activity",
+        "rereads Team Automation and Activity",
+        "It will appear in Activity when available.",
+    ):
+        if forbidden in prototype_text:
+            raise SystemExit(f"prototype Schedule surface still links to Activity: {forbidden}")
     if "scheduleMutation" not in prototype_text:
         raise SystemExit("prototype does not model accepted Schedule mutations")
     if 'data-step-type="schedule"' in prototype_text:
@@ -470,20 +527,14 @@ def main() -> None:
     schedule_prototype_text = schedule_prototype_path.read_text(encoding="utf-8")
     if "prototype.html#schedule" not in schedule_prototype_text:
         raise SystemExit("dedicated Schedule prototype does not open the visible Schedule state")
-    verify_png(
-        BASELINE_DIR / SCHEDULE_PAGE_PNG_NAME,
-        (1440, 900),
-        EXPECTED_SCHEDULE_PAGE_PNG_SHA256,
-        actual_schedule_sha256,
-        actual_renderer_sha256,
-    )
-    verify_png(
-        BASELINE_DIR / SCHEDULE_BOARD_PNG_NAME,
-        (4800, 3200),
-        EXPECTED_SCHEDULE_BOARD_PNG_SHA256,
-        actual_schedule_sha256,
-        actual_renderer_sha256,
-    )
+    for png_name, expected_sha256 in SCHEDULE_PNG_SHA256.items():
+        verify_png(
+            BASELINE_DIR / png_name,
+            (1440, 900),
+            expected_sha256,
+            actual_schedule_sha256,
+            actual_renderer_sha256,
+        )
 
     frame_names = tuple(
         element["name"]
@@ -514,7 +565,7 @@ def main() -> None:
                 check=True,
                 capture_output=True,
             )
-            for png_name in (SCHEDULE_PAGE_PNG_NAME, SCHEDULE_BOARD_PNG_NAME):
+            for png_name in SCHEDULE_PNG_SHA256:
                 if (generated_dir / png_name).read_bytes() != (BASELINE_DIR / png_name).read_bytes():
                     raise SystemExit(f"schedule renderer output does not match {png_name}")
 
@@ -527,7 +578,7 @@ def main() -> None:
     print(f"frames: {len(frame_names)}/{len(EXPECTED_FRAMES)}")
     print(f"schedule design SHA-256: {actual_schedule_sha256}")
     print(f"schedule frames: {len(schedule_frame_names)}/{len(EXPECTED_SCHEDULE_FRAMES)}")
-    print("schedule PNGs: 1440x900 page + 4800x3200 overview")
+    print(f"schedule PNGs: {len(SCHEDULE_PNG_SHA256)} standalone 1440x900 scenes")
     print("schedule PNG pixels: non-blank and source-linked")
     print("schedule HTML: direct entry available")
     print("generators output: byte-identical")

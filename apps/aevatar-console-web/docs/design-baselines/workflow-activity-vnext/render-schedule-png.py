@@ -15,8 +15,14 @@ from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 
 BASELINE_DIR = Path(__file__).resolve().parent
 SOURCE = BASELINE_DIR / "aevatar-workflow-schedule-design.excalidraw"
-PAGE_OUTPUT_NAME = "prototype-schedule.png"
-BOARD_OUTPUT_NAME = "aevatar-workflow-schedule-design.png"
+FRAME_OUTPUTS = (
+    ("01 · Workflows — quick schedule modal", "schedule-workflows-list-modal.png"),
+    ("02 · Workflow — schedule setup panel", "schedule-workflow-editor-panel.png"),
+    ("03 · Schedule — review authorization", "schedule-authorization-review.png"),
+    ("04 · Schedule — creation pending", "schedule-creation-pending.png"),
+    ("05 · Workflow — schedule detail", "schedule-detail.png"),
+    ("06 · Workflow — change schedule", "schedule-edit.png"),
+)
 
 SANS_FONT = Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf")
 MONO_FONT = Path("/System/Library/Fonts/Menlo.ttc")
@@ -182,35 +188,6 @@ def render_frame(
     return image
 
 
-def render_board(document: dict[str, Any], frames: list[dict[str, Any]]) -> Image.Image:
-    width, height = 4800, 3200
-    margin = 46
-    gap = 34
-    label_height = 36
-    tile_width = (width - margin * 2 - gap * 2) // 3
-    tile_height = (height - margin * 2 - gap * 2) // 3
-    frame_height = tile_height - label_height
-    board = Image.new("RGB", (width, height), "#e9ecef")
-    draw = ImageDraw.Draw(board)
-    label_font = load_font(1, 22)
-
-    for index, frame in enumerate(frames):
-        column = index % 3
-        row = index // 3
-        x = margin + column * (tile_width + gap)
-        y = margin + row * (tile_height + gap)
-        draw.text((x, y), frame["name"], font=label_font, fill="#344054")
-        rendered = render_frame(document, frame, (tile_width, frame_height))
-        board.paste(rendered, (x, y + label_height))
-        draw.rectangle(
-            (x, y + label_height, x + tile_width - 1, y + tile_height - 1),
-            outline="#c7ccd1",
-            width=2,
-        )
-
-    return board
-
-
 def output_metadata(source_bytes: bytes) -> PngImagePlugin.PngInfo:
     metadata = PngImagePlugin.PngInfo()
     metadata.add_text("Source-SHA256", hashlib.sha256(source_bytes).hexdigest())
@@ -230,26 +207,22 @@ def main() -> None:
     source_bytes = SOURCE.read_bytes()
     document = json.loads(source_bytes)
     frames = [element for element in document["elements"] if element.get("type") == "frame"]
-    if len(frames) != 9:
-        raise SystemExit(f"expected 9 Schedule frames, found {len(frames)}")
+    frames_by_name = {frame["name"]: frame for frame in frames}
+    expected_names = tuple(frame_name for frame_name, _ in FRAME_OUTPUTS)
+    if tuple(frames_by_name) != expected_names:
+        raise SystemExit(
+            f"Schedule frame inventory mismatch: expected {expected_names!r}, "
+            f"found {tuple(frames_by_name)!r}"
+        )
 
-    configure_frame = next(frame for frame in frames if frame["name"].startswith("02 ·"))
-    page_output = args.output_dir / PAGE_OUTPUT_NAME
-    board_output = args.output_dir / BOARD_OUTPUT_NAME
-    metadata = output_metadata(source_bytes)
-    render_frame(document, configure_frame, (1440, 900)).save(
-        page_output,
-        optimize=True,
-        pnginfo=metadata,
-    )
-    render_board(document, frames).save(
-        board_output,
-        optimize=True,
-        pnginfo=metadata,
-    )
-
-    print(f"rendered {page_output.name}: 1440x900")
-    print(f"rendered {board_output.name}: 4800x3200")
+    for frame_name, output_name in FRAME_OUTPUTS:
+        output_path = args.output_dir / output_name
+        render_frame(document, frames_by_name[frame_name], (1440, 900)).save(
+            output_path,
+            optimize=True,
+            pnginfo=output_metadata(source_bytes),
+        )
+        print(f"rendered {output_path.name}: 1440x900")
 
 
 if __name__ == "__main__":

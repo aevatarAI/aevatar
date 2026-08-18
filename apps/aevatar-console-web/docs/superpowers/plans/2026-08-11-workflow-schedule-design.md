@@ -1,275 +1,109 @@
 # Workflow Schedule vNext Design Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** implement this plan incrementally and keep the
+> deterministic Excalidraw, PNGs, prototype, verifier, and documentation in
+> sync.
 
-**Goal:** Extend the Workflow Activity vNext design baseline with an honest
-Workflow editor Schedule entry that reuses the existing Team member automation
-and `ScheduledDispatch` contracts.
+**Goal:** Define a Workflow-owned Schedule experience backed by the existing
+Team member automation and `ScheduledDispatch` contracts, with useful
+standalone review images and no Activity product dependency.
 
-**Architecture:** Keep `ScheduledDispatch` outside the Workflow graph and make
-the canonical Team member automation owner (`scopeId + teamId + memberId`) the
-Schedule owner. The published service and active revision remain read-only
-targets. The PR changes reference documents, the deterministic Excalidraw
-generator and its generated board, and the standalone interaction prototype.
-It deliberately does not add a runtime route, client API, or backend endpoint.
+**Architecture:** The canonical Team member (`scopeId + teamId + memberId`)
+owns the automation. `publishedServiceId` and `activeRevisionId` are read-only
+target facts. Schedule creation, authorization, pending state, detail, and
+editing are presented from Workflows and the Workflow editor. This design does
+not add an Activity entry, Activity filter, Schedule-to-Run navigation, runtime
+route, client API, or backend endpoint.
 
-**Tech Stack:** Markdown, Mermaid, Python 3 Excalidraw generator, static HTML,
-CSS, vanilla JavaScript, repository documentation lint.
+**Tech stack:** Markdown, Mermaid, deterministic Python Excalidraw generation,
+Pillow PNG rendering, static HTML/CSS/JavaScript, and repository documentation
+lint.
 
 ---
 
 ## File Map
 
-- Create: `apps/aevatar-console-web/docs/superpowers/specs/2026-08-11-workflow-schedule-design.md`
-- Create: `apps/aevatar-console-web/docs/superpowers/plans/2026-08-11-workflow-schedule-design.md`
-- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.gen.py`
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.excalidraw`
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py`
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/README.md`
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype.html`
-- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype-schedule.html`
-- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/render-schedule-png.py`
-- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype-schedule.png`
-- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.png`
+- `apps/aevatar-console-web/docs/superpowers/specs/2026-08-11-workflow-schedule-design.md`
+- `apps/aevatar-console-web/docs/superpowers/plans/2026-08-11-workflow-schedule-design.md`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/README.md`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.gen.py`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.excalidraw`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/render-schedule-png.py`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype.html`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype-schedule.html`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/schedule-workflows-list-modal.png`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/schedule-workflow-editor-panel.png`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/schedule-authorization-review.png`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/schedule-creation-pending.png`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/schedule-detail.png`
+- `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/schedule-edit.png`
 
-### Task 1: Lock The Product Contract
+The obsolete `prototype-schedule.png` and
+`aevatar-workflow-schedule-design.png` combined overview must not exist.
 
-**Files:**
+## Task 1: Lock The Product Boundary
 
-- Create: `apps/aevatar-console-web/docs/superpowers/specs/2026-08-11-workflow-schedule-design.md`
+- [x] Keep Schedule ownership on `scopeId + teamId + memberId`.
+- [x] Keep `workflowId`, `memberId`, and `publishedServiceId` distinct.
+- [x] Use the authoritative `publishedServiceId` and `activeRevisionId` as the
+      recurring invocation target.
+- [x] Keep Schedule outside the Workflow graph and outside the Run dialog.
+- [x] Exclude Activity UI, filters, navigation, and evidence from this
+      supplement.
 
-- [ ] **Step 1: Record the resource boundary**
+## Task 2: Generate Six Useful UI Scenes
 
-Add the exact existing lineage:
-
-```text
-Team member Workflow draft -> Publish -> Published Service -> Team member automation -> ScheduledDispatch -> Workflow Run -> Activity
-```
-
-State that `workflowId`, `memberId`, and `publishedServiceId` are never
-interchangeable, and schedule creation uses the Workflow detail's real
-`scopeId`, `teamId`, `memberId`, `activeRevisionId`, and
-`publishedServiceId`.
-
-- [ ] **Step 2: Define the UI contract**
-
-Specify `Schedule` beside `Run`, a disabled draft action with `Publish this
-workflow before scheduling it.`, a right-side manager panel that mirrors
-Team Automation, the recurring-cron form, optional prompt behavior, Dedicated
-Agent Key authorization review, pinned revision behavior, `202 Accepted`
-observation treatment, and Activity's generic Schedule origin filter.
-
-- [ ] **Step 3: Record the server boundary**
-
-Document the existing member automation routes rooted at:
+The deterministic Schedule source contains exactly these frames:
 
 ```text
-/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations
+01 · Workflows — quick schedule modal
+02 · Workflow — schedule setup panel
+03 · Schedule — review authorization
+04 · Schedule — creation pending
+05 · Workflow — schedule detail
+06 · Workflow — change schedule
 ```
 
-Also document the generic `/api/schedules` scheduled dispatch capability as a
-lower-level implementation detail. Explicitly prohibit global ownerless
-schedule list reads plus browser-side filtering.
+- [x] Show the Workflows catalogue behind the quick-create modal.
+- [x] Keep the Workflow canvas visible beside the editor Schedule panel.
+- [x] Show an editable Schedule name before cadence on both creation surfaces.
+- [x] Use `Repeat + time + timezone` as the primary schedule builder.
+- [x] Keep raw cron behind `write it as cron instead` and preserve complex cron
+      without lossy preset conversion.
+- [x] Show only server-returned preview and authorization facts.
+- [x] Show `202 Accepted` as pending, not Active, until owner-scoped Schedule
+      state is observed.
+- [x] Keep detail and edit actions inside the Workflow-owned panel.
+- [x] Round-trip the selected Schedule name, cadence, time, timezone, cron, and
+      prompt without substituting creation defaults.
 
-### Task 2: Rebuild The Schedule-Only Excalidraw
+## Task 3: Keep The Interactive Prototype Consistent
 
-**Files:**
+- [x] Open a `New schedule` modal from published Workflows rows.
+- [x] Open the Schedule manager panel from the Workflow editor header.
+- [x] Share cadence, preview, authorization, and accepted-state logic between
+      the modal and panel containers.
+- [x] Remove Schedule-specific Activity navigation and lifecycle copy.
+- [x] Never treat an accepted mutation as authoritative state.
 
-- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.gen.py`
+## Task 4: Render Standalone PNGs
 
-- [ ] **Step 1: Keep the graph free of Schedule nodes**
+- [x] Render each of the six frames to its own 1440x900 PNG.
+- [x] Do not render a contact sheet, overview board, or generic ambiguously
+      named Schedule PNG.
+- [x] Bind every PNG to the current Excalidraw source and renderer hashes.
+- [x] Reject blank output, wrong dimensions, stale hashes, obsolete PNGs, and
+      nondeterministic re-renders in `verify-baseline.py`.
 
-Replace creation-path step arrays such as:
+## Task 5: Focused Verification And PR Delivery
 
-```python
-[("Schedule every Monday", "Schedule"), ("Collect recent feedback", "Lark messages")]
-```
-
-with workflow steps that begin at the actual first processing node, for
-example:
-
-```python
-[("Collect recent feedback", "Lark messages"), ("Group feedback themes", "AI task")]
-```
-
-No Schedule node, Schedule node-library item, or draft Schedule property is
-drawn anywhere in the schedule board.
-
-- [ ] **Step 2: Draw the configure-to-observe flow**
-
-Generate nine schedule-only frames from the attachment's schedule sections:
-
-```python
-01 Workflows quick-create modal -> 02 Configure cadence -> 03 Authorization review
-04 Activity scheduled Runs -> 05 Workflow Schedule detail -> 06 Workflow change cadence
-SPEC cadence control -> SPEC row states -> REF lifecycle
-```
-
-Keep the existing Operational Automation Ledger visual language and show
-owner, published target, cron, timezone, preview, credential state, and
-observed recovery actions where each screen needs them.
-
-Frame 01 must show the published Workflow catalogue still present behind a
-`New schedule` modal. The modal is the direct row-action path; it must not
-route through the editor before configuration.
-
-- [ ] **Step 3: Draw the schedule configuration panel**
-
-Add the `02 · Schedule — configure recurring work` frame with the editor canvas
-still visible and a right panel showing:
-
-```text
-Member automations
-Team member / Published service / Pinned revision
-Automation name / Cadence / Cron expression / Time zone / Optional prompt
-Dedicated Agent Key review
-Credential active / Next run / Last run / Server preview
-Run now / Pause / Review and reauthorize / Save changes
-```
-
-Keep failed dispatch and expired credential recovery in the detail and row
-states frames, where the observed reason is visible next to its action.
-
-- [ ] **Step 4: Keep the lifecycle boundary explicit**
-
-Show the published Workflow entry, generic Scheduled Activity Run evidence,
-Workflow-owned Schedule detail and cadence editing, owner-aware Team Automation
-identity, and the `202 Accepted` reread boundary. Activity must never own a
-Schedule definition list or management action.
-
-### Task 3: Make The Standalone Prototype Match The Baseline
-
-**Files:**
-
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype.html`
-
-- [ ] **Step 1: Add the catalogue quick-create path**
-
-Keep the editor `Schedule` action as a right-side panel, but make each
-published Workflow row's `Schedule` action open an in-place `New schedule`
-modal. The modal owns only new-schedule configuration and authorization review;
-existing Schedule list/detail/lifecycle management stays in the editor panel.
-The quick path must synchronize cadence presets with custom cron, request
-server preview and owner-scoped authorization preflight before review, render
-the exact returned authorization plan, bind confirmation to its digest and
-policy version, and end in a `202 Accepted` pending state until the owner
-automation read model is observed. The editor panel reuses this creation state
-machine without replacing its right-panel presentation with the catalogue modal.
-
-Match the supplied Schedule wireframe's control hierarchy: `Repeat`, time, and
-timezone are the default primary controls; a human sentence reads the rule
-back; `write it as cron instead` opens the raw five-field editor. Do not render
-`Cron expression` as an always-visible peer field, and do not reduce a complex
-cron to an approximate preset when reopening it.
-
-- [ ] **Step 2: Remove the Schedule node-library entry and mutation path**
-
-Delete the node-library button whose data type is `schedule`, then remove the
-matching `addStep` definition:
-
-```js
-schedule: makeStep("Schedule", "Schedule", ...)
-```
-
-No prototype Workflow document may use `kind: "Schedule"` after the change.
-
-- [ ] **Step 3: Add the editor-level Schedule action**
-
-Place an `#editor-schedule` action next to `#editor-run`. Its handler must
-open a `.studio-schedule-panel`, not a Run dialog or a node-library modal.
-
-```js
-document.querySelector("#editor-schedule").onclick = openSchedulePanel;
-```
-
-For draft Workflow documents, render it disabled and set the explanatory title
-to `Publish this workflow before scheduling it.`.
-
-- [ ] **Step 4: Render only prototype-owned sample states**
-
-Keep schedule records in a clearly named prototype state object. Render a
-right panel with Team member owner, published service, cadence, timezone,
-optional prompt, Dedicated Agent Key authorization review, pinned revision,
-preview, enabled switch, next and last run, credential status, and a failure
-message. Label the prototype state as demonstration data and never describe it
-as production API behavior.
-
-### Task 4: Regenerate And Declare The Baseline
-
-**Files:**
-
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.excalidraw`
-- Create: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.gen.py`
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py`
-- Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/README.md`
-
-- [ ] **Step 1: Generate the deterministic board**
-
-Run:
-
-```bash
-python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/aevatar-workflow-schedule-design.gen.py
-```
-
-Expected: a regenerated schedule board with exactly 9 named frames and no
-unsupported entry terminology.
-
-- [ ] **Step 2: Update the verifier**
-
-Replace the expected Schedule frame inventory and stored SHA with the
-generated board's values. Assert that every schedule frame has owner, cadence,
-authorization, Activity, and observed lifecycle copy, and that unsupported
-entry terminology is absent.
-
-- [ ] **Step 3: Update the README**
-
-Add the schedule generator and schedule-only board to the normative source
-order, document the nine-frame reading order, and keep `Run` scoped to manual
-execution only.
-
-- [ ] **Step 4: Render and review the interaction references**
-
-Render `prototype-schedule.png` at 1440x900 and the complete nine-frame
-`aevatar-workflow-schedule-design.png` overview at 4800x3200. Commit both PNGs
-as baseline review artifacts. The verifier must bind them to the current
-Excalidraw source and renderer hashes, reject blank output, and compare fresh
-Pillow renders byte-for-byte whenever Pillow is available.
-
-### Task 5: Focused Verification And Pull Request
-
-**Files:**
-
-- Verify only the files in this plan's File Map.
-
-- [ ] **Step 1: Run baseline and documentation checks**
-
-```bash
-python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py
-bash tools/docs/lint.sh
-git diff --check origin/feat/2026-08-04_workflow-activity-vnext...HEAD
-```
-
-Expected: deterministic baseline, documentation lint, and whitespace check all
-pass.
-
-- [ ] **Step 2: Run changed-file frontend analysis**
-
-```bash
-python3 ~/.codex/skills/frontend-incremental-pr/scripts/frontend_change_scope.py --repo . --base origin/feat/2026-08-04_workflow-activity-vnext
-```
-
-Expected: documentation/prototype scope is reported; run only any static check
-the analyzer names. Do not run a complete frontend suite, typecheck, or build.
-
-- [ ] **Step 3: Review, commit, and create the PR**
-
-Stage only the files in the File Map, commit with:
-
-```bash
-git commit -m "Design published workflow schedules"
-```
-
-Push `feat/2026-08-11_workflow-schedule-design`, create a Draft PR targeting
-`feat/2026-08-04_workflow-activity-vnext`, and include the exact focused
-verification commands. State that complete frontend validation is deferred to
-GitHub CI.
+- [x] Run the Schedule baseline verifier.
+- [x] Run related Jest only for the changed HTML source files.
+- [x] Run Biome only for analyzer-reported static-check files.
+- [x] Run docs lint, Python bytecode compilation, inline JavaScript syntax
+      checking, and `git diff --check`.
+- [x] Do not run the full frontend suite, typecheck, or production build; GitHub
+      CI owns complete frontend validation.
+- [ ] Review the complete diff, stage only task files, commit, push, and update
+      Draft PR #3421 while preserving `[DO NOT MERGE]`.

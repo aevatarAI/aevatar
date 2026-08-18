@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate the schedule-only reference board for published Workflows.
+"""Generate standalone Schedule review scenes for published Workflows.
 
-The board follows the schedule path in the supplied wireframe while keeping
-the Aevatar product boundary explicit: a published Team member owns a
-recurring automation, and Activity records the resulting runs.
+The scenes follow the Schedule path in the supplied wireframe while keeping
+the Aevatar product boundary explicit: a published Team member owns the
+recurring automation and its Workflow owns the configuration surface.
 """
 
 from __future__ import annotations
@@ -261,14 +261,29 @@ def schedule_summary(x: float, y: float, width: float) -> None:
          FS_BODY, INK, width=width - 32)
 
 
-def schedule_fields(x: float, y: float, width: float, *, show_preview: bool = False) -> None:
+def schedule_fields(
+    x: float,
+    y: float,
+    width: float,
+    *,
+    show_preview: bool = False,
+    name: str = "Weekly Feedback Report recurring work",
+    repeat_label: str = "Mon · Tue · Wed · Thu · Fri",
+    repeat_time: str = "09:00",
+    time_zone: str = "Asia/Singapore",
+    human_summary: str = "Every weekday at 09:00",
+    cron_expression: str = "0 9 * * 1-5",
+    preview_copy: str = "next  Mon 24, Tue 25, Wed 26 Aug · see all",
+) -> None:
+    field(x, y, width, "Schedule name", name, h=54)
+    y += 76
     text(x, y, "HOW OFTEN", FS_SMALL, MUTED, font=FONT_MONO)
     text(x, y + 40, "Repeat", FS_SMALL, MUTED, font=FONT_MONO, width=72)
     repeat_x = x + 84
     compact = width < 600
     repeat_w = width - 84 if compact else width * 0.46
     rect(repeat_x, y + 26, repeat_w, 46, bg=SURFACE, stroke=LINE)
-    text(repeat_x + 12, y + 40, "Mon · Tue · Wed · Thu · Fri", FS_SMALL, INK,
+    text(repeat_x + 12, y + 40, repeat_label, FS_SMALL, INK,
          width=repeat_w - 36)
     text(repeat_x + repeat_w - 20, y + 40, "▾", FS_SMALL, MUTED, width=12)
     if compact:
@@ -286,28 +301,27 @@ def schedule_fields(x: float, y: float, width: float, *, show_preview: bool = Fa
         zone_x = time_x + time_w + 34
         text(zone_x - 22, y + 40, "in", FS_SMALL, MUTED, width=20)
     rect(time_x, time_y, time_w, 46, bg=SURFACE, stroke=LINE)
-    text(time_x + 12, time_y + 14, "09:00", FS_SMALL, INK, width=time_w - 24)
+    text(time_x + 12, time_y + 14, repeat_time, FS_SMALL, INK, width=time_w - 24)
     zone_w = x + width - zone_x
     rect(zone_x, time_y, zone_w, 46, bg=SURFACE, stroke=LINE)
-    text(zone_x + 12, time_y + 14, "Asia/Singapore", FS_SMALL, INK, width=zone_w - 30)
+    text(zone_x + 12, time_y + 14, time_zone, FS_SMALL, INK, width=zone_w - 30)
     text(zone_x + zone_w - 20, time_y + 14, "▾", FS_SMALL, MUTED, width=12)
 
     preview_y = y + (146 if compact else 90)
     preview_h = 112 if compact else 92
     rect(x, preview_y, width, preview_h, bg=GREEN_BG, stroke=GREEN)
-    text(x + 14, preview_y + 14, "Every weekday at 09:00", FS_BODY, GREEN,
+    text(x + 14, preview_y + 14, human_summary, FS_BODY, GREEN,
          width=width * 0.5)
     text(x + width - 210, preview_y + 16,
          "SERVER RESPONSE" if show_preview else "SERVER PREVIEW REQUIRED",
          FS_SMALL, MUTED, font=FONT_MONO, width=196, align="right")
     text(x + 14, preview_y + 50,
-         "next  Mon 24, Tue 25, Wed 26 Aug · see all" if show_preview else
-         "Next five fires appear after review.",
+         preview_copy if show_preview else "Next five fires appear after review.",
          FS_SMALL, INK if show_preview else MUTED, width=width * 0.56)
     cron_y = preview_y + (78 if compact else 50)
     text(x + (14 if compact else width * 0.58), cron_y,
          "write it as cron instead", FS_SMALL, BLUE, width=178)
-    text(x + width - 110, cron_y, "0 9 * * 1-5", FS_SMALL, MUTED,
+    text(x + width - 110, cron_y, cron_expression, FS_SMALL, MUTED,
          font=FONT_MONO, width=100, align="right")
 
     needs_y = preview_y + preview_h + 28
@@ -321,7 +335,7 @@ def schedule_fields(x: float, y: float, width: float, *, show_preview: bool = Fa
     text(x, outcome_y, "WHAT WILL HAPPEN", FS_SMALL, MUTED, font=FONT_MONO)
     rect(x, outcome_y + 22, width, 78, bg=SUBTLE, stroke=LINE)
     text(x + 14, outcome_y + 35,
-         "Runs every weekday at 09:00, as you, until somebody pauses it.\n"
+         f"Runs {human_summary[0].lower() + human_summary[1:]}, as you, until somebody pauses it.\n"
          "The published revision is pinned from the Workflow context above.",
          FS_SMALL, INK, width=width - 28)
 
@@ -380,7 +394,7 @@ def frame_workflows_list(index: int) -> None:
 
 
 def frame_schedule_setup(index: int) -> None:
-    fx, fy = begin_frame(index, "02 · Schedule — configure recurring work")
+    fx, fy = begin_frame(index, "02 · Workflow — schedule setup panel")
     cx, cy, cw = app_shell(fx, fy, "Workflows", title="Weekly Feedback Report",
                            subtitle="Published · v7 · finance workspace")
     button(cx + cw - 528, fy + 18, 70, "Run", color=INK)
@@ -455,49 +469,63 @@ def frame_authorization(index: int) -> None:
     end_frame()
 
 
-def frame_scheduled_runs(index: int) -> None:
-    fx, fy = begin_frame(index, "04 · Activity — scheduled runs")
-    cx, cy, cw = app_shell(fx, fy, "Activities", title="Activity",
-                           subtitle="Every row is one immutable Run. Schedule is only a Run source.")
-    chip(cx + 28, cy + 22, "Runs 847")
-    chip(cx + 126, cy + 22, "Scheduled 7", selected=True)
-    button(cx + cw - 170, fy + 18, 142, "Start a run", color=INK)
-    text(cx + 28, cy + 92, "SOURCE: SCHEDULE", FS_SMALL, PURPLE, font=FONT_MONO, width=320)
-    text(cx + 28, cy + 120, "Activity records dispatched Runs; recurring configuration stays in Workflow > Schedule.", FS_SMALL, MUTED, width=850)
-    table_x = cx + 28
-    table_y = cy + 164
-    widths = [150, 260, 220, 170, 330, 150]
-    rect(table_x, table_y, sum(widths), 42, bg=SUBTLE, stroke=LINE, radius=False)
-    cursor = table_x
-    for width, label in zip(widths, ("RUN ID", "WORKFLOW", "SOURCE", "STARTED", "RESULT", "STATUS")):
-        text(cursor + 14, table_y + 13, label, FS_SMALL, MUTED, font=FONT_MONO, width=width - 28)
+def frame_creation_pending(index: int) -> None:
+    fx, fy = begin_frame(index, "04 · Schedule — creation pending")
+    cx, cy, cw = app_shell(fx, fy, "Workflows", title="Workflows",
+                           subtitle="Published capabilities can run manually or on a schedule.")
+    field(cx + 28, cy + 24, 360, "Search", "Search workflows")
+    header_y = cy + 112
+    widths = [460, 190, 270, 180, 180]
+    rect(cx + 28, header_y, sum(widths), 42, bg=SUBTLE, stroke=LINE, radius=False)
+    cursor = cx + 28
+    for width, label in zip(widths, ("NAME", "LAST RUN", "STARTS ON ITS OWN", "STATE", "ACTIONS")):
+        text(cursor + 14, header_y + 13, label, FS_SMALL, MUTED,
+             font=FONT_MONO, width=width - 28)
         cursor += width
-    rows = [
-        ("R-1041", "Invoice follow-up", "Schedule · weekday", "42m ago", "Approve 4 messages", "Needs you", "wait"),
-        ("R-1040", "Weekly Feedback Report", "Schedule · weekly", "2h ago", "Posted 1 summary", "Succeeded", "ok"),
-        ("R-1038", "Nightly order sync", "Schedule · nightly", "3:04 AM", "Warehouse unavailable", "Failed", "fail"),
-        ("R-1028", "Invoice follow-up", "Schedule · weekday", "2d ago", "Sent 6 reminders", "Succeeded", "ok"),
-    ]
-    for idx, (run_id, workflow, source, started, result, state, kind) in enumerate(rows):
-        y = table_y + 42 + idx * 104
-        rect(table_x, y, sum(widths), 104, bg=SURFACE, stroke=LINE, radius=False)
-        text(table_x + 16, y + 30, run_id, FS_SMALL, INK, font=FONT_MONO, width=120)
-        text(table_x + 166, y + 30, workflow, FS_SMALL, INK, width=230)
-        text(table_x + 426, y + 30, source, FS_SMALL, MUTED, width=190)
-        text(table_x + 646, y + 30, started, FS_SMALL, MUTED, width=140)
-        text(table_x + 816, y + 30, result, FS_SMALL, RED if kind == "fail" else INK, width=290)
-        badge(table_x + 1160, y + 24, state, kind)
-        text(table_x + 1230, y + 30, "›", FS_HEAD, MUTED, width=28, align="center")
-    text(cx + 28, cy + 748, "Open Workflow > Schedule to manage recurring work. Activity never owns Schedule definitions.", FS_SMALL, MUTED, width=1140)
-    annotation(fx + FRAME_W + 42, fy + 190, "4", "Run evidence only",
-                "Activity owns immutable Runs; Schedule is one source filter and never becomes a second configuration surface.")
+    rect(cx + 28, header_y + 42, sum(widths), 116, bg=SURFACE, stroke=LINE, radius=False)
+    text(cx + 44, header_y + 60, "Weekly Feedback Report", FS_BODY, INK, width=420)
+    text(cx + 44, header_y + 90, "reads #feedback, groups themes, posts a summary", FS_SMALL, MUTED, width=420)
+    text(cx + 488, header_y + 76, "2h ago", FS_SMALL, MUTED, width=150)
+    text(cx + 678, header_y + 76, "3 · 1 paused", FS_SMALL, INK, font=FONT_MONO, width=220)
+    badge(cx + 948, header_y + 72, "Published", "ok")
+    button(cx + 1140, header_y + 70, 80, "Schedule", color=BLUE, bg=BLUE_BG)
+    button(cx + 1228, header_y + 70, 62, "Open")
+
+    modal_x, modal_y, modal_w, modal_h = cx + 520, cy + 48, 760, 720
+    rect(cx + 500, cy + 10, cw - 512, 820, bg="#eef2f6", stroke="#eef2f6", radius=False)
+    rect(modal_x, modal_y, modal_w, modal_h, bg=SURFACE, stroke=INK, sw=2)
+    text(modal_x + 28, modal_y + 28, "New schedule", FS_HEAD, INK, width=300)
+    button(modal_x + modal_w - 58, modal_y + 20, 32, "×", color=MUTED)
+    schedule_summary(modal_x + 28, modal_y + 82, modal_w - 56)
+    rect(modal_x + 28, modal_y + 184, modal_w - 56, 118, bg=BLUE_BG, stroke="#84adff")
+    text(modal_x + 50, modal_y + 208, "202 ACCEPTED", FS_SMALL, BLUE,
+         font=FONT_MONO, width=240)
+    text(modal_x + 50, modal_y + 240, "Waiting for Schedule state", FS_HEAD, INK,
+         width=520)
+    text(modal_x + 50, modal_y + 274,
+         "The create command was accepted. The latest owner-scoped state has not arrived yet.",
+         FS_SMALL, MUTED, width=620)
+    rect(modal_x + 28, modal_y + 330, modal_w - 56, 132, bg=SUBTLE, stroke=LINE)
+    text(modal_x + 50, modal_y + 352, "NOT YET ACTIVE", FS_SMALL, AMBER,
+         font=FONT_MONO, width=220)
+    text(modal_x + 50, modal_y + 386,
+         "No credential, enabled state, or next fire is claimed until the Schedule read returns it.",
+         FS_BODY, INK, width=620)
+    text(modal_x + 50, modal_y + 430,
+         "You can close this dialog. Workflows will refresh when state is available.",
+         FS_SMALL, MUTED, width=620)
+    field(modal_x + 28, modal_y + 492, 330, "Policy", "team-automation-v3", disabled=True)
+    field(modal_x + 374, modal_y + 492, 358, "Permission digest", "sha256:feedback-v7-permissions", disabled=True)
+    button(modal_x + modal_w - 146, modal_y + 650, 118, "Close", primary=True, color=BLUE)
+    annotation(fx + FRAME_W + 42, fy + 240, "4", "Accepted is not active",
+                "The dialog remains honest until the owner-scoped Schedule state is observed.")
     end_frame()
 
 
 def workflow_canvas(cx: float, cy: float) -> None:
     rect(cx + 20, cy + 18, 700, 898, bg="#f7f9fc", stroke=LINE)
     text(cx + 48, cy + 52, "Workflow canvas remains visible", FS_HEAD, INK, width=420)
-    text(cx + 48, cy + 92, "Schedule belongs to this published Workflow, not to Activity.", FS_SMALL, MUTED, width=590)
+    text(cx + 48, cy + 92, "Schedule belongs to this published Workflow.", FS_SMALL, MUTED, width=590)
     for n, (x, label, detail, node_color) in enumerate(((cx + 64, "Collect feedback", "Lark messages", GREEN),
                                                          (cx + 282, "Group themes", "AI task", BLUE),
                                                          (cx + 500, "Post summary", "Lark message", GREEN))):
@@ -524,24 +552,24 @@ def frame_schedule_detail(index: int) -> None:
     text(cx + 776, cy + 46, "Schedule details", FS_HEAD, INK, width=330)
     text(cx + 776, cy + 80, "Managed from this Workflow", FS_SMALL, BLUE, font=FONT_MONO, width=420)
     schedule_summary(cx + 776, cy + 112, 492)
-    rect(cx + 776, cy + 204, 492, 136, bg=RED_BG, stroke="#fda29b")
-    text(cx + 796, cy + 224, "NEEDS ATTENTION", FS_SMALL, RED, font=FONT_MONO, width=280)
-    text(cx + 796, cy + 252, "Credential expired · owner review required", FS_SMALL, INK, width=440)
-    text(cx + 796, cy + 278, "Future fires will not start until authorization is reviewed.", FS_SMALL, MUTED, width=440)
-    button(cx + 796, cy + 300, 180, "Review and reauthorize", primary=True, color=BLUE)
-    field(cx + 776, cy + 368, 240, "Cadence", "Every weekday 09:00")
-    field(cx + 1032, cy + 368, 236, "Time zone", "Asia/Shanghai")
-    field(cx + 776, cy + 446, 240, "Next fire", "Will not run", disabled=True)
-    field(cx + 1032, cy + 446, 236, "Last run", "Failed yesterday")
-    field(cx + 776, cy + 524, 492, "Pinned revision", "Published · v7", disabled=True)
-    text(cx + 776, cy + 616, "Activity contains immutable Runs only.", FS_SMALL, MUTED, width=492)
-    button(cx + 776, cy + 656, 160, "View scheduled runs", color=BLUE, bg=BLUE_BG)
+    field(cx + 776, cy + 204, 492, "Schedule name", "Weekly review")
+    rect(cx + 776, cy + 282, 492, 136, bg=RED_BG, stroke="#fda29b")
+    text(cx + 796, cy + 302, "NEEDS ATTENTION", FS_SMALL, RED, font=FONT_MONO, width=280)
+    text(cx + 796, cy + 330, "Credential expired · owner review required", FS_SMALL, INK, width=440)
+    text(cx + 796, cy + 356, "Future fires will not start until authorization is reviewed.", FS_SMALL, MUTED, width=440)
+    button(cx + 796, cy + 378, 180, "Review and reauthorize", primary=True, color=BLUE)
+    field(cx + 776, cy + 446, 240, "Cadence", "Every Monday at 10:00")
+    field(cx + 1032, cy + 446, 236, "Time zone", "Asia/Shanghai")
+    field(cx + 776, cy + 524, 240, "Next fire", "Will not run", disabled=True)
+    field(cx + 1032, cy + 524, 236, "Last run", "Failed yesterday")
+    field(cx + 776, cy + 602, 492, "Pinned revision", "Published · v7", disabled=True)
+    text(cx + 776, cy + 694, "Authorization and next-fire state are returned by the Schedule service.", FS_SMALL, MUTED, width=492)
     button(cx + 776, cy + 824, 100, "Run now", color=INK)
     button(cx + 884, cy + 824, 98, "Change", color=BLUE, bg=BLUE_BG)
     button(cx + 990, cy + 824, 84, "Pause", color=INK)
     button(cx + 1082, cy + 824, 78, "Delete", color=RED)
     annotation(fx + FRAME_W + 42, fy + 320, "5", "Workflow owns the schedule",
-                "Schedule detail and lifecycle actions stay beside the Workflow; Activity is reached only for Run evidence.")
+                "Schedule detail and lifecycle actions stay beside the Workflow that owns the published target.")
     end_frame()
 
 
@@ -559,7 +587,19 @@ def frame_schedule_edit(index: int) -> None:
     text(cx + 776, cy + 46, "Change schedule", FS_HEAD, INK, width=330)
     text(cx + 776, cy + 80, "Managed from this Workflow", FS_SMALL, BLUE, font=FONT_MONO, width=420)
     schedule_summary(cx + 776, cy + 112, 492)
-    schedule_fields(cx + 776, cy + 204, 492, show_preview=True)
+    schedule_fields(
+        cx + 776,
+        cy + 204,
+        492,
+        show_preview=True,
+        name="Weekly review",
+        repeat_label="Mon",
+        repeat_time="10:00",
+        time_zone="Asia/Shanghai",
+        human_summary="Every Monday at 10:00",
+        cron_expression="0 10 * * 1",
+        preview_copy="next  Mon 24 Aug, Mon 31 Aug, Mon 7 Sep · see all",
+    )
     button(cx + 776, cy + 824, 136, "Save changes", primary=True, color=BLUE)
     button(cx + 924, cy + 824, 92, "Cancel", color=MUTED)
     annotation(fx + FRAME_W + 42, fy + 260, "6", "Edit in Workflow",
@@ -567,121 +607,22 @@ def frame_schedule_edit(index: int) -> None:
     end_frame()
 
 
-def frame_cadence_spec(index: int) -> None:
-    fx, fy = begin_frame(index, "SPEC · cadence control")
-    text(fx + 58, fy + 38, "Tick the days. The sentence writes itself.", FS_HEAD, INK, width=640)
-    text(fx + 58, fy + 84, "The compact builder is a safe way into cron; it never rounds an expression it cannot represent.", FS_SMALL, MUTED, width=900)
-    rect(fx + 58, fy + 142, 650, 84, bg=SURFACE, stroke=LINE)
-    text(fx + 80, fy + 160, "REPEAT", FS_SMALL, MUTED, font=FONT_MONO, width=120)
-    text(fx + 188, fy + 158, "Mon  Tue  Wed  Thu  Fri", FS_SMALL, INK, width=260)
-    text(fx + 462, fy + 158, "09:00", FS_SMALL, INK, font=FONT_MONO, width=80)
-    text(fx + 562, fy + 158, "Asia/Singapore", FS_SMALL, INK, width=130)
-    text(fx + 80, fy + 190, "Every weekday at 09:00", FS_BODY, BLUE, width=300)
-    text(fx + 58, fy + 272, "WHAT IS TICKED", FS_SMALL, MUTED, font=FONT_MONO, width=260)
-    text(fx + 530, fy + 272, "WHAT IT READS BACK", FS_SMALL, MUTED, font=FONT_MONO, width=260)
-    rows = [("Monday to Friday", "Every weekday"), ("Saturday and Sunday", "Every weekend"), ("one day", "Every Monday"), ("anything else", "Every Mon, Wed and Fri"), ("nothing", "Pick at least one day")]
-    for idx, (left, right) in enumerate(rows):
-        y = fy + 318 + idx * 50
-        text(fx + 58, y, left, FS_BODY, INK, width=360)
-        text(fx + 530, y, right, FS_BODY, BLUE if idx < 4 else RED, width=460)
-        line(fx + 58, y + 34, 980, 0, color="#edf0f3")
-    text(fx + 58, fy + 602, "Every hour", FS_BODY, INK, width=180)
-    text(fx + 282, fy + 602, "Every month", FS_BODY, INK, width=180)
-    text(fx + 506, fy + 602, "Every year", FS_BODY, INK, width=180)
-    text(fx + 730, fy + 602, "Something else…", FS_BODY, BLUE, width=220)
-    text(fx + 58, fy + 660, "A cron the builder cannot say stays as cron. Reopening */15 9-17 * * 1-5 keeps the exact expression and its plain-English line.", FS_SMALL, MUTED, width=1080)
-    annotation(fx + FRAME_W + 42, fy + 214, "7", "No lossy conversion",
-                "The builder is a convenience; the stored five-field expression remains authoritative.")
-    end_frame()
-
-
-def frame_row_states(index: int) -> None:
-    fx, fy = begin_frame(index, "SPEC · Workflow Schedule row states")
-    text(fx + 58, fy + 38, "Seven states. Every Workflow Schedule row names the next action.", FS_HEAD, INK, width=900)
-    text(fx + 58, fy + 84, "A schedule that cannot fire is still visible in Workflow, with the observed reason and lifecycle action.", FS_SMALL, MUTED, width=980)
-    rows = [("creating", "every day 03:00", "—", "it cannot fire until authorization finishes", "", "wait"),
-            ("active", "every day 03:00", "✓ 1h ago", "credential active · next fire observed", "Pause", "ok"),
-            ("paused", "every day 03:00", "✓ 3d ago", "paused by Ana · 2d ago", "Resume", "muted"),
-            ("needs attention", "every Friday 17:00", "✕ 7d ago", "authorization expired · owner review required", "Open", "fail"),
-            ("dispatched late", "every day 03:00", "◷ 03:00 → 07:12", "the fire was accepted late; it was not skipped", "Open", "run"),
-            ("never fired", "every Monday 09:00", "never", "created 8 days ago · check the cron", "Open", "muted"),
-            ("delete pending", "every Monday 09:00", "—", "credential revocation is still processing", "Open", "wait")]
-    header_y = fy + 144
-    widths = [250, 270, 250, 580, 120]
-    rect(fx + 58, header_y, sum(widths), 42, bg=SUBTLE, stroke=LINE, radius=False)
-    cursor = fx + 58
-    for width, label in zip(widths, ("STATE", "CADENCE", "LAST", "REASON", "ACTION")):
-        text(cursor + 12, header_y + 13, label, FS_SMALL, MUTED, font=FONT_MONO, width=width - 24)
-        cursor += width
-    for idx, (state, cadence, last, reason, action, kind) in enumerate(rows):
-        y = header_y + 42 + idx * 78
-        rect(fx + 58, y, sum(widths), 78, bg=SURFACE, stroke=LINE, radius=False)
-        badge(fx + 72, y + 18, state, kind)
-        text(fx + 322, y + 27, cadence, FS_SMALL, INK, width=240)
-        text(fx + 592, y + 27, last, FS_SMALL, MUTED, font=FONT_MONO, width=220)
-        text(fx + 842, y + 16, reason, FS_SMALL, RED if kind == "fail" else MUTED, width=540)
-        if action:
-            button(fx + 1420, y + 20, 82, action, color=BLUE if action != "Open" else INK, bg=BLUE_BG if action == "Open" else SURFACE, h=34)
-    annotation(fx + FRAME_W + 42, fy + 184, "8", "State is observed",
-                "Accepted commands remain pending until the owner read model reports the new lifecycle state.")
-    end_frame()
-
-
-def frame_runtime_reference(index: int) -> None:
-    fx, fy = begin_frame(index, "REF · schedule lifecycle")
-    text(fx + 58, fy + 38, "Read from the code. This is why the screens look this way.", FS_HEAD, INK, width=930)
-    text(fx + 58, fy + 84, "The schedule surface composes existing Team Automation and ScheduledDispatch facts; it does not invent a second scheduler.", FS_SMALL, MUTED, width=1050)
-    text(fx + 58, fy + 148, "ALREADY WORKS", FS_SMALL, GREEN, font=FONT_MONO, width=280)
-    works = [("schedules", "create · update · pause · resume · run-now · delete"),
-             ("permission preflight", "exact reachable services and grants before commit"),
-             ("next-fire preview", "server-side calculation from the same scheduler"),
-             ("authorization state", "credential lifecycle with an observed reason"),
-             ("named run inputs", "the engine seeds typed inputs at each fire")]
-    for idx, (name, detail) in enumerate(works):
-        y = fy + 194 + idx * 48
-        badge(fx + 58, y - 4, name, "ok")
-        text(fx + 284, y, detail, FS_SMALL, INK, width=720)
-    text(fx + 58, fy + 468, "PUBLIC BOUNDARY", FS_SMALL, BLUE, font=FONT_MONO, width=280)
-    text(fx + 58, fy + 508, "Team member owner", FS_BODY, INK, width=250)
-    text(fx + 284, fy + 508, "scopeId + teamId + memberId", FS_SMALL, INK, font=FONT_MONO, width=480)
-    text(fx + 58, fy + 548, "Published target", FS_BODY, INK, width=250)
-    text(fx + 284, fy + 548, "publishedServiceId + activeRevisionId", FS_SMALL, INK, font=FONT_MONO, width=520)
-    text(fx + 58, fy + 588, "Mutation receipt", FS_BODY, INK, width=250)
-    text(fx + 284, fy + 588, "202 Accepted · reread owner automation state", FS_SMALL, INK, width=620)
-    text(fx + 58, fy + 628, "UI OWNERSHIP", FS_SMALL, BLUE, font=FONT_MONO, width=280)
-    text(fx + 58, fy + 668, "Workflow", FS_BODY, INK, width=250)
-    text(fx + 284, fy + 668, "owns Schedule list, detail, cadence, authorization, pause, and delete", FS_SMALL, INK, width=760)
-    text(fx + 58, fy + 708, "Activity", FS_BODY, INK, width=250)
-    text(fx + 284, fy + 708, "owns immutable Runs; Schedule is only a source filter", FS_SMALL, INK, width=760)
-    text(fx + 58, fy + 768, "DOES NOT EXIST IN THIS RELEASE", FS_SMALL, RED, font=FONT_MONO, width=420)
-    text(fx + 58, fy + 810, "one global schedule collection", FS_BODY, INK, width=360)
-    text(fx + 360, fy + 810, "browser-side filtering would cross owner boundaries", FS_SMALL, MUTED, width=620)
-    text(fx + 58, fy + 850, "a schedule graph node", FS_BODY, INK, width=360)
-    text(fx + 360, fy + 850, "the Workflow starts at its first processing node", FS_SMALL, MUTED, width=620)
-    annotation(fx + FRAME_W + 42, fy + 220, "9", "One schedule model",
-                "The board keeps owner, target, authorization, dispatch, and Activity evidence on one understandable path.")
-    end_frame()
-
-
 text(ORIGIN_X, 70, "Aevatar — Published workflow schedules", FS_TITLE, INK, width=1040)
-text(ORIGIN_X, 126, "One owner, one recurring automation, one observable run history.", FS_HEAD, BLUE, width=1060)
+text(ORIGIN_X, 126, "One owner, one recurring automation, six reviewable screens.", FS_HEAD, BLUE, width=1060)
 text(ORIGIN_X, 178,
-     "Schedule is configured and managed inside a published Workflow; Activity only records its Runs.",
+     "Schedule is configured, authorized, observed, and managed inside a published Workflow.",
      FS_BODY, MUTED, width=1180)
 text(ORIGIN_X, 232,
-     "9 frames · configure → authorize → observe → recover. Notes stay outside the screen frames.",
+     "Each frame renders to its own 1440 × 900 PNG. Notes stay outside the screen frames.",
      FS_SMALL, MUTED, width=900)
 line(ORIGIN_X, 274, 1150, 0, color=LINE)
 
 frame_workflows_list(0)
 frame_schedule_setup(1)
 frame_authorization(2)
-frame_scheduled_runs(3)
+frame_creation_pending(3)
 frame_schedule_detail(4)
 frame_schedule_edit(5)
-frame_cadence_spec(6)
-frame_row_states(7)
-frame_runtime_reference(8)
 
 document = {
     "type": "excalidraw",

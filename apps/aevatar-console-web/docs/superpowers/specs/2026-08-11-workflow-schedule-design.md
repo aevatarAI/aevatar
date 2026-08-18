@@ -4,9 +4,10 @@
 
 Design direction approved for review on 2026-08-11 and corrected on
 2026-08-18 after comparing the design with the existing Aevatar scheduled
-workflow implementation. This document extends the Workflow Activity vNext
-baseline with a published-workflow schedule entry that reuses the existing
-Team member automation and `ScheduledDispatch` contracts.
+workflow implementation. This document defines a published-workflow Schedule
+surface that reuses the existing Team member automation and
+`ScheduledDispatch` contracts. Activity is outside this supplement's product
+scope.
 
 Implementation branch: `feat/2026-08-11_workflow-schedule-design`.
 
@@ -15,10 +16,10 @@ Baseline branch: `feat/2026-08-04_workflow-activity-vnext` at
 
 ## Problem
 
-The current visual baseline uses Schedule both as a workflow graph node and as
-an Activity run origin. That makes the product model ambiguous: a user could
-reasonably conclude that schedule configuration is stored in a draft document
-or inside a single Run.
+The previous Schedule board mixed configuration screens, Activity evidence,
+component inventories, and a runtime reference into one nine-frame overview.
+That made the deliverable hard to review and implied a product relationship
+between Schedule configuration and Activity that this surface does not need.
 
 The runtime model is different. Current scheduled workflow and Team automation
 already uses `ScheduledDispatchGAgent` plus workflow or Team service
@@ -33,8 +34,9 @@ automation capability.
 Schedule is a contextual execution source owned by an existing Team member
 automation and backed by `ScheduledDispatch`. The Workflow editor may provide
 an inline configuration surface for the current member workflow, while the Team
-Automations tab remains the full management surface and Activity remains the
-execution evidence surface.
+Automations tab remains the full management surface. This design does not add
+an Activity entry, Activity filter, Schedule-to-Run navigation, or Activity
+state to the Schedule workflow.
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -43,9 +45,7 @@ flowchart LR
     P --> S["Published Service"]
     S --> T["Team member automation"]
     T --> Q["ScheduledDispatch scheduleId"]
-    Q --> R["Scheduled fire"]
-    R --> A["Workflow Run"]
-    A --> H["Activity evidence"]
+    Q --> R["Owner-scoped Schedule state"]
 ```
 
 `Run` remains the sole manual execution action. `Schedule` is a separate
@@ -128,8 +128,8 @@ member surface once the owner is known.
   say the Schedule is active, or show a next fire until the owner-scoped member
   automation read model returns the new state.
 - Schedule list, detail, cadence editing, authorization review, pause, resume,
-  run-now, and delete remain Workflow-owned operations. Activity must never
-  render a second Schedule-definition collection or management surface.
+  run-now, and delete remain Workflow-owned operations. No Activity UI is part
+  of this Schedule supplement.
 - The header may show a compact, non-interactive state badge such as
   `1 schedule` or `Next Tue 09:00` only after a scoped schedule read model has
   returned it. The action keeps the stable label `Schedule`.
@@ -146,8 +146,7 @@ field model and authorization flow. It has three non-overlapping modes:
 
 1. List mode: displays member-owned automations with name, cadence, enabled or
    paused state, authorization state, credential expiry, and next fire. It
-   provides `New automation`, `View all automations`, and opens Activity with
-   the generic Schedule-origin filter.
+   provides `New automation` and `View all automations`.
 2. Create mode: renders the same creation state machine used by the catalogue
    modal inside the right panel, preserving the Workflow canvas.
 3. Detail mode: edits one observed automation. The selected Team member,
@@ -180,8 +179,8 @@ receives the raw key, delete revokes the credential, pause/resume preserves
 the credential, and node IDs are the permission set when required.
 
 `Run now` requires an explicit confirmation whenever the published Workflow
-can create external effects. It does not claim that a corresponding Activity
-Run already exists.
+can create external effects. Its accepted receipt does not optimistically
+change Schedule state, last-fire data, or next-fire data.
 
 ### State Contract
 
@@ -199,26 +198,8 @@ Run already exists.
 
 The panel does not label an accepted create, update, enable, disable, or
 run-now command as complete. Those commands are `202 Accepted`; the UI waits
-for the member automation query, the schedule query, or Activity before
-claiming the new state or a new run.
-
-## Activity And Run Detail
-
-- Activity retains `Schedule` as a generic Run-source filter.
-- Activity is Run-only: each row is an immutable execution record with its
-  Run ID, Workflow, source, started time, result, and status. It does not show
-  cadence, next-fire, authorization, pause, resume, or delete controls for a
-  Schedule definition.
-- Opening Activity from the schedule panel can combine the current Workflow
-  filter with `origin=schedule`, and must label the result `Scheduled runs`.
-  It must not claim that every row belongs to one named schedule until a
-  server-scoped schedule-to-run relationship query exists.
-- Run detail may render `Started by schedule` plus a cadence or schedule name
-  only when those facts are returned by the authoritative Run detail contract.
-- A failed scheduled Run stays an immutable Activity record. It is not an
-  editable schedule failure, and retrying a Run never mutates the schedule.
-- A schedule panel must not include a deep `View run` link for an individual
-  fire until the read model returns an authoritative `runId` relationship.
+for the owner-scoped member automation or schedule query before claiming the
+new state.
 
 ## Existing Backend Contract
 
@@ -255,8 +236,7 @@ The response needs the existing Team Automation fields: `scheduleId`,
 `memberId`, `publishedServiceId`, display name, prompt, cron expression,
 timezone, enabled state, authorization status, credential expiry,
 revocation state, owner LLM route, next and last fire, state version, and
-updated time. A later exact schedule-run query may extend the resource, but it
-is not a first-release prerequisite.
+updated time. No Activity contract is required by this Schedule surface.
 
 ## First Release Boundaries
 
@@ -275,7 +255,7 @@ It also does not include:
 - attachment or file payload scheduling;
 - a required prompt when the existing Team Automation contract treats prompt as
   optional;
-- an exact schedule-name Activity filter before a server-owned contract exists.
+- an Activity entry, Activity filter, or Schedule-to-Run navigation path.
 
 ## Visual Baseline Changes
 
@@ -283,27 +263,26 @@ The baseline change keeps the existing Operational Automation Ledger visual
 language: dark rail, white work surface, neutral borders, compact rows,
 four-to-six-pixel radii, blue actions, and status color used only for state.
 
-- The schedule-only board follows the corrected readable sequence: Workflow
-  catalogue quick-create modal, editor-side recurring cadence configuration,
-  authorization review, scheduled Run
-  evidence in Activity, Workflow-owned schedule detail, Workflow-owned cadence
-  editing, cadence control states, Workflow Schedule row states, and a
-  lifecycle reference.
+- The Schedule source contains six reviewable UI scenes: Workflow catalogue
+  quick-create modal, editor-side creation panel, authorization review,
+  accepted/pending creation, Workflow-owned Schedule detail, and Workflow-owned
+  Schedule editing.
 - Workflow-owned screens keep the Workflow canvas visible beside the Schedule
-  panel. The Activity screen shows only Scheduled Run evidence; the schedule is
-  never drawn as a graph node or an Activity-owned definition.
+  panel. The Schedule is never drawn as a graph node and no Activity screen is
+  included in this supplement.
 - The board uses the same dark rail, white work surface, compact rows, neutral
   borders, blue actions, and state-only status colors as the existing baseline.
 - The standalone prototype removes the Schedule node-library item and uses a
   right-side Schedule panel as an interaction demonstration only.
+- Each of the six Schedule scenes is rendered to its own 1440x900 PNG. There is
+  no combined overview PNG.
 
 ## Verification
 
 - Regenerate the Excalidraw board from the generator and run the baseline
   verifier so SHA, exact frame inventory, and deterministic output agree.
-- Inspect the new rendered schedule reference at desktop and mobile widths when
-  a browser-accessible target is available; the committed board remains the
-  durable visual reference for this design-only PR.
+- Inspect all six standalone 1440x900 PNGs; the verifier binds each image to the
+  current Excalidraw source and renderer and rejects obsolete combined PNGs.
 - Run documentation lint and `git diff --check`.
 - Do not run a full frontend suite, full typecheck, or production build for
   this design-only PR. GitHub CI owns complete validation when runtime code is

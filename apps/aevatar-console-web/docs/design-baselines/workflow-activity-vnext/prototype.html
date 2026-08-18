@@ -351,10 +351,6 @@
     .schedule-alert strong { display: block; margin-bottom: 4px; }
     .schedule-pending { margin: 16px 0 0; padding: 10px 12px; color: #175cd3; border: 1px solid #84adff; border-radius: 6px; background: var(--blue-bg); font-size: 12px; line-height: 1.45; }
     .schedule-pending strong { display: block; margin-bottom: 3px; }
-    .schedule-flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 16px; }
-    .schedule-flow-step { padding: 8px 9px; border: 1px solid #e5e7eb; border-radius: 5px; color: var(--muted); background: #fbfcfe; font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .schedule-flow-step.current { color: var(--blue); border-color: #84adff; background: var(--blue-bg); }
-    .schedule-flow-step strong { display: block; margin-bottom: 3px; color: inherit; font-size: 11px; }
     .schedule-cadence { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 16px; }
     .schedule-cadence span { padding: 7px 5px; border: 1px solid #e5e7eb; border-radius: 5px; color: var(--muted); background: #fff; font-size: 11px; text-align: center; }
     .schedule-cadence span.selected { color: var(--blue); border-color: #84adff; background: var(--blue-bg); font-weight: 700; }
@@ -1499,7 +1495,7 @@ steps:
       initializeScheduleCreation(workflow, "modal");
       renderScheduleCreation();
       document.querySelector("#schedule-quick-modal").hidden = false;
-      setTimeout(() => document.querySelector("#schedule-quick-content #quick-schedule-repeat")?.focus(), 0);
+      setTimeout(() => document.querySelector("#schedule-quick-content #quick-schedule-name")?.focus(), 0);
     }
 
     function openSchedulePanelCreation() {
@@ -1508,7 +1504,7 @@ steps:
       schedulePanelMode = "new";
       selectedScheduleId = null;
       renderSchedulePanel();
-      setTimeout(() => document.querySelector("#schedule-panel #quick-schedule-repeat")?.focus(), 0);
+      setTimeout(() => document.querySelector("#schedule-panel #quick-schedule-name")?.focus(), 0);
     }
 
     function quickScheduleCronForRepeat(repeat, repeatTime) {
@@ -1570,6 +1566,7 @@ steps:
       if (quickScheduleStep === "configure") {
         content.innerHTML = `
           <div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(workflow.revision)} · published target · ${escapeHtml(workflow.publishedServiceId)}</span></div><span class="schedule-state">New</span></div>
+          <label class="form-row"><span class="field-label">Schedule name</span><input class="input" id="quick-schedule-name" value="${escapeHtml(quickScheduleDraft.name)}"></label>
           <section class="schedule-quick-section">
             <div class="schedule-quick-section-heading"><strong>How often</strong><span>Build the repeat rule</span></div>
             <div class="schedule-repeat-builder">
@@ -1682,8 +1679,14 @@ steps:
     function requestQuickSchedulePreflight(content) {
       const workflow = quickScheduleWorkflow;
       if (!workflow || !quickScheduleDraft) return;
+      const name = content.querySelector("#quick-schedule-name").value.trim();
       const cronExpression = content.querySelector("#quick-schedule-cron").value.trim();
       const timeZone = content.querySelector("#quick-schedule-time-zone").value.trim();
+      if (!name) {
+        showToast("Give this Schedule a name before reviewing authorization.");
+        content.querySelector("#quick-schedule-name").focus();
+        return;
+      }
       if (cronExpression.split(/\s+/).length !== 5) {
         showToast("Enter a five-field cron expression before requesting server validation.");
         content.querySelector("#quick-schedule-cron").focus();
@@ -1695,7 +1698,7 @@ steps:
         return;
       }
       quickScheduleDraft = {
-        name: quickScheduleDraft.name || `${workflow.name} recurring work`,
+        name: content.querySelector("#quick-schedule-name").value.trim(),
         cadence: content.querySelector("#quick-schedule-repeat").value,
         repeatTime: content.querySelector("#quick-schedule-repeat-time").value,
         cronExpression,
@@ -1961,15 +1964,6 @@ steps:
       setTimeout(() => document.querySelector("#close-schedule")?.focus(), 0);
     }
 
-    function openScheduledRuns() {
-      activityFilter = "Scheduled";
-      activityWorkflowId = currentWorkflow.id;
-      document.querySelector("#activity-search").value = "";
-      closeSchedulePanel();
-      syncFilterButtons("activity");
-      showView("activity");
-    }
-
     function scheduleState(schedule) {
       return schedule.enabled ? "Active" : "Paused";
     }
@@ -1980,6 +1974,48 @@ steps:
 
     function schedulePreview(schedule) {
       return schedule.enabled ? schedule.preview : ["No upcoming runs"];
+    }
+
+    function scheduleEditModel(schedule) {
+      const [minute, hour, dayOfMonth, month, daysOfWeek] = schedule.cronExpression.trim().split(/\s+/);
+      const repeatByDaysOfWeek = {
+        "*": "Every day",
+        "1-5": "Every weekday",
+        "0,6": "Every weekend",
+        "1": "Every Monday",
+        "1,3,5": "Every Mon, Wed and Fri"
+      };
+      let repeat = "Write cron yourself";
+      let repeatTime = "09:00";
+      if (minute === "0" && hour === "*" && dayOfMonth === "*" && month === "*" && daysOfWeek === "*") {
+        repeat = "Every hour";
+      } else if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dayOfMonth === "*" && month === "*" && repeatByDaysOfWeek[daysOfWeek]) {
+        repeat = repeatByDaysOfWeek[daysOfWeek];
+        repeatTime = `${String(Number(hour)).padStart(2, "0")}:${String(Number(minute)).padStart(2, "0")}`;
+      }
+      return {
+        name: schedule.name,
+        repeat,
+        repeatTime,
+        timeZone: schedule.timeZone,
+        cronExpression: schedule.cronExpression,
+        prompt: schedule.prompt,
+        humanSummary: schedule.cadence,
+        customCron: repeat === "Write cron yourself"
+      };
+    }
+
+    function updateScheduleEditRepeatPresentation(panel, locked = false) {
+      const repeatInput = panel.querySelector("#schedule-edit-repeat");
+      const timeInput = panel.querySelector("#schedule-edit-repeat-time");
+      const cronInput = panel.querySelector("#schedule-edit-cron");
+      const cronEditor = panel.querySelector("#schedule-edit-cron-editor");
+      const customCron = repeatInput.value === "Write cron yourself";
+      timeInput.disabled = locked || customCron || repeatInput.value === "Every hour";
+      cronEditor.hidden = !customCron;
+      if (!customCron) cronInput.value = quickScheduleCronForRepeat(repeatInput.value, timeInput.value);
+      panel.querySelector("#schedule-edit-generated-cron").textContent = cronInput.value.trim();
+      panel.querySelector("#schedule-edit-human-summary").textContent = quickScheduleHumanSummary(repeatInput.value, timeInput.value, cronInput.value.trim());
     }
 
     function schedulePending(schedule) {
@@ -2009,17 +2045,14 @@ steps:
         const rows = schedules.map(scheduleListRow).join("");
         panel.innerHTML = `<header class="studio-panel-header"><div><h2>Member automations</h2><p>Recurring work for this Team member workflow.</p></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close automations" title="Close">×</button></header>
           <div class="studio-panel-body">
-            <div class="schedule-flow" aria-label="Schedule lifecycle"><div class="schedule-flow-step current"><strong>1 · Configure</strong>cadence and inputs</div><div class="schedule-flow-step"><strong>2 · Authorize</strong>review access</div><div class="schedule-flow-step"><strong>3 · Observe</strong>watch Activity</div></div>
             <div class="section-heading" style="margin:0 0 10px"><div><h2>${schedules.length ? "Automations" : "No automations yet"}</h2><p>${schedules.length ? "Select an automation to review its configuration." : "Create recurring work for this published member."}</p></div><button type="button" class="button small primary" id="schedule-new">New automation</button></div>
             ${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : ""}
             <button type="button" class="button small" id="schedule-all">View all automations</button>
-            <button type="button" class="button small" id="schedule-activity">View scheduled runs</button>
             <p class="muted" style="margin-top:14px">Prototype data only. Production reads /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations.</p>
           </div>`;
         document.querySelector("#close-schedule").onclick = closeSchedulePanel;
         document.querySelector("#schedule-new").onclick = openSchedulePanelCreation;
         document.querySelector("#schedule-all").onclick = () => showToast("Full management lives at the Team member Automations route.");
-        document.querySelector("#schedule-activity").onclick = openScheduledRuns;
         document.querySelectorAll("[data-schedule-id]").forEach(button => {
           button.onclick = () => {
             selectedScheduleId = button.dataset.scheduleId;
@@ -2040,41 +2073,59 @@ steps:
       const pending = schedulePending(schedule);
       const state = scheduleState(schedule);
       const previewLabel = schedule.enabled ? "Next five runs" : "Upcoming runs";
+      const editModel = scheduleEditModel(schedule);
       panel.innerHTML = `<header class="studio-panel-header"><div><h2>${escapeHtml(schedule.name)}</h2><p>Recurring work for this Team member workflow.</p></div><div><button type="button" class="icon-button" id="schedule-back" aria-label="Back to automations" title="Back">←</button><button type="button" class="icon-button" id="close-schedule" aria-label="Close automations" title="Close">×</button></div></header>
         <div class="studio-panel-body">
-          <div class="schedule-flow" aria-label="Schedule lifecycle"><div class="schedule-flow-step current"><strong>1 · Configure</strong>cadence and inputs</div><div class="schedule-flow-step current"><strong>2 · Authorize</strong>credential state observed</div><div class="schedule-flow-step"><strong>3 · Observe</strong>next fire and Activity</div></div>
           <section class="schedule-summary"><div class="schedule-summary-top"><strong>Team member automation</strong><span class="schedule-state${scheduleStateClass(schedule)}">${state}</span></div><p>${escapeHtml(currentWorkflow.memberId)} · ${escapeHtml(schedule.publishedServiceId)} · ${escapeHtml(schedule.revisionId)}</p></section>
-          <label class="form-row"><span class="field-label">Automation name</span><input class="input" value="${escapeHtml(schedule.name)}" ${pending ? "disabled" : ""}></label>
-          <div class="form-row"><span class="field-label">How often</span><div class="schedule-repeat-builder"><label><span class="field-label">Repeat</span><select class="select" ${pending ? "disabled" : ""}><option selected>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Write cron yourself</option></select></label><label><span class="field-label">At</span><input class="input" type="time" value="09:00" ${pending ? "disabled" : ""}></label><label><span class="field-label">In</span><input class="input" value="${escapeHtml(schedule.timeZone)}" ${pending ? "disabled" : ""}></label></div><div class="schedule-repeat-preview"><div class="schedule-repeat-preview-row"><strong>${escapeHtml(schedule.cadence)}</strong><span>server-owned next fires</span></div><div class="schedule-repeat-preview-row"><span>${escapeHtml(schedule.nextRun)}</span><span><button type="button" class="schedule-cron-action" id="schedule-edit-cron-mode" ${pending ? "disabled" : ""}>write it as cron instead</button><code class="schedule-cron-code">${escapeHtml(schedule.cronExpression)}</code></span></div></div><label class="schedule-cron-editor" id="schedule-edit-cron-editor" hidden><span class="field-label">Cron</span><input class="input mono" value="${escapeHtml(schedule.cronExpression)}" ${pending ? "disabled" : ""}></label></div>
-          <label class="form-row"><span class="field-label">Prompt (optional)</span><textarea class="textarea" ${pending ? "disabled" : ""}>${escapeHtml(schedule.prompt)}</textarea><small>Sent with each scheduled run only when provided.</small></label>
+          <label class="form-row"><span class="field-label">Schedule name</span><input class="input" id="schedule-edit-name" value="${escapeHtml(editModel.name)}" ${pending ? "disabled" : ""}></label>
+          <div class="form-row"><span class="field-label">How often</span><div class="schedule-repeat-builder"><label><span class="field-label">Repeat</span><select class="select" id="schedule-edit-repeat" ${pending ? "disabled" : ""}><option>Every hour</option><option>Every day</option><option>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Every Mon, Wed and Fri</option><option>Write cron yourself</option></select></label><label><span class="field-label">At</span><input class="input" id="schedule-edit-repeat-time" type="time" value="${escapeHtml(editModel.repeatTime)}" ${pending ? "disabled" : ""}></label><label><span class="field-label">In</span><input class="input" id="schedule-edit-time-zone" value="${escapeHtml(editModel.timeZone)}" ${pending ? "disabled" : ""}></label></div><div class="schedule-repeat-preview"><div class="schedule-repeat-preview-row"><strong id="schedule-edit-human-summary">${escapeHtml(editModel.humanSummary)}</strong><span>server-owned next fires</span></div><div class="schedule-repeat-preview-row"><span>${escapeHtml(schedule.nextRun)}</span><span><button type="button" class="schedule-cron-action" id="schedule-edit-cron-mode" ${pending ? "disabled" : ""}>write it as cron instead</button><code class="schedule-cron-code" id="schedule-edit-generated-cron">${escapeHtml(editModel.cronExpression)}</code></span></div></div><label class="schedule-cron-editor" id="schedule-edit-cron-editor" ${editModel.customCron ? "" : "hidden"}><span class="field-label">Cron</span><input class="input mono" id="schedule-edit-cron" value="${escapeHtml(editModel.cronExpression)}" ${pending ? "disabled" : ""}><small>Complex expressions stay in raw-cron mode and are never rounded to a preset.</small></label></div>
+          <label class="form-row"><span class="field-label">Prompt (optional)</span><textarea class="textarea" id="schedule-edit-prompt" ${pending ? "disabled" : ""}>${escapeHtml(editModel.prompt)}</textarea><small>Sent with each scheduled run only when provided.</small></label>
           <section class="schedule-summary"><div class="schedule-summary-top"><strong>Dedicated Agent Key</strong><span class="schedule-state">${escapeHtml(schedule.authorizationStatus)}</span></div><p>${escapeHtml(schedule.credentialExpiry)} · browser never receives the raw key</p></section>
           <label class="schedule-toggle"><span>Schedule is active</span><input id="schedule-enabled" type="checkbox" role="switch" ${schedule.enabled ? "checked" : ""} ${pending ? "disabled" : ""}></label>
           <div class="form-row"><span class="field-label">${previewLabel}</span><ul class="schedule-preview">${schedulePreview(schedule).map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>
           <div class="form-row"><span class="field-label">Last run</span><p class="muted" style="margin:4px 0 0">${escapeHtml(schedule.lastRun)}</p></div>
           ${schedule.lastError ? `<div class="schedule-alert"><strong>Last run</strong>${escapeHtml(schedule.lastError)}</div>` : ""}
-          ${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Waiting for the latest automation status.</div>` : "<div class=\"schedule-observation\"><strong>Observed state only.</strong><br>Prototype data is illustrative; production rereads Team Automation and Activity after each accepted command.</div>"}
+          ${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Waiting for the latest automation status.</div>` : "<div class=\"schedule-observation\"><strong>Observed Schedule state only.</strong><br>Production rereads the owner-scoped automation after each accepted command.</div>"}
         </div>
         <footer class="studio-panel-footer"><button type="button" class="button small danger" id="schedule-delete" ${pending ? "disabled" : ""}>Delete</button><button type="button" class="button small" id="schedule-run-now" ${pending ? "disabled" : ""}>Run now</button><button type="button" class="button small" id="schedule-reauthorize" ${pending ? "disabled" : ""}>Review</button><button type="button" class="button small primary" id="schedule-save" ${pending ? "disabled" : ""}>Save changes</button></footer>`;
 
       document.querySelector("#close-schedule").onclick = closeSchedulePanel;
       document.querySelector("#schedule-back").onclick = () => { schedulePanelMode = "list"; selectedScheduleId = null; renderSchedulePanel(); };
+      panel.querySelector("#schedule-edit-repeat").value = editModel.repeat;
+      panel.querySelector("#schedule-edit-repeat").onchange = () => updateScheduleEditRepeatPresentation(panel, Boolean(pending));
+      panel.querySelector("#schedule-edit-repeat-time").oninput = () => updateScheduleEditRepeatPresentation(panel, Boolean(pending));
+      panel.querySelector("#schedule-edit-cron").oninput = () => updateScheduleEditRepeatPresentation(panel, Boolean(pending));
       document.querySelector("#schedule-edit-cron-mode").onclick = () => {
-        document.querySelector("#schedule-edit-cron-editor").hidden = false;
-        document.querySelector("#schedule-edit-cron-editor input").focus();
+        panel.querySelector("#schedule-edit-repeat").value = "Write cron yourself";
+        updateScheduleEditRepeatPresentation(panel, Boolean(pending));
+        panel.querySelector("#schedule-edit-cron").focus();
       };
+      updateScheduleEditRepeatPresentation(panel, Boolean(pending));
       document.querySelector("#schedule-enabled").onchange = event => {
         scheduleMutation = { scheduleId: schedule.id, label: event.target.checked ? "Enable request accepted." : "Pause request accepted." };
         renderSchedulePanel();
         showToast(`${scheduleMutation.label} Waiting for the latest status.`);
       };
       document.querySelector("#schedule-save").onclick = () => {
-        scheduleMutation = { scheduleId: schedule.id, label: "Automation update accepted." };
+        const scheduleUpdateDraft = {
+          name: panel.querySelector("#schedule-edit-name").value.trim(),
+          cadence: panel.querySelector("#schedule-edit-repeat").value,
+          repeatTime: panel.querySelector("#schedule-edit-repeat-time").value,
+          timeZone: panel.querySelector("#schedule-edit-time-zone").value.trim(),
+          cronExpression: panel.querySelector("#schedule-edit-cron").value.trim(),
+          prompt: panel.querySelector("#schedule-edit-prompt").value.trim()
+        };
+        if (!scheduleUpdateDraft.name || !isValidTimeZone(scheduleUpdateDraft.timeZone) || scheduleUpdateDraft.cronExpression.split(/\s+/).length !== 5) {
+          showToast("Name, a valid IANA timezone, and a five-field cron are required.");
+          return;
+        }
+        scheduleMutation = { scheduleId: schedule.id, label: "Automation update accepted.", request: scheduleUpdateDraft };
         renderSchedulePanel();
         showToast("Automation update accepted. Waiting for the latest status.");
       };
       document.querySelector("#schedule-run-now").onclick = () => {
         if (!window.confirm("Run this published workflow now? It may change external systems.")) return;
-        showToast("Run requested. It will appear in Activity when available.");
+        showToast("Run request accepted.");
       };
       document.querySelector("#schedule-reauthorize").onclick = () => showToast("Review and reauthorize uses the Team Automation authorization flow.");
       document.querySelector("#schedule-delete").onclick = () => {
