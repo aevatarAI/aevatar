@@ -659,6 +659,60 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
     }
 
     [Fact]
+    public async Task DeadLetterCompletionSelfPublishFailure_ShouldRecoverNormalizedCompletionOnActivation()
+    {
+        var harness = await CreateStartedRunAsync(
+            NormalizedSagaWorkflowYaml(),
+            normalizedAdmission: true);
+        await CompleteStepAsync(harness, "create_order", "order-output", producedOutput: true);
+        await CompleteStepAsync(harness, "charge_payment", "charge-output", producedOutput: true);
+        await FailStepAsync(harness, "ship_order", "ship failed", producedOutput: true);
+        var request = CompensationRequests(harness.Publisher).Should().ContainSingle().Subject;
+        var failFirstCompletion = true;
+        harness.Publisher.FailPublish = (evt, _) =>
+        {
+            if (!failFirstCompletion ||
+                evt is not WorkflowCompletedEvent)
+            {
+                return false;
+            }
+
+            failFirstCompletion = false;
+            return true;
+        };
+
+        await FluentActions.Awaiting(() =>
+                FailCompensationAsync(harness, request, "refund failed", producedOutput: true))
+            .Should()
+            .ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        harness.Agent.State.Status.Should().Be("failed");
+        harness.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        harness.Agent.State.TerminalWorkflowCompletionRecorded.Should().BeFalse();
+        failFirstCompletion.Should().BeFalse("the terminal completion publication should have been attempted");
+        harness.Agent.State.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>()
+            .PendingWorkflowCompletion.Should().NotBeNull();
+
+        var recovered = await CreateRunAsync(
+            harness.RunId,
+            NormalizedSagaWorkflowYaml(),
+            harness.EventStore,
+            normalizedAdmission: true);
+
+        recovered.Agent.State.Status.Should().Be("failed");
+        recovered.Agent.State.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        recovered.Agent.State.TerminalWorkflowCompletionRecorded.Should().BeTrue();
+        recovered.Agent.State.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>()
+            .PendingWorkflowCompletion.Should().BeNull();
+        CommittedEvents<WorkflowCompletedEvent>(recovered.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Which.Error.Should().Be("refund failed");
+    }
+
+    [Fact]
     public async Task CompensationStepWithoutTimeout_ShouldUseDefaultTimeoutAndDeadLetter()
     {
         var harness = await CreateStartedRunAsync(NoTimeoutCompensationWorkflowYaml());
@@ -1292,7 +1346,11 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
         }));
     }
 
-    private static async Task FailCompensationAsync(RunHarness harness, CompensationRequestEvent request, string error)
+    private static async Task FailCompensationAsync(
+        RunHarness harness,
+        CompensationRequestEvent request,
+        string error,
+        bool producedOutput = false)
     {
         var stepRequest = harness.Publisher.Published
             .Where(x => x.Event is StepRequestEvent stepRequestEvent && stepRequestEvent.StepId == request.CompensationStepId)
@@ -1306,6 +1364,9 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             Success = false,
             Error = error,
             ExecutionId = stepRequest.ExecutionId,
+            OutputProvenance = producedOutput
+                ? WorkflowStepOutputProvenance.Produced
+                : WorkflowStepOutputProvenance.Unspecified,
         }));
     }
 
@@ -1692,6 +1753,8 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
 
         public bool AutoReplaySelfPublished { get; init; } = true;
 
+        public Func<IMessage, TopologyAudience, bool>? FailPublish { get; set; }
+
         public WorkflowRunGAgent Agent { get; set; } = null!;
 
         public RecordingRuntimeCallbackScheduler CallbackScheduler =>
@@ -1706,6 +1769,9 @@ public sealed class WorkflowRunGAgentSagaCompensationTests
             where T : IMessage
         {
             ct.ThrowIfCancellationRequested();
+            if (FailPublish?.Invoke(evt, audience) == true)
+                throw new InvalidOperationException("Injected topology publication failure.");
+
             Published.Add((evt.Descriptor.Parser.ParseFrom(evt.ToByteArray()), audience));
 
             if (AutoReplaySelfPublished && audience == TopologyAudience.Self)

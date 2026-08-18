@@ -611,7 +611,7 @@ public sealed partial class WorkflowRunGAgent
 
     private async Task<bool> RecoverPendingWorkflowCompletionAsync(CancellationToken ct)
     {
-        if (IsTerminalStatus(State.Status))
+        if (ShouldIgnoreWorkflowCompleted(State))
             return false;
 
         var pending = GetPendingWorkflowCompletion(State);
