@@ -105,21 +105,64 @@ public class WorkflowExecutionProjectionRegistrationTests
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
         var rootProperties = provider.Metadata.Mappings["properties"]
             .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        AssertNotIndexedTextFields(rootProperties, "input", "final_output", "final_error");
         var stepEntries = rootProperties["step_entries"]
             .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
         var stepProperties = stepEntries["properties"]
             .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
-        var failureOutput = stepProperties["failure_output"]
-            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
-        failureOutput["index"].Should().Be(false);
+        AssertNotIndexedTextFields(
+            stepProperties,
+            "output_preview",
+            "error",
+            "assigned_value",
+            "suspension_prompt",
+            "suspension_content",
+            "failure_output");
         foreach (var field in new[] { "file_item_results", "vote_agreement_decision", "latest_failed_attempt" })
         {
             var mapping = stepProperties[field]
                 .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
             mapping["enabled"].Should().Be(false);
         }
+
+        AssertObjectTextFieldsNotIndexed(rootProperties, "role_reply_entries", "content");
+        AssertObjectTextFieldsNotIndexed(rootProperties, "timeline_entries", "message");
+        AssertObjectTextFieldsNotIndexed(
+            rootProperties,
+            "operation_entries",
+            "input_summary",
+            "output",
+            "error",
+            "arguments_json",
+            "result_json",
+            "reasoning_content");
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
+    }
+
+    private static void AssertObjectTextFieldsNotIndexed(
+        IReadOnlyDictionary<string, object?> rootProperties,
+        string objectField,
+        params string[] textFields)
+    {
+        var objectMapping = rootProperties[objectField]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        var properties = objectMapping["properties"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        AssertNotIndexedTextFields(properties, textFields);
+    }
+
+    private static void AssertNotIndexedTextFields(
+        IReadOnlyDictionary<string, object?> properties,
+        params string[] fields)
+    {
+        foreach (var field in fields)
+        {
+            var mapping = properties[field]
+                .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+            mapping["type"].Should().Be("text");
+            mapping["index"].Should().Be(false);
+        }
     }
 
     [Fact]
