@@ -1,5 +1,4 @@
 import {
-  RobotOutlined,
   SettingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
@@ -24,10 +23,9 @@ const TEAM_FIRST_NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
   {
     flattenSingleItemAsGroupLabel: true,
     flattenSingleItem: true,
-    icon: <RobotOutlined />,
-    key: "ai",
-    label: "AI",
-    labelMessageId: "nav.groups.ai",
+    key: "chat",
+    label: "Chat",
+    labelMessageId: "nav.groups.chat",
   },
   {
     flattenSingleItem: true,

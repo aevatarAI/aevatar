@@ -21,8 +21,8 @@ public sealed class AIWorkspaceOverviewQueryService(
 
         var agentResult = await agentsTask.ConfigureAwait(false);
         var activityResult = await activityTask.ConfigureAwait(false);
-        var agentView = agentResult.Value ?? UnavailableAgents(scopeId, agentResult.Failure);
-        var activityView = activityResult.Value ?? UnavailableActivity(scopeId, activityResult.Failure);
+        var agentView = agentResult.Value ?? UnavailableAgents(agentResult.Failure);
+        var activityView = activityResult.Value ?? UnavailableActivity(activityResult.Failure);
 
         return AIWorkspaceQueryResult<AIWorkspaceOverviewView>.Success(new AIWorkspaceOverviewView(
             "independent_read_models",
@@ -43,7 +43,6 @@ public sealed class AIWorkspaceOverviewQueryService(
             source.Error);
 
     private static AIWorkspaceAgentsView UnavailableAgents(
-        string scopeId,
         AIWorkspaceQueryFailure? failure)
     {
         var error = new AIWorkspaceSourceErrorView(
@@ -53,8 +52,6 @@ public sealed class AIWorkspaceOverviewQueryService(
             "independent_read_models",
             new AIWorkspaceAgentCollectionView(
                 "agent_profile_catalog",
-                "scope",
-                scopeId,
                 AIWorkspaceSourceAvailability.Unavailable,
                 [],
                 null,
@@ -64,8 +61,6 @@ public sealed class AIWorkspaceOverviewQueryService(
                 error),
             new AIWorkspaceAgentCollectionView(
                 "agent_profile_catalog",
-                "system",
-                null,
                 AIWorkspaceSourceAvailability.Unavailable,
                 [],
                 null,
@@ -76,11 +71,10 @@ public sealed class AIWorkspaceOverviewQueryService(
     }
 
     private static AIWorkspaceActivityView UnavailableActivity(
-        string scopeId,
         AIWorkspaceQueryFailure? failure)
     {
-        var conversations = AIWorkspaceActivityQueryService.UnavailableConversations(scopeId);
-        var runs = AIWorkspaceActivityQueryService.UnavailableRuns(scopeId);
+        var conversations = AIWorkspaceActivityQueryService.UnavailableConversations();
+        var runs = AIWorkspaceActivityQueryService.UnavailableRuns();
         if (failure is null)
             return new AIWorkspaceActivityView("independent_read_models", conversations, runs);
 

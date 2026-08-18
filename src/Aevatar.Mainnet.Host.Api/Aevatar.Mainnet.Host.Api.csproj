@@ -64,6 +64,7 @@
     <ProjectReference Include="..\Aevatar.AI.Infrastructure.ToolExecution\Aevatar.AI.Infrastructure.ToolExecution.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="AI\ai.html" />
     <EmbeddedResource Include="BackendConsole\admin.html" />
     <EmbeddedResource Include="BackendConsole\auto-callback.html" />
     <EmbeddedResource Include="BackendConsole\delivery.html" />

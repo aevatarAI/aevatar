@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Configuration;
+using Aevatar.Mainnet.Host.Api.AI;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
 using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Skills;
@@ -17,8 +18,417 @@ namespace Aevatar.Capabilities.Tests;
 
 public sealed class BackendConsoleStaticAssetEndpointTests
 {
+    [Fact]
+    public async Task AIPage_ShouldSupportHeadWithoutReturningTheDocumentBody()
+    {
+        await using var app = await CreateAppAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Head, "/ai");
+
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("text/html");
+        (await response.Content.ReadAsByteArrayAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AIPage_Logout_ShouldInvalidateAnInFlightTokenRefreshAndPreserveAdminSession()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/ai");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function sourceBlock(startMarker, endMarker) {
+              const start = html.indexOf(startMarker);
+              const end = html.indexOf(endMarker, start);
+              assert.notEqual(start, -1, startMarker + ' must exist');
+              assert.notEqual(end, -1, endMarker + ' must follow ' + startMarker);
+              return html.slice(start, end);
+            }
+
+            const stored = new Map();
+            let releaseRefresh;
+            const context = {
+              Date, URLSearchParams,
+              localStorage: {
+                getItem: key => stored.has(key) ? stored.get(key) : null,
+                setItem: (key, value) => stored.set(key, value),
+                removeItem: key => stored.delete(key),
+              },
+              sessionStorage: {removeItem() {}},
+              fetch: async () => await new Promise(resolve => {
+                releaseRefresh = () => resolve({
+                  ok: true,
+                  json: async () => ({
+                    access_token: 'late-access',
+                    refresh_token: 'late-refresh',
+                    expires_in: 900,
+                  }),
+                });
+              }),
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              var OIDC = {authority:'https://id.example.test',clientId:'client-example'};
+              var TOKEN_KEY = 'console:test:ai:token';
+              var PKCE_KEY = 'console:test:ai:pkce';
+              var refreshOperation = null;
+              var refreshTimer = null;
+              var refreshSkewMs = 60000;
+              var authEpoch = 0;
+              var contextRequestId = 0;
+              var agentDetailRequestId = 0;
+              var runDetailRequestId = 0;
+              ${sourceBlock('function getToken()', '\n    function safeReturnPath()')}
+            `, context);
+
+            (async () => {
+              stored.set('console:test:token', JSON.stringify({access_token:'admin-access'}));
+              stored.set('console:test:ai:token', JSON.stringify({
+                access_token: 'old-access',
+                refresh_token: 'old-refresh',
+              }));
+              const refresh = context.refreshToken(true);
+              assert.equal(typeof releaseRefresh, 'function');
+
+              context.clearToken();
+              releaseRefresh();
+
+              assert.equal(await refresh, null);
+              assert.equal(stored.has('console:test:ai:token'), false,
+                'a late refresh response must not restore a logged-out AI session');
+              assert.equal(JSON.parse(stored.get('console:test:token')).access_token, 'admin-access',
+                'AI logout must not modify the Admin session');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task AIPage_RunDrawer_ShouldRetainFocusAfterDetailRender()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/ai");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function sourceBlock(startMarker, endMarker) {
+              const start = html.indexOf(startMarker);
+              const end = html.indexOf(endMarker, start);
+              assert.notEqual(start, -1, startMarker + ' must exist');
+              assert.notEqual(end, -1, endMarker + ' must follow ' + startMarker);
+              return html.slice(start, end);
+            }
+
+            let focusedElement = null;
+            const loadingCloseButton = {focus() { focusedElement = this; }};
+            const renderedCloseButton = {focus() { focusedElement = this; }};
+            const root = {
+              firstChild: {},
+              closeButton: loadingCloseButton,
+              _innerHTML: '',
+              set innerHTML(value) {
+                this._innerHTML = value;
+                this.closeButton = renderedCloseButton;
+              },
+              get innerHTML() { return this._innerHTML; },
+              querySelector(selector) {
+                assert.equal(selector, '.drawer-close');
+                return this.closeButton;
+              },
+            };
+            const context = {
+              state: {runDetail:{
+                authorityStateVersion:7,
+                summary:{workflowName:'Research run',status:'completed',durationMs:42},
+                statistics:{completedSteps:1,totalSteps:1},
+                usageTotals:{totalTokens:12},
+                steps:[],timeline:[],
+              }},
+              $: id => {
+                assert.equal(id, 'drawer-root');
+                return root;
+              },
+              object: value => value && typeof value === 'object' ? value : {},
+              arr: value => Array.isArray(value) ? value : [],
+              esc: value => String(value == null ? '' : value),
+              statusBadge: () => '', icon: () => '', emptyView: () => '',
+              formatDuration: value => String(value), formatTime: value => String(value),
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${sourceBlock('function renderRunDrawer(', '\n    function closeDrawer(')}
+            `, context);
+
+            context.renderRunDrawer('run-7');
+
+            assert.notEqual(root.closeButton, loadingCloseButton);
+            assert.equal(focusedElement, renderedCloseButton,
+              'the replacement drawer close button must own focus');
+            assert.match(root.innerHTML, /data-run-id="run-7"/);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task AIPage_ModelRouteChanges_ShouldSelectAndPersistRouteDefaultAsNull()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/ai");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function sourceBlock(startMarker, endMarker) {
+              const start = html.indexOf(startMarker);
+              const end = html.indexOf(endMarker, start);
+              assert.notEqual(start, -1, startMarker + ' must exist');
+              assert.notEqual(end, -1, endMarker + ' must follow ' + startMarker);
+              return html.slice(start, end);
+            }
+
+            const requests = [];
+            const routeSelect = {value:'route-a'};
+            const modelSelect = {
+              value:'', _html:'',
+              set innerHTML(value) {
+                this._html = value;
+                const selected = value.match(/<option value="([^"]*)"[^>]* selected/);
+                this.value = selected ? selected[1] : '';
+              },
+              get innerHTML() { return this._html; },
+            };
+            const elements = {'model-route':routeSelect, 'model-id':modelSelect};
+            const context = {
+              state: {
+                models: {personalDefault:{settings:{
+                  savedSelection:{routeValue:'route-a',modelSelection:{kind:'explicit_model',modelId:'model-a'}},
+                  routeOptions:[
+                    {routeValue:'route-a',modelCatalog:{modelIds:['model-a','model-a-2']}},
+                    {routeValue:'route-b',modelCatalog:{modelIds:['model-b']}},
+                  ],
+                }}},
+                receipts:{},
+              },
+              $: id => elements[id],
+              arr: value => Array.isArray(value) ? value : [],
+              object: value => value && typeof value === 'object' ? value : {},
+              esc: value => String(value == null ? '' : value),
+              jsonOptions: (method, body) => ({method,body:JSON.stringify(body)}),
+              api: async (path, options) => {
+                requests.push({path,body:JSON.parse(options.body)});
+                return {commandId:'command-model-default'};
+              },
+              acceptedReceipt: (message, receipt) => ({message,commandId:receipt.commandId}),
+              render() {}, toast() {}, ignoredError() { return false; }, errorMessage(error) { return String(error); },
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${sourceBlock('function selectedRouteOption()', '\n    async function saveCatalog()')}
+            `, context);
+
+            (async () => {
+              context.syncModelOptions();
+              assert.equal(modelSelect.value, 'model-a', 'the saved route keeps its explicit model');
+
+              routeSelect.value = 'route-b';
+              context.syncModelOptions();
+              assert.equal(modelSelect.value, '', 'a new route must start at Route default');
+              assert.match(modelSelect.innerHTML, /<option value="" selected>Route default<\/option>/);
+
+              await context.savePersonalModel();
+              assert.deepEqual(requests, [{
+                path:'/api/ai/models/personal-default',
+                body:{routeValue:'route-b',modelId:null},
+              }]);
+              assert.equal(context.state.models.personalDefault.settings.savedSelection.modelSelection.modelId, null);
+              assert.equal(context.state.models.personalDefault.settings.savedSelection.modelSelection.kind, 'provider_default');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task AIPage_StatusBadges_ShouldClassifyInactiveAndInvalidAsFailures()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/ai");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function statusBadge(');
+            const end = html.indexOf('\n    function errorMessage(', start);
+            assert.notEqual(start, -1, 'statusBadge must exist');
+            assert.notEqual(end, -1, 'errorMessage must follow statusBadge');
+
+            const context = {esc:value => String(value == null ? '' : value)};
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            for (const status of ['inactive','invalid']) {
+              const badge = context.statusBadge(status);
+              assert.match(badge, /class="badge failed"/);
+              assert.doesNotMatch(badge, /class="badge success"/);
+            }
+            assert.match(context.statusBadge('active'), /class="badge success"/);
+            assert.match(context.statusBadge('valid'), /class="badge success"/);
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task AIPage_LoginButton_ShouldIgnoreASecondClickWhilePkceIsInFlight()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/ai");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+
+            function sourceBlock(startMarker, endMarker) {
+              const start = html.indexOf(startMarker);
+              const end = html.indexOf(endMarker, start);
+              assert.notEqual(start, -1, startMarker + ' must exist');
+              assert.notEqual(end, -1, endMarker + ' must follow ' + startMarker);
+              return html.slice(start, end);
+            }
+
+            let digestCalls = 0;
+            let releaseDigest;
+            const assignments = [];
+            const pending = [];
+            const button = {disabled:false,textContent:'登录 NyxID'};
+            const buttonLabel = {textContent:'使用 NyxID 登录'};
+            const context = {
+              TextEncoder, URL,
+              btoa: value => Buffer.from(value, 'binary').toString('base64'),
+              location: {
+                origin:'https://ai.example.test', pathname:'/ai', hash:'#/models',
+                assign:value => assignments.push(value),
+              },
+              crypto: {
+                getRandomValues: values => values.fill(7),
+                subtle: {digest: async () => {
+                  digestCalls += 1;
+                  return await new Promise(resolve => {
+                    releaseDigest = () => resolve(new Uint8Array([1,2,3]).buffer);
+                  });
+                }},
+              },
+              sessionStorage: {setItem:(key, value) => pending.push({key,value:JSON.parse(value)})},
+              $: id => id === 'login-button' ? button : id === 'login-button-label' ? buttonLabel : null,
+              showAuth() {}, errorMessage:error => String(error),
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              var OIDC = {
+                authority:'https://id.example.test', clientId:'client-example',
+                redirectUri:'https://ai.example.test/auto/callback', loginScope:'openid profile'
+              };
+              var PKCE_KEY = 'console:test:ai:pkce';
+              var loginPending = false;
+              ${sourceBlock('function safeReturnPath()', '\n    async function api(')}
+            `, context);
+
+            (async () => {
+              const first = context.beginLogin();
+              const second = context.beginLogin();
+              assert.equal(digestCalls, 1, 'the second click must not start another PKCE operation');
+              assert.equal(button.disabled, true);
+              assert.equal(buttonLabel.textContent, '正在跳转…');
+
+              releaseDigest();
+              await Promise.all([first, second]);
+
+              assert.equal(pending.length, 1);
+              assert.equal(pending[0].key, 'console:test:ai:pkce');
+              assert.equal(pending[0].value.returnTo, '/ai#/models');
+              assert.deepEqual(pending[0].value.resources, []);
+              assert.equal(assignments.length, 1);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task AIPage_SelectAgentOnNarrowScreen_ShouldRevealTheDetailPanel()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/ai");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('function revealAgentDetailOnNarrowScreen()');
+            const end = html.indexOf('\n    function reloadAgentDetail()', start);
+            assert.notEqual(start, -1, 'narrow-screen detail reveal behavior must exist');
+            assert.notEqual(end, -1, 'reloadAgentDetail must follow selectAgent');
+
+            const scrollCalls = [];
+            let isNarrow = true;
+            let animationFrames = 0;
+            const detail = {scrollIntoView: options => scrollCalls.push(options)};
+            const context = {
+              window:{matchMedia: query => ({matches:isNarrow && query === '(max-width: 760px)'})},
+              requestAnimationFrame: callback => { animationFrames += 1; callback(); },
+              state:{
+                agentMode:'system', selectedAgent:null, agentDetail:null, validation:null,
+                errors:{agentDetail:null}, receipts:{agents:null},
+              },
+              authEpoch:0, agentDetailRequestId:0,
+              activeAgentCollection:() => ({items:[{profileSlug:'system-alpha'}]}),
+              arr:value => Array.isArray(value) ? value : [],
+              $:id => id === 'agent-detail' ? detail : null,
+              render() {},
+            };
+            vm.createContext(context);
+            vm.runInContext(html.slice(start, end), context);
+
+            (async () => {
+              await context.selectAgent('system-alpha');
+              assert.equal(context.state.selectedAgent.profileSlug, 'system-alpha');
+              assert.equal(scrollCalls.length, 1);
+              assert.equal(scrollCalls[0].block, 'start');
+              assert.equal(animationFrames, 1);
+
+              isNarrow = false;
+              await context.selectAgent('system-alpha');
+              assert.equal(animationFrames, 1, 'desktop selection must not schedule an animation frame');
+              assert.equal(scrollCalls.length, 1, 'desktop selection must not scroll the detail panel');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
     [Theory]
     [InlineData("/admin", "Aevatar Backend Console")]
+    [InlineData("/ai", "Aevatar AI")]
     [InlineData("/admin/studio", "<title>Aevatar Studio</title>")]
     [InlineData("/auto/callback", "正在完成登录")]
     [InlineData("/delivery", "Workflow Delivery Center")]
@@ -37,9 +447,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("https://id.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
-        html.Should().Contain(
-            "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\"]");
+        if (path == "/ai")
+        {
+            html.Should().NotContain("\"resources\":");
+            html.Should().Contain("\"storageKey\":\"console:test:ai\"");
+            html.Should().NotContain("\"storageKey\":\"console:test\"");
+        }
+        else
+            html.Should().Contain(
+                "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://api.example.test/api/v1/proxy/s/ornn-api\"]");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
+        html.Should().NotContain("__AEVATAR_AI_CONFIG__");
         html.Should().NotContain("https://nyx-api.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (path == "/cqrs")
@@ -48,8 +466,26 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("const NYXID_USER_API = NYXID_API");
             html.Should().NotContain("const NYXID_AUTHORITY = CFG.authority");
         }
+        else if (path == "/ai")
+        {
+            html.Should().Contain("data-aevatar-ai");
+            html.Should().Contain("#/overview");
+            html.Should().Contain("#/agents");
+            html.Should().Contain("#/models");
+            html.Should().Contain("#/activity");
+            html.Should().Contain("/api/auth/nyxid/finalize");
+            html.Should().Contain("/api/ai/overview");
+            html.Should().Contain("/api/ai/agents");
+            html.Should().Contain("/api/ai/models");
+            html.Should().Contain("/api/ai/activity");
+            var normalizedHtml = html.ToLowerInvariant();
+            normalizedHtml.Should().NotContain("aevatar console");
+            normalizedHtml.Should().NotContain("team");
+            normalizedHtml.Should().NotContain("scopes");
+        }
         if (path == "/admin")
         {
+            html.Should().NotContain("\"aiStorageKey\":");
             html.Should().Contain("var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi");
             html.Should().Contain("fetch(NYX_API+'/api/v1/admin/users");
             html.Should().Contain("var FLEET_RUN_WINDOW=500;");
@@ -92,11 +528,19 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         }
         else if (path == "/auto/callback")
         {
+            html.Should().Contain("\"aiStorageKey\":\"console:test:ai\"");
             // The exchange loops over the PKCE-stored request list; session logins
             // store an empty list (ADR-0018), so only voice-purpose logins append.
             html.Should().Contain("form.append(\"resource\"");
             html.Should().Contain("normalizeResources(pending.resources) : []");
             html.Should().NotContain("normalizeResources(RESOURCES)");
+            html.Should().Contain("var parsed = new URL(p, location.origin)");
+            html.Should().Contain("parsed.origin !== location.origin");
+            html.Should().Contain("return parsed.pathname + parsed.search + parsed.hash");
+            html.Should().Contain("var AUTH_STORAGE_CONTEXTS = [");
+            html.Should().Contain("hasOAuthState && candidateState.length > 0 && candidateState === oauthState");
+            html.Should().Contain("matchingContexts.length === 1");
+            html.Should().Contain("callbackTitle.textContent=\"Aevatar AI\"");
         }
         else if (path == "/delivery")
         {
@@ -134,6 +578,12 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("purpose===VOICE_TOKEN_PURPOSE ? normalizeResources(CFG.resources,requestedResources) : []");
             html.Should().Contain("normalizeResources(pending.resources) : []");
         }
+        else if (path == "/ai")
+        {
+            html.Should().Contain("async function api(path, options)");
+            html.Should().Contain("async function refreshToken(force)");
+            html.Should().Contain("resources: []");
+        }
         else
         {
             html.Should().NotContain("searchParams.append(\"resource\"");
@@ -143,6 +593,210 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("requestAdminShellTokenRefresh(");
             html.Should().Contain("rejectedAccessToken");
         }
+    }
+
+    [Fact]
+    public async Task AutoCallback_AILogin_ShouldSelectIsolatedPkceByStateAndPreserveAdminSession()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/auto/callback");
+        const string script = """
+            (async () => {
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('(function(){');
+            const end = source.lastIndexOf('})();');
+            const records = new Map([
+              ['console:test:token', JSON.stringify({access_token:'admin-access'})],
+            ]);
+            const pendingRecords = new Map([
+              ['console:test:pkce', JSON.stringify({
+                verifier:'admin-verifier', state:'admin-state', returnTo:'/admin',
+                resources:[], tokenPurpose:'', authFlow:'',
+              })],
+              ['console:test:ai:pkce', JSON.stringify({
+                verifier:'ai-verifier', state:'ai-state', returnTo:'/ai#/agents',
+                resources:[], tokenPurpose:'', authFlow:'', storageKey:'attacker-controlled',
+              })],
+            ]);
+            const removedPending = [];
+            const fetchCalls = [];
+            const elements = new Map();
+            const context = {
+              URL, URLSearchParams, TextDecoder, Uint8Array,
+              atob:value => Buffer.from(value, 'base64').toString('binary'),
+              document:{
+                title:'',
+                getElementById:id => {
+                  if (!elements.has(id)) elements.set(id, {style:{},textContent:'',appendChild(){}});
+                  return elements.get(id);
+                },
+                createElement:() => ({href:'',textContent:''}),
+              },
+              location:{
+                origin:'http://127.0.0.1:5080',
+                search:'?code=ai-code&state=ai-state',
+                replace:value => { context.replaced = value; },
+              },
+              sessionStorage:{
+                getItem:key => pendingRecords.get(key) || null,
+                removeItem:key => { removedPending.push(key); pendingRecords.delete(key); },
+              },
+              localStorage:{
+                getItem:key => records.get(key) || null,
+                setItem:(key, value) => records.set(key, value),
+                removeItem:key => records.delete(key),
+              },
+              fetch:async (url, options) => {
+                fetchCalls.push({url, options});
+                return {ok:true,json:async () => ({tokens:{
+                  accessToken:'ai-access', refreshToken:'ai-refresh',
+                  tokenType:'Bearer', expiresIn:3600, scope:'openid profile',
+                }})};
+              },
+              Date, JSON, Map, Boolean, console,
+            };
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end + 5), context);
+            await new Promise(resolve => setImmediate(resolve));
+            await new Promise(resolve => setImmediate(resolve));
+
+            assert.equal(fetchCalls.length, 1);
+            assert.equal(fetchCalls[0].url, '/api/auth/nyxid/finalize');
+            assert.equal(JSON.parse(fetchCalls[0].options.body).codeVerifier, 'ai-verifier');
+            assert.equal(JSON.parse(records.get('console:test:token')).access_token, 'admin-access');
+            assert.equal(JSON.parse(records.get('console:test:ai:token')).access_token, 'ai-access');
+            assert.equal(records.has('attacker-controlled:token'), false);
+            assert.deepEqual(removedPending, ['console:test:ai:pkce']);
+            assert.equal(pendingRecords.has('console:test:pkce'), true);
+            assert.equal(context.replaced, '/ai#/agents');
+            assert.equal(context.document.title, '登录中 · Aevatar AI');
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task AutoCallback_InvalidOrAmbiguousState_ShouldNotExchangeOrMutateStorage()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/auto/callback");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('(function(){');
+            const end = source.lastIndexOf('})();');
+
+            const scenarios = [
+              {
+                name:'empty returned and pending state',
+                search:'?code=code-alpha&state=',
+                pending:[{verifier:'admin-verifier',state:''},{verifier:'ai-verifier',state:'ai-state'}],
+              },
+              {
+                name:'missing returned and pending state',
+                search:'?code=code-alpha',
+                pending:[{verifier:'admin-verifier'},{verifier:'ai-verifier',state:'ai-state'}],
+              },
+              {
+                name:'duplicate state across fixed storage contexts',
+                search:'?code=code-alpha&state=shared-state',
+                pending:[
+                  {verifier:'admin-verifier',state:'shared-state'},
+                  {verifier:'ai-verifier',state:'shared-state'},
+                ],
+              },
+            ];
+
+            for (const scenario of scenarios) {
+              const pendingRecords = new Map([
+                ['console:test:pkce', JSON.stringify(scenario.pending[0])],
+                ['console:test:ai:pkce', JSON.stringify(scenario.pending[1])],
+              ]);
+              const elements = new Map();
+              const mutations = [];
+              let fetchCalls = 0;
+              const context = {
+                URL, URLSearchParams, TextDecoder, Uint8Array,
+                atob:value => Buffer.from(value, 'base64').toString('binary'),
+                document:{
+                  title:'',
+                  getElementById:id => {
+                    if (!elements.has(id)) elements.set(id, {style:{},textContent:'',appendChild(){}});
+                    return elements.get(id);
+                  },
+                  createElement:() => ({href:'',textContent:''}),
+                },
+                location:{
+                  origin:'http://127.0.0.1:5080', search:scenario.search,
+                  replace:value => mutations.push({kind:'replace',value}),
+                },
+                sessionStorage:{
+                  getItem:key => pendingRecords.get(key) || null,
+                  removeItem:key => mutations.push({kind:'remove-pending',key}),
+                },
+                localStorage:{
+                  getItem:() => null,
+                  setItem:(key, value) => mutations.push({kind:'set-token',key,value}),
+                  removeItem:key => mutations.push({kind:'remove-token',key}),
+                },
+                fetch:async () => { fetchCalls += 1; throw new Error('unexpected token exchange'); },
+                Date, JSON, Map, Boolean, console,
+              };
+              vm.createContext(context);
+              vm.runInContext(source.slice(start, end + 5), context);
+
+              assert.equal(fetchCalls, 0, scenario.name);
+              assert.deepEqual(mutations, [], scenario.name);
+              assert.equal(elements.get('msg').textContent, '登录状态校验失败，请返回重试。', scenario.name);
+            }
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
+    public async Task AutoCallback_SafePath_ShouldRejectCrossOriginControlCharacterPaths()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/auto/callback");
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function safePath(p, fallback){');
+            const end = source.indexOf('\n  function normalizeResources', start);
+            assert.notEqual(start, -1);
+            assert.notEqual(end, -1);
+
+            const context = {URL,location:{origin:'https://ai.example.test'}};
+            vm.createContext(context);
+            vm.runInContext(source.slice(start, end), context);
+
+            for (const code of [9, 10, 13]) {
+              const attack = '/' + String.fromCharCode(code) + '/evil.example';
+              assert.equal(context.safePath(attack, '/admin'), '/admin');
+            }
+            assert.equal(context.safePath('//evil.example/path', '/admin'), '/admin');
+            assert.equal(context.safePath('javascript:alert(1)', '/admin'), '/admin');
+            assert.equal(
+              context.safePath('/ai/../ai?view=models#/models', '/admin'),
+              '/ai?view=models#/models');
+            assert.equal(
+              context.safePath('https://ai.example.test/ai#/agents', '/admin'),
+              '/ai#/agents');
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
     }
 
     [Fact]
@@ -244,6 +898,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             };
             const elements = new Map();
             const context = {
+              URL,
               URLSearchParams,
               TextDecoder,
               Uint8Array,
@@ -321,7 +976,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             const fetchCalls = [];
             const elements = new Map();
             const context = {
-              URLSearchParams, TextDecoder, Uint8Array,
+              URL, URLSearchParams, TextDecoder, Uint8Array,
               atob:(value) => Buffer.from(value, 'base64').toString('binary'),
               document:{getElementById:(id) => {
                 if (!elements.has(id)) elements.set(id, {style:{},textContent:'',innerHTML:''});
@@ -399,7 +1054,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             const fetchCalls = [];
             const elements = new Map();
             const context = {
-              URLSearchParams, TextDecoder, Uint8Array,
+              URL, URLSearchParams, TextDecoder, Uint8Array,
               atob:(value) => Buffer.from(value, 'base64').toString('binary'),
               document:{getElementById:(id) => {
                 if (!elements.has(id)) elements.set(id, {style:{},textContent:'',innerHTML:''});
@@ -4758,6 +5413,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 
         var app = builder.Build();
         app.MapAdminConsoleEndpoints();
+        app.MapAIPageEndpoints();
         app.MapAutoConsoleCallbackEndpoints();
         app.MapDeliveryConsoleEndpoints();
         app.MapCqrsObservatoryPageEndpoints();

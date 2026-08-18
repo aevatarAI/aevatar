@@ -582,6 +582,7 @@ public static class MainnetHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(app);
 
+        app.UseAIWorkspaceErrorContract();
         app.UseAevatarDefaultHost();
         app.MapMainnetChatEndpoints();
         app.MapNyxIdChatPublicEndpoints();
@@ -591,6 +592,7 @@ public static class MainnetHostBuilderExtensions
         app.MapAgentProfileEndpoints();
         app.MapAIWorkspaceEndpoints();
         app.MapAIWorkspaceAgentManagementEndpoints();
+        app.MapAIPageEndpoints();
         app.MapDefaultVoiceAgentEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();

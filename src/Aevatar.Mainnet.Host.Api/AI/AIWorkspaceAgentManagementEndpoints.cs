@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Audit;
@@ -9,18 +10,22 @@ using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Mainnet.Host.Api.AI;
 
 /// <summary>
-/// Caller-scope facade for Agent Profile management used by the AI workspace.
+/// Caller-authorized facade for Agent Profile management used by the AI application.
 /// The Agent Profile application service remains the sole command/query boundary;
-/// these routes only adapt the URL and scope identity.
+/// these routes only adapt the URL and derive the internal authorization partition.
 /// </summary>
 internal static class AIWorkspaceAgentManagementEndpoints
 {
+    private const string MyAgentsSource = "my_agents";
+    private const string SystemAgentsSource = "system_agents";
+
     public static IEndpointRouteBuilder MapAIWorkspaceAgentManagementEndpoints(this IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -75,14 +80,28 @@ internal static class AIWorkspaceAgentManagementEndpoints
             subject,
             slug => $"/api/ai/agents/{Uri.EscapeDataString(slug)}",
             ct,
-            includeActorId: false);
+            includeActorId: false,
+            callerFacing: true);
     }
 
     private static IResult GetEditorOptions(HttpContext http)
     {
         if (!TryGetCallerOwner(http, out _, out var denied))
             return denied!;
-        return AgentProfileEndpoints.GetEditorOptions();
+        return Results.Ok(new AIWorkspaceAgentEditorOptionsResponse(
+            ActivationModes: ["SHADOW", "ENFORCED"],
+            SideEffectClasses: ["READ_ONLY", "EXTERNAL_HANDOFF", "SERVICE_CALL", "MAINTENANCE"],
+            AgentSources: [MyAgentsSource, SystemAgentsSource],
+            SupportedAgentKinds: [AgentProfilePolicies.NyxIdChatAgentKind],
+            AllowedRouteToolSetRefs: [AgentProfilePolicies.NyxIdChatRouteToolSet],
+            RuntimeParameters: new AIWorkspaceAgentRuntimeParametersResponse(
+                AgentProfileValidationLimits.RequiredMaxPlanSteps,
+                AgentProfileValidationLimits.RequiredHandoffTtlSeconds,
+                AgentProfileValidationLimits.RequiredClassifierTimeoutMs,
+                AgentProfileValidationLimits.RequiredExactSkillFetchTimeoutMs,
+                AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes,
+                AgentProfileValidationLimits.MaximumMembers),
+            MaximumPageSize: AgentProfileApplicationService.MaximumPageSize));
     }
 
     private static Task<IResult> GetDetailAsync(
@@ -93,7 +112,13 @@ internal static class AIWorkspaceAgentManagementEndpoints
     {
         if (!TryGetCallerOwner(http, out var owner, out var denied))
             return Task.FromResult(denied!);
-        return AgentProfileEndpoints.GetDetailAsync(service, owner, profileSlug, ct);
+        return AgentProfileEndpoints.GetDetailAsync(
+            service,
+            owner,
+            profileSlug,
+            ct,
+            includeOwnerKind: false,
+            callerFacing: true);
     }
 
     private static Task<IResult> UpdateDraftAsync(
@@ -117,7 +142,8 @@ internal static class AIWorkspaceAgentManagementEndpoints
             subject,
             $"/api/ai/agents/{Uri.EscapeDataString(profileSlug)}",
             ct,
-            includeActorId: false);
+            includeActorId: false,
+            callerFacing: true);
     }
 
     private static Task<IResult> ValidateAsync(
@@ -128,7 +154,13 @@ internal static class AIWorkspaceAgentManagementEndpoints
     {
         if (!TryGetCallerOwner(http, out var owner, out var denied))
             return Task.FromResult(denied!);
-        return AgentProfileEndpoints.ValidateAsync(service, owner, profileSlug, BearerToken(http), ct);
+        return AgentProfileEndpoints.ValidateAsync(
+            service,
+            owner,
+            profileSlug,
+            BearerToken(http),
+            ct,
+            callerFacing: true);
     }
 
     private static Task<IResult> PublishAsync(
@@ -151,7 +183,8 @@ internal static class AIWorkspaceAgentManagementEndpoints
             BearerToken(http),
             $"/api/ai/agents/{Uri.EscapeDataString(profileSlug)}",
             ct,
-            includeActorId: false);
+            includeActorId: false,
+            callerFacing: true);
     }
 
     private static Task<IResult> GetBindingAsync(
@@ -162,47 +195,68 @@ internal static class AIWorkspaceAgentManagementEndpoints
     {
         if (!TryGetCallerOwner(http, out var owner, out var denied))
             return Task.FromResult(denied!);
-        return AgentProfileEndpoints.GetBindingAsync(
+        return AgentProfileEndpoints.GetBindingForCallerFacadeAsync(
             service,
             owner,
             agentKind,
-            ct,
-            includeSystemRollout: false);
+            ct);
     }
 
-    private static Task<IResult> SetBindingAsync(
+    private static async Task<IResult> SetBindingAsync(
         HttpContext http,
         string agentKind,
-        AIWorkspaceAgentBindingInput? input,
         [FromServices] AgentProfileApplicationService service,
         CancellationToken ct)
     {
         if (!TryGetCallerOwner(http, out var owner, out var denied))
-            return Task.FromResult(denied!);
+            return denied!;
         if (!TryAuditSubject(http, out var subject))
-            return Task.FromResult(Error(StatusCodes.Status403Forbidden, "AUDIT_SUBJECT_REQUIRED", "Authenticated caller subject is required."));
+            return Error(StatusCodes.Status403Forbidden, "AUDIT_SUBJECT_REQUIRED", "Authenticated caller subject is required.");
 
-        return AgentProfileEndpoints.SetBindingAsync(
+        AIWorkspaceAgentBindingInput? input;
+        try
+        {
+            input = http.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody == true
+                ? await http.Request
+                    .ReadFromJsonAsync<AIWorkspaceAgentBindingInput>(cancellationToken: ct)
+                    .ConfigureAwait(false)
+                : null;
+        }
+        catch (JsonException)
+        {
+            return InvalidBindingRequest();
+        }
+        catch (InvalidOperationException)
+        {
+            return InvalidBindingRequest();
+        }
+        catch (NotSupportedException)
+        {
+            return InvalidBindingRequest();
+        }
+
+        if (input?.AgentProfile is null)
+            return Error(StatusCodes.Status400BadRequest, "AI_AGENT_DEFAULT_INVALID", "agentProfile is required.");
+        if (!TryReferenceSource(input.AgentProfile.Source, out var referenceSource))
+        {
+            return Error(
+                StatusCodes.Status400BadRequest,
+                "AI_AGENT_DEFAULT_INVALID",
+                $"agentProfile.source must be {MyAgentsSource} or {SystemAgentsSource}.");
+        }
+
+        return await AgentProfileEndpoints.SetBindingForCallerFacadeAsync(
             http,
             service,
             owner,
             agentKind,
-            input is null
-                ? null
-                : new AgentProfileEndpoints.AgentProfileBindingInput(
-                    input.AgentProfile is null
-                        ? null
-                        : new AgentProfileEndpoints.AgentProfileReferenceInput(
-                            input.AgentProfile.OwnerKind,
-                            input.AgentProfile.ProfileSlug),
-                    Enabled: null,
-                    CohortBasisPoints: null,
-                    input.ExpectedVersion,
-                    input.IdempotencyKey),
+            referenceSource,
+            input.AgentProfile.ProfileSlug,
+            input.ExpectedVersion,
+            input.IdempotencyKey,
             subject,
             $"/api/ai/agents/default/{Uri.EscapeDataString(agentKind)}",
-            ct,
-            includeActorId: false);
+            ct).ConfigureAwait(false);
     }
 
     private static Task<IResult> ClearBindingAsync(
@@ -216,15 +270,14 @@ internal static class AIWorkspaceAgentManagementEndpoints
         if (!TryAuditSubject(http, out var subject))
             return Task.FromResult(Error(StatusCodes.Status403Forbidden, "AUDIT_SUBJECT_REQUIRED", "Authenticated caller subject is required."));
 
-        return AgentProfileEndpoints.ClearBindingAsync(
+        return AgentProfileEndpoints.ClearBindingForCallerFacadeAsync(
             http,
             service,
             owner,
             agentKind,
             subject,
             $"/api/ai/agents/default/{Uri.EscapeDataString(agentKind)}",
-            ct,
-            includeActorId: false);
+            ct);
     }
 
     private static bool TryGetCallerOwner(HttpContext http, out AgentProfileOwner owner, out IResult? denied)
@@ -241,8 +294,8 @@ internal static class AIWorkspaceAgentManagementEndpoints
             http.User.Identity?.IsAuthenticated == true
                 ? StatusCodes.Status403Forbidden
                 : StatusCodes.Status401Unauthorized,
-            "AI_SCOPE_REQUIRED",
-            "A single authenticated scope is required.");
+            "AI_ACCESS_CONTEXT_REQUIRED",
+            "Authenticated caller access context is required.");
         return false;
     }
 
@@ -267,6 +320,22 @@ internal static class AIWorkspaceAgentManagementEndpoints
     private static IResult Error(int statusCode, string code, string message) =>
         AIWorkspaceEndpoints.Error(statusCode, code, message);
 
+    private static IResult InvalidBindingRequest() =>
+        Error(StatusCodes.Status400BadRequest, "AI_AGENT_DEFAULT_INVALID", "Default Agent request is invalid.");
+
+    private static bool TryReferenceSource(
+        string? value,
+        out AgentProfileReferenceOwnerKind referenceSource)
+    {
+        referenceSource = value?.Trim().ToLowerInvariant() switch
+        {
+            MyAgentsSource => AgentProfileReferenceOwnerKind.Caller,
+            SystemAgentsSource => AgentProfileReferenceOwnerKind.System,
+            _ => AgentProfileReferenceOwnerKind.Unspecified,
+        };
+        return referenceSource != AgentProfileReferenceOwnerKind.Unspecified;
+    }
+
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AIWorkspaceAgentBindingInput(
         AIWorkspaceAgentReferenceInput? AgentProfile,
@@ -275,8 +344,25 @@ internal static class AIWorkspaceAgentManagementEndpoints
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AIWorkspaceAgentReferenceInput(
-        string? OwnerKind,
+        string? Source,
         string? ProfileSlug);
+
+    internal sealed record AIWorkspaceAgentEditorOptionsResponse(
+        IReadOnlyList<string> ActivationModes,
+        IReadOnlyList<string> SideEffectClasses,
+        IReadOnlyList<string> AgentSources,
+        IReadOnlyList<string> SupportedAgentKinds,
+        IReadOnlyList<string> AllowedRouteToolSetRefs,
+        AIWorkspaceAgentRuntimeParametersResponse RuntimeParameters,
+        int MaximumPageSize);
+
+    internal sealed record AIWorkspaceAgentRuntimeParametersResponse(
+        int MaxPlanSteps,
+        int HandoffTtlSeconds,
+        int ClassifierTimeoutMs,
+        int ExactSkillFetchTimeoutMs,
+        int MaxSelectedSkillBytes,
+        int MaximumMembers);
 
     private static void Audit(
         RouteHandlerBuilder builder,

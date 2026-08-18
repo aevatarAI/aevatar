@@ -1,8 +1,6 @@
 # Aevatar Console Web
 
-`aevatar-console-web` is the Ant Design Pro based authenticated product console for Aevatar.
-It hosts the scope-confined `/ai` workspace alongside the existing Team and platform surfaces;
-the separate Mainnet `/admin` console remains unchanged.
+`aevatar-console-web` is the Ant Design Pro based admin shell for Aevatar.
 
 ## Stack
 
@@ -57,8 +55,6 @@ NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
 ORNN_BASE_URL=https://ornn.chrono-ai.fun
 # Optional when deploying under a sub-path such as /console/
 AEVATAR_CONSOLE_PUBLIC_PATH=/
-# Optional router base; keep this as / for the Mainnet-hosted /ai build
-AEVATAR_CONSOLE_BASE_PATH=/
 ```
 
 `NYXID_BASE_URL`, `NYXID_CLIENT_ID`, and `NYXID_SCOPE` are injected into the
@@ -71,13 +67,6 @@ Default service preselection is owned by the NyxID OAuth Client
 `default_service_catalog_slugs`; the browser does not send OAuth `resource` parameters.
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
-
-The Mainnet production image builds this app with router base `/` and public
-path `/ai-assets/`, then serves the result directly from the backend origin at
-`/ai`. Keeping those values separate is required: history routes remain
-`/ai/...`, while JavaScript, CSS, fonts, and images are isolated under the
-dedicated asset prefix. The same-origin build uses `/auth/callback`; that exact
-callback must be registered for the Mainnet public origin in NyxID.
 
 ## Available scripts
 
@@ -112,15 +101,11 @@ pnpm dev
 
 Current proxy split during local development:
 
-- `/api/ai/*`, `/api/chat`, `/api/workflows/*`, `/api/actors/*`, `/api/runs/*`, `/api/primitives`, `/api/capabilities`, most `/api/scopes/*` runtime routes -> `Mainnet Host API`
+- `/api/chat`, `/api/workflows/*`, `/api/actors/*`, `/api/runs/*`, `/api/primitives`, `/api/capabilities`, most `/api/scopes/*` runtime routes -> `Mainnet Host API`
 - `/api/app/*`, `/api/auth/*`, `/api/workspace/*`, `/api/editor/*`, `/api/executions/*`, `/api/roles/*`, `/api/connectors/*`, `/api/scopes/{scopeId}/teams*` -> `Studio Hosting API target`
 
 ## Current scope
 
-- `/ai`: operational Overview over independent Agent, Conversation, and Run sources
-- `/ai/chat`: canonical React Assistant Chat; `/chat` preserves query/hash and redirects here
-- `/ai/agents`: scope-owned Agent Profiles and read-only system templates
-- `/ai/models`: independent personal model preference and scope model catalog views
 - `Overview`
 - `Studio`
 - `Primitives`
