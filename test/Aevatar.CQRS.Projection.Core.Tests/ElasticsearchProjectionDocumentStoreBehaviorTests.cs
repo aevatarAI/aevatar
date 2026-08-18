@@ -2035,7 +2035,35 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task ReconcileIndexAsync_WhenDriftAndExpectedExists_ShouldSwapAliasWithoutReindex()
+    public async Task ReconcileIndexAsync_WhenDriftAndExpectedExists_ShouldTopUpFromSourceThenSwapAlias()
+    {
+        // An interrupted earlier heal can leave the expected physical partially filled, so the
+        // reconcile must copy source -> destination (overwrite) before it moves the alias.
+        const string oldPhysical = "aevatar-projection-core-tests-vstale01";
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            $"{{\"{oldPhysical}\":{{\"aliases\":{{\"aevatar-projection-core-tests\":{{}}}}}}}}"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, "")); // HEAD expected -> exists
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"took":3,"timed_out":false,"total":2,"updated":1,"created":1,"version_conflicts":0,"failures":[]}""")); // POST _reindex top-up
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}""")); // POST _aliases
+
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
+
+        await store.ReconcileIndexAsync();
+
+        var reindex = handler.CapturedRequests
+            .Should().ContainSingle(r => r.Method == "POST" && r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal)).Subject;
+        reindex.Body.Should().Contain(oldPhysical).And.NotContain("op_type").And.NotContain("conflicts");
+        handler.CapturedRequests
+            .Should().ContainSingle(r => r.Method == "POST" && r.PathAndQuery.EndsWith("/_aliases")).Subject
+            .Body.Should().Contain("\"add\"").And.Contain("\"remove\"").And.Contain(oldPhysical).And.NotContain("remove_index");
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenDriftAndExpectedExists_AndTopUpMissesDocuments_ShouldNotSwapAlias()
     {
         const string oldPhysical = "aevatar-projection-core-tests-vstale01";
         var handler = new ScriptedHttpMessageHandler();
@@ -2043,16 +2071,22 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             HttpStatusCode.OK,
             $"{{\"{oldPhysical}\":{{\"aliases\":{{\"aevatar-projection-core-tests\":{{}}}}}}}}"));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, "")); // HEAD expected -> exists
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}""")); // POST _aliases
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"took":3,"timed_out":false,"total":3,"updated":1,"created":1,"version_conflicts":0,"failures":[]}""")); // POST _reindex top-up short by one
 
         using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
 
-        await store.ReconcileIndexAsync();
+        var act = () => store.ReconcileIndexAsync();
 
-        handler.CapturedRequests.Should().NotContain(r => r.PathAndQuery.Contains("/_reindex"));
-        handler.CapturedRequests
-            .Should().ContainSingle(r => r.Method == "POST" && r.PathAndQuery.EndsWith("/_aliases")).Subject
-            .Body.Should().Contain("\"add\"").And.Contain("\"remove\"").And.Contain(oldPhysical).And.NotContain("remove_index");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*did not account for every source document*");
+        handler.CapturedRequests.Should().NotContain(r => r.PathAndQuery.EndsWith("/_aliases"));
+    }
+
+    [Fact]
+    public void ReindexRequestTimeout_ShouldOutliveReindexCompletionBudget()
+    {
+        ElasticsearchIndexLifecycleManager.ReindexRequestTimeout.Should().BeGreaterThan(TimeSpan.FromMinutes(2));
     }
 
     [Fact]
