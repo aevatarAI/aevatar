@@ -1574,6 +1574,95 @@ message WorkflowToolCallAttemptCancellationRecoveryIntent
   string arguments_sha256 = 9;
 }
 
+enum WorkflowToolCallAttemptWaterline
+{
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_PENDING_STATE_PERSISTED = 1;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_EXTERNAL_DISPATCH_STARTED = 2;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_PROVIDER_RETURNED = 3;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_COMPLETION_DELIVERY_PRODUCER_CONFIRMED = 4;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_TIMEOUT_SIGNAL_ACCEPTED = 5;
+  WORKFLOW_TOOL_CALL_ATTEMPT_WATERLINE_ACTOR_RECONCILIATION_COMPLETED = 6;
+}
+
+enum WorkflowToolCallProviderDisposition
+{
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_SUCCEEDED = 1;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_FAILED = 2;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_APPROVAL_REQUIRED = 3;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_PENDING_OPERATION = 4;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_THREW = 5;
+  WORKFLOW_TOOL_CALL_PROVIDER_DISPOSITION_CANCELLED = 6;
+}
+
+enum WorkflowToolCallCompletionDeliveryMethod
+{
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_METHOD_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_METHOD_SELF_PUBLISH = 1;
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_METHOD_DURABLE_CALLBACK = 2;
+}
+
+enum WorkflowToolCallCompletionDeliveryAcceptance
+{
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_ACCEPTANCE_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_ACCEPTANCE_CONFIRMED = 1;
+  WORKFLOW_TOOL_CALL_COMPLETION_DELIVERY_ACCEPTANCE_UNKNOWN = 2;
+}
+
+enum WorkflowToolCallReconciliationDisposition
+{
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_UNSPECIFIED = 0;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_SUCCEEDED = 1;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_PROVIDER_FAILED = 2;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_APPROVAL_SUSPENDED = 3;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_PENDING_OPERATION = 4;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_RETRY_SCHEDULED = 5;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_TIMEOUT_OUTCOME_UNKNOWN = 6;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_RETRY_DEADLINE_EXCEEDED = 7;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_DUPLICATE = 8;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_STALE = 9;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_UNTRUSTED = 10;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_NO_PENDING_EXECUTION = 11;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_PROTECTED_MATERIAL_UNAVAILABLE = 12;
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_APPROVAL_DEADLINE_EXCEEDED = 13;
+}
+
+message WorkflowToolCallProviderTiming
+{
+  string dispatch_id = 1;
+  google.protobuf.Timestamp dispatch_started_at_utc = 2;
+  google.protobuf.Timestamp provider_returned_at_utc = 3;
+  int64 external_execution_elapsed_ms = 4;
+  WorkflowToolCallProviderDisposition disposition = 5;
+}
+
+message WorkflowToolCallAttemptTimingObservation
+{
+  string scope_id = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string call_id = 4;
+  string execution_id = 5;
+  string continuation_id = 6;
+  int32 attempt = 7;
+  string dispatch_id = 8;
+  WorkflowToolCallAttemptWaterline waterline = 9;
+  google.protobuf.Timestamp observed_at_utc = 10;
+  int32 transport_attempt = 11;
+  WorkflowToolCallProviderDisposition provider_disposition = 12;
+  WorkflowToolCallCompletionDeliveryMethod delivery_method = 13;
+  WorkflowToolCallCompletionDeliveryAcceptance delivery_acceptance = 14;
+  WorkflowToolCallReconciliationDisposition reconciliation_disposition = 15;
+  oneof elapsed
+  {
+    int64 preparation_elapsed_ms = 16;
+    int64 external_execution_elapsed_ms = 17;
+    int64 completion_delivery_elapsed_ms = 18;
+    int64 actor_reconciliation_elapsed_ms = 19;
+  }
+}
+
 // Internal self-signal emitted only after the provider response has crossed its
 // authored projection boundary. Actor-owned state is reconciled by the receiver.
 message WorkflowToolCallAttemptCompletedEvent
@@ -1591,6 +1680,7 @@ message WorkflowToolCallAttemptCompletedEvent
     WorkflowToolCallAttemptPendingOperationOutcome pending_operation = 10;
   }
   string continuation_id = 9;
+  WorkflowToolCallProviderTiming provider_timing = 11;
 }
 
 enum WorkflowLeaseConflictPolicy {
@@ -1774,6 +1864,7 @@ message WorkflowToolCallTimeoutFiredEvent
   string call_id = 4;
   int32 timeout_ms = 5;
   string continuation_id = 6;
+  int32 attempt = 7;
 }
 message WorkflowToolCallRetryFiredEvent
 {
