@@ -61,6 +61,8 @@ public sealed partial class WorkflowRunGAgent
     private static readonly TimeSpan TerminalToolCallCleanupRetryDelay = TimeSpan.FromSeconds(1);
     private const string WorkflowNotExecutableError = "Workflow run is not definition-bound or compiled.";
     private const string InputFileBindingError = "workflow_input_file_binding_failed";
+    internal const string OrphanedExecutionTerminalError =
+        "workflow execution became inactive before a terminal completion was committed";
     private const int InteractiveActionHandoffLimit = 32;
     private const string NyxIdChatAgentKind = "nyxid.chat";
     private WorkflowDefinition? _compiledWorkflow;
@@ -404,6 +406,8 @@ public sealed partial class WorkflowRunGAgent
     {
         RebuildCompiledWorkflowCache();
         await base.OnActivateAsync(ct);
+        if (await RecoverPendingWorkflowCompletionAsync(ct))
+            return;
         await DrainPendingDefinitionBindingContinuationAsync(ct);
         InstallCognitiveModules();
         await RecoverTerminalNotificationAsync(ct);
@@ -439,11 +443,119 @@ public sealed partial class WorkflowRunGAgent
         CancellationToken ct)
     {
         await base.OnCommittedStatePublicationRecoveredAsync(envelope, ct);
+        if (await RecoverPendingWorkflowCompletionAsync(ct))
+            return;
         await DrainPendingDefinitionBindingContinuationAsync(ct);
         await RecoverTerminalNotificationAsync(ct);
         await RecoverToolCallActorLocalStateAsync(ct);
         await DispatchPendingInteractiveActionContinuationsAsync(ct);
         await RecoverForEachDurablePublicationsAsync(ct);
+    }
+
+    private async Task<bool> RecoverPendingWorkflowCompletionAsync(CancellationToken ct)
+    {
+        if (IsTerminalStatus(State.Status))
+            return false;
+
+        var pending = GetPendingWorkflowCompletion(State);
+        if (pending == null)
+            return false;
+
+        if (IsMismatchedRunIdentity(State, pending.RunId))
+        {
+            Logger.LogWarning(
+                "Ignore persisted workflow completion with mismatched run id. actor={ActorId} stateRun={StateRunId} pendingRun={PendingRunId}",
+                Id,
+                State.RunId,
+                pending.RunId);
+            return false;
+        }
+
+        try
+        {
+            await PublishAsync(
+                pending.Clone(),
+                TopologyAudience.Self,
+                ct,
+                WorkflowExecutionKernel.BuildWorkflowCompletionPublishOptions(pending));
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (
+            ex is IRuntimeEnvelopeRetryableException ||
+            WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new WorkflowDurablePublicationPendingException(
+                $"Persisted workflow completion recovery remains pending for run '{pending.RunId}'.",
+                ex);
+        }
+    }
+
+    private static WorkflowCompletedEvent? GetPendingWorkflowCompletion(WorkflowRunState state)
+    {
+        var packed = state.ExecutionStates.GetValueOrDefault(WorkflowExecutionKernel.ModuleStateKey);
+        return packed?.Is(WorkflowExecutionKernelState.Descriptor) == true
+            ? packed.Unpack<WorkflowExecutionKernelState>().PendingWorkflowCompletion
+            : null;
+    }
+
+    [EventHandler]
+    public async Task HandleReconcileWorkflowTerminalState(
+        ReconcileWorkflowTerminalStateCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var requestedRunId = WorkflowRunIdNormalizer.Normalize(command.RunId);
+        var currentRunId = WorkflowRunIdNormalizer.Normalize(State.RunId);
+        if (string.IsNullOrWhiteSpace(requestedRunId) ||
+            !string.Equals(requestedRunId, currentRunId, StringComparison.Ordinal) ||
+            !string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var packed = State.ExecutionStates.GetValueOrDefault(WorkflowExecutionKernel.ModuleStateKey);
+        if (packed == null || !packed.Is(WorkflowExecutionKernelState.Descriptor))
+            return;
+
+        var kernelState = packed.Unpack<WorkflowExecutionKernelState>();
+        if (kernelState.PendingWorkflowCompletion != null)
+        {
+            await RecoverPendingWorkflowCompletionAsync(CancellationToken.None);
+            return;
+        }
+
+        if (IsCompensating(State) ||
+            kernelState.Active ||
+            !string.IsNullOrWhiteSpace(kernelState.RunId))
+            return;
+
+        var completion = new WorkflowCompletedEvent
+        {
+            WorkflowName = State.WorkflowName ?? string.Empty,
+            RunId = currentRunId,
+            Success = false,
+            Error = OrphanedExecutionTerminalError,
+        };
+        kernelState.PendingWorkflowCompletion = completion.Clone();
+
+        Logger.LogWarning(
+            "Reconcile orphaned workflow execution as failed. actor={ActorId} run={RunId} observedStateVersion={ObservedStateVersion}",
+            Id,
+            currentRunId,
+            command.ObservedStateVersion);
+        await UpsertExecutionStateAsync(
+            WorkflowExecutionKernel.ModuleStateKey,
+            Any.Pack(kernelState),
+            CancellationToken.None);
+        await RecoverPendingWorkflowCompletionAsync(CancellationToken.None);
     }
 
     private async Task RecoverToolCallActorLocalStateAsync(CancellationToken ct)
@@ -1159,6 +1271,16 @@ public sealed partial class WorkflowRunGAgent
         string? bindPublisherActorId = null,
         CancellationToken ct = default)
     {
+        if (GetPendingWorkflowCompletion(State) != null)
+        {
+            Logger.LogInformation(
+                "Defer workflow definition bind until pending terminal completion is recovered. actor={ActorId} run={RunId}",
+                Id,
+                RunId);
+            await RecoverPendingWorkflowCompletionAsync(ct);
+            return;
+        }
+
         if (State.PendingDefinitionBindingContinuation != null)
         {
             throw new InvalidOperationException(
@@ -1594,6 +1716,16 @@ public sealed partial class WorkflowRunGAgent
                 Id,
                 RunId,
                 State.Status);
+            return;
+        }
+
+        if (GetPendingWorkflowCompletion(State) != null)
+        {
+            Logger.LogInformation(
+                "Ignore dynamic definition replacement while terminal completion is pending. actor={ActorId} run={RunId}",
+                Id,
+                RunId);
+            await RecoverPendingWorkflowCompletionAsync(CancellationToken.None);
             return;
         }
 
@@ -3282,6 +3414,9 @@ public sealed partial class WorkflowRunGAgent
 
     private WorkflowRunState ApplyBindWorkflowRunDefinition(WorkflowRunState current, BindWorkflowRunDefinitionEvent evt)
     {
+        if (GetPendingWorkflowCompletion(current) != null)
+            return current;
+
         var decision = EvaluateRunDefinitionBind(current, evt, publisherActorId: null, verifyPublisher: false);
         if (decision.Disposition != RunDefinitionBindDisposition.Accept)
             return current;
@@ -3382,8 +3517,12 @@ public sealed partial class WorkflowRunGAgent
         WorkflowRunState current,
         WorkflowRunDefinitionBindingContinuationRegisteredEvent evt)
     {
-        if (evt.Continuation == null || string.IsNullOrWhiteSpace(evt.Continuation.ContinuationId))
+        if (GetPendingWorkflowCompletion(current) != null ||
+            evt.Continuation == null ||
+            string.IsNullOrWhiteSpace(evt.Continuation.ContinuationId))
+        {
             return current;
+        }
 
         var next = current.Clone();
         next.PendingDefinitionBindingContinuation = evt.Continuation.Clone();

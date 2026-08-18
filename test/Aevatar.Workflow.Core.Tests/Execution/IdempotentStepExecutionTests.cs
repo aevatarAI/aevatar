@@ -743,7 +743,10 @@ public sealed class IdempotentStepExecutionTests
         completions.Should().OnlyContain(x => !x.Success);
         completions.Should().OnlyContain(
             x => x.Error == "fork seed start step 'missing-step' was not found");
-        host.GetExecutionState("workflow_execution_kernel").Should().BeNull();
+        var state = LoadKernelState(host);
+        state.Active.Should().BeFalse();
+        state.RunId.Should().BeEmpty();
+        state.PendingWorkflowCompletion.Should().BeEquivalentTo(completions.Single());
     }
 
     [Fact]

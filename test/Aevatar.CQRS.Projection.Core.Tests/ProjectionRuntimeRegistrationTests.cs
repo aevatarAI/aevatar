@@ -550,6 +550,37 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
+    public async Task ProjectionFailureReplayService_ShouldDispatchTypedAutomaticRecoveryCommand()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var service = new ProjectionFailureReplayService(runtime, dispatchPort);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-automatic",
+            "projection-automatic",
+            ProjectionRuntimeMode.SessionObservation,
+            "session-automatic");
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        runtime.ExistingActorIds.Add(actorId);
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 17,
+            maxItems: 0);
+
+        replayed.Should().BeTrue();
+        dispatchPort.Dispatched.Should().ContainSingle();
+        var dispatched = dispatchPort.Dispatched[0];
+        dispatched.actorId.Should().Be(actorId);
+        dispatched.command.Route.PublisherActorId.Should().Be("projection.scope.automatic-recovery");
+        dispatched.command.Route.GetTargetActorId().Should().Be(actorId);
+        var command = dispatched.command.Payload!.Unpack<ReplayProjectionFailuresCommand>();
+        command.MaxItems.Should().Be(1);
+        command.AutomaticRecovery.Should().BeTrue();
+        command.ObservedScopeStateVersion.Should().Be(17);
+    }
+
+    [Fact]
     public void ProjectionFailureRetentionPolicy_ShouldTrimOldestFailures()
     {
         var failures = new Google.Protobuf.Collections.RepeatedField<ProjectionFailureDiagnostic>();

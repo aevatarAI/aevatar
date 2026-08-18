@@ -65,6 +65,13 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return;
 
         var workflowContext = WorkflowExecutionContextAdapter.Create(ctx, _stateHost);
+        var kernelState = LoadState(workflowContext);
+        if (kernelState.PendingWorkflowCompletion != null)
+        {
+            await PublishPreparedWorkflowCompletionAsync(kernelState, workflowContext, ct);
+            return;
+        }
+
         var payload = envelope.Payload;
         if (payload.Is(StartWorkflowEvent.Descriptor))
         {
@@ -145,8 +152,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 return;
             }
 
-            await PublishWorkflowCompletedAsync(
-                ctx,
+            await PrepareWorkflowCompletionAsync(
+                state,
                 new WorkflowCompletedEvent
                 {
                     WorkflowName = _workflow.Name,
@@ -154,7 +161,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     Success = false,
                     Error = "workflow run is already active",
                 },
+                ctx,
                 ct);
+            await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
             return;
         }
 
@@ -200,12 +209,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             : _workflow.Steps.FirstOrDefault();
         if (entry == null)
         {
-            await CleanupRunAsync(state, ctx, ct);
             var error = hasForkSeedStart
                 ? $"fork seed start step '{forkSeed!.StartAtStepId}' was not found"
                 : "无步骤";
-            await PublishWorkflowCompletedAsync(
-                ctx,
+            await PrepareWorkflowCompletionAsync(
+                state,
                 new WorkflowCompletedEvent
                 {
                     WorkflowName = _workflow.Name,
@@ -213,7 +221,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     Success = false,
                     Error = error,
                 },
+                ctx,
                 ct);
+            await CleanupRunAsync(state, ctx, ct);
+            await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
             return;
         }
 
@@ -514,9 +525,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
             if (next == null)
             {
-                await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
-                await PublishWorkflowCompletedAsync(
-                    ctx,
+                await PrepareWorkflowCompletionAsync(
+                    state,
                     new WorkflowCompletedEvent
                     {
                         WorkflowName = _workflow.Name,
@@ -524,7 +534,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                         Success = true,
                         Output = evt.Output,
                     },
+                    ctx,
                     ct);
+                await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
+                await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
                 return;
             }
 
@@ -532,6 +545,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
         catch (Exception ex) when (
             !ct.IsCancellationRequested &&
+            ex is not WorkflowDurablePublicationPendingException &&
             !WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
         {
             ctx.Logger.LogError(
@@ -747,14 +761,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 {
                     var state = LoadState(ctx);
                     var recoveryFailureKind = state.CompensationTerminalRecoveryFailureKind;
-                    await CleanupRunAsync(
+                    await PrepareWorkflowCompletionAsync(
                         state,
-                        ctx,
-                        ct,
-                        preserveTerminalFacts: true,
-                        preserveCurrentStepInputVariable: true);
-                    await PublishWorkflowCompletedAsync(
-                        ctx,
                         new WorkflowCompletedEvent
                         {
                             WorkflowName = _workflow.Name,
@@ -763,7 +771,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                             Error = error ?? string.Empty,
                             RecoveryFailureKind = recoveryFailureKind,
                         },
+                        ctx,
                         ct);
+                    await CleanupRunAsync(
+                        state,
+                        ctx,
+                        ct,
+                        preserveTerminalFacts: true,
+                        preserveCurrentStepInputVariable: true);
+                    await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
                     return true;
                 }
             case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
@@ -772,15 +788,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 {
                     var state = LoadState(ctx);
                     var recoveryFailureKind = state.CompensationTerminalRecoveryFailureKind;
-                    await CleanupRunAsync(
-                        state,
-                        ctx,
-                        ct,
-                        preserveTerminalFacts: true,
-                        preserveCurrentStepInputVariable: true);
                     var deadLetterError = error ?? string.Empty;
-                    await PublishWorkflowCompletedAsync(
-                        ctx,
+                    await PrepareWorkflowCompletionAsync(
+                        state,
                         new WorkflowCompletedEvent
                         {
                             WorkflowName = _workflow.Name,
@@ -789,7 +799,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                             Error = deadLetterError,
                             RecoveryFailureKind = recoveryFailureKind,
                         },
+                        ctx,
                         ct);
+                    await CleanupRunAsync(
+                        state,
+                        ctx,
+                        ct,
+                        preserveTerminalFacts: true,
+                        preserveCurrentStepInputVariable: true);
+                    await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
                     return true;
                 }
             case WorkflowCompensationTransitionStatus.NoCompensableLedger:
@@ -840,25 +858,28 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     ct);
                 return;
             case WorkflowCompensationTransitionStatus.NoCompensableLedger:
+                await PrepareWorkflowCompletionAsync(state, terminalFailure, ctx, ct);
                 await TryCleanupRunForTerminalFailureAsync(
                     state,
                     ctx,
                     ct,
                     preserveTerminalFacts: true,
                     preserveCurrentStepInputVariable: true);
-                await PublishWorkflowCompletedAsync(ctx, terminalFailure, ct);
+                await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
                 return;
             case WorkflowCompensationTransitionStatus.CompletedAll:
-                await PublishWorkflowCompletedAsync(ctx, terminalFailure, ct);
+                await PrepareWorkflowCompletionAsync(state, terminalFailure, ctx, ct);
+                await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
                 return;
             case WorkflowCompensationTransitionStatus.CompensationDeadLettered:
+                await PrepareWorkflowCompletionAsync(state, terminalFailure, ctx, ct);
                 await TryCleanupRunForTerminalFailureAsync(
                     state,
                     ctx,
                     ct,
                     preserveTerminalFacts: true,
                     preserveCurrentStepInputVariable: true);
-                await PublishWorkflowCompletedAsync(ctx, terminalFailure, ct);
+                await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
                 return;
             case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
             default:
@@ -1194,9 +1215,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     var next = _workflow.GetNextStep(step.Id);
                     if (next == null)
                     {
-                        await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
-                        await PublishWorkflowCompletedAsync(
-                            ctx,
+                        await PrepareWorkflowCompletionAsync(
+                            state,
                             new WorkflowCompletedEvent
                             {
                                 WorkflowName = _workflow.Name,
@@ -1204,7 +1224,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                                 Success = true,
                                 Output = output,
                             },
+                            ctx,
                             ct);
+                        await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
+                        await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
                     }
                     else
                     {
@@ -1237,15 +1260,73 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
     }
 
-    private static async Task PublishWorkflowCompletedAsync(
-        IWorkflowExecutionContext ctx,
+    private static async Task PrepareWorkflowCompletionAsync(
+        WorkflowExecutionKernelState state,
         WorkflowCompletedEvent completed,
+        IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(ctx);
         ArgumentNullException.ThrowIfNull(completed);
 
-        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
+        if (state.PendingWorkflowCompletion != null)
+            return;
+
+        state.PendingWorkflowCompletion = completed.Clone();
+        await SaveStateAsync(state, ctx, ct);
+    }
+
+    private static async Task PublishPreparedWorkflowCompletionAsync(
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(ctx);
+        var pending = state.PendingWorkflowCompletion ??
+                      throw new InvalidOperationException("Workflow completion must be persisted before self publication.");
+
+        var durableCompletion = pending.Clone();
+        try
+        {
+            await ctx.PublishAsync(
+                durableCompletion,
+                TopologyAudience.Self,
+                ct,
+                BuildWorkflowCompletionPublishOptions(durableCompletion));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (
+            ex is IRuntimeEnvelopeRetryableException ||
+            WorkflowRuntimeInfrastructureFailurePolicy.IsCommitConsistencyFailure(ex))
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new WorkflowDurablePublicationPendingException(
+                $"Persisted workflow completion publication remains pending for run '{durableCompletion.RunId}'.",
+                ex);
+        }
+    }
+
+    internal static EventEnvelopePublishOptions BuildWorkflowCompletionPublishOptions(
+        WorkflowCompletedEvent completed)
+    {
+        ArgumentNullException.ThrowIfNull(completed);
+        return new EventEnvelopePublishOptions
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    "workflow-completion",
+                    completed.RunId ?? string.Empty),
+            },
+        };
     }
 
     private async Task DispatchStepAsync(
@@ -1760,6 +1841,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.CompensationPhaseDeadlineCallbackId = string.Empty;
         state.CompensationPhaseDeadlineLease = null;
         state.CompensationTerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
+        state.PendingWorkflowCompletion = null;
         state.InputFileRefs.Clear();
         state.RetryAttemptsByStepId.Clear();
         state.TimeoutsByStepId.Clear();
@@ -1788,6 +1870,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.InputFileRefs.Count == 0 &&
         state.CurrentStepInputFileRefs.Count == 0 &&
         state.CompensationTerminalRecoveryFailureKind == WorkflowRecoveryFailureKind.Unspecified &&
+        state.PendingWorkflowCompletion == null &&
         IsEmptyUsage(state.Usage);
 
     private static bool MatchesCurrentStep(WorkflowExecutionKernelState state, string? stepId) =>

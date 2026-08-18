@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
@@ -29,6 +30,15 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
             descriptor.ServiceType == typeof(IProjectionMaterializer<ProjectionScopeStatusMaterializationContext>));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionFailureReplayService) &&
+            descriptor.ImplementationType == typeof(ProjectionFailureReplayService));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ProjectionFailureRecoveryReconciler) &&
+            descriptor.ImplementationType == typeof(ProjectionFailureRecoveryReconciler));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(ProjectionFailureRecoveryHostedService));
     }
 
     [Fact]

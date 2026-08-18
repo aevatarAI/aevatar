@@ -373,6 +373,108 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleReplayAsync_WhenAutomaticBacklogExceedsBatch_ShouldAdmitNextBatchAtAdvancedStateVersion()
+    {
+        var processedVersions = new List<long>();
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 1);
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-automatic-batches",
+            onProcess: envelope =>
+            {
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                processedVersions.Add(version);
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: eventSourcing);
+        agent.State.Active = false;
+        await agent.InitializeForTestAsync();
+        agent.State.Active = true;
+        for (var version = 1; version <= 101; version++)
+        {
+            agent.State.Failures.Add(new ProjectionScopeFailure
+            {
+                FailureId = $"failure-{version}",
+                SourceVersion = version,
+                Envelope = BuildForwardedCommittedObservationEnvelope(
+                    "projection-scope-automatic-batches",
+                    version,
+                    eventId: $"evt-{version}"),
+            });
+        }
+
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 100,
+            AutomaticRecovery = true,
+            ObservedScopeStateVersion = 1,
+        });
+
+        processedVersions.Should().HaveCount(100);
+        agent.State.Failures.Should().ContainSingle()
+            .Which.FailureId.Should().Be("failure-101");
+        var nextObservedScopeStateVersion = eventSourcing.CurrentVersion;
+        nextObservedScopeStateVersion.Should().BeGreaterThan(1);
+
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 100,
+            AutomaticRecovery = true,
+            ObservedScopeStateVersion = nextObservedScopeStateVersion,
+        });
+
+        processedVersions.Should().Equal(Enumerable.Range(1, 101).Select(static value => (long)value));
+        agent.State.Failures.Should().BeEmpty();
+        agent.State.LastAutomaticRecoveryObservedStateVersion.Should().Be(nextObservedScopeStateVersion);
+    }
+
+    [Fact]
+    public async Task HandleReplayAsync_WhenAutomaticTokenIsRepeated_ShouldSpendRetryBudgetOnce()
+    {
+        var processCount = 0;
+        var eventSourcing = new TrackingEventSourcing(initialVersion: 1);
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-automatic-deduplication",
+            onProcess: _ =>
+            {
+                processCount++;
+                throw new InvalidOperationException("still failing");
+            },
+            eventSourcing: eventSourcing);
+        agent.State.Active = false;
+        await agent.InitializeForTestAsync();
+        agent.State.Active = true;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-recoverable",
+            EventType = "type.googleapis.com/aevatar.TestEvent",
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-automatic-deduplication",
+                version: 1),
+        });
+        var commandFromReplica = new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 1,
+            AutomaticRecovery = true,
+            ObservedScopeStateVersion = 1,
+        };
+
+        await agent.HandleReplayAsync(commandFromReplica);
+        var stateVersionAfterFirstCommand = eventSourcing.CurrentVersion;
+        await agent.HandleReplayAsync(commandFromReplica.Clone());
+
+        processCount.Should().Be(1);
+        eventSourcing.CurrentVersion.Should().Be(stateVersionAfterFirstCommand);
+        agent.State.LastAutomaticRecoveryObservedStateVersion.Should().Be(1);
+        agent.State.Failures.Should().ContainSingle();
+        agent.State.Failures[0].Attempts.Should().Be(1);
+        agent.State.FailedAttemptTotal.Should().Be(1);
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldSwallow_DeterministicProjectionFailure()
     {
         var agent = BuildActivatedAgent(
@@ -508,6 +610,12 @@ public sealed class ProjectionScopeGAgentBaseTests
     private sealed class TrackingEventSourcing : IEventSourcingBehavior<ProjectionScopeState>
     {
         private readonly List<IMessage> _pending = [];
+
+        public TrackingEventSourcing(long initialVersion = 0)
+        {
+            CurrentVersion = initialVersion;
+        }
+
         public int DiscardCallCount { get; private set; }
         public long CurrentVersion { get; private set; }
         public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage => _pending.Add(evt);
@@ -553,6 +661,8 @@ public sealed class ProjectionScopeGAgentBaseTests
                     ProjectionScopeStateApplier.ApplyDispatchFailed(current, failed),
                 ProjectionScopeFailureReplayedEvent replayed =>
                     ProjectionScopeStateApplier.ApplyFailureReplayed(current, replayed),
+                ProjectionScopeAutomaticRecoveryRequestedEvent automaticRecovery =>
+                    ProjectionScopeStateApplier.ApplyAutomaticRecoveryRequested(current, automaticRecovery),
                 _ => current,
             };
     }

@@ -538,7 +538,9 @@ public sealed class ProjectionScopeActivationEvidenceTests
 
     private sealed class CountingDispatchPort : IActorDispatchPort
     {
-        public int CallCount { get; private set; }
+        private int _callCount;
+
+        public int CallCount => Volatile.Read(ref _callCount);
         public Func<string, EventEnvelope, Task> Handler { get; set; } = static (_, _) => Task.CompletedTask;
 
         public async Task<DispatchAdmission> DispatchAsync(
@@ -547,7 +549,7 @@ public sealed class ProjectionScopeActivationEvidenceTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            CallCount++;
+            Interlocked.Increment(ref _callCount);
             await Handler(actorId, envelope);
             return DispatchAdmissionFactory.Create(actorId, envelope);
         }

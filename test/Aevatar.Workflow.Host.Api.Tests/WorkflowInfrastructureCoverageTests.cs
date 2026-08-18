@@ -8,6 +8,7 @@ using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -245,6 +246,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddLogging();
         services.AddSingleton<IActorRuntime, RecordingActorRuntime>();
         services.AddSingleton<IActorDispatchPort, RecordingActorDispatchPort>();
+        var forwardingRegistry = new InMemoryStreamForwardingRegistry();
+        services.AddSingleton<IStreamForwardingRegistry>(forwardingRegistry);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(forwardingRegistry);
         services.AddSingleton<Aevatar.Foundation.Abstractions.IStreamProvider, InMemoryStreamProvider>();
         services.AddSingleton<IScriptRuntimeCommandPort, RecordingScriptRuntimeCommandPort>();
         services.AddSingleton<IWorkflowRunProvisioningPort, RecordingWorkflowRunProvisioningPort>();

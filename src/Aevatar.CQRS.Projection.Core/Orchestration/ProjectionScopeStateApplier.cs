@@ -168,4 +168,16 @@ internal static class ProjectionScopeStateApplier
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }
+
+    public static ProjectionScopeState ApplyAutomaticRecoveryRequested(
+        ProjectionScopeState current,
+        ProjectionScopeAutomaticRecoveryRequestedEvent evt)
+    {
+        var next = current.Clone();
+        next.LastAutomaticRecoveryObservedStateVersion = Math.Max(
+            next.LastAutomaticRecoveryObservedStateVersion,
+            evt.ObservedScopeStateVersion);
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
 }

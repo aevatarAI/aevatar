@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.CQRS.Projection.Core.DependencyInjection;
@@ -30,6 +31,9 @@ public static class ProjectionScopeStatusRuntimeRegistration
         services.TryAddSingleton<IProjectionScopeWatermarkQueryPort, ProjectionScopeStatusQueryPort>();
         services.TryAddSingleton<IProjectionScopeStatusListQueryPort, ProjectionScopeStatusListQueryPort>();
         services.TryAddSingleton<IProjectionScopeIntrospectionQueryPort, ProjectionScopeIntrospectionQueryPort>();
+        services.TryAddSingleton<IProjectionFailureReplayService, ProjectionFailureReplayService>();
+        services.TryAddSingleton<ProjectionFailureRecoveryReconciler>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, ProjectionFailureRecoveryHostedService>());
         services.AddCurrentStateProjectionMaterializer<
             ProjectionScopeStatusMaterializationContext,
             ProjectionScopeStatusProjector>();

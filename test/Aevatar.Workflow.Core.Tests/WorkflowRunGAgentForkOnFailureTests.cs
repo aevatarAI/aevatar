@@ -273,6 +273,370 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
+    public async Task WorkflowCompletionSelfPublishFailure_ShouldRecoverPersistedSuccessOnActivation()
+    {
+        var runId = "run-completion-intent-" + Guid.NewGuid().ToString("N");
+        const string output = "durable-success-output";
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var failFirstCompletion = true;
+        harness.Publisher.FailPublish = evt =>
+        {
+            if (evt is not WorkflowCompletedEvent || !failFirstCompletion)
+                return false;
+
+            failFirstCompletion = false;
+            return true;
+        };
+
+        await FluentActions.Awaiting(() => harness.Agent.HandleEventAsync(
+                SelfEnvelope(runId, SuccessfulStepCompletion(harness, output))))
+            .Should()
+            .ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        harness.Agent.State.Status.Should().Be("running");
+        var pending = KernelState(harness.Agent).PendingWorkflowCompletion;
+        pending.Should().NotBeNull();
+        pending!.RunId.Should().Be(runId);
+        pending.Success.Should().BeTrue();
+        pending.Output.Should().Be(output);
+
+        var recovered = await CreateRunAsync(
+            runId,
+            WorkflowYaml(onFailure: false),
+            eventStore: harness.EventStore);
+
+        recovered.Agent.State.Status.Should().Be("completed");
+        recovered.Agent.State.FinalOutput.Should().Be(output);
+        KernelState(recovered.Agent).PendingWorkflowCompletion.Should().BeNull();
+        var recoveredCompletion = recovered.Publisher.Published
+            .Where(static item => item.Audience == TopologyAudience.Self)
+            .Select(static item => item.Event)
+            .OfType<WorkflowCompletedEvent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        recoveredCompletion.Should().BeEquivalentTo(pending);
+
+        var initialOperationId = harness.Publisher.PublishAttempts
+            .Single(static attempt =>
+                attempt.Event is WorkflowCompletedEvent &&
+                attempt.Audience == TopologyAudience.Self)
+            .Options?.Delivery?.OperationId;
+        var recoveredOperationId = recovered.Publisher.PublishAttempts
+            .Single(static attempt =>
+                attempt.Event is WorkflowCompletedEvent &&
+                attempt.Audience == TopologyAudience.Self)
+            .Options?.Delivery?.OperationId;
+        recoveredOperationId.Should().Be(initialOperationId).And.NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task PendingCompletion_ShouldWinOverDynamicDefinitionReplacement()
+    {
+        var runId = "run-completion-before-replace-" + Guid.NewGuid().ToString("N");
+        const string output = "terminal-output-before-replace";
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var originalWorkflowYaml = harness.Agent.State.WorkflowYaml;
+        var bindCountBefore = CommittedEvents<BindWorkflowRunDefinitionEvent>(harness.CommittedPublisher).Count;
+        var failFirstCompletion = true;
+        harness.Publisher.FailPublish = evt =>
+            evt is WorkflowCompletedEvent && failFirstCompletion && !(failFirstCompletion = false);
+
+        await FluentActions.Awaiting(() => harness.Agent.HandleEventAsync(
+                SelfEnvelope(runId, SuccessfulStepCompletion(harness, output))))
+            .Should()
+            .ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        await harness.Agent.HandleReplaceWorkflowDefinitionAndExecute(
+            new ReplaceWorkflowDefinitionAndExecuteEvent
+            {
+                WorkflowYaml = WorkflowYaml(onFailure: false)
+                    .Replace("wf_1859", "wf_replacement", StringComparison.Ordinal),
+                Input = "replacement-input",
+            });
+
+        harness.Agent.State.Status.Should().Be("completed");
+        harness.Agent.State.FinalOutput.Should().Be(output);
+        harness.Agent.State.WorkflowYaml.Should().Be(originalWorkflowYaml);
+        KernelState(harness.Agent).PendingWorkflowCompletion.Should().BeNull();
+        CommittedEvents<BindWorkflowRunDefinitionEvent>(harness.CommittedPublisher)
+            .Should().HaveCount(bindCountBefore);
+    }
+
+    [Fact]
+    public async Task PendingCompletion_ShouldWinOverLiveDefinitionBind()
+    {
+        var runId = "run-completion-before-bind-" + Guid.NewGuid().ToString("N");
+        const string output = "terminal-output-before-bind";
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var bindCountBefore = CommittedEvents<BindWorkflowRunDefinitionEvent>(harness.CommittedPublisher).Count;
+        var failFirstCompletion = true;
+        harness.Publisher.FailPublish = evt =>
+            evt is WorkflowCompletedEvent && failFirstCompletion && !(failFirstCompletion = false);
+
+        await FluentActions.Awaiting(() => harness.Agent.HandleEventAsync(
+                SelfEnvelope(runId, SuccessfulStepCompletion(harness, output))))
+            .Should()
+            .ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        await harness.Agent.HandleBindWorkflowRunDefinition(new BindWorkflowRunDefinitionEvent
+        {
+            DefinitionActorId = "definition-replacement",
+            WorkflowName = "wf_replacement",
+            WorkflowYaml = WorkflowYaml(onFailure: false)
+                .Replace("wf_1859", "wf_replacement", StringComparison.Ordinal),
+            RunId = runId,
+            ScopeId = "scope-replacement",
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+        });
+
+        harness.Agent.State.Status.Should().Be("completed");
+        harness.Agent.State.FinalOutput.Should().Be(output);
+        KernelState(harness.Agent).PendingWorkflowCompletion.Should().BeNull();
+        CommittedEvents<BindWorkflowRunDefinitionEvent>(harness.CommittedPublisher)
+            .Should().HaveCount(bindCountBefore);
+    }
+
+    [Fact]
+    public async Task PendingCompletionCommittedPublicationRecovery_ShouldPublishCompletionWithoutHandlerReplay()
+    {
+        var runId = "run-completion-commit-recovery-" + Guid.NewGuid().ToString("N");
+        const string output = "completion-after-checkpoint-recovery";
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var failPendingIntentPublication = true;
+        harness.CommittedPublisher.FailBeforePublish = evt =>
+        {
+            if (!failPendingIntentPublication ||
+                evt is not WorkflowExecutionStateUpsertedEvent upserted ||
+                upserted.ScopeKey != WorkflowExecutionKernel.ModuleStateKey ||
+                upserted.State?.Is(WorkflowExecutionKernelState.Descriptor) != true ||
+                upserted.State.Unpack<WorkflowExecutionKernelState>().PendingWorkflowCompletion == null)
+            {
+                return false;
+            }
+
+            failPendingIntentPublication = false;
+            return true;
+        };
+        var original = SelfEnvelope(runId, SuccessfulStepCompletion(harness, output));
+
+        await FluentActions.Awaiting(() => harness.Agent.HandleEventAsync(original))
+            .Should()
+            .ThrowAsync<CommittedStatePublicationException>();
+
+        harness.Agent.State.Status.Should().Be("running");
+        KernelState(harness.Agent).PendingWorkflowCompletion!.Output.Should().Be(output);
+        harness.Publisher.PublishAttempts
+            .Should().NotContain(static attempt => attempt.Event is WorkflowCompletedEvent);
+
+        await harness.Agent.HandleEventAsync(CreatePublicationRetryEnvelope(original));
+
+        harness.Agent.State.Status.Should().Be("completed");
+        harness.Agent.State.FinalOutput.Should().Be(output);
+        harness.Publisher.Published
+            .Where(static item => item.Audience == TopologyAudience.Self)
+            .Select(static item => item.Event)
+            .OfType<WorkflowCompletedEvent>()
+            .Should().ContainSingle()
+            .Which.Output.Should().Be(output);
+        KernelState(harness.Agent).PendingWorkflowCompletion.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Activation_WithActiveKernelAndNoCompletionIntent_ShouldNotRecoverCompletion()
+    {
+        var runId = "run-active-no-completion-intent-" + Guid.NewGuid().ToString("N");
+        var active = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+
+        var recovered = await CreateRunAsync(
+            runId,
+            WorkflowYaml(onFailure: false),
+            eventStore: active.EventStore);
+
+        recovered.Agent.State.Status.Should().Be("running");
+        KernelState(recovered.Agent).Active.Should().BeTrue();
+        KernelState(recovered.Agent).PendingWorkflowCompletion.Should().BeNull();
+        recovered.Publisher.PublishAttempts
+            .Should().NotContain(static attempt => attempt.Event is WorkflowCompletedEvent);
+    }
+
+    [Fact]
+    public async Task TerminalReconciliation_WithPersistedCompletion_ShouldPublishPendingTerminalEvent()
+    {
+        var runId = "run-reconcile-pending-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var failFirstCompletion = true;
+        harness.Publisher.FailPublish = evt =>
+            evt is WorkflowCompletedEvent && failFirstCompletion && !(failFirstCompletion = false);
+
+        await FluentActions.Awaiting(() => harness.Agent.HandleEventAsync(
+                SelfEnvelope(runId, SuccessfulStepCompletion(harness, "pending-terminal-output"))))
+            .Should()
+            .ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 91));
+
+        harness.Agent.State.Status.Should().Be("completed");
+        harness.Agent.State.FinalOutput.Should().Be("pending-terminal-output");
+        (await harness.EventStore.GetEventsAsync(runId))
+            .Count(static stored => stored.EventData?.Is(WorkflowCompletedEvent.Descriptor) == true)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task StepCompletionRetry_WithPersistedCompletion_ShouldRecoverOnSameActivation()
+    {
+        var runId = "run-same-activation-retry-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var failFirstCompletion = true;
+        harness.Publisher.FailPublish = evt =>
+            evt is WorkflowCompletedEvent && failFirstCompletion && !(failFirstCompletion = false);
+        var completionEnvelope = SelfEnvelope(
+            runId,
+            SuccessfulStepCompletion(harness, "same-activation-terminal-output"));
+
+        await FluentActions.Awaiting(() => harness.Agent.HandleEventAsync(completionEnvelope))
+            .Should()
+            .ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        await harness.Agent.HandleEventAsync(completionEnvelope.Clone());
+
+        harness.Agent.State.Status.Should().Be("completed");
+        harness.Agent.State.FinalOutput.Should().Be("same-activation-terminal-output");
+        (await harness.EventStore.GetEventsAsync(runId))
+            .Count(static stored => stored.EventData?.Is(WorkflowCompletedEvent.Descriptor) == true)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task TerminalReconciliation_WithLegacyInactiveKernel_ShouldPersistIntentBeforeFailingRun()
+    {
+        var runId = "run-reconcile-orphan-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var kernel = KernelState(harness.Agent);
+        kernel.Active = false;
+        kernel.RunId = string.Empty;
+        kernel.CurrentStepDispatchPending = false;
+        kernel.CurrentStepTimeoutCallbackId = string.Empty;
+        kernel.PendingWorkflowCompletion = null;
+        await harness.Agent.UpsertExecutionStateAsync(
+            WorkflowExecutionKernel.ModuleStateKey,
+            Any.Pack(kernel));
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 1465));
+
+        harness.Agent.State.Status.Should().Be("failed");
+        harness.Agent.State.FinalError.Should().Be(WorkflowRunGAgent.OrphanedExecutionTerminalError);
+        var storedEvents = await harness.EventStore.GetEventsAsync(runId);
+        var pendingIntent = storedEvents.Single(stored =>
+            stored.EventData is { } eventData &&
+            eventData.Is(WorkflowExecutionStateUpsertedEvent.Descriptor) &&
+            eventData.Unpack<WorkflowExecutionStateUpsertedEvent>().State
+                .Unpack<WorkflowExecutionKernelState>().PendingWorkflowCompletion != null);
+        var completion = storedEvents.Single(stored =>
+            stored.EventData is { } eventData &&
+            eventData.Is(WorkflowCompletedEvent.Descriptor));
+        pendingIntent.Version.Should().BeLessThan(completion.Version);
+        completion.EventData.Unpack<WorkflowCompletedEvent>().Success.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TerminalReconciliation_WithActiveKernel_ShouldPreserveLegitimateWait()
+    {
+        var runId = "run-reconcile-active-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 77));
+
+        harness.Agent.State.Status.Should().Be("running");
+        KernelState(harness.Agent).Active.Should().BeTrue();
+        harness.Publisher.PublishAttempts.Should().NotContain(static attempt =>
+            attempt.Event is WorkflowCompletedEvent &&
+            attempt.Audience == TopologyAudience.Self);
+        (await harness.EventStore.GetEventsAsync(runId))
+            .Any(static stored =>
+                stored.EventData is { } eventData &&
+                eventData.Is(WorkflowCompletedEvent.Descriptor))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TerminalReconciliation_WithMismatchedRunId_ShouldNotChangeAuthoritativeState()
+    {
+        var runId = "run-reconcile-mismatch-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope("run-other", observedStateVersion: 77));
+
+        harness.Agent.State.Status.Should().Be("running");
+        KernelState(harness.Agent).Active.Should().BeTrue();
+        (await harness.EventStore.GetEventsAsync(runId))
+            .Any(static stored =>
+                stored.EventData is { } eventData &&
+                eventData.Is(WorkflowCompletedEvent.Descriptor))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TerminalReconciliation_WithCompensationInProgress_ShouldNotInferLegacyFailure()
+    {
+        var runId = "run-reconcile-compensating-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var kernel = KernelState(harness.Agent);
+        kernel.Active = false;
+        kernel.RunId = string.Empty;
+        kernel.PendingWorkflowCompletion = null;
+        await harness.Agent.UpsertExecutionStateAsync(
+            WorkflowExecutionKernel.ModuleStateKey,
+            Any.Pack(kernel));
+        harness.Agent.State.SagaStatus = WorkflowSagaStatus.Compensating;
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 88));
+
+        harness.Agent.State.Status.Should().Be("running");
+        (await harness.EventStore.GetEventsAsync(runId))
+            .Any(static stored =>
+                stored.EventData is { } eventData &&
+                eventData.Is(WorkflowCompletedEvent.Descriptor))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CompletionIntentRecovery_ShouldRemainIdempotentAcrossRepeatedActivation()
+    {
+        var runId = "run-completion-idempotent-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var failFirstCompletion = true;
+        harness.Publisher.FailPublish = evt =>
+            evt is WorkflowCompletedEvent && failFirstCompletion && !(failFirstCompletion = false);
+
+        await FluentActions.Awaiting(() => harness.Agent.HandleEventAsync(
+                SelfEnvelope(runId, SuccessfulStepCompletion(harness, "one-terminal-result"))))
+            .Should()
+            .ThrowAsync<WorkflowDurablePublicationPendingException>();
+
+        var firstRecovery = await CreateRunAsync(
+            runId,
+            WorkflowYaml(onFailure: false),
+            eventStore: harness.EventStore);
+        var secondRecovery = await CreateRunAsync(
+            runId,
+            WorkflowYaml(onFailure: false),
+            eventStore: harness.EventStore);
+
+        firstRecovery.Publisher.Published
+            .Where(static item => item.Audience == TopologyAudience.Self)
+            .Select(static item => item.Event)
+            .OfType<WorkflowCompletedEvent>()
+            .Should().ContainSingle();
+        secondRecovery.Publisher.PublishAttempts
+            .Should().NotContain(static attempt => attempt.Event is WorkflowCompletedEvent);
+        (await harness.EventStore.GetEventsAsync(runId))
+            .Count(static stored => stored.EventData?.Is(WorkflowCompletedEvent.Descriptor) == true)
+            .Should().Be(1);
+    }
+
+    [Fact]
     public async Task ChatRequest_WithInputFileRef_ShouldBindArtifactOwnerBeforeStartingWorkflow()
     {
         var runId = "run-1917-" + Guid.NewGuid().ToString("N");
@@ -538,9 +902,17 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             .Should().Be(1);
     }
 
-    private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml, int attempt)
+    private static Task<RunHarness> CreateStartedRunAsync(string workflowYaml, int attempt) =>
+        CreateStartedRunAsync(
+            "run-1859-" + Guid.NewGuid().ToString("N"),
+            workflowYaml,
+            attempt);
+
+    private static async Task<RunHarness> CreateStartedRunAsync(
+        string runId,
+        string workflowYaml,
+        int attempt = 0)
     {
-        var runId = "run-1859-" + Guid.NewGuid().ToString("N");
         var harness = await CreateRunAsync(runId, workflowYaml);
 
         await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
@@ -582,15 +954,16 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         SetAgentId(agent, runId);
         topologyPublisher.Agent = agent;
         await agent.ActivateAsync();
-        return new RunHarness(agent, runId, string.Empty, committedHook, topologyPublisher);
+        return new RunHarness(agent, runId, string.Empty, eventStore, committedHook, topologyPublisher);
     }
 
     private static async Task<RunHarness> CreateRunAsync(
         string runId,
         string workflowYaml,
-        Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort? fileOwnershipPort = null)
+        Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort? fileOwnershipPort = null,
+        RecordingEventStore? eventStore = null)
     {
-        var eventStore = new RecordingEventStore();
+        eventStore ??= new RecordingEventStore();
         var committedHook = new RecordingCommittedStatePublicationHook();
         var topologyPublisher = new RecordingEventPublisher(runId);
         var agent = new WorkflowRunGAgent(
@@ -609,18 +982,56 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         topologyPublisher.Agent = agent;
         await agent.ActivateAsync();
 
-        await agent.HandleEventAsync(EnvelopeFrom("workflow-run-actor-port", new BindWorkflowRunDefinitionEvent
+        if (string.IsNullOrWhiteSpace(agent.State.WorkflowYaml))
         {
-            DefinitionActorId = "definition-1859",
-            WorkflowName = "wf_1859",
-            WorkflowYaml = workflowYaml,
-            RunId = runId,
-            ScopeId = "scope-1",
-            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
-        }));
+            await agent.HandleEventAsync(EnvelopeFrom("workflow-run-actor-port", new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = "definition-1859",
+                WorkflowName = "wf_1859",
+                WorkflowYaml = workflowYaml,
+                RunId = runId,
+                ScopeId = "scope-1",
+                ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            }));
+        }
 
-        return new RunHarness(agent, runId, string.Empty, committedHook, topologyPublisher);
+        return new RunHarness(agent, runId, string.Empty, eventStore, committedHook, topologyPublisher);
     }
+
+    private static StepCompletedEvent SuccessfulStepCompletion(RunHarness harness, string output) =>
+        new()
+        {
+            RunId = harness.RunId,
+            StepId = "failed-step",
+            Success = true,
+            Output = output,
+            ExecutionId = harness.StepExecutionId,
+        };
+
+    private static WorkflowExecutionKernelState KernelState(WorkflowRunGAgent agent) =>
+        agent.State.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+
+    private static EventEnvelope CreatePublicationRetryEnvelope(EventEnvelope original)
+    {
+        var retry = original.Clone();
+        retry.EnsureRuntime().Retry = new EnvelopeRetryContext
+        {
+            OriginEventId = original.Id,
+            Attempt = 1,
+            LastErrorType = nameof(CommittedStatePublicationException),
+        };
+        return retry;
+    }
+
+    private static EventEnvelope TerminalReconciliationEnvelope(
+        string runId,
+        long observedStateVersion) =>
+        EnvelopeFrom("workflow.run.terminal-recovery", new ReconcileWorkflowTerminalStateCommand
+        {
+            RunId = runId,
+            ObservedStateVersion = observedStateVersion,
+        });
 
     private static WorkflowRunForkRequestedEvent? TryUnpackForkRequest(CommittedStateEventPublished published)
     {
@@ -689,6 +1100,7 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         WorkflowRunGAgent Agent,
         string RunId,
         string StepExecutionId,
+        RecordingEventStore EventStore,
         RecordingCommittedStatePublicationHook CommittedPublisher,
         RecordingEventPublisher Publisher);
 
@@ -782,6 +1194,8 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     {
         public List<(IMessage Event, TopologyAudience Audience)> Published { get; } = [];
 
+        public List<(IMessage Event, TopologyAudience Audience, EventEnvelopePublishOptions? Options)> PublishAttempts { get; } = [];
+
         public Func<IMessage, bool>? FailPublish { get; set; }
 
         public async Task PublishAsync<T>(
@@ -793,6 +1207,10 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             where T : IMessage
         {
             ct.ThrowIfCancellationRequested();
+            PublishAttempts.Add((
+                evt.Descriptor.Parser.ParseFrom(evt.ToByteArray()),
+                audience,
+                options?.DeepClone()));
             if (FailPublish?.Invoke(evt) == true)
                 throw new InvalidOperationException("start failed with bearer super-secret-token");
 
@@ -842,6 +1260,8 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
                 return eventData.Unpack<WorkflowRunExecutionStartedEvent>();
             if (eventData.Is(WorkflowRunForkRequestedEvent.Descriptor))
                 return eventData.Unpack<WorkflowRunForkRequestedEvent>();
+            if (eventData.Is(WorkflowExecutionStateUpsertedEvent.Descriptor))
+                return eventData.Unpack<WorkflowExecutionStateUpsertedEvent>();
 
             return null;
         }

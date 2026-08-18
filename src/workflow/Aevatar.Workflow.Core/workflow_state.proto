@@ -426,6 +426,7 @@ message WorkflowExecutionKernelState
   WorkflowRuntimeCallbackLeaseState compensation_phase_deadline_lease = 17;
   string compensation_phase_deadline_callback_id = 18;
   aevatar.workflow.WorkflowRecoveryFailureKind compensation_terminal_recovery_failure_kind = 19;
+  WorkflowCompletedEvent pending_workflow_completion = 20;
 }
 
 message WorkflowUsageMetricsState

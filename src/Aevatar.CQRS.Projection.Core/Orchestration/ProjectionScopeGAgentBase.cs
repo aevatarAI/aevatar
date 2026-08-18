@@ -137,6 +137,24 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         if (!State.Active || State.Released || State.Failures.Count == 0)
             return;
 
+        if (command.AutomaticRecovery)
+        {
+            var observedScopeStateVersion = command.ObservedScopeStateVersion > 0
+                ? command.ObservedScopeStateVersion
+                : Math.Max(1, EventSourcing?.CurrentVersion ?? 0);
+            if (observedScopeStateVersion <= State.LastAutomaticRecoveryObservedStateVersion)
+                return;
+
+            if (!State.Failures.Any(static failure => !failure.RetryExhausted))
+                return;
+
+            await PersistDomainEventAsync(new ProjectionScopeAutomaticRecoveryRequestedEvent
+            {
+                ObservedScopeStateVersion = observedScopeStateVersion,
+                OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            });
+        }
+
         await _failureTracker!.ReplayAsync(
             State,
             command.MaxItems,
@@ -158,6 +176,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             {
                 MaxItems = pendingCount,
                 AutomaticRecovery = true,
+                ObservedScopeStateVersion = Math.Max(1, EventSourcing?.CurrentVersion ?? 0),
             },
             TopologyAudience.Self,
             ct);
@@ -222,6 +241,8 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             .On<ProjectionScopeWatermarkAdvancedEvent>(ProjectionScopeStateApplier.ApplyWatermarkAdvanced)
             .On<ProjectionScopeDispatchFailedEvent>(ProjectionScopeStateApplier.ApplyDispatchFailed)
             .On<ProjectionScopeFailureReplayedEvent>(ProjectionScopeStateApplier.ApplyFailureReplayed)
+            .On<ProjectionScopeAutomaticRecoveryRequestedEvent>(
+                ProjectionScopeStateApplier.ApplyAutomaticRecoveryRequested)
             .OrCurrent();
 
     protected ProjectionRuntimeScopeKey BuildScopeKey() =>

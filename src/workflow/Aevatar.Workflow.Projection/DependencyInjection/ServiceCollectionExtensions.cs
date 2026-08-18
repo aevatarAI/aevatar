@@ -95,6 +95,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
         AddWorkflowDefinitionBindObservation(services);
         services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
+        AddWorkflowTerminalStateReconciliation(services);
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
         services.TryAddSingleton<WorkflowRunForkSeedReadModelMapper>();
         services.TryAddSingleton<WorkflowRunForkSeedQueryPort>();
@@ -178,6 +179,15 @@ public static class ServiceCollectionExtensions
         services.AddAuditCommittedFactMaterializer<WorkflowExecutionMaterializationContext>();
         services.AddAuditCommittedFactMaterializer<WorkflowBindingProjectionContext>();
         return services;
+    }
+
+    private static void AddWorkflowTerminalStateReconciliation(IServiceCollection services)
+    {
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<WorkflowTerminalStateReconciler>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IHostedService,
+            WorkflowTerminalStateReconciliationHostedService>());
     }
 
     private static void AddWorkflowDefinitionBindObservation(IServiceCollection services)

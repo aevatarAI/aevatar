@@ -1713,7 +1713,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     }
 
     [Fact]
-    public async Task Kernel_ShouldPublishTerminalFailure_WhenCompletionHandlingThrowsAfterRunIsActive()
+    public async Task Kernel_ShouldNotPublishTerminalFailure_WhenDurableCompletionIntentCannotBeSaved()
     {
         var workflow = new WorkflowDefinition
         {
@@ -1741,27 +1741,21 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         ctx.Published.Clear();
         host.FailSave = true;
 
-        await module.HandleAsync(
-            Envelope(new StepCompletedEvent
-            {
-                RunId = "run-1",
-                StepId = "step-1",
-                Success = true,
-                Output = "next",
-            }),
-            ctx,
-            CancellationToken.None);
+        await FluentActions.Awaiting(() => module.HandleAsync(
+                Envelope(new StepCompletedEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-1",
+                    Success = true,
+                    Output = "next",
+                }),
+                ctx,
+                CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>();
 
-        var completion = ctx.Published
+        ctx.Published
             .Select(x => x.Event)
-            .Where(x => x.Is(WorkflowCompletedEvent.Descriptor))
-            .Select(x => x.Unpack<WorkflowCompletedEvent>())
-            .Should()
-            .ContainSingle()
-            .Subject;
-        completion.Success.Should().BeFalse();
-        completion.Error.Should().StartWith("step_completion_handling_failed: step 'step-1' (notify) failed during completion: ");
-        completion.Error.Should().NotContain("super-secret-token");
+            .Should().NotContain(x => x.Is(WorkflowCompletedEvent.Descriptor));
     }
 
     private static EventEnvelope Envelope(IMessage payload) => new()

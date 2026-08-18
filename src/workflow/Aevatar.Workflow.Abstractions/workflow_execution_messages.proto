@@ -601,6 +601,14 @@ message WorkflowCompletedEvent {
   WorkflowRecoveryFailureKind recovery_failure_kind = 7;
 }
 
+// Requests the authoritative workflow run actor to reconcile a stale running
+// read-model observation against its committed state. The actor alone decides
+// whether a terminal transition is required.
+message ReconcileWorkflowTerminalStateCommand {
+  string run_id = 1;
+  int64 observed_state_version = 2;
+}
+
 message WorkflowRunTerminalTimingRecordedEvent {
   string run_id = 1;
   google.protobuf.Timestamp completed_at_utc = 2;

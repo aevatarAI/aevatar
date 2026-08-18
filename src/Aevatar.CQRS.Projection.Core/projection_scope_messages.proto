@@ -39,6 +39,10 @@ message ProjectionScopeState {
   // Exact query-facing failure status. The publication hook populates this before
   // replacing repair payloads with an equal-count, payload-free rolling-upgrade view.
   ProjectionScopeFailureSummary failure_summary = 23;
+  // Last committed scope state version admitted for automatic recovery.
+  // The actor owns this monotonic fence so multiple host replicas cannot
+  // replay the same observed failure snapshot more than once.
+  int64 last_automatic_recovery_observed_state_version = 24;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -95,6 +99,7 @@ message ReleaseProjectionScopeCommand {
 message ReplayProjectionFailuresCommand {
   int32 max_items = 1;
   bool automatic_recovery = 2;
+  int64 observed_scope_state_version = 3;
 }
 
 message ProjectionScopeStartedEvent {
@@ -158,4 +163,9 @@ message ProjectionScopeFailureReplayedEvent {
   bool succeeded = 2;
   string reason = 3;
   google.protobuf.Timestamp occurred_at_utc = 4;
+}
+
+message ProjectionScopeAutomaticRecoveryRequestedEvent {
+  int64 observed_scope_state_version = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
 }

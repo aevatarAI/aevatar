@@ -69,7 +69,7 @@ public sealed class WorkflowSagaCompensationTests
                 sources => sources.ReplaceIn(
                     "src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionKernel.cs",
                     "await TryStartCompensationOrPublishTerminalFailureAsync(",
-                    "await PublishWorkflowCompletedAsync("),
+                    "await PublishPreparedWorkflowCompletionAsync("),
                 "Terminal workflow failure must enter the compensation decision path"
             },
             {
@@ -88,8 +88,8 @@ public sealed class WorkflowSagaCompensationTests
                     "ctx.Logger.LogWarning(\"workflow_loop: step={StepId} timed out after {Ms}ms\", stepId, evt.TimeoutMs);",
                     """
                     ctx.Logger.LogWarning("workflow_loop: step={StepId} timed out after {Ms}ms", stepId, evt.TimeoutMs);
-                    await PublishWorkflowCompletedAsync(
-                        ctx,
+                    await PrepareWorkflowCompletionAsync(
+                        state,
                         new WorkflowCompletedEvent
                         {
                             WorkflowName = _workflow.Name,
@@ -97,7 +97,9 @@ public sealed class WorkflowSagaCompensationTests
                             Success = false,
                             Error = $"TIMEOUT after {evt.TimeoutMs}ms",
                         },
+                        ctx,
                         ct);
+                    await PublishPreparedWorkflowCompletionAsync(state, ctx, ct);
                     """),
                 "Failed WorkflowCompletedEvent may only be published directly"
             },
@@ -132,7 +134,7 @@ public sealed class WorkflowSagaCompensationTests
                     "src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionKernel.cs",
                     "HandleCompensationTransitionAsync",
                     "WorkflowCompensationTransitionStatus.CompensationDeadLettered",
-                    "PublishWorkflowCompletedAsync"),
+                    "PublishPreparedWorkflowCompletionAsync"),
                 "Dead-lettered compensation transition must publish failed WorkflowCompletedEvent"
             },
             {
@@ -141,8 +143,17 @@ public sealed class WorkflowSagaCompensationTests
                     "src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionKernel.cs",
                     "TryStartCompensationOrPublishTerminalFailureAsync",
                     "WorkflowCompensationTransitionStatus.CompensationDeadLettered",
-                    "PublishWorkflowCompletedAsync(ctx, terminalFailure, ct)"),
+                    "PublishPreparedWorkflowCompletionAsync"),
                 "Dead-lettered compensation start result must publish failed WorkflowCompletedEvent"
+            },
+            {
+                "prepared completion publication drops durable preparation",
+                sources => sources.RemoveStatementInSwitchCaseContaining(
+                    "src/workflow/Aevatar.Workflow.Core/Execution/WorkflowExecutionKernel.cs",
+                    "TryStartCompensationOrPublishTerminalFailureAsync",
+                    "WorkflowCompensationTransitionStatus.CompletedAll",
+                    "PrepareWorkflowCompletionAsync"),
+                "Prepared workflow completion must be persisted before publication"
             },
             {
                 "compensation default timeout is renamed",
@@ -274,7 +285,11 @@ public sealed class WorkflowSagaCompensationTests
         if (!SagaSyntaxQueries.SwitchCaseInvokes(
                 tryStart,
                 "WorkflowCompensationTransitionStatus.NoCompensableLedger",
-                "PublishWorkflowCompletedAsync"))
+                "PrepareWorkflowCompletionAsync") ||
+            !SagaSyntaxQueries.SwitchCaseInvokes(
+                tryStart,
+                "WorkflowCompensationTransitionStatus.NoCompensableLedger",
+                "PublishPreparedWorkflowCompletionAsync"))
         {
             violations.Add(
                 "Failed WorkflowCompletedEvent may only be published directly when no compensable ledger exists.");
@@ -284,7 +299,11 @@ public sealed class WorkflowSagaCompensationTests
         if (!SagaSyntaxQueries.SwitchCaseInvokes(
                 compensationTransition,
                 "WorkflowCompensationTransitionStatus.CompensationDeadLettered",
-                "PublishWorkflowCompletedAsync"))
+                "PrepareWorkflowCompletionAsync") ||
+            !SagaSyntaxQueries.SwitchCaseInvokes(
+                compensationTransition,
+                "WorkflowCompensationTransitionStatus.CompensationDeadLettered",
+                "PublishPreparedWorkflowCompletionAsync"))
         {
             violations.Add(
                 "Dead-lettered compensation transition must publish failed WorkflowCompletedEvent to notify callers.");
@@ -293,13 +312,17 @@ public sealed class WorkflowSagaCompensationTests
         if (!SagaSyntaxQueries.SwitchCaseInvokes(
                 tryStart,
                 "WorkflowCompensationTransitionStatus.CompensationDeadLettered",
-                "PublishWorkflowCompletedAsync"))
+                "PrepareWorkflowCompletionAsync") ||
+            !SagaSyntaxQueries.SwitchCaseInvokes(
+                tryStart,
+                "WorkflowCompensationTransitionStatus.CompensationDeadLettered",
+                "PublishPreparedWorkflowCompletionAsync"))
         {
             violations.Add(
                 "Dead-lettered compensation start result must publish failed WorkflowCompletedEvent to notify callers.");
         }
 
-        var unsafeFailedCompletionSites = SagaSyntaxQueries.WorkflowCompletedPublicationSites(kernelFile, kernelRoot)
+        var unsafeFailedCompletionSites = SagaSyntaxQueries.WorkflowCompletedPreparationSites(kernelFile, kernelRoot)
             .Where(site => SagaSyntaxQueries.WorkflowCompletedSuccessLiteral(site.Invocation) != true)
             .Where(site => !IsAllowedFailedWorkflowCompletionPublication(site))
             .ToList();
@@ -308,6 +331,21 @@ public sealed class WorkflowSagaCompensationTests
             violations.Add(
                 "Failed WorkflowCompletedEvent may only be published directly from start-rejection/no-step or compensation terminal contexts. Unexpected sites: " +
                 string.Join(", ", unsafeFailedCompletionSites.Select(SagaSyntaxQueries.SiteDisplayName)));
+        }
+
+        var completionPublicationsWithoutPreparation = SagaSyntaxQueries.PreparedWorkflowCompletionPublicationSites(
+                kernelFile,
+                kernelRoot)
+            .Where(site => !IsDurableCompletionRecoveryPublication(site))
+            .Where(site => !SagaSyntaxQueries.HasPriorInvocationInSameControlFlowBranch(
+                site.Invocation,
+                "PrepareWorkflowCompletionAsync"))
+            .ToList();
+        if (completionPublicationsWithoutPreparation.Count > 0)
+        {
+            violations.Add(
+                "Prepared workflow completion must be persisted before publication in the same terminal branch. Unexpected sites: " +
+                string.Join(", ", completionPublicationsWithoutPreparation.Select(SagaSyntaxQueries.SiteDisplayName)));
         }
 
         var compensationRequestSites = SagaSyntaxQueries.EventCreationInvocationSites(
@@ -505,6 +543,12 @@ public sealed class WorkflowSagaCompensationTests
         }
 
         return false;
+    }
+
+    private static bool IsDurableCompletionRecoveryPublication(SagaInvocationSite site)
+    {
+        return SagaSyntaxQueries.MethodDisplayName(site.Method) == "HandleAsync" &&
+               SagaSyntaxQueries.HasAncestorIfCondition(site.Invocation, "PendingWorkflowCompletion != null");
     }
 
     private sealed record SagaSourceFile(
@@ -727,12 +771,34 @@ public sealed class WorkflowSagaCompensationTests
                     variable.Identifier.ValueText == constantName &&
                     string.Equals(variable.Initializer?.Value.ToString(), valueText, StringComparison.Ordinal));
 
-        public static IReadOnlyList<SagaInvocationSite> WorkflowCompletedPublicationSites(
+        public static IReadOnlyList<SagaInvocationSite> WorkflowCompletedPreparationSites(
             string relativePath,
             CompilationUnitSyntax root) =>
             InvocationSites(relativePath, root)
-                .Where(site => site.InvocationName == "PublishWorkflowCompletedAsync")
+                .Where(site => site.InvocationName == "PrepareWorkflowCompletionAsync")
                 .ToList();
+
+        public static IReadOnlyList<SagaInvocationSite> PreparedWorkflowCompletionPublicationSites(
+            string relativePath,
+            CompilationUnitSyntax root) =>
+            InvocationSites(relativePath, root)
+                .Where(site => site.InvocationName == "PublishPreparedWorkflowCompletionAsync")
+                .ToList();
+
+        public static bool HasPriorInvocationInSameControlFlowBranch(
+            InvocationExpressionSyntax invocation,
+            string methodName)
+        {
+            var scopes = invocation.Ancestors()
+                .Where(node => node is BlockSyntax or SwitchSectionSyntax)
+                .OrderBy(node => node.Span.Length);
+            var scope = scopes.FirstOrDefault();
+            return scope != null && scope.DescendantNodes()
+                .OfType<InvocationExpressionSyntax>()
+                .Any(candidate =>
+                    candidate.SpanStart < invocation.SpanStart &&
+                    GetInvocationName(candidate) == methodName);
+        }
 
         public static IReadOnlyList<SagaInvocationSite> EventCreationInvocationSites(
             string eventType,
