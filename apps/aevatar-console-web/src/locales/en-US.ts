@@ -187,6 +187,8 @@ const enUSMessages = {
   'pages.ai.models.scopeCatalog.authority': 'Scope catalog',
   'pages.ai.models.scopeCatalog.empty':
     'No models are currently available for this scope.',
+  'pages.ai.models.scopeCatalog.source.identityUnknown': 'Unknown source',
+  'pages.ai.models.scopeCatalog.source.slugUnavailable': 'Service unavailable',
   'pages.ai.models.scopeCatalog.title': 'Available models',
   'pages.ai.models.scopeCatalog.version':
     'Scope catalog observed at v{version}',

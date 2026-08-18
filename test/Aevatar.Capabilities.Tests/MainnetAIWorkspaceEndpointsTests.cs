@@ -677,6 +677,33 @@ public sealed class MainnetAIWorkspaceEndpointsTests
     }
 
     [Fact]
+    public async Task ActivityRuns_WithoutOptionalQuery_ShouldUseDefaults()
+    {
+        var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();
+        observatory.ListActivityRunsForScopeAsync(
+                "scope-alpha",
+                Arg.Any<WorkflowActivityRunFeedFilter>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new WorkflowActivityRunFeedPage()));
+        await using var host = await AIWorkspaceTestHost.StartAsync(
+            null,
+            observatory: observatory);
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        var response = await host.Client.GetAsync("/api/ai/activity/runs");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        await observatory.Received(1).ListActivityRunsForScopeAsync(
+            "scope-alpha",
+            Arg.Is<WorkflowActivityRunFeedFilter>(filter =>
+                filter.Take == 50 &&
+                !filter.IncludeTotalCount &&
+                filter.Origins.Count == 0),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ActivityRunDetailMapper_ShouldExposeTypedResultAndSanitizedFailure()
     {
         var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();

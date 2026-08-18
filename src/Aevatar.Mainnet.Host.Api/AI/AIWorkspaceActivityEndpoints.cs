@@ -69,8 +69,8 @@ internal static class AIWorkspaceActivityEndpoints
         DateTimeOffset? to,
         int? take,
         string? cursor,
-        bool includeTotalCount,
-        CancellationToken ct)
+        bool includeTotalCount = false,
+        CancellationToken ct = default)
     {
         if (!AIWorkspaceEndpoints.TryGetScopeId(http, out var scopeId, out var error))
             return error;

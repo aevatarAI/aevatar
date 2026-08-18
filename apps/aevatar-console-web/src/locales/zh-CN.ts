@@ -181,6 +181,8 @@ const zhCNMessages = {
   'pages.ai.models.scopeMismatch.title': '模型目录 Scope 不一致',
   'pages.ai.models.scopeCatalog.authority': 'Scope 模型目录',
   'pages.ai.models.scopeCatalog.empty': '当前 Scope 没有可用模型。',
+  'pages.ai.models.scopeCatalog.source.identityUnknown': '未知来源',
+  'pages.ai.models.scopeCatalog.source.slugUnavailable': '服务不可用',
   'pages.ai.models.scopeCatalog.title': '可用模型',
   'pages.ai.models.scopeCatalog.version': '已观察 Scope 目录版本 v{version}',
   'pages.ai.models.selectionStatus.legacyRepairRequired': '需要迁移',
