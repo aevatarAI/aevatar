@@ -4,7 +4,7 @@ using Aevatar.Foundation.Core.Runtime;
 
 namespace Aevatar.Foundation.Projection.Runtime;
 
-public sealed class RuntimeFleetCapabilityProjectionActivationPlanProvider
+public sealed class RuntimeFleetCapabilityCommittedStateProjectionActivationPlanProvider
     : IProjectionActivationPlanProvider
 {
     public IEnumerable<ProjectionActivationPlan> GetPlans(

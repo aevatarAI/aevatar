@@ -34,12 +34,13 @@ public static class RuntimeFleetCapabilityProjectionServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             RuntimeFleetCapabilityProjectionContext,
             RuntimeFleetCapabilityAuthorityCurrentStateProjector>();
+        services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
             CommittedStateProjectionActivationHook>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
-            RuntimeFleetCapabilityProjectionActivationPlanProvider>());
+            RuntimeFleetCapabilityCommittedStateProjectionActivationPlanProvider>());
         services.Replace(ServiceDescriptor.Singleton<
             IRuntimeFleetCapabilityAdmissionReader,
             ProjectionRuntimeFleetCapabilityAdmissionReader>());
