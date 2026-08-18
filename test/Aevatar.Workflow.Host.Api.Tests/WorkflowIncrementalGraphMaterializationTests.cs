@@ -202,7 +202,6 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
             ProjectionGraphDeltaApplyDisposition.Applied);
         var projector = new WorkflowRunInsightReportArtifactProjector(
             reportStore,
-            reportStore,
             graphWriter,
             versionedStore,
             CreateMaterializer());
@@ -232,7 +231,6 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         var store = new InMemoryProjectionGraphStore();
         var materializer = CreateMaterializer();
         var projector = new WorkflowRunInsightReportArtifactProjector(
-            reportStore,
             reportStore,
             graphWriter,
             store,
@@ -669,7 +667,8 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
 
     private sealed class RecordingDocumentStore
         : IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>,
-          IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>
+          IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>,
+          IProjectionDocumentMutator<WorkflowRunInsightReportDocument, string>
     {
         public WorkflowRunInsightReportDocument? Document { get; private set; }
         public int UpsertCount { get; private set; }
@@ -699,6 +698,25 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>> MutateAsync(
+            string key,
+            Func<WorkflowRunInsightReportDocument?, WorkflowRunInsightReportDocument> reducer,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var incoming = reducer(Document?.Clone());
+            var result = ProjectionWriteResultEvaluator.Evaluate(Document, incoming);
+            if (result.IsApplied)
+            {
+                Document = incoming.Clone();
+                UpsertCount++;
+            }
+
+            return Task.FromResult(new ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>(
+                result,
+                Document?.Clone()));
+        }
     }
 
     private sealed class MutableReportReader(WorkflowRunInsightReportDocument document)

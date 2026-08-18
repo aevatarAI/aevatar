@@ -27,12 +27,10 @@ public sealed class WorkflowProjectionMaterializationTests
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
 
-        Action noReader = () => new WorkflowRunInsightReportArtifactProjector(null!, reportStore, graphWriter);
-        Action noReportWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, null!, graphWriter);
-        Action noGraphWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, null!);
+        Action noReportMutator = () => new WorkflowRunInsightReportArtifactProjector(null!, graphWriter);
+        Action noGraphWriter = () => new WorkflowRunInsightReportArtifactProjector(reportStore, null!);
 
-        noReader.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportReader");
-        noReportWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportWriter");
+        noReportMutator.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("reportMutator");
         noGraphWriter.Should().Throw<ArgumentNullException>().Which.ParamName.Should().Be("graphWriter");
     }
 
@@ -286,7 +284,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -413,7 +411,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -527,7 +525,7 @@ public sealed class WorkflowProjectionMaterializationTests
         });
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -576,7 +574,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -653,7 +651,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -693,7 +691,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -788,7 +786,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -831,7 +829,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var reportStore = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, reportStore, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(reportStore, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -911,7 +909,7 @@ public sealed class WorkflowProjectionMaterializationTests
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
         var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
-        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, graphWriter);
         var context = new WorkflowExecutionMaterializationContext
         {
             RootActorId = "actor-1",
@@ -1127,8 +1125,9 @@ public sealed class WorkflowProjectionMaterializationTests
 
     private sealed class RecordingDocumentStore<TReadModel>
         : IProjectionDocumentReader<TReadModel, string>,
-          IProjectionWriteDispatcher<TReadModel>
-        where TReadModel : class, IProjectionReadModel
+          IProjectionWriteDispatcher<TReadModel>,
+          IProjectionDocumentMutator<TReadModel, string>
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
         private readonly Func<TReadModel, string> _keySelector;
 
@@ -1166,6 +1165,28 @@ public sealed class WorkflowProjectionMaterializationTests
             ProjectionDocumentQuery query,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<ProjectionDocumentMutationResult<TReadModel>> MutateAsync(
+            string key,
+            Func<TReadModel?, TReadModel> reducer,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Stored.TryGetValue(key, out var existing);
+            var incoming = reducer(existing);
+            if (!string.Equals(_keySelector(incoming), key, StringComparison.Ordinal))
+                throw new InvalidOperationException("Projection mutation changed the document key.");
+
+            var result = ProjectionWriteResultEvaluator.Evaluate(existing, incoming);
+            if (result.IsApplied)
+            {
+                Stored[key] = incoming;
+                UpsertCount++;
+            }
+
+            Stored.TryGetValue(key, out var committed);
+            return Task.FromResult(new ProjectionDocumentMutationResult<TReadModel>(result, committed));
+        }
     }
 
     private sealed class RecordingGraphWriter<TReadModel> : IProjectionGraphWriter<TReadModel>
