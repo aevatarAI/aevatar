@@ -578,7 +578,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.archiveTitle': 'Archive this workflow?',
   'workflowActivityVNext.workflows.archiveTryAgain': 'Try again',
   'workflowActivityVNext.workflows.archivedStatus': 'Archived',
-  'workflowActivityVNext.workflows.archivedView': 'Archived',
+  'workflowActivityVNext.workflows.archivedView': 'Show archived workflows',
   'workflowActivityVNext.workflows.clearFilters': 'Clear filters',
   'workflowActivityVNext.workflows.columnActions': 'Actions',
   'workflowActivityVNext.workflows.columnStatus': 'Status',
