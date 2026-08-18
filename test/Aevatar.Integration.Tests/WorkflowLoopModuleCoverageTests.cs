@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
@@ -663,8 +662,7 @@ public sealed class WorkflowLoopModuleCoverageTests
 
         await module.HandleAsync(Envelope(timeoutEvent), ctx, CancellationToken.None);
         ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel").Active.Should().BeFalse();
-        await ApplyRunAgentTerminalNormalizationAsync(ctx);
-        ctx.Published.Clear();
+        await ctx.AcknowledgeTerminalCompletionAsync();
 
         await module.HandleAsync(
             Envelope(new StepCompletedEvent
@@ -891,8 +889,7 @@ public sealed class WorkflowLoopModuleCoverageTests
             ctx,
             CancellationToken.None);
         SingleWorkflowCompletion(ctx).Success.Should().BeFalse();
-        await ApplyRunAgentTerminalNormalizationAsync(ctx);
-        ctx.Published.Clear();
+        await ctx.AcknowledgeTerminalCompletionAsync();
 
         await module.HandleAsync(
             Envelope(new StepCompletedEvent
@@ -1202,22 +1199,6 @@ public sealed class WorkflowLoopModuleCoverageTests
             ],
             Steps = steps.ToList(),
         };
-    }
-
-    /// <summary>
-    /// The run actor clears the kernel's persisted terminal completion when it applies the
-    /// terminal run event; an isolated kernel test must mirror that hand-off before it can
-    /// assert late-delivery behaviour, otherwise the kernel keeps re-publishing the pending
-    /// completion as durable recovery.
-    /// </summary>
-    private static async Task ApplyRunAgentTerminalNormalizationAsync(TestEventHandlerContext ctx)
-    {
-        var kernelState = ctx.LoadState<WorkflowExecutionKernelState>(WorkflowExecutionKernel.ModuleStateKey);
-        kernelState.PendingWorkflowCompletion.Should().NotBeNull();
-        if (WorkflowExecutionKernel.NormalizeTerminalState(kernelState))
-            await ctx.ClearStateAsync(WorkflowExecutionKernel.ModuleStateKey);
-        else
-            await ctx.SaveStateAsync(WorkflowExecutionKernel.ModuleStateKey, kernelState);
     }
 
     private static TestEventHandlerContext CreateContext()
