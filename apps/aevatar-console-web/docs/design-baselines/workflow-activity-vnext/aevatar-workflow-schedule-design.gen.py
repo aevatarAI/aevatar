@@ -261,7 +261,7 @@ def schedule_summary(x: float, y: float, width: float) -> None:
          FS_BODY, INK, width=width - 32)
 
 
-def schedule_fields(x: float, y: float, width: float) -> None:
+def schedule_fields(x: float, y: float, width: float, *, show_preview: bool = False) -> None:
     field(x, y, width, "Automation name", "Morning feedback digest")
     text(x, y + 76, "HOW OFTEN", FS_SMALL, MUTED, font=FONT_MONO)
     cursor = x
@@ -272,25 +272,26 @@ def schedule_fields(x: float, y: float, width: float) -> None:
     field(x + width * 0.57, y + 146, width * 0.43, "At", "09:00")
     field(x, y + 224, width, "Time zone", "Asia/Singapore")
     field(x, y + 302, width, "Cron expression", "0 9 * * 1-5", mono=True)
-    text(x, y + 380, "NEXT FIVE FIRES", FS_SMALL, MUTED, font=FONT_MONO)
+    text(x, y + 380, "NEXT FIVE FIRES · SERVER RESPONSE" if show_preview else "NEXT FIVE FIRES · SERVER PREVIEW REQUIRED", FS_SMALL, MUTED, font=FONT_MONO)
     rect(x, y + 402, width, 70, bg=SUBTLE, stroke=LINE)
     text(x + 14, y + 414,
          "Mon 24 Aug 09:00   ·   Tue 25 Aug 09:00\n"
          "Wed 26 Aug 09:00   ·   Thu 27 Aug 09:00\n"
-         "Fri 28 Aug 09:00",
-         FS_SMALL, INK, font=FONT_MONO, width=width - 28)
+         "Fri 28 Aug 09:00" if show_preview else
+         "No timestamps are estimated in the browser.\n"
+         "Review authorization requests the server response.",
+         FS_SMALL, INK if show_preview else MUTED, font=FONT_MONO, width=width - 28)
     text(x, y + 484, "PROMPT (OPTIONAL)", FS_SMALL, MUTED, font=FONT_MONO)
     rect(x, y + 506, width, 54, bg=SURFACE, stroke=LINE)
-    text(x + 12, y + 520, "Summarize new feedback and post one concise update.",
-         FS_SMALL, INK, width=width - 24)
+    text(x + 12, y + 520, "No prompt", FS_SMALL, MUTED, width=width - 24)
     text(x, y + 574,
-         "The server computes the preview. The selected IANA timezone and exact\n"
-         "cron expression are the values sent with the automation command.",
+         "POST /api/schedules/preview returns these fires. The selected IANA\n"
+         "timezone and exact cron are sent unchanged; the browser never estimates.",
          FS_SMALL, MUTED, width=width)
 
 
 def frame_workflows_list(index: int) -> None:
-    fx, fy = begin_frame(index, "01 · Workflows — schedule entry")
+    fx, fy = begin_frame(index, "01 · Workflows — quick schedule modal")
     cx, cy, cw = app_shell(fx, fy, "Workflows", title="Workflows",
                            subtitle="Published capabilities can run manually or on a schedule.")
     button(cx + cw - 170, fy + 18, 142, "Start a run", color=INK)
@@ -327,8 +328,20 @@ def frame_workflows_list(index: int) -> None:
                color=BLUE if state == "Published" else MUTED,
                bg=BLUE_BG if state == "Published" else SUBTLE)
         button(cx + 1228, y + 28, 62, "Open")
-    annotation(fx + FRAME_W + 42, fy + 160, "1", "One entry point",
-                "Schedule is a secondary summary on the published Workflow row; the editor owns configuration.")
+    modal_x, modal_y, modal_w, modal_h = cx + 520, cy + 18, 760, 890
+    rect(cx + 500, cy + 10, cw - 512, 910, bg="#eef2f6", stroke="#eef2f6", radius=False)
+    rect(modal_x, modal_y, modal_w, modal_h, bg=SURFACE, stroke=INK, sw=2)
+    text(modal_x + 28, modal_y + 26, "New schedule", FS_HEAD, INK, width=300)
+    text(modal_x + 28, modal_y + 58, "Configure recurring work without leaving Workflows.", FS_SMALL, MUTED, width=520)
+    button(modal_x + modal_w - 58, modal_y + 20, 32, "×", color=MUTED)
+    schedule_summary(modal_x + 28, modal_y + 92, modal_w - 56)
+    text(modal_x + 28, modal_y + 182, "1  Configure   ·   2  Authorize   ·   3  Observe", FS_SMALL, MUTED,
+         font=FONT_MONO, width=650)
+    schedule_fields(modal_x + 28, modal_y + 214, modal_w - 56)
+    button(modal_x + modal_w - 230, modal_y + 824, 202, "Review authorization", primary=True, color=BLUE)
+    button(modal_x + modal_w - 324, modal_y + 824, 84, "Cancel", color=MUTED)
+    annotation(fx + FRAME_W + 42, fy + 160, "1", "Quick create, no navigation",
+                "The published Workflow row opens this modal directly; open the editor later for Schedule management.")
     end_frame()
 
 
@@ -362,7 +375,7 @@ def frame_schedule_setup(index: int) -> None:
          font=FONT_MONO, width=490)
     schedule_summary(cx + 776, cy + 112, 492)
     schedule_fields(cx + 776, cy + 206, 492)
-    button(cx + 776, cy + 836, 178, "Review and create", primary=True, color=BLUE)
+    button(cx + 776, cy + 836, 178, "Review authorization", primary=True, color=BLUE)
     button(cx + 966, cy + 836, 92, "Cancel", color=MUTED)
     annotation(fx + FRAME_W + 42, fy + 220, "2", "Only recurring work",
                 "The public contract accepts a five-field cron and an IANA timezone; the preview comes from the server.")
@@ -377,12 +390,12 @@ def frame_authorization(index: int) -> None:
     text(cx + 184, cy + 66, "Weekly Feedback Report will act on your behalf", FS_HEAD, INK, width=680)
     text(cx + 184, cy + 102, "every weekday at 09:00 · Asia/Singapore · published v7", FS_SMALL, MUTED, width=680)
     line(cx + 184, cy + 142, 990, 0, color=LINE)
-    text(cx + 184, cy + 174, "WHAT IT WILL BE ABLE TO REACH", FS_SMALL, MUTED, font=FONT_MONO, width=420)
+    text(cx + 184, cy + 174, "EXACT SERVER-RETURNED AUTHORIZATION PLAN", FS_SMALL, MUTED, font=FONT_MONO, width=520)
     permissions = [
-        ("Lark", "post a message in #feedback", "already granted", "ok"),
-        ("Linear", "create issues in ENG", "already granted", "ok"),
-        ("Warehouse", "read completed orders", "will be requested", "wait"),
-        ("Salesforce", "read accounts", "administrator approval required", "fail"),
+        ("Lark · Acme", "service nyx-service-lark-acme", "exact service", "ok"),
+        ("Node IDs", "lark.messages.read · lark.messages.write", "exact nodes", "ok"),
+        ("Owner LLM", "NyxID Gateway · gpt-4o-mini", "reviewed", "ok"),
+        ("Scopes", "read · proxy", "restricted", "ok"),
     ]
     for idx, (name, detail, state, kind) in enumerate(permissions):
         y = cy + 226 + idx * 62
@@ -398,14 +411,15 @@ def frame_authorization(index: int) -> None:
     text(cx + 184, cy + 580,
          "The browser never receives the raw key. Delete revokes it; pause keeps it available.",
          FS_SMALL, MUTED, width=860)
-    badge(cx + 184, cy + 628, "Credential ready", "ok")
-    badge(cx + 326, cy + 628, "Policy 2026-08-04", "info")
-    text(cx + 184, cy + 674, "If the workflow, revision, or grant changes, review is required again.",
+    badge(cx + 184, cy + 628, "Credential plan ready", "ok")
+    badge(cx + 354, cy + 628, "Policy team-automation-v3", "info")
+    text(cx + 184, cy + 660, "DIGEST sha256:feedback-v7-permissions", FS_SMALL, MUTED, font=FONT_MONO, width=560)
+    text(cx + 184, cy + 698, "If the workflow, revision, or grant changes, review is required again.",
          FS_SMALL, MUTED, width=760)
-    button(cx + 850, cy + 714, 190, "Confirm and create", primary=True, color=BLUE)
-    button(cx + 1052, cy + 714, 88, "Back", color=MUTED)
-    annotation(fx + FRAME_W + 42, fy + 280, "3", "Authorization is a step",
-                "Create remains pending until the dedicated credential and permission facts are observed.")
+    button(cx + 850, cy + 734, 190, "Confirm and create", primary=True, color=BLUE)
+    button(cx + 1052, cy + 734, 88, "Back", color=MUTED)
+    annotation(fx + FRAME_W + 42, fy + 280, "3", "Authorization is server-owned",
+                "Confirm binds permissionDigest + policyVersion; create stays pending until owner state is observed.")
     end_frame()
 
 
@@ -567,7 +581,7 @@ def frame_row_states(index: int) -> None:
     text(fx + 58, fy + 38, "Seven states. Every Workflow Schedule row names the next action.", FS_HEAD, INK, width=900)
     text(fx + 58, fy + 84, "A schedule that cannot fire is still visible in Workflow, with the observed reason and lifecycle action.", FS_SMALL, MUTED, width=980)
     rows = [("creating", "every day 03:00", "—", "it cannot fire until authorization finishes", "", "wait"),
-            ("active", "every day 03:00", "✓ 1h ago", "", "Pause", "ok"),
+            ("active", "every day 03:00", "✓ 1h ago", "credential active · next fire observed", "Pause", "ok"),
             ("paused", "every day 03:00", "✓ 3d ago", "paused by Ana · 2d ago", "Resume", "muted"),
             ("needs attention", "every Friday 17:00", "✕ 7d ago", "authorization expired · owner review required", "Open", "fail"),
             ("dispatched late", "every day 03:00", "◷ 03:00 → 07:12", "the fire was accepted late; it was not skipped", "Open", "run"),

@@ -82,6 +82,11 @@ member surface once the owner is known.
 
 ### Entry And Placement
 
+- The Workflows catalogue exposes `Schedule` on each published Workflow row.
+  Clicking that row action opens a `New schedule` modal in place, keeps the
+  catalogue visible behind it, and starts at cadence configuration. It does
+  not navigate to the Workflow editor. The modal and editor panel render the
+  same creation state machine in different containers.
 - The Workflow Editor header exposes `Schedule` immediately beside `Run`.
 - On a draft or a Workflow without an authoritative `teamId`, `memberId`, or
   `publishedServiceId`, the action is disabled with `Publish this workflow
@@ -97,6 +102,24 @@ member surface once the owner is known.
   automation capability exposed at
   `/scopes/:scopeId/teams/:teamId/members/:memberId/automations`; it is not a
   route-level Settings page and not a modal Run option.
+- The catalogue modal is a quick-create path only. After creation, existing
+  Schedule management remains in the Workflow editor panel; the modal does not
+  become a second list or detail surface.
+- The modal starts with an empty optional prompt and the browser's valid IANA
+  timezone, falling back to `UTC`. Cadence presets and the five-field cron
+  expression are one input model: changing a preset updates cron, while
+  manually changing cron selects `Custom cron`.
+- `Review authorization` first sends the exact cron and timezone to
+  `/api/schedules/preview`, then requests the owner-scoped member automation
+  preflight. The browser never fabricates next-fire timestamps or derives
+  permissions from editable canvas steps. Authorization renders the exact
+  server-returned plan: service and node grants, owner LLM selection, credential
+  scopes and expiry, disclosures, permission digest, and policy version.
+- `Confirm and create` sends a command. The modal presents `202 Accepted` and
+  remains pending. The command confirms the reviewed `permissionDigest` and
+  `policyVersion`; it does not add an enabled automation, claim a credential,
+  say the Schedule is active, or show a next fire until the owner-scoped member
+  automation read model returns the new state.
 - Schedule list, detail, cadence editing, authorization review, pause, resume,
   run-now, and delete remain Workflow-owned operations. Activity must never
   render a second Schedule-definition collection or management surface.
@@ -112,13 +135,15 @@ member surface once the owner is known.
 
 The panel is a manager for zero or more existing Team member automations for
 one published member workflow. It follows the current `TeamAutomationsTab`
-field model and authorization flow. It has two non-overlapping modes:
+field model and authorization flow. It has three non-overlapping modes:
 
 1. List mode: displays member-owned automations with name, cadence, enabled or
    paused state, authorization state, credential expiry, and next fire. It
    provides `New automation`, `View all automations`, and opens Activity with
    the generic Schedule-origin filter.
-2. Detail mode: creates or edits one automation. The selected Team member,
+2. Create mode: renders the same creation state machine used by the catalogue
+   modal inside the right panel, preserving the Workflow canvas.
+3. Detail mode: edits one observed automation. The selected Team member,
    published service, and pinned published revision are read-only target facts.
 
 The form presents the following fields in this order:
@@ -252,7 +277,8 @@ language: dark rail, white work surface, neutral borders, compact rows,
 four-to-six-pixel radii, blue actions, and status color used only for state.
 
 - The schedule-only board follows the corrected readable sequence: Workflow
-  entry, recurring cadence configuration, authorization review, scheduled Run
+  catalogue quick-create modal, editor-side recurring cadence configuration,
+  authorization review, scheduled Run
   evidence in Activity, Workflow-owned schedule detail, Workflow-owned cadence
   editing, cadence control states, Workflow Schedule row states, and a
   lifecycle reference.

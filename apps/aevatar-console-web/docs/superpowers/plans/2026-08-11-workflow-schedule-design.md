@@ -100,7 +100,7 @@ drawn anywhere in the schedule board.
 Generate nine schedule-only frames from the attachment's schedule sections:
 
 ```python
-01 Workflows entry -> 02 Configure cadence -> 03 Authorization review
+01 Workflows quick-create modal -> 02 Configure cadence -> 03 Authorization review
 04 Activity scheduled Runs -> 05 Workflow Schedule detail -> 06 Workflow change cadence
 SPEC cadence control -> SPEC row states -> REF lifecycle
 ```
@@ -108,6 +108,10 @@ SPEC cadence control -> SPEC row states -> REF lifecycle
 Keep the existing Operational Automation Ledger visual language and show
 owner, published target, cron, timezone, preview, credential state, and
 observed recovery actions where each screen needs them.
+
+Frame 01 must show the published Workflow catalogue still present behind a
+`New schedule` modal. The modal is the direct row-action path; it must not
+route through the editor before configuration.
 
 - [ ] **Step 3: Draw the schedule configuration panel**
 
@@ -139,7 +143,20 @@ Schedule definition list or management action.
 
 - Modify: `apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/prototype.html`
 
-- [ ] **Step 1: Remove the Schedule node-library entry and mutation path**
+- [ ] **Step 1: Add the catalogue quick-create path**
+
+Keep the editor `Schedule` action as a right-side panel, but make each
+published Workflow row's `Schedule` action open an in-place `New schedule`
+modal. The modal owns only new-schedule configuration and authorization review;
+existing Schedule list/detail/lifecycle management stays in the editor panel.
+The quick path must synchronize cadence presets with custom cron, request
+server preview and owner-scoped authorization preflight before review, render
+the exact returned authorization plan, bind confirmation to its digest and
+policy version, and end in a `202 Accepted` pending state until the owner
+automation read model is observed. The editor panel reuses this creation state
+machine without replacing its right-panel presentation with the catalogue modal.
+
+- [ ] **Step 2: Remove the Schedule node-library entry and mutation path**
 
 Delete the node-library button whose data type is `schedule`, then remove the
 matching `addStep` definition:
@@ -150,7 +167,7 @@ schedule: makeStep("Schedule", "Schedule", ...)
 
 No prototype Workflow document may use `kind: "Schedule"` after the change.
 
-- [ ] **Step 2: Add the editor-level Schedule action**
+- [ ] **Step 3: Add the editor-level Schedule action**
 
 Place an `#editor-schedule` action next to `#editor-run`. Its handler must
 open a `.studio-schedule-panel`, not a Run dialog or a node-library modal.
@@ -162,7 +179,7 @@ document.querySelector("#editor-schedule").onclick = openSchedulePanel;
 For draft Workflow documents, render it disabled and set the explanatory title
 to `Publish this workflow before scheduling it.`.
 
-- [ ] **Step 3: Render only prototype-owned sample states**
+- [ ] **Step 4: Render only prototype-owned sample states**
 
 Keep schedule records in a clearly named prototype state object. Render a
 right panel with Team member owner, published service, cadence, timezone,
