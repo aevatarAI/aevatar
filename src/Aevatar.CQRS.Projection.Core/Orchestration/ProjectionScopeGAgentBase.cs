@@ -323,6 +323,17 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         EventEnvelope envelope,
         CancellationToken ct);
 
+    protected virtual ValueTask PrepareObservationContextAsync(
+        TContext context,
+        EventEnvelope envelope,
+        CancellationToken ct) => ValueTask.CompletedTask;
+
+    protected virtual ValueTask OnObservationMaterializedAsync(
+        TContext context,
+        EventEnvelope envelope,
+        ProjectionScopeDispatchResult result,
+        CancellationToken ct) => ValueTask.CompletedTask;
+
     private async Task<ProjectionScopeDispatchResult> DispatchObservationAsync(
         EventEnvelope envelope,
         CancellationToken ct,
@@ -387,6 +398,8 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             });
         }
 
+        await PrepareObservationContextAsync(context, envelope, ct);
+
         var startedAt = Stopwatch.GetTimestamp();
         var previousReplayState = _isReplayingFailure;
         _isReplayingFailure = origin == ProjectionObservationDispatchOrigin.FailureReplay;
@@ -401,6 +414,8 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         }
         if (!result.Handled)
             return result;
+
+        await OnObservationMaterializedAsync(context, envelope, result, ct);
 
         await PersistDomainEventAsync(new ProjectionScopeWatermarkAdvancedEvent
         {

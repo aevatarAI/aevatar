@@ -113,6 +113,23 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleObservedEnvelopeAsync_ShouldInvokeContextHooksAroundMaterialization()
+    {
+        var dispatchStages = new List<string>();
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-context-hooks",
+            onProcess: _ => ProjectionScopeDispatchResult.Success(7, "event-type"),
+            dispatchStages: dispatchStages);
+
+        await agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-context-hooks",
+            version: 7,
+            eventId: "evt-7"));
+
+        dispatchStages.Should().Equal("prepare", "process", "materialized");
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldCapturePayloadFreeCommittedEnvelopeMetadata()
     {
         var agent = BuildActivatedAgent(
@@ -642,13 +659,15 @@ public sealed class ProjectionScopeGAgentBaseTests
         IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null,
         ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization,
         bool recordFailureBeforeThrow = false,
-        bool enableDurableObservationRecovery = false)
+        bool enableDurableObservationRecovery = false,
+        ICollection<string>? dispatchStages = null)
     {
         var agent = new TestScopeAgent(
             onProcess,
             runtimeMode,
             recordFailureBeforeThrow,
-            enableDurableObservationRecovery);
+            enableDurableObservationRecovery,
+            dispatchStages);
 
         typeof(GAgentBase)
             .GetProperty(nameof(GAgentBase.Id), BindingFlags.Instance | BindingFlags.Public)!
@@ -730,17 +749,20 @@ public sealed class ProjectionScopeGAgentBaseTests
         private readonly ProjectionRuntimeMode _runtimeMode;
         private readonly bool _recordFailureBeforeThrow;
         private readonly bool _enableDurableObservationRecovery;
+        private readonly ICollection<string>? _dispatchStages;
 
         public TestScopeAgent(
             Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
             ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization,
             bool recordFailureBeforeThrow = false,
-            bool enableDurableObservationRecovery = false)
+            bool enableDurableObservationRecovery = false,
+            ICollection<string>? dispatchStages = null)
         {
             _onProcess = onProcess;
             _runtimeMode = runtimeMode;
             _recordFailureBeforeThrow = recordFailureBeforeThrow;
             _enableDurableObservationRecovery = enableDurableObservationRecovery;
+            _dispatchStages = dispatchStages;
         }
 
         protected override ProjectionRuntimeMode RuntimeMode => _runtimeMode;
@@ -750,11 +772,31 @@ public sealed class ProjectionScopeGAgentBaseTests
 
         public Task InitializeForTestAsync() => OnActivateAsync(CancellationToken.None);
 
+        protected override ValueTask PrepareObservationContextAsync(
+            TestContext context,
+            EventEnvelope envelope,
+            CancellationToken ct)
+        {
+            _dispatchStages?.Add("prepare");
+            return ValueTask.CompletedTask;
+        }
+
+        protected override ValueTask OnObservationMaterializedAsync(
+            TestContext context,
+            EventEnvelope envelope,
+            ProjectionScopeDispatchResult result,
+            CancellationToken ct)
+        {
+            _dispatchStages?.Add("materialized");
+            return ValueTask.CompletedTask;
+        }
+
         protected override async ValueTask<ProjectionScopeDispatchResult> ProcessObservationCoreAsync(
             TestContext context,
             EventEnvelope envelope,
             CancellationToken ct)
         {
+            _dispatchStages?.Add("process");
             if (_recordFailureBeforeThrow)
             {
                 await RecordDispatchFailureAsync(
