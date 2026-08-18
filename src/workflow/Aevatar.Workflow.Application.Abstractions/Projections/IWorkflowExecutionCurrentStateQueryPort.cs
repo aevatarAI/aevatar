@@ -78,6 +78,34 @@ public interface IWorkflowExecutionCurrentStateQueryPort
         return exactMatches.Length == 1 ? exactMatches[0] : null;
     }
 
+    async Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateForScopeAsync(
+        string scopeId,
+        string runId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = scopeId?.Trim() ?? string.Empty;
+        var normalizedRunId = runId?.Trim() ?? string.Empty;
+        if (normalizedScopeId.Length == 0 || normalizedRunId.Length == 0)
+            return null;
+
+        var page = await PageWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 2,
+                ScopeId = normalizedScopeId,
+                RunId = normalizedRunId,
+            },
+            ct);
+        var exactMatches = page.Items
+            .Where(snapshot =>
+                string.Equals(snapshot.ScopeId?.Trim(), normalizedScopeId, StringComparison.Ordinal) &&
+                string.Equals(snapshot.RunId?.Trim(), normalizedRunId, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+
+        return exactMatches.Length == 1 ? exactMatches[0] : null;
+    }
+
     Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
         int take = 200,
         CancellationToken ct = default);

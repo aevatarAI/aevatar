@@ -564,7 +564,10 @@ public sealed class WorkflowRunObservatoryQueryService
         if (normalizedScopeId.Length == 0 || normalizedRunId.Length == 0)
             return null;
 
-        var snapshot = await _currentStateQueryPort.GetWorkflowRunCurrentStateAsync(normalizedRunId, ct);
+        var snapshot = await _currentStateQueryPort.GetWorkflowRunCurrentStateForScopeAsync(
+            normalizedScopeId,
+            normalizedRunId,
+            ct);
         if (snapshot == null ||
             !string.Equals(snapshot.RunId?.Trim(), normalizedRunId, StringComparison.Ordinal))
             return null;

@@ -45,6 +45,45 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
     }
 
     [Fact]
+    public async Task GetWorkflowRunCurrentStateForScopeAsync_ShouldFilterScopeAndTypedRunId()
+    {
+        var reader = new RecordingCurrentStateReader
+        {
+            Items =
+            [
+                new WorkflowExecutionCurrentStateDocument
+                {
+                    Id = "actor-alpha",
+                    RootActorId = "actor-alpha",
+                    RunId = "run-alpha",
+                    ScopeId = "scope-alpha",
+                },
+            ],
+        };
+        IWorkflowExecutionCurrentStateQueryPort port = CreatePort(reader);
+
+        var snapshot = await port.GetWorkflowRunCurrentStateForScopeAsync(
+            " scope-alpha ",
+            " run-alpha ");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.RunId.Should().Be("run-alpha");
+        snapshot.ScopeId.Should().Be("scope-alpha");
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Take.Should().Be(2);
+        ShouldContainStringFilter(
+            reader.LastQuery.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.ScopeId),
+            ProjectionDocumentFilterOperator.Eq,
+            "scope-alpha");
+        ShouldContainStringFilter(
+            reader.LastQuery.Filters,
+            nameof(WorkflowExecutionCurrentStateDocument.RunId),
+            ProjectionDocumentFilterOperator.Eq,
+            "run-alpha");
+    }
+
+    [Fact]
     public async Task GetWorkflowRunCurrentStateAsync_ShouldNotFallBackToActorId()
     {
         var reader = new RecordingCurrentStateReader
