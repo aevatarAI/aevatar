@@ -89,6 +89,9 @@ message WorkflowRunInsightReportDocument {
   WorkflowExecutionSummary summary_value = 24;
   WorkflowUsageMetricsReadModel usage_value = 25;
   repeated WorkflowRuntimeOperationReadModel operation_entries = 26;
+  // Stable O(1) lookup for the growing step list. Values are zero-based indexes
+  // into step_entries and are rebuilt once when reading a legacy document.
+  map<string, int32> step_index_by_id = 27;
 }
 
 message WorkflowExecutionCurrentStateDocument {

@@ -388,6 +388,7 @@ public sealed class WorkflowProjectionMaterializationTests
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
         report.Steps.Should().ContainSingle();
         report.Steps[0].StepId.Should().Be("step-1");
+        report.StepIndexById.Should().Contain("step-1", 0);
         report.Steps[0].Success.Should().BeFalse();
         report.Steps[0].OutputPreview.Should().Be("partial");
         report.Steps[0].CompletionAnnotations.Should().ContainKey("token_usage");
@@ -903,6 +904,50 @@ public sealed class WorkflowProjectionMaterializationTests
         };
         runCodec.Deserialize(runCodec.GetEventType(runEnvelope), runCodec.Serialize(runEnvelope))!.Custom.Name.Should().Be("evt");
         runCodec.Deserialize(string.Empty, ByteString.Empty).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldRebuildLegacyStepIndexOnce()
+    {
+        var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+        var legacy = new WorkflowRunInsightReportDocument
+        {
+            Id = "actor-1",
+            RootActorId = "actor-1",
+            StateVersion = 1,
+            LastEventId = "evt-1",
+        };
+        legacy.Steps.Add(new WorkflowExecutionStepTrace
+        {
+            StepId = "step-1",
+            Outcome = WorkflowExecutionStepOutcomeReadModel.Waiting,
+        });
+        store.Stored[legacy.Id] = legacy;
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                2,
+                new StepCompletedEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-1",
+                    Success = true,
+                    Output = "done",
+                },
+                BuildState("running")));
+
+        var report = store.Stored["actor-1"];
+        report.Steps.Should().ContainSingle();
+        report.Steps[0].Outcome.Should().Be(WorkflowExecutionStepOutcomeReadModel.Succeeded);
+        report.StepIndexById.Should().Contain("step-1", 0);
     }
 
     private static EventEnvelope BuildCommittedEnvelope(
