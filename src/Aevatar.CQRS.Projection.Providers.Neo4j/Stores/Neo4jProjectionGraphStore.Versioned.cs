@@ -503,14 +503,34 @@ public sealed partial class Neo4jProjectionGraphStore
             parameters.Remove("edges");
             parameters["promotableNodeIds"] = promotableNodeIds;
             parameters["promotableEdgeIds"] = promotableEdgeIds;
-            await RunAndConsumeAsync(
+            var promotableRows = await RunRowsAsync(
                 transaction,
-                Neo4jProjectionGraphStoreVersionedCypherSupport.BuildPromotePendingEdgesCypher(
-                    _nodeLabel,
-                    _edgeType,
+                Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesCypher(
                     _versionedEdgeIdentityLabel),
                 parameters,
                 ct);
+            var promotable = promotableRows
+                .Select(row => new Dictionary<string, object?>
+                {
+                    ["edgeId"] = ReadString(row, "edgeId"),
+                    ["fromNodeId"] = ReadString(row, "fromNodeId"),
+                    ["toNodeId"] = ReadString(row, "toNodeId"),
+                })
+                .ToArray();
+            if (promotable.Length > 0)
+            {
+                parameters["promotable"] = promotable;
+                // Only identities whose both endpoints exist as this owner's nodes are promoted;
+                // the rest simply stay pending until their target node arrives.
+                await RunAndConsumeAsync(
+                    transaction,
+                    Neo4jProjectionGraphStoreVersionedCypherSupport.BuildPromotePendingEdgesCypher(
+                        _nodeLabel,
+                        _edgeType,
+                        _versionedEdgeIdentityLabel),
+                    parameters,
+                    ct);
+            }
         }
         return null;
     }

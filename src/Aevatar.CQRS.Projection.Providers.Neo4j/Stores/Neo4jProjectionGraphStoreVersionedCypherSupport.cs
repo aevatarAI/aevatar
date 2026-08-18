@@ -150,26 +150,30 @@ internal static class Neo4jProjectionGraphStoreVersionedCypherSupport
         "edge.projectionOwnerId = $ownerId, edge.projectionGraphVersion = item.projectionGraphVersion " +
         "RETURN count(edge) AS appliedCount";
 
-    // The pending-edge selection (disjunction over edge/from/to ids) and the endpoint lookups are
-    // separated by explicit WITH boundaries: planning them as one query graph together with the
-    // relationship MERGE trips a Neo4j 5 planner assertion ("Expected: RegularSinglePlannerQuery")
-    // on the production database, which failed every promotion.
-    internal static string BuildPromotePendingEdgesCypher(
-        string nodeLabel,
-        string edgeType,
-        string edgeIdentityLabel) =>
+    // Promotion is two statements. The disjunctive selection of promotable pending identities is a
+    // read on its own; the endpoint match + relationship MERGE then runs per selected identity via
+    // UNWIND (the same shape as live-edge creation). Planning the disjunction together with the
+    // MERGE in one query graph trips a Neo4j 5 planner assertion ("Expected:
+    // RegularSinglePlannerQuery") on the production database, and a plain WITH does not create a
+    // planner boundary.
+    internal static string BuildSelectPromotablePendingEdgesCypher(string edgeIdentityLabel) =>
         $"MATCH (identity:{edgeIdentityLabel} {{physicalNamespace: $physicalNamespace, " +
         "projectionOwnerId: $ownerId, status: 'pending'}) " +
         "WHERE identity.edgeId IN $promotableEdgeIds " +
         "OR identity.fromNodeId IN $promotableNodeIds " +
         "OR identity.toNodeId IN $promotableNodeIds " +
-        "WITH identity " +
-        $"MATCH (from:{nodeLabel} {{scope: $physicalNamespace, nodeId: identity.fromNodeId}}) " +
-        "WHERE from.projectionOwnerId = $ownerId " +
-        "WITH identity, from " +
-        $"MATCH (to:{nodeLabel} {{scope: $physicalNamespace, nodeId: identity.toNodeId}}) " +
-        "WHERE to.projectionOwnerId = $ownerId " +
-        "WITH identity, from, to " +
+        "RETURN identity.edgeId AS edgeId, identity.fromNodeId AS fromNodeId, identity.toNodeId AS toNodeId";
+
+    internal static string BuildPromotePendingEdgesCypher(
+        string nodeLabel,
+        string edgeType,
+        string edgeIdentityLabel) =>
+        "UNWIND $promotable AS item " +
+        $"MATCH (identity:{edgeIdentityLabel} {{physicalNamespace: $physicalNamespace, edgeId: item.edgeId}}) " +
+        "WHERE identity.projectionOwnerId = $ownerId AND identity.status = 'pending' " +
+        $"MATCH (from:{nodeLabel} {{scope: $physicalNamespace, nodeId: item.fromNodeId}}) " +
+        $"MATCH (to:{nodeLabel} {{scope: $physicalNamespace, nodeId: item.toNodeId}}) " +
+        "WHERE from.projectionOwnerId = $ownerId AND to.projectionOwnerId = $ownerId " +
         $"MERGE (from)-[edge:{edgeType} {{scope: $physicalNamespace, edgeId: identity.edgeId}}]->(to) " +
         "SET edge.relationType = identity.relationType, edge.mutationPayload = identity.mutationPayload, " +
         "edge.updatedAtEpochMs = identity.updatedAtEpochMs, edge.projectionManaged = true, " +

@@ -56,6 +56,7 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
             ["upsert-edge-identities"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildUpsertEdgeIdentitiesCypher("EdgeIdentity"),
             ["delete-rewire"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildDeleteRelationshipsForRewireCypher("REL"),
             ["create-live-edges"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateLiveEdgesCypher("Node", "REL"),
+            ["select-promotable"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesCypher("EdgeIdentity"),
             ["promote-pending"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildPromotePendingEdgesCypher("Node", "REL", "EdgeIdentity"),
             ["commit-watermark"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCommitWatermarkCypher("OwnerState", "OwnerEvent"),
             ["read-snapshot"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadOwnerSnapshotCypher("OwnerState", "Node", "REL", "EdgeIdentity"),
@@ -95,16 +96,21 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
         edgeIdentities.Should().Contain("identity.status = item.status");
         edgeIdentities.Should().Contain("identity.mutationPayload = item.mutationPayload");
         edgeIdentities.Should().Contain("identity.projectionGraphVersion = item.projectionGraphVersion");
-        promote.Should().Contain("status: 'pending'");
-        promote.Should().Contain("identity.edgeId IN $promotableEdgeIds");
-        promote.Should().Contain("identity.fromNodeId IN $promotableNodeIds");
-        promote.Should().Contain("identity.toNodeId IN $promotableNodeIds");
+        var select = Neo4jProjectionGraphStoreVersionedCypherSupport
+            .BuildSelectPromotablePendingEdgesCypher("EdgeIdentity");
+        select.Should().Contain("status: 'pending'");
+        select.Should().Contain("identity.edgeId IN $promotableEdgeIds");
+        select.Should().Contain("identity.fromNodeId IN $promotableNodeIds");
+        select.Should().Contain("identity.toNodeId IN $promotableNodeIds");
+        select.Should().NotContain("MERGE");
+        // The MERGE statement is UNWIND-driven and carries no disjunction: the selection above is
+        // the only place the OR predicate lives, so the planner never sees it next to the MERGE.
+        promote.Should().StartWith("UNWIND $promotable AS item ");
+        promote.Should().NotContain(" OR ");
+        promote.Should().Contain("identity.status = 'pending'");
+        promote.Should().Contain("MERGE (from)-[edge:");
         promote.Should().Contain("identity.status = 'live'");
         promote.Should().NotContain("Unknown");
-        // Endpoint lookups and the relationship MERGE must be planned as separate query graphs.
-        promote.Should().Contain("WITH identity MATCH (from:");
-        promote.Should().Contain("WITH identity, from MATCH (to:");
-        promote.Should().Contain("WITH identity, from, to MERGE (from)-[edge:");
     }
 
     [Fact]
