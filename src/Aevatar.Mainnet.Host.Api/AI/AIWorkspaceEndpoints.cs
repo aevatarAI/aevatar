@@ -65,7 +65,8 @@ internal static class AIWorkspaceEndpoints
                 "/ai",
                 "/ai/chat",
                 "/ai/agents",
-                "/ai/models"),
+                "/ai/models",
+                "/ai/activity"),
             new AIWorkspaceApiLinks(
                 "/api/ai/overview",
                 "/api/chat",
@@ -82,7 +83,8 @@ internal static class AIWorkspaceEndpoints
                 new AIWorkspaceFeatureResponse("available", "/ai", "/api/ai/overview"),
                 new AIWorkspaceFeatureResponse("available", "/ai/chat", "/api/chat"),
                 new AIWorkspaceFeatureResponse("available", "/ai/agents", "/api/ai/agents"),
-                new AIWorkspaceFeatureResponse("available", "/ai/models", "/api/ai/models"))));
+                new AIWorkspaceFeatureResponse("available", "/ai/models", "/api/ai/models"),
+                new AIWorkspaceFeatureResponse("available", "/ai/activity", "/api/ai/activity"))));
     }
 
     private static async Task<IResult> GetOverviewAsync(
@@ -197,7 +199,8 @@ internal sealed record AIWorkspacePageLinks(
     string Overview,
     string Chat,
     string Agents,
-    string Models);
+    string Models,
+    string Activity);
 
 internal sealed record AIWorkspaceApiLinks(
     string Overview,
@@ -216,7 +219,8 @@ internal sealed record AIWorkspaceFeaturesResponse(
     AIWorkspaceFeatureResponse Overview,
     AIWorkspaceFeatureResponse Chat,
     AIWorkspaceFeatureResponse Agents,
-    AIWorkspaceFeatureResponse Models);
+    AIWorkspaceFeatureResponse Models,
+    AIWorkspaceFeatureResponse Activity);
 
 internal sealed record AIWorkspaceFeatureResponse(
     string Availability,

@@ -228,6 +228,7 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         json.RootElement.GetProperty("scopeId").GetString().Should().Be("scope-alpha");
         json.RootElement.GetProperty("consistency").GetString().Should().Be("independent_read_models");
         json.RootElement.GetProperty("pages").GetProperty("agents").GetString().Should().Be("/ai/agents");
+        json.RootElement.GetProperty("pages").GetProperty("activity").GetString().Should().Be("/ai/activity");
         var apis = json.RootElement.GetProperty("apis");
         apis.GetProperty("overview").GetString().Should().Be("/api/ai/overview");
         apis.GetProperty("ownedAgentProfiles").GetString().Should().Be(
@@ -237,8 +238,10 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         apis.GetProperty("conversations").GetString().Should().Be("/api/ai/activity/conversations");
         apis.GetProperty("runs").GetString().Should().Be("/api/ai/activity/runs");
         apis.TryGetProperty("auditedActions", out _).Should().BeFalse();
-        json.RootElement.GetProperty("pages").TryGetProperty("activity", out _).Should().BeFalse();
-        json.RootElement.GetProperty("features").TryGetProperty("activity", out _).Should().BeFalse();
+        var features = json.RootElement.GetProperty("features");
+        features.GetProperty("activity").GetProperty("availability").GetString().Should().Be("available");
+        features.GetProperty("activity").GetProperty("page").GetString().Should().Be("/ai/activity");
+        features.GetProperty("activity").GetProperty("api").GetString().Should().Be("/api/ai/activity");
     }
 
     [Fact]
