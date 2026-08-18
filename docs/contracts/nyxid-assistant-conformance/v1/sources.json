@@ -3,7 +3,7 @@
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
     "revision": "10b3a771d87d58dceeeca18963bd6ea060b1d8a9",
-    "contract_files_sha256": "1a5d4464a367d5228a31449e0f923cc93d6f844e356cf3d56055f5c723f8f30a"
+    "contract_files_sha256": "1a5d4464a367d5228a31449e0f923cc93d6f844e356cf3d56055f5c723f8f30a",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "23fd2cf48541c4b8da3fa1ef07277a7700c8478f9c638be8221465bf877fbb31",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "3854a0847baee04bd8dac537ed7b76d157aca6e56716d5541187f828780d5a95",
