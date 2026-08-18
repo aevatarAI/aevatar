@@ -207,6 +207,13 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             throw new InvalidOperationException(
                 "A normalized workflow fork seed cannot be downgraded to the legacy value representation.");
         }
+        if (WorkflowValueLifecyclePolicy.HasDeclarations(_workflow) &&
+            (representation != WorkflowExecutionValueRepresentation.Normalized ||
+             !WorkflowNormalizedStateWriteAdmission.IsValueLifecycleGranted(
+                 _stateHost.RuntimeStateSchemaContextReader)))
+        {
+            throw WorkflowValueLifecycleException.SchemaUnavailable();
+        }
 
         state.Active = true;
         state.RunId = runId;
@@ -774,6 +781,13 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     ct);
             }
 
+            WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+                state,
+                current.ValueLifecycle,
+                current.Id,
+                evt.ExecutionId,
+                _stateHost.IsValuePinnedForCompensation);
+
             if (await TryRecordSuccessfulCompensationAsync(evt, compensationExecutionId, state, ctx, ct))
                 return;
 
@@ -856,6 +870,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     Success = false,
                     Error = WorkflowRuntimeFailureMessages.StepCompletionHandlingFailed(current, evt, ex),
                     RecoveryFailureKind = evt.RecoveryFailureKind,
+                    ValueLifecycleFailureKind = ex is WorkflowValueLifecycleException lifecycleFailure
+                        ? lifecycleFailure.Kind
+                        : WorkflowValueLifecycleFailureKind.Unspecified,
                 },
                 state,
                 evt,
@@ -1940,6 +1957,13 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         // start another attempt.
         if (!committed.Success)
             return;
+
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state,
+            current.ValueLifecycle,
+            current.Id,
+            completion.ExecutionId,
+            _stateHost.IsValuePinnedForCompensation);
 
         var output = WorkflowExecutionValueStore.GetCanonicalValue(
             state,

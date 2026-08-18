@@ -147,6 +147,7 @@ message WorkflowExecutionCurrentStateDocument {
   int64 definition_version = 46;
   aevatar.workflow.WorkflowRunLineage lineage = 47;
   aevatar.workflow.WorkflowNormalizedExecutionSeed normalized_fork_seed = 48;
+  aevatar.workflow.WorkflowValueLifecycleFailureKind terminal_value_lifecycle_failure_kind = 49;
 }
 
 message WorkflowRunActivityInitiatorReadModel {

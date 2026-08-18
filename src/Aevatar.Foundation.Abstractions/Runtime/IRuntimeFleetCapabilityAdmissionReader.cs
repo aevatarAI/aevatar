@@ -16,7 +16,12 @@ public static class RuntimeFleetCapabilityContracts
     public const string WorkflowNormalizedStateV1 =
         "aevatar.workflow.normalized-state.v1";
 
-    public const int WorkflowNormalizedStateReaderVersion = 1;
+    public const int WorkflowNormalizedStateReaderVersionV1 = 1;
+
+    public const int WorkflowNormalizedStateReaderVersionV2 = 2;
+
+    public const int WorkflowNormalizedStateReaderVersion =
+        WorkflowNormalizedStateReaderVersionV2;
 
     public const string ProjectionScopeStatusTerminalV1 =
         "aevatar.projection.scope-status-terminal.v1";

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Google.Protobuf;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -22,6 +23,7 @@ internal static class WorkflowExecutionValueStore
                 normalized.CompletedSteps.Count == 0 &&
                 normalized.AcceptedCompletions.Count == 0 &&
                 normalized.InheritedCompletions.Count == 0 &&
+                normalized.ReleasedBindings.Count == 0 &&
                 normalized.PendingInternalDispatches.Count == 0 &&
                 string.IsNullOrWhiteSpace(normalized.CurrentStepInputValueId));
     }
@@ -114,6 +116,7 @@ internal static class WorkflowExecutionValueStore
             WorkflowCanonicalValueSourceKind.RequestOverride);
         state.Variables.Remove(key);
         normalized.Bindings.Remove(key);
+        normalized.ReleasedBindings.Remove(key);
         Bind(
             normalized,
             key,
@@ -135,6 +138,14 @@ internal static class WorkflowExecutionValueStore
                !key.StartsWith(StepPrefix, StringComparison.Ordinal) &&
                !string.Equals(key, "workflow.usage", StringComparison.Ordinal) &&
                !key.StartsWith("workflow.usage.", StringComparison.Ordinal);
+    }
+
+    internal static bool IsLifecycleReleaseVariableKey(string? name)
+    {
+        var key = name?.Trim() ?? string.Empty;
+        return IsAuthorVariableKey(key) &&
+               !string.Equals(key, "workflow_call", StringComparison.Ordinal) &&
+               !key.StartsWith("workflow_call.", StringComparison.Ordinal);
     }
 
     internal static bool IsAuthorVariableKey(
@@ -160,6 +171,115 @@ internal static class WorkflowExecutionValueStore
                    WorkflowValueBindingKind.AssignedValue;
     }
 
+    internal static void ReleaseVariablesAfterSuccess(
+        WorkflowExecutionKernelState state,
+        WorkflowStepValueLifecycle? lifecycle,
+        string? releaseStepId,
+        string? releaseExecutionId,
+        Func<string, bool>? isPinnedForCompensation = null)
+    {
+        if (lifecycle == null || lifecycle.ReleaseVariablesAfterSuccess.Count == 0)
+            return;
+
+        var normalized = state.NormalizedValues
+            ?? throw WorkflowValueLifecycleException.SchemaUnavailable();
+        var stepId = releaseStepId?.Trim() ?? string.Empty;
+        var executionId = releaseExecutionId?.Trim() ?? string.Empty;
+        if (stepId.Length == 0 || executionId.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "Workflow value release requires exact step and execution identity.");
+        }
+
+        var plans = new List<ValueReleasePlan>();
+        foreach (var rawName in lifecycle.ReleaseVariablesAfterSuccess)
+        {
+            var name = rawName?.Trim() ?? string.Empty;
+            if (name.Length == 0)
+                throw WorkflowValueLifecycleException.ReleaseTargetMissing(name);
+
+            if (normalized.ReleasedBindings.TryGetValue(name, out var priorRelease))
+            {
+                if (IsSameRelease(priorRelease, stepId, executionId))
+                    continue;
+                throw WorkflowValueLifecycleException.ReleasedValueAccessed(name);
+            }
+
+            if (!normalized.Bindings.TryGetValue(name, out var binding) ||
+                string.IsNullOrWhiteSpace(binding.ValueId) ||
+                !normalized.CanonicalValues.TryGetValue(binding.ValueId, out var canonical))
+            {
+                throw WorkflowValueLifecycleException.ReleaseTargetMissing(name);
+            }
+
+            if (canonical.Released != null)
+            {
+                if (IsSameRelease(canonical.Released, stepId, executionId))
+                    continue;
+                throw WorkflowValueLifecycleException.ReleasedValueAccessed(name);
+            }
+
+            if (IsLiveValue(normalized, binding.ValueId, stepId, executionId))
+                throw WorkflowValueLifecycleException.ReleaseTargetLive(name);
+            if (isPinnedForCompensation?.Invoke(binding.ValueId) == true)
+                throw WorkflowValueLifecycleException.ReleaseTargetPinnedForCompensation(name);
+
+            plans.Add(new ValueReleasePlan(name, binding.ValueId, canonical));
+        }
+
+        foreach (var group in plans.GroupBy(static plan => plan.ValueId, StringComparer.Ordinal))
+        {
+            var first = group.First();
+            var tombstone = new WorkflowReleasedValueTombstone
+            {
+                Digest = CreateDigest(first.Canonical.Value ?? string.Empty),
+                ReleasedAfterStepId = stepId,
+                ReleasedAfterExecutionId = executionId,
+            };
+            first.Canonical.Value = string.Empty;
+            first.Canonical.Released = tombstone.Clone();
+            UpdateCompletionDigestEvidence(normalized, first.ValueId, tombstone.Digest);
+
+            var aliases = normalized.Bindings
+                .Where(pair => string.Equals(pair.Value.ValueId, first.ValueId, StringComparison.Ordinal))
+                .Select(static pair => pair.Key)
+                .Concat(group.Select(static plan => plan.Name))
+                .Concat(CollectCurrentCompletionAliases(normalized, first.ValueId))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            foreach (var alias in aliases)
+            {
+                if (normalized.Bindings.TryGetValue(alias, out var currentBinding) &&
+                    !string.Equals(currentBinding.ValueId, first.ValueId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                normalized.Bindings.Remove(alias);
+                state.Variables.Remove(alias);
+                normalized.ReleasedBindings[alias] = tombstone.Clone();
+            }
+        }
+
+        RemoveUnreferencedValues(normalized);
+    }
+
+    internal static void MigrateToValueLifecycleV2(WorkflowExecutionKernelState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var normalized = state.NormalizedValues;
+        if (normalized == null)
+            return;
+
+        foreach (var completed in normalized.CompletedSteps.Values)
+            PopulateMissingCompletionDigests(normalized, completed);
+        foreach (var completed in normalized.AcceptedCompletions.Values)
+            PopulateMissingCompletionDigests(normalized, completed);
+        foreach (var completed in normalized.InheritedCompletions.Values)
+            PopulateMissingCompletionDigests(normalized, completed);
+        RemoveUnreferencedValues(normalized);
+    }
+
     internal static string RecordInternalOutput(
         WorkflowExecutionKernelState state,
         StepCompletedEvent completion,
@@ -170,6 +290,19 @@ internal static class WorkflowExecutionValueStore
         var stepId = completion.StepId?.Trim() ?? string.Empty;
         if (stepId.Length == 0)
             return string.Empty;
+        var executionId = completion.ExecutionId?.Trim() ?? string.Empty;
+        if (executionId.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"Normalized internal completion for step '{stepId}' has no execution id.");
+        }
+        var acceptanceKey = BuildCompletionAcceptanceKey(stepId, executionId);
+        if (normalized.AcceptedCompletions.TryGetValue(acceptanceKey, out var replayed) ||
+            normalized.CompletedSteps.TryGetValue(stepId, out replayed) &&
+            string.Equals(replayed.ExecutionId, executionId, StringComparison.Ordinal))
+        {
+            return ValidateExactStepCompletionReplay(normalized, replayed, completion, stepId);
+        }
 
         var valueId = ResolveOutputValueId(
             state,
@@ -189,7 +322,7 @@ internal static class WorkflowExecutionValueStore
             stepId);
         state.Variables.Remove(stepId);
         normalized.Bindings.Remove(stepId);
-        normalized.CompletedSteps[stepId] = new WorkflowCompletedStepState
+        var completed = new WorkflowCompletedStepState
         {
             StepId = stepId,
             ExecutionId = completion.ExecutionId ?? string.Empty,
@@ -212,11 +345,14 @@ internal static class WorkflowExecutionValueStore
             RetryDisposition = completion.RetryDisposition,
             Outcome = completion.Outcome,
         };
+        PopulateCompletionDigests(normalized, completed);
+        normalized.CompletedSteps[stepId] = completed;
         MarkCompletionAccepted(
             normalized,
             completion,
             valueId,
             CreateAcceptedCompletionSnapshot(
+                normalized,
                 completion,
                 valueId,
                 assignedValueId,
@@ -310,6 +446,7 @@ internal static class WorkflowExecutionValueStore
         completed.FailureOutcome = completion.FailureOutcome;
         completed.RetryDisposition = completion.RetryDisposition;
         completed.Outcome = completion.Outcome;
+        PopulateCompletionDigests(normalized, completed);
         if (HasUsage(completion.Usage))
         {
             completed.Usage = ToUsageState(completion.Usage);
@@ -335,6 +472,7 @@ internal static class WorkflowExecutionValueStore
             completion,
             outputValueId,
             CreateAcceptedCompletionSnapshot(
+                normalized,
                 completion,
                 outputValueId,
                 assignedValueId,
@@ -364,12 +502,6 @@ internal static class WorkflowExecutionValueStore
             return false;
         }
 
-        if (!normalized.CanonicalValues.TryGetValue(valueId, out var canonical) ||
-            !CompletionOutputMatches(canonical, completion, valueId))
-        {
-            return false;
-        }
-
         if (state.ExecutionIdsByStepId.TryGetValue(stepId, out var activeExecutionId) &&
             !string.Equals(activeExecutionId, executionId, StringComparison.Ordinal))
         {
@@ -385,6 +517,12 @@ internal static class WorkflowExecutionValueStore
         var accepted = normalized.AcceptedCompletions.TryGetValue(acceptanceKey, out var snapshot)
             ? snapshot
             : current;
+        normalized.CanonicalValues.TryGetValue(valueId, out var canonical);
+        if (!string.Equals(accepted.OutputValueId, valueId, StringComparison.Ordinal) ||
+            !CompletionOutputMatches(canonical, accepted.OutputDigest, completion, valueId))
+        {
+            return false;
+        }
 
         try
         {
@@ -431,11 +569,16 @@ internal static class WorkflowExecutionValueStore
                 $"Workflow completion replay for step '{stepId}' declares an unknown provenance value.");
         }
 
-        if (string.IsNullOrWhiteSpace(replayed.OutputValueId) ||
-            !normalized.CanonicalValues.TryGetValue(replayed.OutputValueId, out var outputValue))
+        if (string.IsNullOrWhiteSpace(replayed.OutputValueId))
         {
             throw new InvalidOperationException(
                 $"Workflow completion replay for step '{stepId}' has no canonical output value.");
+        }
+        normalized.CanonicalValues.TryGetValue(replayed.OutputValueId, out var outputValue);
+        if (outputValue == null && !IsAuthoritativeDigest(replayed.OutputDigest))
+        {
+            throw new InvalidOperationException(
+                $"Workflow completion replay for step '{stepId}' has no digest-backed output evidence.");
         }
 
         var sameCompletion =
@@ -443,7 +586,11 @@ internal static class WorkflowExecutionValueStore
             string.Equals(replayed.Error ?? string.Empty, completion.Error ?? string.Empty, StringComparison.Ordinal) &&
             string.Equals(replayed.BranchKey ?? string.Empty, completion.BranchKey ?? string.Empty, StringComparison.Ordinal) &&
             string.Equals(replayed.NextStepId ?? string.Empty, completion.NextStepId ?? string.Empty, StringComparison.Ordinal) &&
-            CompletionOutputMatches(outputValue, completion, replayed.OutputValueId) &&
+            CompletionOutputMatches(
+                outputValue,
+                replayed.OutputDigest,
+                completion,
+                replayed.OutputValueId) &&
             replayed.OutputProvenance == completion.OutputProvenance &&
             replayed.AssignedValueProvenance == completion.AssignedValueProvenance &&
             replayed.FailureOutcome == completion.FailureOutcome &&
@@ -500,22 +647,25 @@ internal static class WorkflowExecutionValueStore
                     $"Workflow completion replay for step '{stepId}' changed its assigned-value mirror.");
             }
         }
-        else if (!normalized.CanonicalValues.TryGetValue(replayed.AssignedValueId, out var assignedCanonical) ||
-                 !string.Equals(assignedCanonical.Value ?? string.Empty, assignedValue, StringComparison.Ordinal))
+        else
         {
-            throw new InvalidOperationException(
-                $"Workflow completion replay for step '{stepId}' changed its assigned-value mirror.");
+            normalized.CanonicalValues.TryGetValue(replayed.AssignedValueId, out var assignedCanonical);
+            if (!ValueMatches(assignedCanonical, replayed.AssignedValueDigest, assignedValue))
+            {
+                throw new InvalidOperationException(
+                    $"Workflow completion replay for step '{stepId}' changed its assigned-value mirror.");
+            }
         }
 
         var rawAssignedValue = completion.AssignedValue ?? string.Empty;
+        normalized.CanonicalValues.TryGetValue(
+            replayed.AssignedMirrorValueId,
+            out var assignedMirrorCanonical);
         if (string.IsNullOrWhiteSpace(replayed.AssignedMirrorValueId) ||
-            !normalized.CanonicalValues.TryGetValue(
-                replayed.AssignedMirrorValueId,
-                out var assignedMirrorCanonical) ||
-            !string.Equals(
-                assignedMirrorCanonical.Value ?? string.Empty,
-                rawAssignedValue,
-                StringComparison.Ordinal))
+            !ValueMatches(
+                assignedMirrorCanonical,
+                replayed.AssignedMirrorDigest,
+                rawAssignedValue))
         {
             if (!string.IsNullOrWhiteSpace(replayed.AssignedValueId))
             {
@@ -530,9 +680,10 @@ internal static class WorkflowExecutionValueStore
                 var expectedSourceKind = replayed.EmitLegacyMirrors
                     ? WorkflowCanonicalValueSourceKind.StepOutput
                     : WorkflowCanonicalValueSourceKind.InternalOutput;
-                if (outputValue.SourceKind != expectedSourceKind ||
-                    !string.Equals(outputValue.ProducerStepId, stepId, StringComparison.Ordinal) ||
-                    !string.Equals(outputValue.ProducerExecutionId, replayed.ExecutionId, StringComparison.Ordinal))
+                if (outputValue != null &&
+                    (outputValue.SourceKind != expectedSourceKind ||
+                     !string.Equals(outputValue.ProducerStepId, stepId, StringComparison.Ordinal) ||
+                     !string.Equals(outputValue.ProducerExecutionId, replayed.ExecutionId, StringComparison.Ordinal)))
                 {
                     throw new InvalidOperationException(
                         $"Workflow produced completion replay for step '{stepId}' does not own its canonical output.");
@@ -551,8 +702,11 @@ internal static class WorkflowExecutionValueStore
                 break;
             case WorkflowStepOutputProvenance.ReferencedStepOutput:
                 if (!string.Equals(replayed.OutputSourceValueId, replayed.OutputValueId, StringComparison.Ordinal) ||
-                    !string.Equals(outputValue.ProducerStepId, replayed.OutputSourceStepId, StringComparison.Ordinal) ||
-                    !string.Equals(outputValue.ProducerExecutionId, replayed.OutputSourceExecutionId, StringComparison.Ordinal))
+                    string.IsNullOrWhiteSpace(replayed.OutputSourceStepId) ||
+                    string.IsNullOrWhiteSpace(replayed.OutputSourceExecutionId) ||
+                    outputValue != null &&
+                    (!string.Equals(outputValue.ProducerStepId, replayed.OutputSourceStepId, StringComparison.Ordinal) ||
+                     !string.Equals(outputValue.ProducerExecutionId, replayed.OutputSourceExecutionId, StringComparison.Ordinal)))
                 {
                     throw new InvalidOperationException(
                         $"Workflow referenced completion replay for step '{stepId}' has inconsistent source identity.");
@@ -567,6 +721,7 @@ internal static class WorkflowExecutionValueStore
     }
 
     private static WorkflowCompletedStepState CreateAcceptedCompletionSnapshot(
+        WorkflowNormalizedExecutionValuesState normalized,
         StepCompletedEvent completion,
         string outputValueId,
         string assignedValueId,
@@ -616,6 +771,8 @@ internal static class WorkflowExecutionValueStore
             };
         }
 
+        PopulateCompletionDigests(normalized, accepted);
+
         return accepted;
     }
 
@@ -630,14 +787,12 @@ internal static class WorkflowExecutionValueStore
         committed.LatencyMs == incoming.LatencyMs;
 
     private static bool CompletionOutputMatches(
-        WorkflowCanonicalValueState canonical,
+        WorkflowCanonicalValueState? canonical,
+        WorkflowValueDigest? digest,
         StepCompletedEvent completion,
         string acceptedValueId)
     {
-        if (string.Equals(
-                canonical.Value ?? string.Empty,
-                completion.Output ?? string.Empty,
-                StringComparison.Ordinal))
+        if (ValueMatches(canonical, digest, completion.Output ?? string.Empty))
         {
             return true;
         }
@@ -646,6 +801,161 @@ internal static class WorkflowExecutionValueStore
                string.IsNullOrEmpty(completion.Output) &&
                string.Equals(completion.OutputSourceValueId, acceptedValueId, StringComparison.Ordinal) &&
                !string.IsNullOrWhiteSpace(completion.OutputReferenceId);
+    }
+
+    private static bool ValueMatches(
+        WorkflowCanonicalValueState? canonical,
+        WorkflowValueDigest? digest,
+        string? incoming)
+    {
+        if (canonical != null && canonical.Released == null)
+        {
+            return string.Equals(
+                canonical.Value ?? string.Empty,
+                incoming ?? string.Empty,
+                StringComparison.Ordinal);
+        }
+
+        var evidence = canonical?.Released?.Digest;
+        if (!IsAuthoritativeDigest(evidence))
+            evidence = digest;
+        return DigestMatches(evidence, incoming ?? string.Empty);
+    }
+
+    private static WorkflowValueDigest CreateDigest(string? value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
+        return new WorkflowValueDigest
+        {
+            Sha256 = ByteString.CopyFrom(SHA256.HashData(bytes)),
+            Utf8Size = checked((ulong)bytes.LongLength),
+        };
+    }
+
+    internal static bool IsAuthoritativeDigest(WorkflowValueDigest? digest) =>
+        digest is { Redacted: false } && digest.Sha256.Length == SHA256.HashSizeInBytes;
+
+    internal static bool IsRedactedDigest(WorkflowValueDigest? digest) =>
+        digest is { Redacted: true, Utf8Size: 0 } && digest.Sha256.Length == 0;
+
+    private static bool DigestMatches(WorkflowValueDigest? digest, string value)
+    {
+        if (!IsAuthoritativeDigest(digest))
+            return false;
+
+        var bytes = Encoding.UTF8.GetBytes(value);
+        return digest!.Utf8Size == checked((ulong)bytes.LongLength) &&
+               CryptographicOperations.FixedTimeEquals(
+                   digest.Sha256.Span,
+                   SHA256.HashData(bytes));
+    }
+
+    private static void PopulateCompletionDigests(
+        WorkflowNormalizedExecutionValuesState normalized,
+        WorkflowCompletedStepState completed)
+    {
+        completed.OutputDigest = ResolveDigest(normalized, completed.OutputValueId);
+        completed.AssignedValueDigest = ResolveDigest(normalized, completed.AssignedValueId);
+        completed.AssignedMirrorDigest = ResolveDigest(normalized, completed.AssignedMirrorValueId);
+    }
+
+    private static void PopulateMissingCompletionDigests(
+        WorkflowNormalizedExecutionValuesState normalized,
+        WorkflowCompletedStepState completed)
+    {
+        if (!IsAuthoritativeDigest(completed.OutputDigest))
+            completed.OutputDigest = ResolveDigest(normalized, completed.OutputValueId);
+        if (!IsAuthoritativeDigest(completed.AssignedValueDigest))
+            completed.AssignedValueDigest = ResolveDigest(normalized, completed.AssignedValueId);
+        if (!IsAuthoritativeDigest(completed.AssignedMirrorDigest))
+            completed.AssignedMirrorDigest = ResolveDigest(normalized, completed.AssignedMirrorValueId);
+    }
+
+    private static WorkflowValueDigest? ResolveDigest(
+        WorkflowNormalizedExecutionValuesState normalized,
+        string? valueId)
+    {
+        var key = valueId?.Trim() ?? string.Empty;
+        if (key.Length == 0 || !normalized.CanonicalValues.TryGetValue(key, out var canonical))
+            return null;
+        if (canonical.Released?.Digest != null)
+            return canonical.Released.Digest.Clone();
+        return CreateDigest(canonical.Value ?? string.Empty);
+    }
+
+    private static bool IsSameRelease(
+        WorkflowReleasedValueTombstone release,
+        string stepId,
+        string executionId) =>
+        string.Equals(release.ReleasedAfterStepId, stepId, StringComparison.Ordinal) &&
+        string.Equals(release.ReleasedAfterExecutionId, executionId, StringComparison.Ordinal);
+
+    private static bool IsLiveValue(
+        WorkflowNormalizedExecutionValuesState normalized,
+        string valueId,
+        string releaseStepId,
+        string releaseExecutionId) =>
+        string.Equals(normalized.CurrentStepInputValueId, valueId, StringComparison.Ordinal) ||
+        (normalized.CompletedSteps.TryGetValue(releaseStepId, out var currentCompletion) &&
+         string.Equals(currentCompletion.ExecutionId, releaseExecutionId, StringComparison.Ordinal) &&
+         string.Equals(currentCompletion.OutputValueId, valueId, StringComparison.Ordinal)) ||
+        normalized.PendingOutputReferences.Values.Any(reference =>
+            string.Equals(reference.SourceValueId, valueId, StringComparison.Ordinal)) ||
+        normalized.PendingInternalDispatches.Values.Any(dispatch =>
+            string.Equals(dispatch.InputValueId, valueId, StringComparison.Ordinal));
+
+    private static IEnumerable<string> CollectCurrentCompletionAliases(
+        WorkflowNormalizedExecutionValuesState normalized,
+        string valueId)
+    {
+        foreach (var (stepId, completed) in normalized.CompletedSteps)
+        {
+            var prefix = $"{StepPrefix}{stepId}";
+            if (string.Equals(completed.OutputValueId, valueId, StringComparison.Ordinal))
+            {
+                yield return stepId;
+                yield return $"{prefix}.output";
+                foreach (var alias in completed.JsonValueBindings.Keys)
+                    yield return $"{prefix}.json.{alias}";
+            }
+
+            if (string.Equals(completed.AssignedValueId, valueId, StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(completed.AssignedVariable) &&
+                normalized.Bindings.TryGetValue(completed.AssignedVariable.Trim(), out var binding) &&
+                string.Equals(binding.ValueId, valueId, StringComparison.Ordinal))
+            {
+                yield return completed.AssignedVariable.Trim();
+            }
+
+            if (string.Equals(completed.AssignedMirrorValueId, valueId, StringComparison.Ordinal))
+                yield return $"{prefix}.assigned_value";
+        }
+    }
+
+    private static void UpdateCompletionDigestEvidence(
+        WorkflowNormalizedExecutionValuesState normalized,
+        string valueId,
+        WorkflowValueDigest digest)
+    {
+        foreach (var completed in normalized.CompletedSteps.Values)
+            UpdateCompletionDigestEvidence(completed, valueId, digest);
+        foreach (var completed in normalized.AcceptedCompletions.Values)
+            UpdateCompletionDigestEvidence(completed, valueId, digest);
+        foreach (var completed in normalized.InheritedCompletions.Values)
+            UpdateCompletionDigestEvidence(completed, valueId, digest);
+    }
+
+    private static void UpdateCompletionDigestEvidence(
+        WorkflowCompletedStepState completed,
+        string valueId,
+        WorkflowValueDigest digest)
+    {
+        if (string.Equals(completed.OutputValueId, valueId, StringComparison.Ordinal))
+            completed.OutputDigest = digest.Clone();
+        if (string.Equals(completed.AssignedValueId, valueId, StringComparison.Ordinal))
+            completed.AssignedValueDigest = digest.Clone();
+        if (string.Equals(completed.AssignedMirrorValueId, valueId, StringComparison.Ordinal))
+            completed.AssignedMirrorDigest = digest.Clone();
     }
 
     internal static void SetCurrentStepInput(
@@ -667,6 +977,8 @@ internal static class WorkflowExecutionValueStore
             throw new InvalidOperationException(
                 $"Normalized workflow current-step input references missing canonical value '{valueId}'.");
         }
+        if (canonical.Released != null)
+            throw WorkflowValueLifecycleException.ReleasedValueAccessed("input");
 
         if (!string.Equals(canonical.Value ?? string.Empty, input ?? string.Empty, StringComparison.Ordinal))
         {
@@ -687,7 +999,9 @@ internal static class WorkflowExecutionValueStore
         return normalized.CanonicalValues.TryGetValue(
             normalized.CurrentStepInputValueId,
             out var value)
-                ? value.Value ?? string.Empty
+                ? value.Released == null
+                    ? value.Value ?? string.Empty
+                    : throw WorkflowValueLifecycleException.ReleasedValueAccessed("input")
                 : throw new InvalidOperationException(
                     $"Workflow current-step input references missing canonical value '{normalized.CurrentStepInputValueId}'.");
     }
@@ -737,6 +1051,8 @@ internal static class WorkflowExecutionValueStore
                 $"Workflow completed step '{key}' has no canonical output value.");
         }
 
+        if (canonical.Released != null)
+            throw WorkflowValueLifecycleException.ReleasedValueAccessed(key);
         return canonical.Value ?? string.Empty;
     }
 
@@ -768,6 +1084,8 @@ internal static class WorkflowExecutionValueStore
                 $"Workflow canonical value '{key}' is unavailable.");
         }
 
+        if (value.Released != null)
+            throw WorkflowValueLifecycleException.ReleasedValueAccessed(key);
         return value;
     }
 
@@ -790,6 +1108,8 @@ internal static class WorkflowExecutionValueStore
             throw new InvalidOperationException(
                 $"Normalized workflow expression input references missing canonical value '{valueId}'.");
         }
+        if (canonical.Released != null)
+            throw WorkflowValueLifecycleException.ReleasedValueAccessed("input");
 
         if (!string.Equals(canonical.Value ?? string.Empty, input ?? string.Empty, StringComparison.Ordinal))
         {
@@ -854,6 +1174,7 @@ internal static class WorkflowExecutionValueStore
                 !string.Equals(existing.StepId, stepId, StringComparison.Ordinal) ||
                 !string.Equals(existing.ExecutionId, executionId, StringComparison.Ordinal) ||
                 !normalized.CanonicalValues.TryGetValue(existing.InputValueId, out var existingInput) ||
+                existingInput.Released != null ||
                 !string.Equals(existingInput.Value, request.Input ?? string.Empty, StringComparison.Ordinal) ||
                 (!string.IsNullOrWhiteSpace(request.InputValueId) &&
                  !string.Equals(request.InputValueId, existing.InputValueId, StringComparison.Ordinal)))
@@ -881,6 +1202,7 @@ internal static class WorkflowExecutionValueStore
             request.InputValueId = inputValueId;
         }
         else if (!normalized.CanonicalValues.TryGetValue(inputValueId, out var canonicalInput) ||
+                 canonicalInput.Released != null ||
                  !string.Equals(canonicalInput.Value, request.Input ?? string.Empty, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
@@ -995,6 +1317,8 @@ internal static class WorkflowExecutionValueStore
             throw new InvalidOperationException(
                 $"Workflow referenced completion '{published.StepId}' has no canonical publication value '{sourceValueId}'.");
         }
+        if (sourceValue.Released != null)
+            throw WorkflowValueLifecycleException.ReleasedValueAccessed(published.OutputSourceStepId);
 
         published.Output = sourceValue.Value ?? string.Empty;
         return published;
@@ -1044,6 +1368,8 @@ internal static class WorkflowExecutionValueStore
             throw new InvalidOperationException(
                 $"Workflow step output reference source '{sourceStepId}' has missing canonical value '{sourceCompletion.OutputValueId}'.");
         }
+        if (sourceValue.Released != null)
+            throw WorkflowValueLifecycleException.ReleasedValueAccessed(sourceStepId);
 
         if (!string.Equals(
                 sourceCompletion.ExecutionId ?? string.Empty,
@@ -1173,6 +1499,8 @@ internal static class WorkflowExecutionValueStore
                 throw new InvalidOperationException(
                     $"Workflow referenced-step completion for step '{completion.StepId}' references missing canonical value '{sourceValueId}'.");
             }
+            if (sourceValue.Released != null)
+                throw WorkflowValueLifecycleException.ReleasedValueAccessed(sourceStepId);
 
             var referenceOnlyCompletion =
                 string.IsNullOrEmpty(completion.Output) &&
@@ -1235,6 +1563,8 @@ internal static class WorkflowExecutionValueStore
                 throw new InvalidOperationException(
                     $"Workflow pass-through completion references missing canonical input '{canonicalInputValueId}'.");
             }
+            if (forwarded.Released != null)
+                throw WorkflowValueLifecycleException.ReleasedValueAccessed("input");
 
             if (!string.Equals(
                     forwarded.Value ?? string.Empty,
@@ -1554,22 +1884,17 @@ internal static class WorkflowExecutionValueStore
             .Concat(normalized.CompletedSteps.Values.SelectMany(
                 static step => step.JsonValueBindings.Values.Select(
                     static binding => binding.OutputValueId)))
-            .Concat(normalized.AcceptedCompletions.Values.Select(static step => step.OutputValueId))
-            .Concat(normalized.AcceptedCompletions.Values.Select(static step => step.AssignedValueId))
-            .Concat(normalized.AcceptedCompletions.Values.Select(static step => step.AssignedMirrorValueId))
             .Concat(normalized.AcceptedCompletions.Values.SelectMany(
-                static step => step.JsonValueBindings.Values.Select(
-                    static binding => binding.OutputValueId)))
-            .Concat(normalized.InheritedCompletions.Values.Select(static step => step.OutputValueId))
-            .Concat(normalized.InheritedCompletions.Values.Select(static step => step.AssignedValueId))
-            .Concat(normalized.InheritedCompletions.Values.Select(static step => step.AssignedMirrorValueId))
+                CollectCompletionValuesRequiringRawRetention))
             .Concat(normalized.InheritedCompletions.Values.SelectMany(
-                static step => step.JsonValueBindings.Values.Select(
-                    static binding => binding.OutputValueId)))
+                CollectCompletionValuesRequiringRawRetention))
             .Concat(normalized.PendingOutputReferences.Values.Select(
                 static reference => reference.SourceValueId))
             .Concat(normalized.PendingInternalDispatches.Values.Select(
                 static dispatch => dispatch.InputValueId))
+            .Concat(normalized.CanonicalValues
+                .Where(static pair => pair.Value.Released != null)
+                .Select(static pair => pair.Key))
             .Append(normalized.CurrentStepInputValueId)
             .Where(static valueId => !string.IsNullOrWhiteSpace(valueId))
             .ToHashSet(StringComparer.Ordinal);
@@ -1580,6 +1905,21 @@ internal static class WorkflowExecutionValueStore
         {
             normalized.CanonicalValues.Remove(valueId);
         }
+    }
+
+    private static IEnumerable<string> CollectCompletionValuesRequiringRawRetention(
+        WorkflowCompletedStepState completed)
+    {
+        if (!IsAuthoritativeDigest(completed.OutputDigest))
+        {
+            yield return completed.OutputValueId;
+            foreach (var binding in completed.JsonValueBindings.Values)
+                yield return binding.OutputValueId;
+        }
+        if (!IsAuthoritativeDigest(completed.AssignedValueDigest))
+            yield return completed.AssignedValueId;
+        if (!IsAuthoritativeDigest(completed.AssignedMirrorDigest))
+            yield return completed.AssignedMirrorValueId;
     }
 
     private static bool TryMatchOutputReference(
@@ -1643,6 +1983,11 @@ internal static class WorkflowExecutionValueStore
         return $"internal-dispatch-{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant()}";
     }
 
+    private sealed record ValueReleasePlan(
+        string Name,
+        string ValueId,
+        WorkflowCanonicalValueState Canonical);
+
     private sealed class WorkflowExecutionVariableView
         : IReadOnlyDictionary<string, string>
     {
@@ -1673,6 +2018,8 @@ internal static class WorkflowExecutionValueStore
         public bool TryGetValue(string key, out string value)
         {
             var normalized = _state.NormalizedValues!;
+            if (normalized.ReleasedBindings.ContainsKey(key))
+                throw WorkflowValueLifecycleException.ReleasedValueAccessed(key);
             if (normalized.Bindings.TryGetValue(key, out var binding))
             {
                 if (!normalized.CanonicalValues.TryGetValue(binding.ValueId, out var canonical))
@@ -1680,6 +2027,9 @@ internal static class WorkflowExecutionValueStore
                     throw new InvalidOperationException(
                         $"Workflow binding '{key}' references missing canonical value '{binding.ValueId}'.");
                 }
+
+                if (canonical.Released != null)
+                    throw WorkflowValueLifecycleException.ReleasedValueAccessed(key);
 
                 value = canonical.Value ?? string.Empty;
                 return true;
@@ -1707,7 +2057,7 @@ internal static class WorkflowExecutionValueStore
             var result = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var (stepId, completed) in _state.NormalizedValues!.CompletedSteps)
             {
-                if (TryGetCanonicalValue(completed.OutputValueId, out var output))
+                if (TryGetCanonicalValue(completed.OutputValueId, out var output, allowReleased: false))
                     result[stepId] = output;
                 AddCompletedStepEntries(result, stepId, completed);
             }
@@ -1745,14 +2095,23 @@ internal static class WorkflowExecutionValueStore
             {
                 target[$"{prefix}.assigned_value"] = string.Empty;
             }
-            else if (TryGetCanonicalValue(assignedMirrorValueId, out var assignedValue))
+            else if (TryGetCanonicalValue(
+                         assignedMirrorValueId,
+                         out var assignedValue,
+                         allowReleased: false))
             {
                 target[$"{prefix}.assigned_value"] = assignedValue;
             }
             else
             {
-                throw new InvalidOperationException(
-                    $"Workflow completion '{stepId}' references missing assigned mirror value '{assignedMirrorValueId}'.");
+                if (!_state.NormalizedValues!.CanonicalValues.TryGetValue(
+                        assignedMirrorValueId,
+                        out var assignedCanonical) ||
+                    assignedCanonical.Released == null)
+                {
+                    throw new InvalidOperationException(
+                        $"Workflow completion '{stepId}' references missing assigned mirror value '{assignedMirrorValueId}'.");
+                }
             }
 
             foreach (var (key, value) in completed.Annotations)
@@ -1860,10 +2219,20 @@ internal static class WorkflowExecutionValueStore
             return false;
         }
 
-        private bool TryGetCanonicalValue(string valueId, out string value)
+        private bool TryGetCanonicalValue(
+            string valueId,
+            out string value,
+            bool allowReleased = true)
         {
             if (_state.NormalizedValues!.CanonicalValues.TryGetValue(valueId, out var canonical))
             {
+                if (canonical.Released != null)
+                {
+                    if (allowReleased)
+                        throw WorkflowValueLifecycleException.ReleasedValueAccessed(valueId);
+                    value = string.Empty;
+                    return false;
+                }
                 value = canonical.Value ?? string.Empty;
                 return true;
             }
@@ -1913,10 +2282,20 @@ internal static class WorkflowExecutionValueStore
         {
             foreach (var (alias, binding) in completed.JsonValueBindings)
             {
-                if (!TryGetCanonicalValue(binding.OutputValueId, out var output))
+                if (!TryGetCanonicalValue(
+                        binding.OutputValueId,
+                        out var output,
+                        allowReleased: false))
                 {
-                    throw new InvalidOperationException(
-                        $"Workflow JSON alias '{alias}' references missing output '{binding.OutputValueId}'.");
+                    if (!_state.NormalizedValues!.CanonicalValues.TryGetValue(
+                            binding.OutputValueId,
+                            out var outputCanonical) ||
+                        outputCanonical.Released == null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Workflow JSON alias '{alias}' references missing output '{binding.OutputValueId}'.");
+                    }
+                    continue;
                 }
 
                 if (ReadJsonVariables(binding.OutputValueId, output)

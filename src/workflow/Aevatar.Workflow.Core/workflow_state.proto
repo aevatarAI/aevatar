@@ -235,6 +235,7 @@ message WorkflowRunState
   // activation can finish the interrupted actor-owned continuation without re-running the
   // compensation step.
   CompensationStepCompletedEvent pending_compensation_completion = 63;
+  aevatar.workflow.WorkflowValueLifecycleFailureKind terminal_value_lifecycle_failure_kind = 64;
 }
 
 message WorkflowRunDefinitionBindingContinuationState
@@ -476,6 +477,7 @@ message WorkflowCanonicalValueState
   string producer_step_id = 3;
   string producer_execution_id = 4;
   aevatar.workflow.WorkflowCanonicalValueSourceKind source_kind = 5;
+  aevatar.workflow.WorkflowReleasedValueTombstone released = 6;
 }
 
 enum WorkflowValueBindingKind
@@ -532,6 +534,9 @@ message WorkflowCompletedStepState
   // target may fall back to output while this mirror retains an empty/blank
   // value, so it cannot share assigned_value_id in that case.
   string assigned_mirror_value_id = 24;
+  aevatar.workflow.WorkflowValueDigest output_digest = 25;
+  aevatar.workflow.WorkflowValueDigest assigned_value_digest = 26;
+  aevatar.workflow.WorkflowValueDigest assigned_mirror_digest = 27;
 }
 
 message WorkflowJsonValueBindingState
@@ -584,6 +589,10 @@ message WorkflowNormalizedExecutionValuesState
   // accept or recover a target-run physical completion.
   map<string, string> inherited_completion_value_ids = 10;
   map<string, WorkflowCompletedStepState> inherited_completions = 11;
+  // Alias tombstones preserve the difference between "never existed" and
+  // "author explicitly released this exact canonical value". Enumeration
+  // omits them and request overrides may bind the same name to a new identity.
+  map<string, aevatar.workflow.WorkflowReleasedValueTombstone> released_bindings = 12;
 }
 
 message WorkflowUsageMetricsState

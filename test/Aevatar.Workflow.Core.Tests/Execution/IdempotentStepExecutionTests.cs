@@ -47,6 +47,35 @@ public sealed class IdempotentStepExecutionTests
         ],
     };
 
+    private static WorkflowDefinition ValueLifecycleWorkflow(bool consumerReferencesReleasedValue = false) => new()
+    {
+        Name = "value-lifecycle-workflow",
+        Roles = [],
+        Steps =
+        [
+            new StepDefinition { Id = "producer", Type = "transform", Next = "reduce" },
+            new StepDefinition
+            {
+                Id = "reduce",
+                Type = "transform",
+                Next = "consumer",
+                ValueLifecycle = new WorkflowStepValueLifecycle
+                {
+                    ReleaseVariablesAfterSuccess = { "raw_pages" },
+                },
+            },
+            new StepDefinition
+            {
+                Id = "consumer",
+                Type = "transform",
+                Parameters =
+                {
+                    ["source"] = consumerReferencesReleasedValue ? "${raw_pages}" : "${input}",
+                },
+            },
+        ],
+    };
+
     private static EventEnvelope Wrap(IMessage msg) => new()
     {
         Id = Guid.NewGuid().ToString("N"),
@@ -95,6 +124,47 @@ public sealed class IdempotentStepExecutionTests
         kernel.Variables.Should().Contain("step-a", "alpha");
         kernel.IdempotencyByStepId["step-b"].IdempotencyKey
             .Should().Be("legacy-run:step-b:2");
+    }
+
+    [Fact]
+    public void SchemaV1ToV2Migration_ShouldReplaceHistoricalRetryPayloadsWithDigestEvidence()
+    {
+        var kernel = new WorkflowExecutionKernelState { RunId = "run-migrate-v2" };
+        WorkflowExecutionValueStore.Initialize(kernel);
+        for (var attempt = 1; attempt <= 32; attempt++)
+        {
+            WorkflowExecutionValueStore.RecordInternalOutput(
+                kernel,
+                CreateProducedCompletion(
+                    kernel.RunId,
+                    "retrying-child",
+                    $"execution-{attempt}",
+                    $"{attempt}:{new string('x', 64 * 1024)}"));
+            kernel.NormalizedValues!.AcceptedCompletions.Values
+                .Single(completion => completion.ExecutionId == $"execution-{attempt}")
+                .OutputDigest = null;
+        }
+        kernel.NormalizedValues!.CompletedSteps["retrying-child"].OutputDigest = null;
+        kernel.NormalizedValues.CanonicalValues.Should().HaveCount(32);
+        var sourceSize = kernel.CalculateSize();
+        var source = new WorkflowRunState { RunId = kernel.RunId };
+        source.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey] = Any.Pack(kernel);
+
+        var migration = new WorkflowRunStateV1ToV2Migration();
+        var migrated = migration.Apply(source);
+
+        migration.FromStateVersion.Should().Be(1);
+        migration.ToStateVersion.Should().Be(2);
+        var migratedKernel = migrated.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        migratedKernel.NormalizedValues!.CanonicalValues.Should().ContainSingle();
+        migratedKernel.NormalizedValues.AcceptedCompletions.Should().HaveCount(32);
+        migratedKernel.NormalizedValues.AcceptedCompletions.Values.Should().OnlyContain(completion =>
+            WorkflowExecutionValueStore.IsAuthoritativeDigest(completion.OutputDigest));
+        migratedKernel.CalculateSize().Should().BeLessThan(sourceSize / 8);
+        source.ExecutionStates[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>()
+            .NormalizedValues!.CanonicalValues.Should().HaveCount(32);
     }
 
     [Fact]
@@ -223,6 +293,209 @@ public sealed class IdempotentStepExecutionTests
         }
         rehydratedHost.States[WorkflowExecutionKernel.ModuleStateKey].ToByteArray()
             .Should().Equal(persistedBeforeRejectedStart);
+    }
+
+    [Fact]
+    public async Task ValueLifecycleAdmission_ShouldRequireV2ReceiptAndLiveGate()
+    {
+        var v1Host = CreateNormalizedStateHost("run-v1-rejected");
+        var v1Act = () => WorkflowNormalizedStateWriteAdmission.SelectNewRunRepresentationAsync(
+            v1Host,
+            forkSeed: null,
+            CancellationToken.None,
+            requiresValueLifecycle: true);
+
+        var rejected = await v1Act.Should().ThrowAsync<WorkflowValueLifecycleException>();
+        rejected.Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.SchemaUnavailable);
+
+        var v2Host = CreateValueLifecycleStateHost("run-v2-admitted");
+        WorkflowNormalizedStateWriteAdmission.IsValueLifecycleGranted(
+            v2Host.RuntimeStateSchemaContextReader).Should().BeTrue();
+        var selected = await WorkflowNormalizedStateWriteAdmission.SelectNewRunRepresentationAsync(
+            v2Host,
+            forkSeed: null,
+            CancellationToken.None,
+            requiresValueLifecycle: true);
+        selected.Should().Be(WorkflowExecutionValueRepresentation.Normalized);
+    }
+
+    [Fact]
+    public async Task ValueLifecycleKernel_WithV1Receipt_ShouldFailBeforeStateMutation()
+    {
+        var host = CreateNormalizedStateHost("run-lifecycle-v1");
+        var kernel = new WorkflowExecutionKernel(ValueLifecycleWorkflow(), host);
+
+        var act = () => kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                RunId = host.RunId,
+                Input = "request",
+                ValueRepresentation = WorkflowExecutionValueRepresentation.Normalized,
+            }),
+            new RecordingEventHandlerContext(),
+            CancellationToken.None);
+
+        var rejected = await act.Should().ThrowAsync<WorkflowValueLifecycleException>();
+        rejected.Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.SchemaUnavailable);
+        host.States.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ValueLifecycleKernel_ShouldReleaseIntermediateAcrossReactivationAndComplete()
+    {
+        const string runId = "run-lifecycle-success";
+        var rawPages = new string('x', 64 * 1024);
+        var workflow = ValueLifecycleWorkflow();
+        var host = CreateValueLifecycleStateHost(runId);
+        var context = new RecordingEventHandlerContext();
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                RunId = runId,
+                Input = "request",
+                ValueRepresentation = WorkflowExecutionValueRepresentation.Normalized,
+            }),
+            context,
+            CancellationToken.None);
+        var producer = StepRequests(context).Single(request => request.StepId == "producer");
+        var producerCompletion = CreateProducedCompletion(
+            runId,
+            producer.StepId,
+            producer.ExecutionId,
+            rawPages);
+        producerCompletion.AssignedVariable = "raw_pages";
+        producerCompletion.AssignedValue = rawPages;
+        producerCompletion.AssignedValueProvenance =
+            WorkflowStepAssignedValueProvenance.ReferencesOutput;
+        await kernel.HandleAsync(Wrap(producerCompletion), context, CancellationToken.None);
+        var reduce = StepRequests(context).Single(request => request.StepId == "reduce");
+
+        kernel = new WorkflowExecutionKernel(workflow, host);
+        await kernel.HandleAsync(
+            Wrap(CreateProducedCompletion(runId, reduce.StepId, reduce.ExecutionId, "reduced")),
+            context,
+            CancellationToken.None);
+
+        var state = LoadKernelState(host);
+        var releasedValueId = state.NormalizedValues!.CompletedSteps["producer"].OutputValueId;
+        state.NormalizedValues.CanonicalValues[releasedValueId].Value.Should().BeEmpty();
+        state.NormalizedValues.CanonicalValues[releasedValueId].Released.Should().NotBeNull();
+        state.NormalizedValues.ReleasedBindings.Should().ContainKey("raw_pages");
+        state.CalculateSize().Should().BeLessThan(rawPages.Length / 2);
+        var consumer = StepRequests(context).Single(request => request.StepId == "consumer");
+        consumer.Input.Should().Be("reduced");
+        consumer.Parameters["source"].Should().Be("reduced");
+
+        await new WorkflowExecutionKernel(workflow, host).HandleAsync(
+            Wrap(CreateProducedCompletion(runId, consumer.StepId, consumer.ExecutionId, "done")),
+            context,
+            CancellationToken.None);
+
+        WorkflowCompletions(context).Should().ContainSingle()
+            .Which.Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ValueLifecycleKernel_AfterDispatchCrash_ShouldRecoverWithoutRawPayload()
+    {
+        const string runId = "run-lifecycle-recovery";
+        var rawPages = new string('y', 64 * 1024);
+        var workflow = ValueLifecycleWorkflow();
+        var host = CreateValueLifecycleStateHost(runId);
+        var context = new RecordingEventHandlerContext();
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                RunId = runId,
+                Input = "request",
+                ValueRepresentation = WorkflowExecutionValueRepresentation.Normalized,
+            }),
+            context,
+            CancellationToken.None);
+        var producer = StepRequests(context).Single(request => request.StepId == "producer");
+        var producerCompletion = CreateProducedCompletion(
+            runId,
+            producer.StepId,
+            producer.ExecutionId,
+            rawPages);
+        producerCompletion.AssignedVariable = "raw_pages";
+        producerCompletion.AssignedValue = rawPages;
+        producerCompletion.AssignedValueProvenance =
+            WorkflowStepAssignedValueProvenance.ReferencesOutput;
+        await kernel.HandleAsync(Wrap(producerCompletion), context, CancellationToken.None);
+        var reduce = StepRequests(context).Single(request => request.StepId == "reduce");
+        context.FailNextPublishType = typeof(StepRequestEvent);
+
+        await FluentActions.Awaiting(() => kernel.HandleAsync(
+                Wrap(CreateProducedCompletion(runId, reduce.StepId, reduce.ExecutionId, "reduced")),
+                context,
+                CancellationToken.None))
+            .Should().ThrowAsync<EventStoreOptimisticConcurrencyException>();
+
+        var crashed = LoadKernelState(host);
+        crashed.CurrentStepDispatchPending.Should().BeTrue();
+        crashed.NormalizedValues!.ReleasedBindings.Should().ContainKey("raw_pages");
+        crashed.NormalizedValues.CanonicalValues.Values.Should().NotContain(value =>
+            string.Equals(value.Value, rawPages, StringComparison.Ordinal));
+
+        var recoveredContext = new RecordingEventHandlerContext();
+        await new WorkflowExecutionKernel(workflow, host).HandleAsync(
+            Wrap(new WorkflowExecutionRecoveryRequestedEvent { RunId = runId }),
+            recoveredContext,
+            CancellationToken.None);
+
+        StepRequests(recoveredContext).Should().ContainSingle()
+            .Which.StepId.Should().Be("consumer");
+        LoadKernelState(host).CurrentStepDispatchPending.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ValueLifecycleKernel_WhenNextStepReadsReleasedAlias_ShouldPublishTypedFailure()
+    {
+        const string runId = "run-lifecycle-failure";
+        const string rawPages = "raw-pages";
+        var workflow = ValueLifecycleWorkflow(consumerReferencesReleasedValue: true);
+        var host = CreateValueLifecycleStateHost(runId);
+        var context = new RecordingEventHandlerContext();
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+
+        await kernel.HandleAsync(
+            Wrap(new StartWorkflowEvent
+            {
+                RunId = runId,
+                Input = "request",
+                ValueRepresentation = WorkflowExecutionValueRepresentation.Normalized,
+            }),
+            context,
+            CancellationToken.None);
+        var producer = StepRequests(context).Single(request => request.StepId == "producer");
+        var producerCompletion = CreateProducedCompletion(
+            runId,
+            producer.StepId,
+            producer.ExecutionId,
+            rawPages);
+        producerCompletion.AssignedVariable = "raw_pages";
+        producerCompletion.AssignedValue = rawPages;
+        producerCompletion.AssignedValueProvenance =
+            WorkflowStepAssignedValueProvenance.ReferencesOutput;
+        await kernel.HandleAsync(Wrap(producerCompletion), context, CancellationToken.None);
+        var reduce = StepRequests(context).Single(request => request.StepId == "reduce");
+
+        await kernel.HandleAsync(
+            Wrap(CreateProducedCompletion(runId, reduce.StepId, reduce.ExecutionId, "reduced")),
+            context,
+            CancellationToken.None);
+
+        var failure = WorkflowCompletions(context).Should().ContainSingle().Subject;
+        failure.Success.Should().BeFalse();
+        failure.ValueLifecycleFailureKind.Should().Be(
+            WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
+        LoadKernelState(host).PendingWorkflowCompletion!.ValueLifecycleFailureKind.Should().Be(
+            WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
     }
 
     [Theory]
@@ -2057,6 +2330,25 @@ public sealed class IdempotentStepExecutionTests
         return host;
     }
 
+    private static RecordingStateHost CreateValueLifecycleStateHost(string runId)
+    {
+        var now = new DateTimeOffset(2026, 8, 18, 2, 0, 0, TimeSpan.Zero);
+        var host = CreateAdoptedStateHost(
+            new FixedSchemaContextAccessor(CreateValueLifecycleSchemaContext(now)),
+            new MutableAdmissionReader(CreateNormalizedAdmission(
+                now,
+                WorkflowNormalizedStateWriteAdmission.ValueLifecycleRequiredReaderContractVersion)),
+            new FixedMembershipReader(new RuntimeLocalMembershipIdentity(
+                7,
+                "digest-a",
+                "revision-a",
+                "member-a",
+                "inc-a")),
+            new FixedTimeProvider(now));
+        host.RunId = runId;
+        return host;
+    }
+
     private static readonly string[] DefaultStartVariableKeys =
     [
         "input",
@@ -2394,7 +2686,31 @@ public sealed class IdempotentStepExecutionTests
         return new RuntimeActorStateSchemaContext("workflow.run", 1, [receipt]);
     }
 
-    private static RuntimeFleetCapabilityAdmission CreateNormalizedAdmission(DateTimeOffset now)
+    private static RuntimeActorStateSchemaContext CreateValueLifecycleSchemaContext(
+        DateTimeOffset adoptedAt)
+    {
+        var v1Receipt = CreateNormalizedSchemaContext(adoptedAt).AdoptionReceipts.Single().Clone();
+        var v2Receipt = new RuntimeActorStateSchemaAdoptionReceipt
+        {
+            StateSchemaVersion = 2,
+            RequiredCapability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            RequiredContractId = WorkflowNormalizedStateWriteAdmission.ContractId,
+            RequiredContractVersion =
+                WorkflowNormalizedStateWriteAdmission.ValueLifecycleRequiredReaderContractVersion,
+            CapabilityEpoch = 3,
+            AuthorityStateVersion = 9,
+            MembershipEpoch = 7,
+            DeploymentRevision = "revision-a",
+            AdoptedAt = Timestamp.FromDateTimeOffset(adoptedAt),
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            MembershipDigest = "digest-a",
+        };
+        return new RuntimeActorStateSchemaContext("workflow.run", 2, [v1Receipt, v2Receipt]);
+    }
+
+    private static RuntimeFleetCapabilityAdmission CreateNormalizedAdmission(
+        DateTimeOffset now,
+        int readerContractVersion = WorkflowNormalizedStateWriteAdmission.RequiredReaderContractVersion)
     {
         var admission = new RuntimeFleetCapabilityAdmission
         {
@@ -2405,7 +2721,7 @@ public sealed class IdempotentStepExecutionTests
             CapabilityEpoch = 3,
             MembershipEpoch = 7,
             DeploymentRevision = "revision-a",
-            MinimumReaderContractVersion = WorkflowNormalizedStateWriteAdmission.RequiredReaderContractVersion,
+            MinimumReaderContractVersion = readerContractVersion,
             MembershipObservedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(-5)),
             MembershipValidUntil = Timestamp.FromDateTimeOffset(now.AddMinutes(1)),
             ActiveMemberCount = 1,

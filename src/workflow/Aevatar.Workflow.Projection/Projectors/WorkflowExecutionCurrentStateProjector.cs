@@ -73,6 +73,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
             Input = state.Input ?? string.Empty,
             FinalOutput = state.FinalOutput ?? string.Empty,
             FinalError = WorkflowAuditTextSanitizer.SanitizeForStorage(state.FinalError),
+            TerminalValueLifecycleFailureKind = state.TerminalValueLifecycleFailureKind,
             SagaStatus = state.SagaStatus,
             DeadLetterFailedCompensationStepId = state.DeadLetterFailedCompensationStepId ?? string.Empty,
             DeadLetterRemainingUncompensated = state.DeadLetterRemainingUncompensated,

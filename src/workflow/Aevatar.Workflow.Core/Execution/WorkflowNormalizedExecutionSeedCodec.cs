@@ -36,14 +36,18 @@ public static class WorkflowNormalizedExecutionSeedCodec
             seed.Bindings[name] = ToSeed(binding);
         foreach (var (stepId, completed) in normalized.CompletedSteps)
             seed.CompletedSteps[stepId] = ToSeed(completed);
-        foreach (var (sourceKey, valueId) in normalized.InheritedCompletionValueIds)
-            seed.SourceCompletionValueIds[sourceKey] = valueId;
-        foreach (var (sourceKey, source) in normalized.InheritedCompletions)
-            seed.SourceCompletions[sourceKey] = ToSeed(source);
-        foreach (var (acceptanceKey, valueId) in normalized.AcceptedCompletionValueIds)
-            seed.SourceCompletionValueIds[acceptanceKey] = valueId;
-        foreach (var (acceptanceKey, accepted) in normalized.AcceptedCompletions)
-            seed.SourceCompletions[acceptanceKey] = ToSeed(accepted);
+        CopyCapturableCompletionEvidence(
+            normalized,
+            normalized.InheritedCompletionValueIds,
+            normalized.InheritedCompletions,
+            seed);
+        CopyCapturableCompletionEvidence(
+            normalized,
+            normalized.AcceptedCompletionValueIds,
+            normalized.AcceptedCompletions,
+            seed);
+        foreach (var (name, released) in normalized.ReleasedBindings)
+            seed.ReleasedBindings[name] = released.Clone();
         seed.Variables.Add(state.Variables);
         return seed;
     }
@@ -71,6 +75,8 @@ public static class WorkflowNormalizedExecutionSeedCodec
             normalized.InheritedCompletionValueIds[sourceKey] = valueId;
         foreach (var (sourceKey, source) in seed.SourceCompletions)
             normalized.InheritedCompletions[sourceKey] = ToState(source);
+        foreach (var (name, released) in seed.ReleasedBindings)
+            normalized.ReleasedBindings[name] = released.Clone();
         state.Variables.Clear();
         state.Variables.Add(seed.Variables);
         state.NormalizedValues = normalized;
@@ -110,6 +116,56 @@ public static class WorkflowNormalizedExecutionSeedCodec
     public static string ResolveCurrentInput(WorkflowExecutionKernelState state) =>
         WorkflowExecutionValueStore.ResolveCurrentStepInput(state);
 
+    private static void CopyCapturableCompletionEvidence(
+        WorkflowNormalizedExecutionValuesState normalized,
+        IDictionary<string, string> valueIds,
+        IDictionary<string, WorkflowCompletedStepState> completions,
+        WorkflowNormalizedExecutionSeed seed)
+    {
+        foreach (var (key, completion) in completions)
+        {
+            if (!valueIds.TryGetValue(key, out var valueId) ||
+                !string.Equals(valueId, completion.OutputValueId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Normalized workflow completion evidence '{key}' has inconsistent value identity.");
+            }
+
+            if (!HasCapturableCompletionEvidence(normalized, completion))
+                continue;
+
+            seed.SourceCompletionValueIds[key] = valueId;
+            seed.SourceCompletions[key] = ToSeed(completion);
+        }
+    }
+
+    private static bool HasCapturableCompletionEvidence(
+        WorkflowNormalizedExecutionValuesState normalized,
+        WorkflowCompletedStepState completion) =>
+        HasCapturableValueEvidence(normalized, completion.OutputValueId, completion.OutputDigest) &&
+        HasCapturableOptionalValueEvidence(
+            normalized,
+            completion.AssignedValueId,
+            completion.AssignedValueDigest) &&
+        HasCapturableOptionalValueEvidence(
+            normalized,
+            completion.AssignedMirrorValueId,
+            completion.AssignedMirrorDigest);
+
+    private static bool HasCapturableOptionalValueEvidence(
+        WorkflowNormalizedExecutionValuesState normalized,
+        string? valueId,
+        WorkflowValueDigest? digest) =>
+        string.IsNullOrWhiteSpace(valueId) || HasCapturableValueEvidence(normalized, valueId, digest);
+
+    private static bool HasCapturableValueEvidence(
+        WorkflowNormalizedExecutionValuesState normalized,
+        string? valueId,
+        WorkflowValueDigest? digest) =>
+        !string.IsNullOrWhiteSpace(valueId) &&
+        (normalized.CanonicalValues.ContainsKey(valueId) ||
+         WorkflowExecutionValueStore.IsAuthoritativeDigest(digest));
+
     private static HashSet<string> CollectSeedValueIds(
         WorkflowNormalizedExecutionValuesState normalized)
     {
@@ -129,28 +185,51 @@ public static class WorkflowNormalizedExecutionSeedCodec
                 valueIds.Add(jsonBinding.OutputValueId);
         }
         foreach (var valueId in normalized.AcceptedCompletionValueIds.Values)
-            valueIds.Add(valueId);
+        {
+            if (normalized.CanonicalValues.ContainsKey(valueId))
+                valueIds.Add(valueId);
+        }
         foreach (var accepted in normalized.AcceptedCompletions.Values)
         {
-            valueIds.Add(accepted.OutputValueId);
-            if (!string.IsNullOrWhiteSpace(accepted.AssignedValueId))
+            if (normalized.CanonicalValues.ContainsKey(accepted.OutputValueId))
+                valueIds.Add(accepted.OutputValueId);
+            if (!string.IsNullOrWhiteSpace(accepted.AssignedValueId) &&
+                normalized.CanonicalValues.ContainsKey(accepted.AssignedValueId))
                 valueIds.Add(accepted.AssignedValueId);
-            if (!string.IsNullOrWhiteSpace(accepted.AssignedMirrorValueId))
+            if (!string.IsNullOrWhiteSpace(accepted.AssignedMirrorValueId) &&
+                normalized.CanonicalValues.ContainsKey(accepted.AssignedMirrorValueId))
                 valueIds.Add(accepted.AssignedMirrorValueId);
             foreach (var jsonBinding in accepted.JsonValueBindings.Values)
-                valueIds.Add(jsonBinding.OutputValueId);
+            {
+                if (normalized.CanonicalValues.ContainsKey(jsonBinding.OutputValueId))
+                    valueIds.Add(jsonBinding.OutputValueId);
+            }
         }
         foreach (var valueId in normalized.InheritedCompletionValueIds.Values)
-            valueIds.Add(valueId);
+        {
+            if (normalized.CanonicalValues.ContainsKey(valueId))
+                valueIds.Add(valueId);
+        }
         foreach (var source in normalized.InheritedCompletions.Values)
         {
-            valueIds.Add(source.OutputValueId);
-            if (!string.IsNullOrWhiteSpace(source.AssignedValueId))
+            if (normalized.CanonicalValues.ContainsKey(source.OutputValueId))
+                valueIds.Add(source.OutputValueId);
+            if (!string.IsNullOrWhiteSpace(source.AssignedValueId) &&
+                normalized.CanonicalValues.ContainsKey(source.AssignedValueId))
                 valueIds.Add(source.AssignedValueId);
-            if (!string.IsNullOrWhiteSpace(source.AssignedMirrorValueId))
+            if (!string.IsNullOrWhiteSpace(source.AssignedMirrorValueId) &&
+                normalized.CanonicalValues.ContainsKey(source.AssignedMirrorValueId))
                 valueIds.Add(source.AssignedMirrorValueId);
             foreach (var jsonBinding in source.JsonValueBindings.Values)
-                valueIds.Add(jsonBinding.OutputValueId);
+            {
+                if (normalized.CanonicalValues.ContainsKey(jsonBinding.OutputValueId))
+                    valueIds.Add(jsonBinding.OutputValueId);
+            }
+        }
+        foreach (var (valueId, value) in normalized.CanonicalValues)
+        {
+            if (value.Released != null)
+                valueIds.Add(valueId);
         }
 
         valueIds.RemoveWhere(string.IsNullOrWhiteSpace);
@@ -185,6 +264,16 @@ public static class WorkflowNormalizedExecutionSeedCodec
                     $"Normalized workflow seed canonical value '{valueId}' has source kind '{value.SourceKind}' without exact producer identity.");
             }
 
+            if (value.Released != null)
+            {
+                if (!string.IsNullOrEmpty(value.Value))
+                {
+                    throw new InvalidOperationException(
+                        $"Normalized workflow seed released value '{valueId}' still contains raw payload.");
+                }
+                ValidateReleaseTombstone(value.Released, $"canonical value '{valueId}'");
+            }
+
             maximumValueSequence = Math.Max(maximumValueSequence, valueSequence);
         }
 
@@ -208,7 +297,8 @@ public static class WorkflowNormalizedExecutionSeedCodec
                 !string.Equals(name, name.Trim(), StringComparison.Ordinal) ||
                 binding.BindingKind == WorkflowValueBindingSeedKind.Unspecified ||
                 !Enum.IsDefined(binding.BindingKind) ||
-                !seed.CanonicalValues.ContainsKey(binding.ValueId))
+                !seed.CanonicalValues.TryGetValue(binding.ValueId, out var boundValue) ||
+                boundValue.Released != null)
             {
                 throw new InvalidOperationException(
                     $"Normalized workflow seed binding '{name}' references missing canonical value '{binding.ValueId}'.");
@@ -249,13 +339,18 @@ public static class WorkflowNormalizedExecutionSeedCodec
 
             var outputAlias = $"steps.{stepId}.output";
             var hasOutputBinding = seed.Bindings.TryGetValue(outputAlias, out var outputBinding);
-            if (completed.EmitLegacyMirrors &&
+            if (completed.EmitLegacyMirrors && outputValue.Released == null &&
                 (!hasOutputBinding ||
                  outputBinding!.BindingKind != WorkflowValueBindingSeedKind.StepOutput ||
                  !string.Equals(outputBinding.ValueId, completed.OutputValueId, StringComparison.Ordinal)))
             {
                 throw new InvalidOperationException(
                     $"Normalized workflow seed completion '{stepId}' is not aligned with its output binding.");
+            }
+            if (outputValue.Released != null && hasOutputBinding)
+            {
+                throw new InvalidOperationException(
+                    $"Normalized workflow seed released completion '{stepId}' still has an output binding.");
             }
             if (!completed.EmitLegacyMirrors && hasOutputBinding)
             {
@@ -412,11 +507,31 @@ public static class WorkflowNormalizedExecutionSeedCodec
             }
         }
 
+        foreach (var (name, released) in seed.ReleasedBindings)
+        {
+            if (string.IsNullOrWhiteSpace(name) ||
+                !string.Equals(name, name.Trim(), StringComparison.Ordinal) ||
+                seed.Bindings.ContainsKey(name))
+            {
+                throw new InvalidOperationException(
+                    $"Normalized workflow seed released binding '{name}' collides with a live binding.");
+            }
+
+            ValidateReleaseTombstone(released, $"binding '{name}'");
+            if (!seed.CanonicalValues.Values.Any(value =>
+                    value.Released != null && value.Released.Equals(released)))
+            {
+                throw new InvalidOperationException(
+                    $"Normalized workflow seed released binding '{name}' has no canonical tombstone.");
+            }
+        }
+
         var hasCurrentInputValue = !string.IsNullOrWhiteSpace(seed.CurrentStepInputValueId);
         var hasInputBinding = seed.Bindings.TryGetValue("input", out var inputBinding);
         if (hasCurrentInputValue != hasInputBinding ||
             (hasCurrentInputValue &&
-             (!seed.CanonicalValues.ContainsKey(seed.CurrentStepInputValueId) ||
+             (!seed.CanonicalValues.TryGetValue(seed.CurrentStepInputValueId, out var currentInput) ||
+              currentInput.Released != null ||
               inputBinding!.BindingKind != WorkflowValueBindingSeedKind.CurrentInput ||
               !string.Equals(
                   inputBinding.ValueId,
@@ -447,7 +562,6 @@ public static class WorkflowNormalizedExecutionSeedCodec
                 !string.Equals(acceptanceKey, expectedKey, StringComparison.Ordinal) ||
                 !seed.SourceCompletionValueIds.TryGetValue(acceptanceKey, out var acceptedValueId) ||
                 !string.Equals(acceptedValueId, accepted.OutputValueId, StringComparison.Ordinal) ||
-                !seed.CanonicalValues.TryGetValue(accepted.OutputValueId, out var outputValue) ||
                 accepted.OutputProvenance == WorkflowStepOutputProvenance.Unspecified ||
                 !Enum.IsDefined(accepted.OutputProvenance) ||
                 !Enum.IsDefined(accepted.AssignedValueProvenance) ||
@@ -457,6 +571,14 @@ public static class WorkflowNormalizedExecutionSeedCodec
             {
                 throw new InvalidOperationException(
                     $"Normalized workflow seed has invalid source completion provenance '{acceptanceKey}'.");
+            }
+
+            seed.CanonicalValues.TryGetValue(accepted.OutputValueId, out var outputValue);
+            if (outputValue == null &&
+                !WorkflowExecutionValueStore.IsAuthoritativeDigest(accepted.OutputDigest))
+            {
+                throw new InvalidOperationException(
+                    $"Normalized workflow seed source completion '{acceptanceKey}' has no digest-backed output evidence.");
             }
 
             ValidateAcceptedOutputIdentity(accepted, outputValue, stepId);
@@ -479,7 +601,7 @@ public static class WorkflowNormalizedExecutionSeedCodec
 
     private static void ValidateAcceptedOutputIdentity(
         WorkflowCompletedStepSeed accepted,
-        WorkflowCanonicalValueSeed outputValue,
+        WorkflowCanonicalValueSeed? outputValue,
         string stepId)
     {
         switch (accepted.OutputProvenance)
@@ -488,12 +610,13 @@ public static class WorkflowNormalizedExecutionSeedCodec
                 var expectedSourceKind = accepted.EmitLegacyMirrors
                     ? WorkflowCanonicalValueSourceKind.StepOutput
                     : WorkflowCanonicalValueSourceKind.InternalOutput;
-                if (outputValue.SourceKind != expectedSourceKind ||
-                    !string.Equals(outputValue.ProducerStepId, stepId, StringComparison.Ordinal) ||
-                    !string.Equals(
-                        outputValue.ProducerExecutionId,
-                        accepted.ExecutionId,
-                        StringComparison.Ordinal) ||
+                if (outputValue != null &&
+                    (outputValue.SourceKind != expectedSourceKind ||
+                     !string.Equals(outputValue.ProducerStepId, stepId, StringComparison.Ordinal) ||
+                     !string.Equals(
+                         outputValue.ProducerExecutionId,
+                         accepted.ExecutionId,
+                         StringComparison.Ordinal)) ||
                     HasOutputSource(accepted))
                 {
                     throw new InvalidOperationException(
@@ -514,14 +637,15 @@ public static class WorkflowNormalizedExecutionSeedCodec
                         accepted.OutputSourceValueId,
                         accepted.OutputValueId,
                         StringComparison.Ordinal) ||
-                    !string.Equals(
-                        outputValue.ProducerStepId,
-                        accepted.OutputSourceStepId,
-                        StringComparison.Ordinal) ||
-                    !string.Equals(
-                        outputValue.ProducerExecutionId,
-                        accepted.OutputSourceExecutionId,
-                        StringComparison.Ordinal))
+                    outputValue != null &&
+                    (!string.Equals(
+                         outputValue.ProducerStepId,
+                         accepted.OutputSourceStepId,
+                         StringComparison.Ordinal) ||
+                     !string.Equals(
+                         outputValue.ProducerExecutionId,
+                         accepted.OutputSourceExecutionId,
+                         StringComparison.Ordinal)))
                 {
                     throw new InvalidOperationException(
                         $"Normalized workflow seed accepted completion '{stepId}' has inconsistent referenced output identity.");
@@ -552,12 +676,20 @@ public static class WorkflowNormalizedExecutionSeedCodec
         }
 
         if (string.IsNullOrWhiteSpace(accepted.AssignedValueId) ||
-            string.IsNullOrWhiteSpace(accepted.AssignedMirrorValueId) ||
-            !seed.CanonicalValues.TryGetValue(accepted.AssignedValueId, out var assignedValue) ||
-            !seed.CanonicalValues.ContainsKey(accepted.AssignedMirrorValueId))
+            string.IsNullOrWhiteSpace(accepted.AssignedMirrorValueId))
         {
             throw new InvalidOperationException(
                 $"Normalized workflow seed accepted completion '{stepId}' has an invalid assigned value.");
+        }
+        seed.CanonicalValues.TryGetValue(accepted.AssignedValueId, out var assignedValue);
+        seed.CanonicalValues.TryGetValue(accepted.AssignedMirrorValueId, out var assignedMirrorValue);
+        if (assignedValue == null &&
+            !WorkflowExecutionValueStore.IsAuthoritativeDigest(accepted.AssignedValueDigest) ||
+            assignedMirrorValue == null &&
+            !WorkflowExecutionValueStore.IsAuthoritativeDigest(accepted.AssignedMirrorDigest))
+        {
+            throw new InvalidOperationException(
+                $"Normalized workflow seed accepted completion '{stepId}' has no digest-backed assigned value.");
         }
 
         if (accepted.AssignedValueProvenance == WorkflowStepAssignedValueProvenance.ReferencesOutput)
@@ -574,12 +706,13 @@ public static class WorkflowNormalizedExecutionSeedCodec
         }
 
         if (accepted.AssignedValueProvenance != WorkflowStepAssignedValueProvenance.Produced ||
-            assignedValue.SourceKind != WorkflowCanonicalValueSourceKind.AssignedValue ||
-            !string.Equals(assignedValue.ProducerStepId, stepId, StringComparison.Ordinal) ||
-            !string.Equals(
-                assignedValue.ProducerExecutionId,
-                accepted.ExecutionId,
-                StringComparison.Ordinal))
+            assignedValue != null &&
+            (assignedValue.SourceKind != WorkflowCanonicalValueSourceKind.AssignedValue ||
+             !string.Equals(assignedValue.ProducerStepId, stepId, StringComparison.Ordinal) ||
+             !string.Equals(
+                 assignedValue.ProducerExecutionId,
+                 accepted.ExecutionId,
+                 StringComparison.Ordinal)))
         {
             throw new InvalidOperationException(
                 $"Normalized workflow seed accepted completion '{stepId}' has inconsistent assigned-value provenance.");
@@ -620,6 +753,21 @@ public static class WorkflowNormalizedExecutionSeedCodec
             valueId,
             $"{prefix}{sequence.ToString("D20", CultureInfo.InvariantCulture)}",
             StringComparison.Ordinal);
+    }
+
+    private static void ValidateReleaseTombstone(
+        WorkflowReleasedValueTombstone? released,
+        string owner)
+    {
+        if (released == null ||
+            (!WorkflowExecutionValueStore.IsAuthoritativeDigest(released.Digest) &&
+             !WorkflowExecutionValueStore.IsRedactedDigest(released.Digest)) ||
+            string.IsNullOrWhiteSpace(released.ReleasedAfterStepId) ||
+            string.IsNullOrWhiteSpace(released.ReleasedAfterExecutionId))
+        {
+            throw new InvalidOperationException(
+                $"Normalized workflow seed {owner} has an invalid release tombstone.");
+        }
     }
 
     private static bool HasOutputSource(WorkflowCompletedStepSeed completed) =>
@@ -673,6 +821,7 @@ public static class WorkflowNormalizedExecutionSeedCodec
         ProducerStepId = value.ProducerStepId,
         ProducerExecutionId = value.ProducerExecutionId,
         SourceKind = value.SourceKind,
+        Released = value.Released?.Clone(),
     };
 
     private static WorkflowCanonicalValueState ToState(WorkflowCanonicalValueSeed value) => new()
@@ -682,6 +831,7 @@ public static class WorkflowNormalizedExecutionSeedCodec
         ProducerStepId = value.ProducerStepId,
         ProducerExecutionId = value.ProducerExecutionId,
         SourceKind = value.SourceKind,
+        Released = value.Released?.Clone(),
     };
 
     private static WorkflowValueBindingSeed ToSeed(WorkflowValueBindingState binding) => new()
@@ -739,6 +889,9 @@ public static class WorkflowNormalizedExecutionSeedCodec
             FailureOutcome = completed.FailureOutcome,
             RetryDisposition = completed.RetryDisposition,
             Outcome = completed.Outcome,
+            OutputDigest = completed.OutputDigest?.Clone(),
+            AssignedValueDigest = completed.AssignedValueDigest?.Clone(),
+            AssignedMirrorDigest = completed.AssignedMirrorDigest?.Clone(),
         };
         seed.Annotations.Add(completed.Annotations);
         foreach (var (alias, binding) in completed.JsonValueBindings)
@@ -778,6 +931,9 @@ public static class WorkflowNormalizedExecutionSeedCodec
             FailureOutcome = completed.FailureOutcome,
             RetryDisposition = completed.RetryDisposition,
             Outcome = completed.Outcome,
+            OutputDigest = completed.OutputDigest?.Clone(),
+            AssignedValueDigest = completed.AssignedValueDigest?.Clone(),
+            AssignedMirrorDigest = completed.AssignedMirrorDigest?.Clone(),
         };
         state.Annotations.Add(completed.Annotations);
         foreach (var (alias, binding) in completed.JsonValueBindings)

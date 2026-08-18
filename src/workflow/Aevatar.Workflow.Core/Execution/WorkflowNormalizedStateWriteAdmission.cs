@@ -8,7 +8,9 @@ internal static class WorkflowNormalizedStateWriteAdmission
     internal const string ContractId =
         RuntimeFleetCapabilityContracts.WorkflowNormalizedStateV1;
     internal const int RequiredReaderContractVersion =
-        RuntimeFleetCapabilityContracts.WorkflowNormalizedStateReaderVersion;
+        RuntimeFleetCapabilityContracts.WorkflowNormalizedStateReaderVersionV1;
+    internal const int ValueLifecycleRequiredReaderContractVersion =
+        RuntimeFleetCapabilityContracts.WorkflowNormalizedStateReaderVersionV2;
 
     internal static bool IsGranted(IRuntimeActorStateSchemaContextReader? reader)
     {
@@ -16,25 +18,24 @@ internal static class WorkflowNormalizedStateWriteAdmission
         if (context == null || context.StateSchemaVersion < 1)
             return false;
 
-        var receipts = context.AdoptionReceipts
-            .Where(static receipt => receipt.StateSchemaVersion == 1)
-            .ToArray();
-        return receipts.Length == 1 &&
-               receipts[0].RequiredCapability ==
-                   RuntimeFleetCapability.WorkflowNormalizedStateWritesV1 &&
-               string.Equals(receipts[0].RequiredContractId, ContractId, StringComparison.Ordinal) &&
-               receipts[0].RequiredContractVersion >= RequiredReaderContractVersion &&
-               receipts[0].CapabilityEpoch > 0 &&
-               receipts[0].AuthorityStateVersion > 0 &&
-               string.Equals(
-                   receipts[0].AuthorityActorId,
-                   RuntimeFleetCapabilityAuthorityIdentity.ActorId,
-                   StringComparison.Ordinal);
+        return HasExactReceipt(context, stateSchemaVersion: 1, RequiredReaderContractVersion);
+    }
+
+    internal static bool IsValueLifecycleGranted(IRuntimeActorStateSchemaContextReader? reader)
+    {
+        var context = reader?.Current;
+        return context != null &&
+               context.StateSchemaVersion >= 2 &&
+               HasExactReceipt(
+                   context,
+                   stateSchemaVersion: 2,
+                   ValueLifecycleRequiredReaderContractVersion);
     }
 
     internal static Task<bool> IsLiveGateGrantedAsync(
         IWorkflowExecutionStateHost stateHost,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        int requiredReaderContractVersion = RequiredReaderContractVersion)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
         var admissionReader = stateHost.RuntimeFleetCapabilityAdmissionReader;
@@ -45,7 +46,7 @@ internal static class WorkflowNormalizedStateWriteAdmission
         return RuntimeFleetCapabilityAdmissionValidation.IsGrantedAsync(
             RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
             ContractId,
-            RequiredReaderContractVersion,
+            requiredReaderContractVersion,
             admissionReader,
             membershipReader,
             stateHost.RuntimeFleetAdmissionTimeProvider,
@@ -56,16 +57,26 @@ internal static class WorkflowNormalizedStateWriteAdmission
     internal static async Task<WorkflowExecutionValueRepresentation> SelectNewRunRepresentationAsync(
         IWorkflowExecutionStateHost stateHost,
         WorkflowRunForkSeed? forkSeed,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool requiresValueLifecycle = false)
     {
         ArgumentNullException.ThrowIfNull(stateHost);
         var normalizedFork = forkSeed?.NormalizedValues != null;
+        var requiresSchemaV2 = requiresValueLifecycle || RequiresSchemaV2(forkSeed?.NormalizedValues);
         if (forkSeed != null && !normalizedFork)
+        {
+            if (requiresSchemaV2)
+                throw WorkflowValueLifecycleException.SchemaUnavailable();
             return WorkflowExecutionValueRepresentation.Legacy;
+        }
 
-        var schemaGranted = IsGranted(stateHost.RuntimeStateSchemaContextReader);
+        var schemaGranted = requiresSchemaV2
+            ? IsValueLifecycleGranted(stateHost.RuntimeStateSchemaContextReader)
+            : IsGranted(stateHost.RuntimeStateSchemaContextReader);
         if (!schemaGranted)
         {
+            if (requiresSchemaV2)
+                throw WorkflowValueLifecycleException.SchemaUnavailable();
             if (normalizedFork)
             {
                 throw new InvalidOperationException(
@@ -75,9 +86,16 @@ internal static class WorkflowNormalizedStateWriteAdmission
             return WorkflowExecutionValueRepresentation.Legacy;
         }
 
-        var liveGateGranted = await IsLiveGateGrantedAsync(stateHost, ct);
+        var liveGateGranted = await IsLiveGateGrantedAsync(
+            stateHost,
+            ct,
+            requiresSchemaV2
+                ? ValueLifecycleRequiredReaderContractVersion
+                : RequiredReaderContractVersion);
         if (!liveGateGranted)
         {
+            if (requiresSchemaV2)
+                throw WorkflowValueLifecycleException.SchemaUnavailable();
             if (normalizedFork)
             {
                 throw new InvalidOperationException(
@@ -92,4 +110,30 @@ internal static class WorkflowNormalizedStateWriteAdmission
 
         return WorkflowExecutionValueRepresentation.Normalized;
     }
+
+    private static bool HasExactReceipt(
+        RuntimeActorStateSchemaContext context,
+        int stateSchemaVersion,
+        int requiredReaderContractVersion)
+    {
+        var receipts = context.AdoptionReceipts
+            .Where(receipt => receipt.StateSchemaVersion == stateSchemaVersion)
+            .ToArray();
+        return receipts.Length == 1 &&
+               receipts[0].RequiredCapability ==
+                   RuntimeFleetCapability.WorkflowNormalizedStateWritesV1 &&
+               string.Equals(receipts[0].RequiredContractId, ContractId, StringComparison.Ordinal) &&
+               receipts[0].RequiredContractVersion == requiredReaderContractVersion &&
+               receipts[0].CapabilityEpoch > 0 &&
+               receipts[0].AuthorityStateVersion > 0 &&
+               string.Equals(
+                   receipts[0].AuthorityActorId,
+                   RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                   StringComparison.Ordinal);
+    }
+
+    private static bool RequiresSchemaV2(WorkflowNormalizedExecutionSeed? seed) =>
+        seed != null &&
+        (seed.ReleasedBindings.Count > 0 ||
+         seed.CanonicalValues.Values.Any(static value => value.Released != null));
 }

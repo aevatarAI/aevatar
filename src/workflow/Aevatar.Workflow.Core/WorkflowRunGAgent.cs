@@ -43,7 +43,7 @@ namespace Aevatar.Workflow.Core;
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
 [GAgent(
     "workflow.run",
-    StateSchemaVersion = 1)]
+    StateSchemaVersion = 2)]
 public sealed partial class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost,
@@ -287,6 +287,13 @@ public sealed partial class WorkflowRunGAgent
     {
         ArgumentNullException.ThrowIfNull(evt);
         return PersistDomainEventAsync(evt, ct);
+    }
+
+    bool IWorkflowExecutionStateHost.IsValuePinnedForCompensation(string valueId)
+    {
+        var key = valueId?.Trim() ?? string.Empty;
+        return key.Length > 0 && State.CompensableLedger.Any(entry =>
+            string.Equals(entry.CapturedOutputValueId, key, StringComparison.Ordinal));
     }
 
     async Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
@@ -1827,7 +1834,8 @@ public sealed partial class WorkflowRunGAgent
         WorkflowNormalizedStateWriteAdmission.SelectNewRunRepresentationAsync(
             (IWorkflowExecutionStateHost)this,
             forkSeed,
-            ct);
+            ct,
+            requiresValueLifecycle: WorkflowValueLifecyclePolicy.HasDeclarations(_compiledWorkflow));
 
     private async Task<WorkflowExecutionValueRepresentation> SelectSubWorkflowValueRepresentationAsync(
         WorkflowExecutionValueRepresentation requested,
@@ -1998,6 +2006,9 @@ public sealed partial class WorkflowRunGAgent
                 RunId = start.RunId,
                 Success = false,
                 Error = WorkflowRuntimeFailureMessages.StartDispatchFailed(ex),
+                ValueLifecycleFailureKind = ex is WorkflowValueLifecycleException lifecycleFailure
+                    ? lifecycleFailure.Kind
+                    : WorkflowValueLifecycleFailureKind.Unspecified,
             };
             try
             {
@@ -3693,6 +3704,7 @@ public sealed partial class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
         next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
+        next.TerminalValueLifecycleFailureKind = WorkflowValueLifecycleFailureKind.Unspecified;
         next.CompletedAtUtc = null;
         next.StartedAtUtc = null;
         next.ClearDurationMs();
@@ -3851,6 +3863,7 @@ public sealed partial class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         next.FinalError = string.Empty;
         next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
+        next.TerminalValueLifecycleFailureKind = WorkflowValueLifecycleFailureKind.Unspecified;
         next.CompletedAtUtc = null;
         next.ClearDurationMs();
         next.Initiator = BuildInitiator(
@@ -4472,6 +4485,7 @@ public sealed partial class WorkflowRunGAgent
         next.FinalOutput = string.Empty;
         next.FinalError = evt.Error ?? string.Empty;
         next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
+        next.TerminalValueLifecycleFailureKind = WorkflowValueLifecycleFailureKind.Unspecified;
         next.SagaStatus = WorkflowSagaStatus.CompensationDeadLetter;
         next.CompensationExecutionId = string.Empty;
         next.DeadLetterFailedCompensationStepId = evt.FailedCompensationStepId ?? string.Empty;
@@ -4510,6 +4524,7 @@ public sealed partial class WorkflowRunGAgent
         if (!string.IsNullOrWhiteSpace(evt.Reason))
             next.FinalError = evt.Reason;
         next.TerminalRecoveryFailureKind = WorkflowRecoveryFailureKind.Unspecified;
+        next.TerminalValueLifecycleFailureKind = WorkflowValueLifecycleFailureKind.Unspecified;
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         ClearExecutionStatesPreservingToolCallCleanup(next);
         next.ExecutionContext = new WorkflowRunExecutionContextState();
@@ -4533,6 +4548,9 @@ public sealed partial class WorkflowRunGAgent
         next.TerminalRecoveryFailureKind = evt.Success
             ? WorkflowRecoveryFailureKind.Unspecified
             : evt.RecoveryFailureKind;
+        next.TerminalValueLifecycleFailureKind = evt.Success
+            ? WorkflowValueLifecycleFailureKind.Unspecified
+            : evt.ValueLifecycleFailureKind;
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         next.TerminalWorkflowCompletionRecorded = true;
         next.PendingCompensationCompletion = null;
@@ -5971,6 +5989,11 @@ public sealed partial class WorkflowRunGAgent
         var validationErrors = ValidateWorkflowDefinition(parsed);
         if (validationErrors.Count > 0)
             return WorkflowCompilationResult.Invalid(string.Join("; ", validationErrors));
+        if (WorkflowValueLifecyclePolicy.HasDeclarations(parsed))
+        {
+            return WorkflowCompilationResult.Invalid(
+                "Dynamic workflow definition replacement cannot opt into value_lifecycle.");
+        }
 
         // Select the new logical run representation before binding cleanup,
         // actor-tree mutation, execution-start persistence, or start dispatch.

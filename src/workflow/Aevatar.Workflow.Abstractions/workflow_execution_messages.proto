@@ -351,6 +351,40 @@ message WorkflowRunForkSeed
   map<string, string> variable_overrides = 8;
 }
 
+// Author-owned release policy for large intermediate workflow values. The
+// runtime resolves every name through its typed canonical binding; this is not
+// an open parameter bag.
+message WorkflowStepValueLifecycle
+{
+  repeated string release_variables_after_success = 1;
+}
+
+// Actor-authoritative replay evidence for a value whose raw UTF-8 payload no
+// longer belongs in current state.
+message WorkflowValueDigest
+{
+  bytes sha256 = 1;
+  uint64 utf8_size = 2;
+  bool redacted = 3;
+}
+
+message WorkflowReleasedValueTombstone
+{
+  WorkflowValueDigest digest = 1;
+  string released_after_step_id = 2;
+  string released_after_execution_id = 3;
+}
+
+enum WorkflowValueLifecycleFailureKind
+{
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_RELEASED_VALUE_ACCESSED = 1;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_RELEASE_TARGET_MISSING = 2;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_RELEASE_TARGET_LIVE = 3;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_RELEASE_TARGET_PINNED_FOR_COMPENSATION = 4;
+  WORKFLOW_VALUE_LIFECYCLE_FAILURE_KIND_SCHEMA_UNAVAILABLE = 5;
+}
+
 message WorkflowCanonicalValueSeed
 {
   string value_id = 1;
@@ -358,6 +392,7 @@ message WorkflowCanonicalValueSeed
   string producer_step_id = 3;
   string producer_execution_id = 4;
   WorkflowCanonicalValueSourceKind source_kind = 5;
+  WorkflowReleasedValueTombstone released = 6;
 }
 
 enum WorkflowValueBindingSeedKind
@@ -417,6 +452,9 @@ message WorkflowCompletedStepSeed
   WorkflowStepRetryDisposition retry_disposition = 22;
   WorkflowStepCompletionOutcome outcome = 23;
   string assigned_mirror_value_id = 24;
+  WorkflowValueDigest output_digest = 25;
+  WorkflowValueDigest assigned_value_digest = 26;
+  WorkflowValueDigest assigned_mirror_digest = 27;
 }
 
 message WorkflowPendingOutputReferenceSeed
@@ -443,6 +481,7 @@ message WorkflowNormalizedExecutionSeed
   // these identities into the target run's live acceptance ledger.
   map<string, string> source_completion_value_ids = 8;
   map<string, WorkflowCompletedStepSeed> source_completions = 9;
+  map<string, WorkflowReleasedValueTombstone> released_bindings = 10;
 }
 
 message WorkflowStepIdempotencyState
@@ -719,6 +758,7 @@ message WorkflowCompletedEvent {
   string run_id = 5;
   google.protobuf.Timestamp completed_at_utc = 6;
   WorkflowRecoveryFailureKind recovery_failure_kind = 7;
+  WorkflowValueLifecycleFailureKind value_lifecycle_failure_kind = 8;
 }
 
 // Requests the authoritative workflow run actor to reconcile a stale running

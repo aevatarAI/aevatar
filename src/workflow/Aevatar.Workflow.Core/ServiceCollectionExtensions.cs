@@ -54,7 +54,8 @@ internal sealed class WorkflowNormalizedStateCapabilityAdvertisement
         new()
         {
             Capability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
-            ReaderContractVersion = WorkflowNormalizedStateWriteAdmission.RequiredReaderContractVersion,
+            ReaderContractVersion =
+                WorkflowNormalizedStateWriteAdmission.ValueLifecycleRequiredReaderContractVersion,
             ContractId = WorkflowNormalizedStateWriteAdmission.ContractId,
         };
 }

@@ -1558,6 +1558,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     Input = "hello",
                     FinalOutput = "done",
                     FinalError = $"err opaque={finalErrorCredential}",
+                    TerminalValueLifecycleFailureKind =
+                        WorkflowValueLifecycleFailureKind.ReleasedValueAccessed,
                     SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
                     DeadLetterFailedCompensationStepId = "refund_payment",
                     DeadLetterRemainingUncompensated = 2,
@@ -1592,6 +1594,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.DeadLetterRemainingUncompensated.Should().Be(2);
         document.FinalError.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
         document.FinalError.Should().NotContain(finalErrorCredential);
+        document.TerminalValueLifecycleFailureKind.Should().Be(
+            WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
         document.DeadLetterError.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
         document.DeadLetterError.Should().NotContain(deadLetterCredential);
         document.CapabilityAdmissionPlan.Should().NotBeNull();

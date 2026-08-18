@@ -99,6 +99,7 @@ message WorkflowActorSnapshot {
   WorkflowRunRecoveryCapability recovery_capability = 33;
   aevatar.workflow.WorkflowRunLineage lineage = 34;
   string compilation_error = 35;
+  aevatar.workflow.WorkflowValueLifecycleFailureKind terminal_value_lifecycle_failure_kind = 36;
 }
 
 message WorkflowRunActivityInitiatorSnapshot {

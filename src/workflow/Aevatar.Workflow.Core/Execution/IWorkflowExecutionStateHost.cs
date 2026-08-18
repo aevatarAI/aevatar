@@ -124,6 +124,8 @@ internal interface IWorkflowExecutionStateHost
         CompensableStepOutputCapturedEvent evt,
         CancellationToken ct = default) => Task.CompletedTask;
 
+    bool IsValuePinnedForCompensation(string valueId) => false;
+
     Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
         CompensationStepCompletedEvent completion,
         CancellationToken ct = default);

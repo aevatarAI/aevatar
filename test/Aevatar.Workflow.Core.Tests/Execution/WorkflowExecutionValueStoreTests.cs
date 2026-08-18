@@ -485,10 +485,46 @@ public sealed class WorkflowExecutionValueStoreTests
     }
 
     [Fact]
-    public void RepeatedLargeRetryOutputs_ShouldRetainAcceptedCanonicalValuesForReplay()
+    public void RepeatedLargeRetryOutputs_ShouldRetainDigestEvidenceForExactReplay()
     {
         var state = NormalizedState();
+        StepCompletedEvent? first = null;
         for (var attempt = 1; attempt <= 32; attempt++)
+        {
+            var completion = new StepCompletedEvent
+            {
+                StepId = "retrying-child",
+                ExecutionId = $"execution-{attempt}",
+                Success = true,
+                Output = $"{attempt}:{new string('x', 64 * 1024)}",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
+            };
+            first ??= completion.Clone();
+            WorkflowExecutionValueStore.RecordInternalOutput(
+                state,
+                completion);
+        }
+
+        state.NormalizedValues!.CanonicalValues.Should().ContainSingle();
+        state.NormalizedValues.AcceptedCompletions.Should().HaveCount(32);
+        state.NormalizedValues.AcceptedCompletions.Values.Should().OnlyContain(snapshot =>
+            WorkflowExecutionValueStore.IsAuthoritativeDigest(snapshot.OutputDigest));
+        state.NormalizedValues.CanonicalValues[
+                state.NormalizedValues.CompletedSteps["retrying-child"].OutputValueId]
+            .Value.Should().StartWith("32:");
+
+        var replayed = WorkflowExecutionValueStore.RecordInternalOutput(state, first!);
+        replayed.Should().Be(ValueId(1));
+        first!.Output = "conflicting";
+        var conflict = () => WorkflowExecutionValueStore.RecordInternalOutput(state, first);
+        conflict.Should().Throw<InvalidOperationException>().WithMessage("*conflicts*");
+    }
+
+    [Fact]
+    public void ProjectedSeed_ShouldOmitRedactedReplayOnlyCompletionWithoutCanonicalValue()
+    {
+        var state = NormalizedState();
+        for (var attempt = 1; attempt <= 2; attempt++)
         {
             WorkflowExecutionValueStore.RecordInternalOutput(
                 state,
@@ -497,16 +533,295 @@ public sealed class WorkflowExecutionValueStoreTests
                     StepId = "retrying-child",
                     ExecutionId = $"execution-{attempt}",
                     Success = true,
-                    Output = $"{attempt}:{new string('x', 64 * 1024)}",
+                    Output = $"payload-{attempt}",
                     OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 });
+            state.NormalizedValues!.AcceptedCompletions.Values
+                .Single(completion => completion.ExecutionId == $"execution-{attempt}")
+                .OutputDigest = null;
+        }
+        WorkflowExecutionValueStore.MigrateToValueLifecycleV2(state);
+        state.NormalizedValues!.CanonicalValues.Should().ContainSingle();
+        foreach (var accepted in state.NormalizedValues.AcceptedCompletions.Values)
+            accepted.OutputDigest = null;
+
+        var seed = WorkflowNormalizedExecutionSeedCodec.Capture(state)!;
+
+        seed.SourceCompletions.Values.Should().ContainSingle()
+            .Which.ExecutionId.Should().Be("execution-2");
+        seed.SourceCompletionValueIds.Should().ContainSingle();
+        var restored = new WorkflowExecutionKernelState();
+        WorkflowNormalizedExecutionSeedCodec.Restore(restored, seed);
+        restored.NormalizedValues!.InheritedCompletions.Values.Should().ContainSingle()
+            .Which.ExecutionId.Should().Be("execution-2");
+    }
+
+    [Fact]
+    public void Release_ShouldTombstoneEveryAliasOfOneIdentityOnly()
+    {
+        const string payload = "same-large-payload";
+        var state = StateReadyToRelease(payload, out var releasedValueId);
+        WorkflowExecutionValueStore.SetRequestOverride(state, "equal_copy", payload);
+        var equalCopyId = WorkflowExecutionValueStore.GetBindingValueId(state, "equal_copy");
+
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state,
+            Release("raw_pages"),
+            "reduce",
+            "reduce-execution");
+
+        equalCopyId.Should().NotBe(releasedValueId);
+        WorkflowExecutionValueStore.CreateVariableView(state)["equal_copy"].Should().Be(payload);
+        var canonical = state.NormalizedValues!.CanonicalValues[releasedValueId];
+        canonical.Value.Should().BeEmpty();
+        canonical.Released.Should().NotBeNull();
+        canonical.Released.ReleasedAfterStepId.Should().Be("reduce");
+        WorkflowExecutionValueStore.IsAuthoritativeDigest(canonical.Released.Digest).Should().BeTrue();
+
+        foreach (var alias in new[] { "raw_pages", "producer", "steps.producer.output" })
+        {
+            var access = () => WorkflowExecutionValueStore.CreateVariableView(state)[alias];
+            access.Should().Throw<WorkflowValueLifecycleException>()
+                .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
+        }
+        WorkflowExecutionValueStore.CreateVariableView(state).Keys.Should().NotContain("raw_pages");
+        WorkflowExecutionValueStore.CreateVariableView(state).Keys.Should().Contain("steps.producer.success");
+    }
+
+    [Fact]
+    public void Release_ShouldPrevalidateAllTargetsBeforeMutation()
+    {
+        var state = StateReadyToRelease("payload", out var valueId);
+
+        var act = () => WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state,
+            Release("raw_pages", "missing"),
+            "reduce",
+            "reduce-execution");
+
+        act.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleaseTargetMissing);
+        state.NormalizedValues!.CanonicalValues[valueId].Value.Should().Be("payload");
+        state.NormalizedValues.ReleasedBindings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Release_ShouldRejectLiveAndCompensationPinnedValues()
+    {
+        var live = NormalizedState();
+        var liveId = WorkflowExecutionValueStore.CaptureInputValue(
+            live,
+            "live",
+            WorkflowCanonicalValueSourceKind.InitialInput);
+        WorkflowExecutionValueStore.SetRequestOverride(live, "raw_pages", "live");
+        live.NormalizedValues!.Bindings["raw_pages"].ValueId = liveId;
+        WorkflowExecutionValueStore.SetCurrentStepInput(live, "live", liveId);
+        var liveAct = () => WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            live,
+            Release("raw_pages"),
+            "reduce",
+            "execution");
+        liveAct.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleaseTargetLive);
+
+        var currentOutput = NormalizedState();
+        var currentOutputId = Record(
+            currentOutput,
+            new StepCompletedEvent
+            {
+                StepId = "reduce",
+                ExecutionId = "reduce-execution",
+                Success = true,
+                Output = "still-needed",
+                AssignedVariable = "result",
+                AssignedValue = "still-needed",
+                AssignedValueProvenance = WorkflowStepAssignedValueProvenance.ReferencesOutput,
+            });
+        var currentOutputAct = () => WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            currentOutput,
+            Release("result"),
+            "reduce",
+            "reduce-execution");
+        currentOutputAct.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleaseTargetLive);
+        currentOutput.NormalizedValues!.CanonicalValues[currentOutputId].Value
+            .Should().Be("still-needed");
+
+        var pinned = StateReadyToRelease("payload", out var pinnedId);
+        var pinnedAct = () => WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            pinned,
+            Release("raw_pages"),
+            "reduce",
+            "reduce-execution",
+            valueId => valueId == pinnedId);
+        pinnedAct.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(
+                WorkflowValueLifecycleFailureKind.ReleaseTargetPinnedForCompensation);
+        pinned.NormalizedValues!.CanonicalValues[pinnedId].Value.Should().Be("payload");
+    }
+
+    [Fact]
+    public void Release_ShouldRejectPendingOutputAndInternalDispatchReferences()
+    {
+        var referenced = StateReadyToRelease("payload", out var referencedId);
+        WorkflowExecutionValueStore.StageCompletedStepOutputReference(
+            referenced,
+            new StepCompletedEvent
+            {
+                StepId = "parent",
+                ExecutionId = "parent-execution",
+                Success = true,
+                Output = "payload",
+            },
+            new StepCompletedEvent
+            {
+                StepId = "producer",
+                ExecutionId = "producer-execution",
+                Success = true,
+                Output = "payload",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
+            });
+
+        var referencedAct = () => WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            referenced,
+            Release("raw_pages"),
+            "reduce",
+            "reduce-execution");
+
+        referencedAct.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleaseTargetLive);
+        referenced.NormalizedValues!.CanonicalValues[referencedId].Value.Should().Be("payload");
+
+        var dispatched = StateReadyToRelease("payload", out var dispatchedId);
+        dispatched.RunId = "run-dispatch";
+        WorkflowExecutionValueStore.PrepareInternalDispatch(
+            dispatched,
+            new StepRequestEvent
+            {
+                RunId = "run-dispatch",
+                StepId = "child",
+                ExecutionId = "child-execution",
+                Input = "payload",
+                InputValueId = dispatchedId,
+            },
+            "origin-envelope").Should().BeTrue();
+
+        var dispatchedAct = () => WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            dispatched,
+            Release("raw_pages"),
+            "reduce",
+            "reduce-execution");
+
+        dispatchedAct.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleaseTargetLive);
+        dispatched.NormalizedValues!.CanonicalValues[dispatchedId].Value.Should().Be("payload");
+    }
+
+    [Fact]
+    public void Release_ShouldBeIdempotentAndRequestOverrideShouldRestoreName()
+    {
+        var state = StateReadyToRelease("old", out var oldValueId);
+        var lifecycle = Release("raw_pages");
+
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state,
+            lifecycle,
+            "reduce",
+            "reduce-execution");
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state,
+            lifecycle,
+            "reduce",
+            "reduce-execution");
+        WorkflowExecutionValueStore.SetRequestOverride(state, "raw_pages", "new");
+
+        WorkflowExecutionValueStore.CreateVariableView(state)["raw_pages"].Should().Be("new");
+        WorkflowExecutionValueStore.GetBindingValueId(state, "raw_pages").Should().NotBe(oldValueId);
+        state.NormalizedValues!.CanonicalValues[oldValueId].Released.Should().NotBeNull();
+        state.NormalizedValues.ReleasedBindings.Should().NotContainKey("raw_pages");
+    }
+
+    [Fact]
+    public void NormalizedSeed_ShouldRoundTripTombstonesWithoutExpandingRawAliases()
+    {
+        var state = StateReadyToRelease("secret-pages", out var releasedValueId);
+        WorkflowExecutionValueStore.ReleaseVariablesAfterSuccess(
+            state,
+            Release("raw_pages"),
+            "reduce",
+            "reduce-execution");
+
+        var seed = WorkflowNormalizedExecutionSeedCodec.Capture(state)!;
+        var restored = new WorkflowExecutionKernelState();
+        WorkflowNormalizedExecutionSeedCodec.Restore(restored, seed);
+        var expanded = WorkflowNormalizedExecutionSeedCodec.Expand(seed);
+
+        seed.CanonicalValues[releasedValueId].Value.Should().BeEmpty();
+        seed.CanonicalValues[releasedValueId].Released.Should().NotBeNull();
+        seed.ReleasedBindings.Should().ContainKey("raw_pages");
+        expanded.Should().NotContainKey("raw_pages");
+        expanded.Values.Should().NotContain("secret-pages");
+        restored.NormalizedValues!.CanonicalValues[releasedValueId].Released.Should().NotBeNull();
+        var access = () => WorkflowExecutionValueStore.CreateVariableView(restored)["raw_pages"];
+        access.Should().Throw<WorkflowValueLifecycleException>()
+            .Which.Kind.Should().Be(WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
+
+        var projectedSeed = seed.Clone();
+        projectedSeed.CanonicalValues[releasedValueId].Released.Digest =
+            new WorkflowValueDigest { Redacted = true };
+        foreach (var name in projectedSeed.ReleasedBindings.Keys.ToArray())
+        {
+            var projectedRelease = projectedSeed.ReleasedBindings[name].Clone();
+            projectedRelease.Digest = new WorkflowValueDigest { Redacted = true };
+            projectedSeed.ReleasedBindings[name] = projectedRelease;
+        }
+        foreach (var completed in projectedSeed.CompletedSteps.Values)
+        {
+            completed.OutputDigest = null;
+            completed.AssignedValueDigest = null;
+            completed.AssignedMirrorDigest = null;
+        }
+        foreach (var completed in projectedSeed.SourceCompletions.Values)
+        {
+            completed.OutputDigest = null;
+            completed.AssignedValueDigest = null;
+            completed.AssignedMirrorDigest = null;
         }
 
-        state.NormalizedValues!.CanonicalValues.Should().HaveCount(32);
-        state.NormalizedValues.AcceptedCompletions.Should().HaveCount(32);
-        state.NormalizedValues.CanonicalValues[
-                state.NormalizedValues.CompletedSteps["retrying-child"].OutputValueId]
-            .Value.Should().StartWith("32:");
+        var projected = new WorkflowExecutionKernelState();
+        WorkflowNormalizedExecutionSeedCodec.Restore(projected, projectedSeed);
+        WorkflowNormalizedExecutionSeedCodec.Expand(projectedSeed).Should().NotContainKey("raw_pages");
+        WorkflowNormalizedExecutionSeedCodec.ApplyOverrides(
+            projected,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["raw_pages"] = "replacement",
+            });
+        WorkflowExecutionValueStore.CreateVariableView(projected)["raw_pages"]
+            .Should().Be("replacement");
+    }
+
+    [Fact]
+    public void V1ToV2Migration_ShouldPopulateDigestEvidence()
+    {
+        var state = NormalizedState();
+        Record(state, new StepCompletedEvent
+        {
+            StepId = "producer",
+            Success = true,
+            Output = "payload",
+        });
+        foreach (var completed in state.NormalizedValues!.CompletedSteps.Values)
+            completed.OutputDigest = null;
+        foreach (var completed in state.NormalizedValues.AcceptedCompletions.Values)
+            completed.OutputDigest = null;
+
+        WorkflowExecutionValueStore.MigrateToValueLifecycleV2(state);
+
+        WorkflowExecutionValueStore.IsAuthoritativeDigest(
+            state.NormalizedValues.CompletedSteps["producer"].OutputDigest).Should().BeTrue();
+        WorkflowExecutionValueStore.IsAuthoritativeDigest(
+            state.NormalizedValues.AcceptedCompletions.Values.Single().OutputDigest).Should().BeTrue();
     }
 
     [Fact]
@@ -678,6 +993,37 @@ public sealed class WorkflowExecutionValueStoreTests
         var state = new WorkflowExecutionKernelState();
         WorkflowExecutionValueStore.Initialize(state);
         return state;
+    }
+
+    private static WorkflowExecutionKernelState StateReadyToRelease(
+        string payload,
+        out string releasedValueId)
+    {
+        var state = NormalizedState();
+        releasedValueId = Record(state, new StepCompletedEvent
+        {
+            StepId = "producer",
+            Success = true,
+            Output = payload,
+            AssignedVariable = "raw_pages",
+            AssignedValue = payload,
+            AssignedValueProvenance = WorkflowStepAssignedValueProvenance.ReferencesOutput,
+        });
+        Record(state, new StepCompletedEvent
+        {
+            StepId = "reduce",
+            ExecutionId = "reduce-execution",
+            Success = true,
+            Output = "reduced",
+        });
+        return state;
+    }
+
+    private static WorkflowStepValueLifecycle Release(params string[] names)
+    {
+        var lifecycle = new WorkflowStepValueLifecycle();
+        lifecycle.ReleaseVariablesAfterSuccess.Add(names);
+        return lifecycle;
     }
 
     private static WorkflowExecutionKernelState LegacyFiftyForwardingStepsFixture(string payload)
