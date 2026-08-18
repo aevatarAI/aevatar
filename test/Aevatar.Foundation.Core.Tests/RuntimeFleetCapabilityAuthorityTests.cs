@@ -81,8 +81,16 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
             .RequiredContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphV1);
         opened.Values.Should().OnlyContain(static gate =>
             gate.Status == RuntimeFleetCapabilityGateStatus.Open &&
-            gate.CapabilityEpoch == 1 &&
-            gate.MinimumReaderContractVersion == 1);
+            gate.CapabilityEpoch == 1);
+        opened[RuntimeFleetCapability.WorkflowNormalizedStateWritesV1]
+            .MinimumReaderContractVersion.Should()
+            .Be(RuntimeFleetCapabilityContracts.WorkflowNormalizedStateReaderVersion);
+        opened[RuntimeFleetCapability.ProjectionScopeStatusTerminalV1]
+            .MinimumReaderContractVersion.Should()
+            .Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion);
+        opened[RuntimeFleetCapability.ProjectionIncrementalGraphV1]
+            .MinimumReaderContractVersion.Should()
+            .Be(RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphReaderVersion);
     }
 
     [Fact]

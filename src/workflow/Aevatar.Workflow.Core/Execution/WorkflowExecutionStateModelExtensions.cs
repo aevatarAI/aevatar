@@ -15,6 +15,10 @@ internal static class WorkflowExecutionStateModelExtensions
             Error = evt.Error ?? string.Empty,
             Index = index,
             FileRef = fileRef?.Clone(),
+            FailureOutcome = evt.FailureOutcome,
+            RecoveryFailureKind = evt.RecoveryFailureKind,
+            RetryDisposition = evt.RetryDisposition,
+            Outcome = evt.Outcome,
         };
 
     public static MapReduceItemResult ToMapReduceItemResult(this StepCompletedEvent evt) =>

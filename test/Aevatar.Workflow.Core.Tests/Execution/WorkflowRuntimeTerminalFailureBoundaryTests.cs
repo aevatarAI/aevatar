@@ -508,6 +508,88 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
         kernelState.Variables.Should().NotContainKey(childStepId);
     }
 
+    [Fact]
+    public async Task Kernel_ShouldIgnoreLateChildWithoutExecutionIdFromCompletedForEachAttempt()
+    {
+        const string runId = "run-foreach-late-child";
+        const string parentStepId = "foreach-parent";
+        const string childStepId = "foreach-parent_execution_0123456789abcdef_item_0";
+        const string childExecutionId = "child-execution-old";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "foreach-late-child-workflow",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition { Id = parentStepId, Type = "foreach", Next = "done" },
+                new StepDefinition { Id = "done", Type = "notify" },
+            ],
+        };
+        var host = new RecordingStateHost { RunId = runId };
+        var kernel = new WorkflowExecutionKernel(workflow, host);
+        var ctx = new RecordingEventHandlerContext();
+        await kernel.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = runId,
+                WorkflowName = workflow.Name,
+                Input = "item",
+            }),
+            ctx,
+            CancellationToken.None);
+        var kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        var parentExecutionId = kernelState.ExecutionIdsByStepId[parentStepId];
+        host.States[ForEachModule.ModuleStateKey] = Any.Pack(new ForEachModuleState
+        {
+            CompletedParentAttempts =
+            {
+                ["completed-parent-attempt"] = new ForEachCompletedParentAttemptState
+                {
+                    ParentRunId = runId,
+                    ParentStepId = parentStepId,
+                    ParentExecutionId = parentExecutionId,
+                    ChildExecutionIds =
+                    {
+                        [childStepId] = childExecutionId,
+                    },
+                },
+            },
+        });
+
+        await kernel.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = runId,
+                StepId = parentStepId,
+                ExecutionId = parentExecutionId,
+                Success = true,
+                Output = "parent-output",
+            }),
+            ctx,
+            CancellationToken.None);
+        kernelState = host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>();
+        kernelState.CurrentStepId.Should().Be("done");
+        var saveAttemptsBeforeLateChild = host.SaveAttempts;
+
+        await kernel.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = runId,
+                StepId = childStepId,
+                Success = true,
+                Output = "late-child-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        host.SaveAttempts.Should().Be(saveAttemptsBeforeLateChild);
+        host.States[WorkflowExecutionKernel.ModuleStateKey]
+            .Unpack<WorkflowExecutionKernelState>()
+            .Variables.Should().NotContainKey(childStepId);
+    }
+
     [Theory]
     [InlineData("foreach", "foreach-parent_item_0_nested")]
     [InlineData("foreach", "foreach-parent_item_00")]
@@ -683,6 +765,18 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             }),
             ctx,
             CancellationToken.None);
+
+        if (mismatch == "missing_received_child_execution_id")
+        {
+            // A completion that omits its execution id but names an exact ledgered child of
+            // the current foreach attempt is that child's completion: the kernel leaves it to
+            // the foreach module and must not park it as a compatibility variable.
+            host.SaveAttempts.Should().Be(saveAttemptsBeforeCompletion);
+            host.States[WorkflowExecutionKernel.ModuleStateKey]
+                .Unpack<WorkflowExecutionKernelState>()
+                .Variables.Should().NotContainKey(childStepId);
+            return;
+        }
 
         host.SaveAttempts.Should().Be(saveAttemptsBeforeCompletion + 1);
         host.States[WorkflowExecutionKernel.ModuleStateKey]

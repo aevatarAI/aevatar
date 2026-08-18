@@ -887,7 +887,22 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     {
         var childStepId = completion.StepId ?? string.Empty;
         var childExecutionId = completion.ExecutionId ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(childStepId) || string.IsNullOrWhiteSpace(state.CurrentStepId))
+        if (string.IsNullOrWhiteSpace(childStepId))
+            return false;
+
+        var forEachState = WorkflowExecutionStateAccess.Load<ForEachModuleState>(
+            ctx,
+            ForEachModule.ModuleStateKey);
+        if (ForEachModule.IsCompletedChildAttempt(
+                forEachState,
+                completion.RunId,
+                childStepId,
+                childExecutionId))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(state.CurrentStepId))
             return false;
 
         var currentStep = _workflow.GetStep(state.CurrentStepId);
@@ -898,26 +913,26 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 StringComparison.Ordinal) ||
             !ForEachModule.IsDirectChildStepId(currentStep.Id, childStepId) ||
             string.IsNullOrWhiteSpace(state.RunId) ||
-            string.IsNullOrWhiteSpace(childExecutionId) ||
             !state.ExecutionIdsByStepId.TryGetValue(currentStep.Id, out var parentExecutionId) ||
             string.IsNullOrWhiteSpace(parentExecutionId))
         {
             return false;
         }
 
-        var forEachState = WorkflowExecutionStateAccess.Load<ForEachModuleState>(
-            ctx,
-            ForEachModule.ModuleStateKey);
-        return forEachState.Parents.Values.Any(parent =>
-            !string.IsNullOrWhiteSpace(parent.ParentRunId) &&
-            !string.IsNullOrWhiteSpace(parent.ParentStepId) &&
-            !string.IsNullOrWhiteSpace(parent.ParentExecutionId) &&
-            string.Equals(parent.ParentRunId, state.RunId, StringComparison.Ordinal) &&
-            string.Equals(parent.ParentStepId, currentStep.Id, StringComparison.Ordinal) &&
-            string.Equals(parent.ParentExecutionId, parentExecutionId, StringComparison.Ordinal) &&
-            parent.ChildExecutionIds.TryGetValue(childStepId, out var expectedChildExecutionId) &&
-            !string.IsNullOrWhiteSpace(expectedChildExecutionId) &&
-            string.Equals(expectedChildExecutionId, childExecutionId, StringComparison.Ordinal));
+        return forEachState.Parents.Values
+            .Where(parent =>
+                !string.IsNullOrWhiteSpace(parent.ParentRunId) &&
+                !string.IsNullOrWhiteSpace(parent.ParentStepId) &&
+                !string.IsNullOrWhiteSpace(parent.ParentExecutionId) &&
+                string.Equals(parent.ParentRunId, state.RunId, StringComparison.Ordinal) &&
+                string.Equals(parent.ParentStepId, currentStep.Id, StringComparison.Ordinal) &&
+                string.Equals(parent.ParentExecutionId, parentExecutionId, StringComparison.Ordinal) &&
+                parent.ChildExecutionIds.TryGetValue(childStepId, out var expectedChildExecutionId) &&
+                !string.IsNullOrWhiteSpace(expectedChildExecutionId) &&
+                (string.IsNullOrWhiteSpace(childExecutionId) ||
+                 string.Equals(expectedChildExecutionId, childExecutionId, StringComparison.Ordinal)))
+            .Take(2)
+            .Count() == 1;
     }
 
     private async Task HandleCompensationRequestAsync(
