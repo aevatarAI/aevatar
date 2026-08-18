@@ -1,6 +1,7 @@
 using Aevatar.AIWorkspace.Application.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -13,6 +14,10 @@ public sealed class AIWorkspaceActivityQueryService(
     ILogger<AIWorkspaceActivityQueryService>? logger = null)
     : IAIWorkspaceActivityQueryService
 {
+    private const int RunInputSummaryMaxLength = 240;
+    private const int RunStepInputSummaryMaxLength = 160;
+    private const int RunFailureMessageMaxLength = 240;
+
     private readonly ILogger<AIWorkspaceActivityQueryService> _logger =
         logger ?? NullLogger<AIWorkspaceActivityQueryService>.Instance;
 
@@ -264,7 +269,9 @@ public sealed class AIWorkspaceActivityQueryService(
             run.Status,
             run.RunOrigin,
             run.Success,
-            run.InputSummary,
+            WorkflowAuditTextSanitizer.SanitizeForDisplay(
+                run.InputSummary,
+                RunInputSummaryMaxLength),
             ToCurrentStep(run.CurrentStep),
             ToFailure(run.FirstFailure),
             ToWaiting(run.Waiting),
@@ -289,7 +296,9 @@ public sealed class AIWorkspaceActivityQueryService(
                 detail.Summary.Status,
                 detail.Summary.RunOrigin,
                 detail.Summary.Success,
-                detail.InputSummary,
+                WorkflowAuditTextSanitizer.SanitizeForDisplay(
+                    detail.InputSummary,
+                    RunInputSummaryMaxLength),
                 null,
                 ToFailure(detail.FirstFailure),
                 null,
@@ -298,7 +307,7 @@ public sealed class AIWorkspaceActivityQueryService(
                 detail.Summary.UpdatedAtUtc,
                 detail.Summary.DurationMs,
                 detail.Summary.StateVersion),
-            detail.FinalOutput,
+            WorkflowAuditTextSanitizer.SanitizeForStorage(detail.FinalOutput),
             detail.Steps.Select(ToStep).ToArray(),
             detail.Timeline.Select(ToTimelineEvent).ToArray(),
             detail.Operations.Select(ToOperation).ToArray(),
@@ -333,14 +342,21 @@ public sealed class AIWorkspaceActivityQueryService(
     private static AIWorkspaceRunStepSummaryView? ToCurrentStep(WorkflowActivityRunStepSummary step) =>
         string.Equals(step.Availability, "unavailable", StringComparison.Ordinal)
             ? null
-            : new AIWorkspaceRunStepSummaryView(step.StepId, step.InputSummary, step.Availability);
+            : new AIWorkspaceRunStepSummaryView(
+                step.StepId,
+                WorkflowAuditTextSanitizer.SanitizeForDisplay(
+                    step.InputSummary,
+                    RunStepInputSummaryMaxLength),
+                step.Availability);
 
     private static AIWorkspaceRunFailureSummaryView? ToFailure(WorkflowActivityRunFailureSummary failure) =>
         string.Equals(failure.Availability, "unavailable", StringComparison.Ordinal)
             ? null
             : new AIWorkspaceRunFailureSummaryView(
                 failure.StepId,
-                failure.Message,
+                WorkflowAuditTextSanitizer.SanitizeForDisplay(
+                    failure.Message,
+                    RunFailureMessageMaxLength),
                 failure.Availability);
 
     private static AIWorkspaceRunWaitingSummaryView? ToWaiting(WorkflowActivityRunWaitingSummary waiting) =>

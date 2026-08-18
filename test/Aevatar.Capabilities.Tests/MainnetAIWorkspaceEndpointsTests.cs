@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.AI;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using FluentAssertions;
 using Google.Protobuf;
@@ -704,6 +705,65 @@ public sealed class MainnetAIWorkspaceEndpointsTests
     }
 
     [Fact]
+    public async Task ActivityRuns_ShouldRedactLegacySensitiveSummariesAtTheApiBoundary()
+    {
+        const string inputSecret = "legacy-input-secret";
+        const string stepSecret = "legacy-step-secret";
+        const string failureSecret = "legacy-failure-secret";
+        var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();
+        observatory.ListActivityRunsForScopeAsync(
+                "scope-alpha",
+                Arg.Any<WorkflowActivityRunFeedFilter>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new WorkflowActivityRunFeedPage
+            {
+                Items =
+                [
+                    new WorkflowActivityRunFeedRow
+                    {
+                        RunId = "run-alpha",
+                        ScopeId = "scope-alpha",
+                        InputSummary = $"{{\"app_token\":\"{inputSecret}\",\"mode\":\"preview\"}}",
+                        CurrentStep = new WorkflowActivityRunStepSummary
+                        {
+                            StepId = "step-alpha",
+                            InputSummary = $"password={stepSecret}",
+                            Availability = "available",
+                        },
+                        FirstFailure = new WorkflowActivityRunFailureSummary
+                        {
+                            StepId = "step-alpha",
+                            Message = $"provider failed token={failureSecret}",
+                            Availability = "available",
+                        },
+                        UpdatedAtUtc = DateTimeOffset.Parse("2026-08-18T04:00:00Z"),
+                        StateVersion = 19,
+                    },
+                ],
+            }));
+        await using var host = await AIWorkspaceTestHost.StartAsync(
+            null,
+            observatory: observatory);
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        var response = await host.Client.GetAsync("/api/ai/activity/runs");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().NotContain(inputSecret);
+        body.Should().NotContain(stepSecret);
+        body.Should().NotContain(failureSecret);
+        using var json = JsonDocument.Parse(body);
+        var run = json.RootElement.GetProperty("items")[0];
+        run.GetProperty("inputSummary").GetString()
+            .Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        run.GetProperty("currentStep").GetProperty("inputSummary").GetString()
+            .Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        run.GetProperty("firstFailure").GetProperty("message").GetString()
+            .Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+    }
+
+    [Fact]
     public async Task ActivityRunDetailMapper_ShouldExposeTypedResultAndSanitizedFailure()
     {
         var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();
@@ -824,6 +884,9 @@ public sealed class MainnetAIWorkspaceEndpointsTests
     [Fact]
     public async Task ActivityRunDetail_ShouldExposeResultAndOmitInternalOrRawPayloads()
     {
+        const string inputSecret = "legacy-detail-input-secret";
+        const string outputSecret = "legacy-detail-output-secret";
+        const string failureSecret = "legacy-detail-failure-secret";
         var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();
         observatory.GetRunForScopeAsync("scope-alpha", "run-alpha", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ObservatoryRunDetail?>(new ObservatoryRunDetail
@@ -870,12 +933,13 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                         VersionStatus = ObservatoryRunDetailSectionVersionStatus.Aligned,
                     },
                 },
-                FinalOutput = "Completed result.",
+                InputSummary = $"{{\"api_key\":\"{inputSecret}\",\"mode\":\"preview\"}}",
+                FinalOutput = $"Completed result token={outputSecret}",
                 FinalError = "raw-provider-error-secret",
                 FirstFailure = new WorkflowActivityRunFailureSummary
                 {
                     StepId = "step-alpha",
-                    Message = "Sanitized failure reason.",
+                    Message = $"provider failed password={failureSecret}",
                     Availability = "available",
                 },
                 Operations =
@@ -922,7 +986,10 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         json.RootElement.GetProperty("summary").GetProperty("completedAtUtc").GetDateTimeOffset()
             .Should().Be(DateTimeOffset.Parse("2026-08-18T03:59:58Z"));
         json.RootElement.GetProperty("summary").GetProperty("durationMs").GetDouble().Should().Be(2_000);
-        json.RootElement.GetProperty("finalOutput").GetString().Should().Be("Completed result.");
+        json.RootElement.GetProperty("summary").GetProperty("inputSummary").GetString()
+            .Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        json.RootElement.GetProperty("finalOutput").GetString()
+            .Should().Be($"Completed result token={WorkflowAuditTextSanitizer.RedactedValue}");
         json.RootElement.GetProperty("reportVersion").GetString().Should().Be("workflow-run-report.v1");
         var sections = json.RootElement.GetProperty("sections");
         sections.GetProperty("steps").GetProperty("versionStatus").GetString()
@@ -933,7 +1000,10 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         sections.GetProperty("timeline").GetProperty("reason").GetString()
             .Should().Be("Run report artifact is unavailable.");
         json.RootElement.GetProperty("summary").GetProperty("firstFailure").GetProperty("message")
-            .GetString().Should().Be("Sanitized failure reason.");
+            .GetString().Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        body.Should().NotContain(inputSecret);
+        body.Should().NotContain(outputSecret);
+        body.Should().NotContain(failureSecret);
         body.Should().Contain("operation-alpha");
         body.Should().NotContain("reasoning-secret");
         body.Should().NotContain("argument-secret");
