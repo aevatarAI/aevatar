@@ -172,7 +172,14 @@ public sealed class RuntimeActorStateMigrationAdmissionTests
             new StubAdmissionReader(CreateAdmission()),
             CurrentMembership());
 
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("write failed");
+        // The storage failure surfaces as the typed persistence exception (with the store's
+        // exception inner) so the grain can keep activating at the persisted schema version.
+        var thrown = await act.Should().ThrowAsync<RuntimeActorStateMigrationPersistenceException>();
+        thrown.Which.InnerException.Should().BeOfType<InvalidOperationException>()
+            .Which.Message.Should().Be("write failed");
+        thrown.Which.AgentKind.Should().Be("test.migrated");
+        thrown.Which.PersistedStateSchemaVersion.Should().Be(0);
+        thrown.Which.TargetStateSchemaVersion.Should().Be(1);
         proxy.WriteCount.Should().Be(1);
         proxy.State.AgentStateTypeName.Should().Be(typeof(EventEnvelope).FullName);
         proxy.State.Identity!.StateSchemaVersion.Should().Be(0);

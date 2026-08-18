@@ -590,16 +590,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             // granted cutover writes snapshot, schema marker, and immutable
             // receipt in one state row. Without a fresh proof, a new actor is
             // durably established at the legacy schema-zero baseline.
-            var migrated = await RuntimeActorStateMigrationPersistence.ApplyAndPersistAsync(
-                _state,
-                implementation,
-                ServiceProvider?.GetService<IRuntimeFleetCapabilityAdmissionReader>() ??
-                    new DenyAllRuntimeFleetCapabilityAdmissionReader(),
-                ServiceProvider?.GetService<IRuntimeLocalMembershipIdentityReader>() ??
-                    new UnavailableRuntimeLocalMembershipIdentityReader(),
-                ServiceProvider?.GetService<TimeProvider>(),
-                ServiceProvider?.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
-                ct);
+            var migrated = await ApplyAdmittedMigrationAsync(implementation, createdIdentity, ct);
             if (createdIdentity && !migrated)
                 await _state.WriteStateAsync(ct);
         }
@@ -630,6 +621,42 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         // separate identities once activation succeeds.
         _activeKind = implementation.Metadata.Kind;
         return implementation;
+    }
+
+    private async Task<bool> ApplyAdmittedMigrationAsync(
+        AgentImplementation implementation,
+        bool createdIdentity,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await RuntimeActorStateMigrationPersistence.ApplyAndPersistAsync(
+                _state,
+                implementation,
+                ServiceProvider?.GetService<IRuntimeFleetCapabilityAdmissionReader>() ??
+                    new DenyAllRuntimeFleetCapabilityAdmissionReader(),
+                ServiceProvider?.GetService<IRuntimeLocalMembershipIdentityReader>() ??
+                    new UnavailableRuntimeLocalMembershipIdentityReader(),
+                ServiceProvider?.GetService<TimeProvider>(),
+                ServiceProvider?.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
+                ct);
+        }
+        catch (RuntimeActorStateMigrationPersistenceException exception) when (!createdIdentity)
+        {
+            // Adoption is fail-closed, activation is not: the persisted row still carries the
+            // legacy schema (the helper restored it), so the actor keeps running exactly as it
+            // would without a fleet grant and the migration is retried on a later activation.
+            // Refusing to activate here would strand every actor whose row the store cannot
+            // rewrite, which is a far worse failure than a deferred adoption.
+            _logger.LogError(
+                exception,
+                "Runtime actor state schema migration could not be persisted; activating at persisted schema version. actorId={ActorId} kind={Kind} persistedVersion={PersistedVersion} targetVersion={TargetVersion}",
+                SafeGetActorIdForLog(),
+                exception.AgentKind,
+                exception.PersistedStateSchemaVersion,
+                exception.TargetStateSchemaVersion);
+            return false;
+        }
     }
 
     private static void EnsureReservedFleetAuthorityIdentity(

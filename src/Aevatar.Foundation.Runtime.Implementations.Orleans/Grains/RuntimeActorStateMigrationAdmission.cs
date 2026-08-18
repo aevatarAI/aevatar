@@ -70,12 +70,45 @@ internal static class RuntimeActorStateMigrationPersistence
             await persistentState.WriteStateAsync(ct);
             return true;
         }
-        catch
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             persisted.AgentStateSnapshot = originalSnapshot;
             persisted.AgentStateTypeName = originalStateTypeName;
             persisted.Identity = originalIdentity;
             throw;
         }
+        catch (Exception exception)
+        {
+            persisted.AgentStateSnapshot = originalSnapshot;
+            persisted.AgentStateTypeName = originalStateTypeName;
+            persisted.Identity = originalIdentity;
+            throw new RuntimeActorStateMigrationPersistenceException(
+                identity.Kind,
+                originalIdentity.StateSchemaVersion,
+                decision.StateSchemaVersion,
+                exception);
+        }
     }
+}
+
+/// <summary>
+/// The admitted migration could not be durably written. The in-memory grain state has been
+/// restored to the persisted schema, so the actor may still activate at that version; the
+/// adoption is simply retried on a later activation.
+/// </summary>
+public sealed class RuntimeActorStateMigrationPersistenceException(
+    string agentKind,
+    int persistedStateSchemaVersion,
+    int targetStateSchemaVersion,
+    Exception innerException)
+    : Exception(
+        $"Actor kind '{agentKind}' could not persist the state schema migration " +
+        $"{persistedStateSchemaVersion}->{targetStateSchemaVersion}.",
+        innerException)
+{
+    public string AgentKind { get; } = agentKind;
+
+    public int PersistedStateSchemaVersion { get; } = persistedStateSchemaVersion;
+
+    public int TargetStateSchemaVersion { get; } = targetStateSchemaVersion;
 }

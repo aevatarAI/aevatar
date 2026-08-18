@@ -31,6 +31,50 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
     }
 
     [Fact]
+    public void EveryVersionedCypherStatement_ShouldHaveBalancedBracesAndNoEscapedBraceResidue()
+    {
+        // Mixed interpolated/plain string segments once left "}}" in the emitted Cypher and
+        // Neo4j rejected the statement at runtime; the InMemory conformance path never sees it.
+        var statements = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["owner-constraint"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateOwnerStateConstraintCypher("OwnerState", "c1"),
+            ["event-constraint"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateEventConstraintCypher("OwnerEvent", "c2"),
+            ["edge-constraint"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateEdgeIdentityConstraintCypher("EdgeIdentity", "c3"),
+            ["pending-from"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreatePendingFromIndexCypher("EdgeIdentity", "i1"),
+            ["pending-to"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreatePendingToIndexCypher("EdgeIdentity", "i2"),
+            ["rel-edge-id"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateRelationshipEdgeIdIndexCypher("REL", "i3"),
+            ["lock-owner"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildLockOwnerStateCypher("OwnerState"),
+            ["read-event"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadEventCypher("OwnerEvent"),
+            ["touched-nodes"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadTouchedNodesCypher("Node"),
+            ["touched-edge-identities"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadTouchedEdgeIdentitiesCypher("EdgeIdentity"),
+            ["touched-relationships"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadTouchedRelationshipsCypher("REL"),
+            ["foreign-relationships"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadForeignIncidentRelationshipsCypher("Node", "REL"),
+            ["foreign-edge-identities"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadForeignIncidentEdgeIdentitiesCypher("EdgeIdentity"),
+            ["delete-nodes"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildDeleteNodesCypher("Node", "REL", "EdgeIdentity"),
+            ["delete-edges"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildDeleteEdgesCypher("REL", "EdgeIdentity"),
+            ["upsert-nodes"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildUpsertNodesCypher("Node"),
+            ["upsert-edge-identities"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildUpsertEdgeIdentitiesCypher("EdgeIdentity"),
+            ["delete-rewire"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildDeleteRelationshipsForRewireCypher("REL"),
+            ["create-live-edges"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateLiveEdgesCypher("Node", "REL"),
+            ["promote-pending"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildPromotePendingEdgesCypher("Node", "REL", "EdgeIdentity"),
+            ["commit-watermark"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCommitWatermarkCypher("OwnerState", "OwnerEvent"),
+            ["read-snapshot"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadOwnerSnapshotCypher("OwnerState", "Node", "REL", "EdgeIdentity"),
+        };
+
+        foreach (var (name, cypher) in statements)
+        {
+            cypher.Should().NotContain("}}", because: $"{name} must not carry escaped-brace residue");
+            cypher.Should().NotContain("{{", because: $"{name} must not carry escaped-brace residue");
+            cypher.Count(static c => c == '{').Should().Be(
+                cypher.Count(static c => c == '}'),
+                because: $"{name} must have balanced braces");
+            cypher.Count(static c => c == '(').Should().Be(
+                cypher.Count(static c => c == ')'),
+                because: $"{name} must have balanced parentheses");
+        }
+    }
+
+    [Fact]
     public void ApplyCypher_ShouldPersistFullRouteAndKeepWatermarkLast()
     {
         var lockOwner = Neo4jProjectionGraphStoreVersionedCypherSupport

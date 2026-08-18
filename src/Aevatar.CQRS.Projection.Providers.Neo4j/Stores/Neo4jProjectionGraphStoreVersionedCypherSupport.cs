@@ -48,7 +48,7 @@ internal static class Neo4jProjectionGraphStoreVersionedCypherSupport
 
     internal static string BuildReadEventCypher(string eventLabel) =>
         $"MATCH (event:{eventLabel} {{physicalNamespace: $physicalNamespace, " +
-        "projectionOwnerId: $ownerId, eventId: $eventId}}) " +
+        "projectionOwnerId: $ownerId, eventId: $eventId}) " +
         "RETURN coalesce(event.sourceActorId, '') AS sourceActorId, " +
         "coalesce(event.sourceVersion, 0) AS sourceVersion, " +
         "coalesce(event.deltaFingerprint, '') AS deltaFingerprint";
@@ -155,7 +155,7 @@ internal static class Neo4jProjectionGraphStoreVersionedCypherSupport
         string edgeType,
         string edgeIdentityLabel) =>
         $"MATCH (identity:{edgeIdentityLabel} {{physicalNamespace: $physicalNamespace, " +
-        "projectionOwnerId: $ownerId, status: 'pending'}}) " +
+        "projectionOwnerId: $ownerId, status: 'pending'}) " +
         "WHERE identity.edgeId IN $promotableEdgeIds " +
         "OR identity.fromNodeId IN $promotableNodeIds " +
         "OR identity.toNodeId IN $promotableNodeIds " +
@@ -177,7 +177,7 @@ internal static class Neo4jProjectionGraphStoreVersionedCypherSupport
         "state.sourceActorId = $sourceActorId, state.sourceVersion = $sourceVersion, " +
         "state.sourceEventId = $eventId, state.deltaFingerprint = $deltaFingerprint " +
         $"CREATE (event:{eventLabel} {{physicalNamespace: $physicalNamespace, " +
-        "projectionOwnerId: $ownerId, eventId: $eventId}}) " +
+        "projectionOwnerId: $ownerId, eventId: $eventId}) " +
         "SET event.sourceActorId = $sourceActorId, event.sourceVersion = $sourceVersion, " +
         "event.deltaFingerprint = $deltaFingerprint";
 
