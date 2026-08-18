@@ -52,6 +52,16 @@ public sealed partial class Neo4jProjectionGraphStore
                 $"projection_graph_node_scope_owner_id_{_nodeLabel}");
             var relationshipOwnerIndexName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
                 $"projection_graph_relationship_scope_owner_id_{_edgeType}");
+            var versionedOwnerConstraintName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
+                $"projection_graph_v2_owner_{_versionedOwnerStateLabel}");
+            var versionedEventConstraintName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
+                $"projection_graph_v2_event_{_versionedEventLabel}");
+            var versionedEdgeConstraintName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
+                $"projection_graph_v2_edge_{_versionedEdgeIdentityLabel}");
+            var pendingFromIndexName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
+                $"projection_graph_v2_pending_from_{_versionedEdgeIdentityLabel}");
+            var pendingToIndexName = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeSchemaName(
+                $"projection_graph_v2_pending_to_{_versionedEdgeIdentityLabel}");
 
             await ExecuteWriteAsync(
                 Neo4jProjectionGraphStoreCypherSupport.BuildCreateNodeConstraintCypher(
@@ -69,6 +79,36 @@ public sealed partial class Neo4jProjectionGraphStore
                 Neo4jProjectionGraphStoreCypherSupport.BuildCreateRelationshipOwnerIndexCypher(
                     _edgeType,
                     relationshipOwnerIndexName),
+                new Dictionary<string, object?>(),
+                ct);
+            await ExecuteWriteAsync(
+                Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateOwnerStateConstraintCypher(
+                    _versionedOwnerStateLabel,
+                    versionedOwnerConstraintName),
+                new Dictionary<string, object?>(),
+                ct);
+            await ExecuteWriteAsync(
+                Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateEventConstraintCypher(
+                    _versionedEventLabel,
+                    versionedEventConstraintName),
+                new Dictionary<string, object?>(),
+                ct);
+            await ExecuteWriteAsync(
+                Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateEdgeIdentityConstraintCypher(
+                    _versionedEdgeIdentityLabel,
+                    versionedEdgeConstraintName),
+                new Dictionary<string, object?>(),
+                ct);
+            await ExecuteWriteAsync(
+                Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreatePendingFromIndexCypher(
+                    _versionedEdgeIdentityLabel,
+                    pendingFromIndexName),
+                new Dictionary<string, object?>(),
+                ct);
+            await ExecuteWriteAsync(
+                Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreatePendingToIndexCypher(
+                    _versionedEdgeIdentityLabel,
+                    pendingToIndexName),
                 new Dictionary<string, object?>(),
                 ct);
 
