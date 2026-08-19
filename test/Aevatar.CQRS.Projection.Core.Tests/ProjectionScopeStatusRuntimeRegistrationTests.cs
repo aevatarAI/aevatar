@@ -211,6 +211,31 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
         kind.Should().Be(ProjectionScopeStatusGAgent.AgentKind);
     }
 
+    [Fact]
+    public async Task AddProjectionScopeStatusRuntimeCore_ShouldAdvertiseTerminalStatusCapabilityToTheFleet()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddProjectionScopeStatusRuntimeCore();
+        services.AddProjectionScopeStatusRuntimeCore();
+
+        await using var provider = services.BuildServiceProvider();
+        var advertisement = provider
+            .GetServices<Aevatar.Foundation.Abstractions.Runtime.IRuntimeFleetCapabilityAdvertisement>()
+            .Should().ContainSingle(candidate =>
+                candidate.GetCapability().Capability ==
+                Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapability.ProjectionScopeStatusTerminalV1)
+            .Subject;
+
+        // The fleet authority opens the terminal gate only when every silo advertises exactly the
+        // contract the source scope demands before adopting the terminal route.
+        var capability = advertisement.GetCapability();
+        capability.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        capability.ReaderContractVersion.Should().Be((int)ProjectionScopeStatusGAgent.ContractVersion);
+        advertisement.GetReaderImplementationType().Should().Be(typeof(ProjectionScopeStatusGAgent));
+    }
+
     [Theory]
     [InlineData(ProjectionScopeStatusMaterializationContext.ProjectionKindValue, true)]
     [InlineData(ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue, true)]

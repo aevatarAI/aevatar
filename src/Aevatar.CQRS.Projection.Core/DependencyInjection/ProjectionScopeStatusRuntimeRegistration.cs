@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.TypeSystem;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,6 +29,11 @@ public static class ProjectionScopeStatusRuntimeRegistration
             // the source scope actor once the fleet admits the terminal contract.
             builder.Register(ProjectionScopeAgentRegistration.Create<ProjectionScopeStatusGAgent>());
         });
+        // Every silo that can activate the terminal materializer advertises its contract; the
+        // fleet authority opens the terminal gate only when all active silos do.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IRuntimeFleetCapabilityAdvertisement,
+            ProjectionScopeStatusTerminalCapabilityAdvertisement>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
             ProjectionScopeCommittedStateRedactionHook>());

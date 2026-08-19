@@ -91,11 +91,21 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         }
 
         if (runtime == null || dispatchPort == null)
+        {
+            _logger.LogInformation(
+                "Projection scope status route stays legacy: actor runtime ports unavailable. actorId={ActorId}",
+                Id);
             return;
+        }
 
         var grant = await ReadFreshStatusRouteAdmissionAsync(ct);
         if (grant == null)
+        {
+            _logger.LogInformation(
+                "Projection scope status route stays legacy: no fresh terminal admission. actorId={ActorId}",
+                Id);
             return;
+        }
 
         var admission = grant.Admission;
         var route = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
