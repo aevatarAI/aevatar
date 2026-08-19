@@ -1748,16 +1748,30 @@ public sealed class ToolCallModuleContextTests
             new DateTimeOffset(2026, 8, 18, 12, 0, 0, 37, TimeSpan.Zero));
 
         await module.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
+        // The producer records completion_delivery_producer_confirmed only after its self-publish
+        // returns, so it may land before or after the actor's reconciliation line. Sync on it
+        // (TCS, no polling) AFTER handing the completion to the actor, then assert only the
+        // causally deterministic edges plus the exact waterline set.
+        await logger.WaitForEntryAsync(entry =>
+            Equals(entry.Properties.GetValueOrDefault("Waterline"), "completion_delivery_producer_confirmed") &&
+            Equals(entry.Properties.GetValueOrDefault("DispatchId"), completed.ProviderTiming.DispatchId));
 
         var observations = logger.Entries
             .Where(entry => entry.Properties.ContainsKey("Waterline"))
             .ToList();
-        observations.Select(entry => entry.Properties["Waterline"]).Should().ContainInOrder(
+        var waterlines = observations.Select(entry => (string)entry.Properties["Waterline"]!).ToList();
+        waterlines.Should().BeEquivalentTo(
             "pending_state_persisted",
             "external_dispatch_started",
             "provider_returned",
             "completion_delivery_producer_confirmed",
             "actor_reconciliation_completed");
+        // Actor persists before the worker dispatches; the worker returns from the provider
+        // before the actor reconciles that dispatch; the worker confirms delivery after it returned.
+        waterlines.IndexOf("pending_state_persisted").Should().BeLessThan(waterlines.IndexOf("external_dispatch_started"));
+        waterlines.IndexOf("external_dispatch_started").Should().BeLessThan(waterlines.IndexOf("provider_returned"));
+        waterlines.IndexOf("provider_returned").Should().BeLessThan(waterlines.IndexOf("actor_reconciliation_completed"));
+        waterlines.IndexOf("provider_returned").Should().BeLessThan(waterlines.IndexOf("completion_delivery_producer_confirmed"));
         observations.Should().OnlyContain(entry =>
             Equals(entry.Properties["RunId"], request.RunId) &&
             Equals(entry.Properties["StepId"], request.StepId) &&
@@ -5116,6 +5130,15 @@ public sealed class ToolCallModuleContextTests
 
         public bool FailNextSchedule { get; set; }
 
+        /// <summary>
+        /// When set, every published <see cref="WorkflowToolCallAttemptCompletedEvent"/> is handed
+        /// to this delegate (the actor inbox) BEFORE <see cref="PublishAsync"/> returns to the
+        /// producer, modelling a transport that delivers self-publications synchronously. The
+        /// producer therefore records its delivery waterline only after the actor has already
+        /// reconciled the completion.
+        /// </summary>
+        public Func<EventEnvelope, Task>? InTransportAttemptCompletionDelivery { get; set; }
+
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new()
         {
@@ -5310,7 +5333,10 @@ public sealed class ToolCallModuleContextTests
                 throw new InvalidOperationException("simulated post-publication failure");
             }
 
-            return Task.CompletedTask;
+            return evt is WorkflowToolCallAttemptCompletedEvent &&
+                   InTransportAttemptCompletionDelivery is { } deliverInTransport
+                ? deliverInTransport(PublishedEnvelope(evt))
+                : Task.CompletedTask;
         }
 
         public Task SendToAsync<TEvent>(

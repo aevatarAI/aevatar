@@ -107,6 +107,12 @@ public sealed partial class ToolCallModule
         RecordToolCallTiming(observation);
     }
 
+    /// <summary>
+    /// Records <c>actor_reconciliation_completed</c> for a timeout wake-up. Identity comes from
+    /// the callback event itself. <paramref name="attemptOverride"/> is only for a matched
+    /// pending approval whose persisted attempt is authoritative; stale/untrusted branches must
+    /// keep the callback's own attempt so an old callback cannot contaminate a newer attempt.
+    /// </summary>
     private void RecordTimeoutReconciliation(
         IWorkflowExecutionContext ctx,
         WorkflowToolCallTimeoutFiredEvent timeout,
@@ -129,10 +135,62 @@ public sealed partial class ToolCallModule
     }
 
     /// <summary>
+    /// Records <c>actor_reconciliation_completed</c> for a retry wake-up the actor rejected as
+    /// stale or untrusted. Identity comes from the callback event itself, never from the
+    /// currently persisted pending attempt, so an old callback cannot contaminate a newer
+    /// attempt's timeline.
+    /// </summary>
+    private void RecordRetryCallbackReconciliation(
+        IWorkflowExecutionContext ctx,
+        WorkflowToolCallRetryFiredEvent retry,
+        long reconciliationStartedAtTimestamp,
+        WorkflowToolCallReconciliationDisposition disposition)
+    {
+        var observation = CreateToolCallTimingObservation(
+            ctx,
+            retry.RunId,
+            retry.StepId,
+            retry.CallId,
+            retry.ExecutionId,
+            retry.ContinuationId,
+            retry.Attempt,
+            WorkflowToolCallAttemptWaterline.ActorReconciliationCompleted);
+        observation.ReconciliationDisposition = disposition;
+        observation.ActorReconciliationElapsedMs = ElapsedMilliseconds(ctx, reconciliationStartedAtTimestamp);
+        RecordToolCallTiming(observation);
+    }
+
+    /// <summary>
+    /// Records <c>actor_reconciliation_completed</c> for an execution-recovery wake-up the actor
+    /// rejected as stale or untrusted. Identity comes from the callback event itself, never from
+    /// the currently persisted pending attempt.
+    /// </summary>
+    private void RecordRecoveryCallbackReconciliation(
+        IWorkflowExecutionContext ctx,
+        WorkflowToolCallExecutionRecoveryFiredEvent recovery,
+        long reconciliationStartedAtTimestamp,
+        WorkflowToolCallReconciliationDisposition disposition)
+    {
+        var observation = CreateToolCallTimingObservation(
+            ctx,
+            recovery.RunId,
+            recovery.StepId,
+            recovery.CallId,
+            recovery.ExecutionId,
+            recovery.ContinuationId,
+            recovery.Attempt,
+            WorkflowToolCallAttemptWaterline.ActorReconciliationCompleted);
+        observation.ReconciliationDisposition = disposition;
+        observation.ActorReconciliationElapsedMs = ElapsedMilliseconds(ctx, reconciliationStartedAtTimestamp);
+        RecordToolCallTiming(observation);
+    }
+
+    /// <summary>
     /// Records <c>actor_reconciliation_completed</c> for an attempt that the actor settled
     /// without a provider completion signal (pre-dispatch failure, deadline before dispatch,
-    /// recovery terminalization, stale/untrusted wakeups). Identity comes from the persisted
-    /// pending execution; no dispatch id exists at this layer.
+    /// protected material unavailable, recovery terminalization). Identity comes from the
+    /// matched persisted pending execution; no dispatch id exists at this layer. Stale/untrusted
+    /// callbacks never use this overload (see the callback-identity overloads above).
     /// </summary>
     private void RecordPendingReconciliation(
         IWorkflowExecutionContext ctx,
@@ -154,6 +212,13 @@ public sealed partial class ToolCallModule
         RecordToolCallTiming(observation);
     }
 
+    /// <summary>
+    /// Records <c>pending_state_persisted</c> for <paramref name="pending"/>'s attempt. Emitted
+    /// exactly once per attempt, immediately after the first successful <c>SaveStateAsync</c>
+    /// that persists that attempt number (initial attempt: <c>StartToolExecutionAsync</c>;
+    /// retry attempt N: <c>ScheduleToolRetryAsync</c>). Later saves of the same attempt
+    /// (watchdog/retry lease, phase flip, recovery) do not re-emit it.
+    /// </summary>
     private void RecordPendingStatePersisted(
         IWorkflowExecutionContext ctx,
         PendingToolCallExecutionState pending,

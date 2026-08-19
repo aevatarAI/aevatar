@@ -1183,7 +1183,13 @@ public sealed partial class ToolCallModule
                 completed.Failure is { TerminalInvoked: false, Retryable: true } &&
                 pending.Attempt < MaxToolExecutionAttempts)
             {
-                await ScheduleToolRetryAsync(state, pending, material!, ctx, ct);
+                await ScheduleToolRetryAsync(
+                    state,
+                    pending,
+                    material!,
+                    reconciliationStartedAtTimestamp,
+                    ctx,
+                    ct);
                 var retryState = WorkflowExecutionStateAccess.Load<ToolCallModuleState>(ctx, ModuleStateKey);
                 var retryDisposition = retryState.PendingExecutions.TryGetValue(pendingKey, out var retryPending) &&
                                        retryPending.ExecutionPhase == WorkflowToolCallExecutionPhase.RetryPending
@@ -1354,12 +1360,13 @@ public sealed partial class ToolCallModule
                 timeout.ExecutionId) ||
             !MatchesContinuationId(pending, timeout.ContinuationId))
         {
+            // Rejected wake-up: observe it under the callback's own identity (including its
+            // attempt), not the persisted pending it failed to match.
             RecordTimeoutReconciliation(
                 ctx,
                 timeout,
                 reconciliationStartedAtTimestamp,
-                WorkflowToolCallReconciliationDisposition.Stale,
-                pending.Attempt);
+                WorkflowToolCallReconciliationDisposition.Stale);
             return;
         }
 
@@ -1369,8 +1376,7 @@ public sealed partial class ToolCallModule
                 ctx,
                 timeout,
                 reconciliationStartedAtTimestamp,
-                WorkflowToolCallReconciliationDisposition.Untrusted,
-                pending.Attempt);
+                WorkflowToolCallReconciliationDisposition.Untrusted);
             return;
         }
 
@@ -1425,10 +1431,17 @@ public sealed partial class ToolCallModule
             ct);
     }
 
+    /// <param name="preparationStartedAtTimestamp">
+    /// Entry timestamp of the completion handler that reconciled attempt N-1's retryable
+    /// failure. The actor starts preparing attempt N at that point, so the
+    /// <c>pending_state_persisted</c> waterline for attempt N reports <c>actor_preparation</c>
+    /// elapsed from it. Telemetry only; retry timing is never derived from it.
+    /// </param>
     private async Task ScheduleToolRetryAsync(
         ToolCallModuleState state,
         PendingToolCallExecutionState pending,
         ToolCallProtectedMaterial material,
+        long preparationStartedAtTimestamp,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
@@ -1459,6 +1472,10 @@ public sealed partial class ToolCallModule
         pending.ExecutionPhase = WorkflowToolCallExecutionPhase.RetryPending;
         state.PendingExecutions[BuildExecutionKey(pending.CallId, pending.ExecutionId)] = pending;
         await SaveStateAsync(state, ctx, ct);
+        // First successful save that persists attempt N: the pending_state_persisted waterline
+        // for attempt N is recorded here (once), not when the retry later wakes up. The
+        // actor_preparation elapsed is measured from the completion handler's entry timestamp.
+        RecordPendingStatePersisted(ctx, pending, preparationStartedAtTimestamp);
 
         try
         {
@@ -1546,9 +1563,11 @@ public sealed partial class ToolCallModule
             !MatchesExecutionIdentity(pending, retry.RunId, retry.StepId, retry.CallId, retry.ExecutionId) ||
             !MatchesContinuationId(pending, retry.ContinuationId))
         {
-            RecordPendingReconciliation(
+            // Rejected wake-up: observe it under the callback's own identity, not the newer
+            // persisted attempt it failed to match.
+            RecordRetryCallbackReconciliation(
                 ctx,
-                pending,
+                retry,
                 preparationStartedAtTimestamp,
                 WorkflowToolCallReconciliationDisposition.Stale);
             return;
@@ -1556,9 +1575,9 @@ public sealed partial class ToolCallModule
 
         if (!MatchesExecutionRetry(envelope, pending))
         {
-            RecordPendingReconciliation(
+            RecordRetryCallbackReconciliation(
                 ctx,
-                pending,
+                retry,
                 preparationStartedAtTimestamp,
                 WorkflowToolCallReconciliationDisposition.Untrusted);
             return;
@@ -1707,8 +1726,9 @@ public sealed partial class ToolCallModule
         pending.RetryDueUnixMs = 0;
         pending.ExecutionPhase = WorkflowToolCallExecutionPhase.ExecutionPending;
         state.PendingExecutions[pendingKey] = pending;
+        // Same attempt, phase flip only: pending_state_persisted for this attempt was already
+        // recorded by ScheduleToolRetryAsync when the attempt number was first persisted.
         await SaveStateAsync(state, ctx, ct);
-        RecordPendingStatePersisted(ctx, pending, preparationStartedAtTimestamp);
 
         if (ctx.UtcNow.ToUnixTimeMilliseconds() >= pending.TimeoutDeadlineUnixMs ||
             !DispatchToolExecution(
@@ -1762,9 +1782,11 @@ public sealed partial class ToolCallModule
                 recovery.ExecutionId) ||
             !MatchesContinuationId(pending, recovery.ContinuationId))
         {
-            RecordPendingReconciliation(
+            // Rejected wake-up: observe it under the callback's own identity, not the newer
+            // persisted attempt it failed to match.
+            RecordRecoveryCallbackReconciliation(
                 ctx,
-                pending,
+                recovery,
                 preparationStartedAtTimestamp,
                 WorkflowToolCallReconciliationDisposition.Stale);
             return;
@@ -1772,9 +1794,9 @@ public sealed partial class ToolCallModule
 
         if (!IsTrustedExecutionRecoveryEnvelope(envelope, ctx, pending))
         {
-            RecordPendingReconciliation(
+            RecordRecoveryCallbackReconciliation(
                 ctx,
-                pending,
+                recovery,
                 preparationStartedAtTimestamp,
                 WorkflowToolCallReconciliationDisposition.Untrusted);
             return;
