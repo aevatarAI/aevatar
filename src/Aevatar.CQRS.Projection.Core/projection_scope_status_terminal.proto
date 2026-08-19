@@ -22,12 +22,29 @@ message ProjectionScopeStatusTerminalState {
   google.protobuf.Timestamp updated_at_utc = 8;
 }
 
+// How a deferred terminal status write failed, and therefore how it recovers.
+enum ProjectionScopeStatusWriteFailureKind {
+  PROJECTION_SCOPE_STATUS_WRITE_FAILURE_KIND_UNSPECIFIED = 0;
+  // The store threw; the same write is retried through durable, backed-off self continuations
+  // until it succeeds or a higher-version terminal write supersedes it.
+  PROJECTION_SCOPE_STATUS_WRITE_FAILURE_KIND_TRANSIENT = 1;
+  // The store rejected the bytes at this version (conflict / gap): retrying the same bytes
+  // cannot heal it, so it is recorded as an explicit failure and only a later higher-version
+  // terminal write supersedes it.
+  PROJECTION_SCOPE_STATUS_WRITE_FAILURE_KIND_REJECTED = 2;
+}
+
 message ProjectionScopeStatusPendingWrite {
   ProjectionSourceCoordinate source = 1;
   aevatar.EventEnvelope envelope = 2;
   int32 attempts = 3;
   string last_error = 4;
   google.protobuf.Timestamp deferred_at_utc = 5;
+  ProjectionScopeStatusWriteFailureKind failure_kind = 6;
+  // Attempts crossed the alert threshold: an explicit, observable stalled state (alert +
+  // error log). Retries continue at the capped cadence; the flag clears on recovery.
+  bool stalled = 7;
+  google.protobuf.Timestamp next_retry_at_utc = 8;
 }
 
 message ProjectionScopeStatusTerminalStartedEvent {
@@ -52,6 +69,13 @@ message ProjectionScopeStatusWriteRecoveredEvent {
   google.protobuf.Timestamp occurred_at_utc = 2;
 }
 
+message ProjectionScopeStatusWriteStalledEvent {
+  ProjectionSourceCoordinate source = 1;
+  int32 attempts = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Durable self continuation (callback scheduler) that retries the pending write.
 message RetryProjectionScopeStatusWriteCommand {
   ProjectionSourceCoordinate expected_source = 1;
   int32 attempt = 2;

@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -28,7 +29,25 @@ public sealed class ProjectionScopeStatusGAgent
     public const string AgentKind = "projection.scope-status-terminal";
     public const string ContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1;
     public const long ContractVersion = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion;
-    internal const int MaxImmediateWriteRetries = 3;
+    internal const string WriteRetryCallbackId = "projection-scope-status-write-retry";
+
+    /// <summary>
+    /// Backed-off durable retry cadence for a transiently failed status write. The last delay
+    /// repeats for as long as the store stays unavailable: recovery needs no new source event,
+    /// no manual ensure and no actor deactivation. Once <see cref="StalledAttemptThreshold"/>
+    /// attempts have failed the pending write is marked stalled (explicit, observable) while the
+    /// retries continue at the capped cadence.
+    /// </summary>
+    internal static readonly TimeSpan[] WriteRetryDelays =
+    [
+        TimeSpan.FromSeconds(1),
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromMinutes(2),
+        TimeSpan.FromMinutes(10),
+    ];
+
+    internal const int StalledAttemptThreshold = 5;
 
     private ILogger _logger = NullLogger.Instance;
 
@@ -39,8 +58,14 @@ public sealed class ProjectionScopeStatusGAgent
             return;
 
         await EnsureObservationRelayAsync(State.SourceScopeActorId, ct);
-        if (State.PendingWrite?.Source != null)
-            await ScheduleWriteRetryAsync(State.PendingWrite.Source, attempt: 1, ct);
+        // A durable retry survives deactivation on its own; re-arming it here only covers a
+        // scheduler that lost it (and is idempotent: the same callback id, one live retry).
+        var pending = State.PendingWrite;
+        if (pending?.Source != null &&
+            pending.FailureKind == ProjectionScopeStatusWriteFailureKind.Transient)
+        {
+            await ScheduleWriteRetryAsync(pending.Source, pending.Attempts, ct);
+        }
     }
 
     protected override async Task OnDeactivateAsync(CancellationToken ct)
@@ -176,6 +201,8 @@ public sealed class ProjectionScopeStatusGAgent
             return;
         if (command.ExpectedSource == null || !SameSource(command.ExpectedSource, pending.Source))
             return;
+        if (pending.FailureKind == ProjectionScopeStatusWriteFailureKind.Rejected)
+            return; // explicit failure state: same bytes cannot heal; a higher-version write supersedes it
 
         if (!CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
                 pending.Envelope,
@@ -201,6 +228,7 @@ public sealed class ProjectionScopeStatusGAgent
             .On<ProjectionScopeStatusTerminalReleasedEvent>(ProjectionScopeStatusTerminalStateApplier.ApplyReleased)
             .On<ProjectionScopeStatusWriteDeferredEvent>(ProjectionScopeStatusTerminalStateApplier.ApplyWriteDeferred)
             .On<ProjectionScopeStatusWriteRecoveredEvent>(ProjectionScopeStatusTerminalStateApplier.ApplyWriteRecovered)
+            .On<ProjectionScopeStatusWriteStalledEvent>(ProjectionScopeStatusTerminalStateApplier.ApplyWriteStalled)
             .OrCurrent();
 
     private async Task WriteStatusAsync(
@@ -226,7 +254,12 @@ public sealed class ProjectionScopeStatusGAgent
         {
             // The observed envelope is acknowledged only because the retry is now durable and
             // actor-owned; a later terminal write at a higher version supersedes it.
-            await DeferWriteAsync(envelope, source, attempt, exception.GetType().Name);
+            await DeferWriteAsync(
+                envelope,
+                source,
+                attempt,
+                ProjectionScopeStatusWriteFailureKind.Transient,
+                exception.GetType().Name);
             _logger.LogWarning(
                 exception,
                 "Terminal status write failed and was deferred. actorId={ActorId} source={SourceActorId} version={StateVersion} attempt={Attempt}",
@@ -241,7 +274,12 @@ public sealed class ProjectionScopeStatusGAgent
         {
             // Another writer committed different bytes at this version. Recording the fact keeps
             // it visible; retrying the same bytes cannot heal it, the next terminal outcome will.
-            await DeferWriteAsync(envelope, source, MaxImmediateWriteRetries, result.Disposition.ToString());
+            await DeferWriteAsync(
+                envelope,
+                source,
+                attempt,
+                ProjectionScopeStatusWriteFailureKind.Rejected,
+                result.Disposition.ToString());
             _logger.LogError(
                 "Terminal status write was rejected as {Disposition}. actorId={ActorId} source={SourceActorId} version={StateVersion}",
                 result.Disposition,
@@ -266,39 +304,132 @@ public sealed class ProjectionScopeStatusGAgent
         EventEnvelope envelope,
         ProjectionSourceCoordinate source,
         int attempt,
+        ProjectionScopeStatusWriteFailureKind failureKind,
         string reason)
     {
-        var existing = State.PendingWrite?.Source;
-        if (existing != null && existing.StateVersion > source.StateVersion)
+        var existing = State.PendingWrite;
+        if (existing?.Source != null && existing.Source.StateVersion > source.StateVersion)
             return; // keep the newer pending write; this one is superseded
 
-        var nextAttempt = attempt + 1;
+        var attempts = attempt + 1;
+        var now = Now();
+        var stalled = failureKind == ProjectionScopeStatusWriteFailureKind.Transient &&
+                      attempts >= StalledAttemptThreshold;
+        var alreadyStalled = existing?.Source != null &&
+                             SameSource(existing.Source, source) &&
+                             existing.Stalled;
+        var nextRetryAt = failureKind == ProjectionScopeStatusWriteFailureKind.Transient
+            ? now + ResolveWriteRetryDelay(attempts)
+            : (DateTimeOffset?)null;
         await PersistDomainEventAsync(new ProjectionScopeStatusWriteDeferredEvent
         {
             Pending = new ProjectionScopeStatusPendingWrite
             {
                 Source = source.Clone(),
                 Envelope = envelope.Clone(),
-                Attempts = nextAttempt,
+                Attempts = attempts,
                 LastError = reason,
-                DeferredAtUtc = Timestamp.FromDateTimeOffset(Now()),
+                DeferredAtUtc = Timestamp.FromDateTimeOffset(now),
+                FailureKind = failureKind,
+                Stalled = stalled || alreadyStalled,
+                NextRetryAtUtc = nextRetryAt == null ? null : Timestamp.FromDateTimeOffset(nextRetryAt.Value),
             },
-            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(now),
         });
 
-        if (nextAttempt <= MaxImmediateWriteRetries)
-            await ScheduleWriteRetryAsync(source, nextAttempt, CancellationToken.None);
+        if (failureKind == ProjectionScopeStatusWriteFailureKind.Rejected)
+        {
+            await PublishWriteFailureAlertAsync(source, attempts, reason, now);
+            return;
+        }
+
+        if (stalled && !alreadyStalled)
+        {
+            await PersistDomainEventAsync(new ProjectionScopeStatusWriteStalledEvent
+            {
+                Source = source.Clone(),
+                Attempts = attempts,
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(now),
+            });
+            _logger.LogError(
+                "Terminal status write is stalled after {Attempts} attempts; retries continue at the capped cadence. actorId={ActorId} source={SourceActorId} version={StateVersion} lastError={LastError}",
+                attempts,
+                Id,
+                source.ActorId,
+                source.StateVersion,
+                reason);
+            await PublishWriteFailureAlertAsync(source, attempts, reason, now);
+        }
+
+        await ScheduleWriteRetryAsync(source, attempts, CancellationToken.None);
     }
 
-    private Task ScheduleWriteRetryAsync(ProjectionSourceCoordinate source, int attempt, CancellationToken ct) =>
-        PublishAsync(
+    internal static TimeSpan ResolveWriteRetryDelay(int attempts) =>
+        WriteRetryDelays[Math.Clamp(attempts - 1, 0, WriteRetryDelays.Length - 1)];
+
+    /// <summary>
+    /// Durable, backed-off self continuation through the callback scheduler: it fires after
+    /// deactivation and across silo restarts, so a recovered store is picked up without any
+    /// new source event, manual ensure or actor deactivation.
+    /// </summary>
+    private async Task ScheduleWriteRetryAsync(ProjectionSourceCoordinate source, int attempts, CancellationToken ct)
+    {
+        if (Services.GetService<IActorRuntimeCallbackScheduler>() == null)
+        {
+            _logger.LogWarning(
+                "Terminal status write retry cannot be scheduled: no durable callback scheduler. actorId={ActorId} source={SourceActorId} version={StateVersion}",
+                Id,
+                source.ActorId,
+                source.StateVersion);
+            return;
+        }
+
+        _ = await ScheduleSelfDurableTimeoutAsync(
+            WriteRetryCallbackId,
+            ResolveWriteRetryDelay(attempts),
             new RetryProjectionScopeStatusWriteCommand
             {
                 ExpectedSource = source.Clone(),
-                Attempt = attempt,
+                Attempt = attempts,
             },
-            TopologyAudience.Self,
-            ct);
+            ct: ct);
+    }
+
+    private async Task PublishWriteFailureAlertAsync(
+        ProjectionSourceCoordinate source,
+        int attempts,
+        string reason,
+        DateTimeOffset now)
+    {
+        var sink = Services.GetService<IProjectionFailureAlertSink>();
+        if (sink == null)
+            return;
+
+        try
+        {
+            await sink.PublishAsync(new ProjectionFailureAlert(
+                ProjectionFailureAlertKind.FailureRecorded,
+                new ProjectionRuntimeScopeKey(
+                    State.SourceScopeActorId,
+                    ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
+                    ProjectionRuntimeMode.DurableMaterialization),
+                FailureId: $"{source.ActorId}:{source.StateVersion}:{source.EventId}",
+                Stage: "terminal-status-write",
+                EventId: source.EventId,
+                EventType: nameof(ProjectionScopeStatusDocument),
+                SourceVersion: source.StateVersion,
+                Reason: reason,
+                UnresolvedFailureCount: 1,
+                DroppedCount: 0,
+                DroppedFailureIds: [],
+                DiagnosticDroppedTotal: 0,
+                OccurredAt: now));
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Terminal status write alert could not be published. actorId={ActorId}", Id);
+        }
+    }
 
     private async Task ReleaseAsync()
     {
@@ -421,6 +552,22 @@ internal static class ProjectionScopeStatusTerminalStateApplier
     {
         var next = current.Clone();
         next.PendingWrite = evt.Pending?.Clone();
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeStatusTerminalState ApplyWriteStalled(
+        ProjectionScopeStatusTerminalState current,
+        ProjectionScopeStatusWriteStalledEvent evt)
+    {
+        var next = current.Clone();
+        if (next.PendingWrite?.Source != null &&
+            evt.Source != null &&
+            next.PendingWrite.Source.StateVersion == evt.Source.StateVersion)
+        {
+            next.PendingWrite.Stalled = true;
+        }
+
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }

@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -17,14 +18,17 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 
 /// <summary>
 /// Behavior of the terminal single-hop status materializer (#3476): one status document
-/// write per terminal source outcome, no per-envelope bookkeeping, durable deferred-write
-/// retry, and the source-owned status route that decides who may write.
+/// write per terminal source outcome, no per-envelope bookkeeping, durable backed-off
+/// deferred-write retry through the callback scheduler, and the source-owned status route
+/// that decides who may write.
 /// </summary>
 public sealed class ProjectionScopeStatusTerminalRouteTests
 {
     private const string RootActorId = "root-actor";
     private const string ProjectionKind = "test-kind";
+    private const string TerminalWriteAlertStage = "terminal-status-write";
     private static readonly DateTimeOffset FixedNow = new(2026, 8, 19, 10, 0, 0, TimeSpan.Zero);
+    private static readonly TimeSpan CappedRetryDelay = TimeSpan.FromMinutes(10);
 
     private static readonly string SourceScopeActorId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
         RootActorId,
@@ -155,12 +159,12 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         document.LastEventId.Should().Be("evt-42");
         document.LastSuccessfulVersion.Should().Be(41);
         document.HighestSeenVersion.Should().Be(42);
-        document.StatusRoute.Should().Be(sourceState.StatusRoute);
         document.UpdatedAtUtcValue.Should().Be(stateEvent.Timestamp);
         harness.EventSourcing.PersistedEvents.Should().ContainSingle(
             "the terminal materializer keeps no per-envelope bookkeeping stream")
             .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>();
         harness.Outbox.Published.Should().BeEmpty();
+        harness.Callbacks.Timeouts.Should().BeEmpty();
         harness.Agent.State.PendingWrite.Should().BeNull();
     }
 
@@ -320,10 +324,10 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Dispatcher.Documents.Should().BeEmpty();
     }
 
-    // ─── 6. Deferred write + self retry ──────────────────────────────────────
+    // ─── 6. Deferred write + durable backed-off retry ────────────────────────
 
     [Fact]
-    public async Task HandleObservedEnvelopeAsync_WhenWriteThrows_ShouldDeferDurablyAndScheduleSelfRetry()
+    public async Task HandleObservedEnvelopeAsync_WhenWriteThrows_ShouldDeferDurablyAndScheduleDurableRetry()
     {
         var harness = await TerminalHarness.CreateStartedAsync();
         harness.Dispatcher.Enqueue(new IOException("store unavailable"));
@@ -344,13 +348,23 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         deferred.Pending.Envelope.Should().Be(envelope);
         deferred.Pending.Attempts.Should().Be(1);
         deferred.Pending.LastError.Should().Be(nameof(IOException));
+        deferred.Pending.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Transient);
+        deferred.Pending.Stalled.Should().BeFalse();
+        deferred.Pending.DeferredAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
+        deferred.Pending.NextRetryAtUtc.Should().Be(
+            Timestamp.FromDateTimeOffset(FixedNow + ProjectionScopeStatusGAgent.WriteRetryDelays[0]));
         harness.Agent.State.PendingWrite.Should().Be(deferred.Pending);
 
-        var retry = harness.Outbox.Published.Should().ContainSingle().Subject;
-        retry.Audience.Should().Be(TopologyAudience.Self);
-        var command = retry.Message.Should().BeOfType<RetryProjectionScopeStatusWriteCommand>().Subject;
+        var timeout = harness.Callbacks.Timeouts.Should().ContainSingle().Subject;
+        timeout.ActorId.Should().Be(TerminalActorId);
+        timeout.CallbackId.Should().Be(ProjectionScopeStatusGAgent.WriteRetryCallbackId);
+        timeout.DueTime.Should().Be(ProjectionScopeStatusGAgent.WriteRetryDelays[0]);
+        timeout.DeliveryMode.Should().Be(RuntimeCallbackDeliveryMode.FiredSelfEvent);
+        var command = UnpackRetryCommand(timeout);
         command.Attempt.Should().Be(1);
         command.ExpectedSource.Should().Be(deferred.Pending.Source);
+        harness.Outbox.Published.Should().BeEmpty("the retry is a durable callback, never an immediate self-publish");
+        harness.Alerts.Published.Should().BeEmpty("a first transient failure is not an alert");
     }
 
     [Fact]
@@ -361,7 +375,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             BuildRoutedSourceState(),
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
-        var retry = (RetryProjectionScopeStatusWriteCommand)harness.Outbox.Published.Single().Message;
+        var retry = UnpackRetryCommand(harness.Callbacks.Timeouts.Single());
 
         await harness.Agent.HandleRetryWriteAsync(retry);
 
@@ -370,11 +384,80 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             .Should().ContainSingle().Subject;
         recovered.Source.Should().Be(retry.ExpectedSource);
         harness.Agent.State.PendingWrite.Should().BeNull();
-        harness.Outbox.Published.Should().ContainSingle("no further retry is scheduled after recovery");
+        harness.Callbacks.Timeouts.Should().ContainSingle("no further retry is scheduled after recovery");
     }
 
     [Fact]
-    public async Task HandleRetryWriteAsync_WhenWriteKeepsFailing_ShouldStopAfterMaxImmediateWriteRetries()
+    public async Task HandleRetryWriteAsync_AfterInitialAndThreeFailedRetries_ShouldRecoverOnFourthRetryWithoutNewSourceEvent()
+    {
+        // The store is down for the initial write and three fired retries (attempts 1..4), each
+        // deferral persisting and re-arming a longer durable timeout; then the store recovers and
+        // the 4th fired retry writes the document. No new source event, no ensure command and no
+        // activation is needed for that recovery.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.AlwaysThrow(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        await harness.FireLatestRetryAsync();
+        await harness.FireLatestRetryAsync();
+        await harness.FireLatestRetryAsync();
+
+        harness.Dispatcher.Documents.Should().BeEmpty();
+        harness.Dispatcher.UpsertAttempts.Should().Be(4);
+        var deferrals = harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>().ToList();
+        deferrals.Select(static evt => evt.Pending.Attempts).Should().Equal(1, 2, 3, 4);
+        deferrals.Should().OnlyContain(static evt =>
+            evt.Pending.FailureKind == ProjectionScopeStatusWriteFailureKind.Transient && !evt.Pending.Stalled);
+        deferrals.Select(static evt => evt.Pending.NextRetryAtUtc).Should().Equal(
+            ProjectionScopeStatusGAgent.WriteRetryDelays.Take(4)
+                .Select(static delay => Timestamp.FromDateTimeOffset(FixedNow + delay)));
+        harness.Callbacks.Timeouts.Should().HaveCount(4);
+        harness.Callbacks.Timeouts.Should().OnlyContain(static timeout =>
+            timeout.CallbackId == ProjectionScopeStatusGAgent.WriteRetryCallbackId &&
+            timeout.ActorId == TerminalActorId);
+        harness.Callbacks.Timeouts.Select(static timeout => timeout.DueTime).Should().Equal(
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMinutes(2));
+        harness.Callbacks.Timeouts.Select(timeout => UnpackRetryCommand(timeout).Attempt).Should().Equal(1, 2, 3, 4);
+        harness.Callbacks.Timeouts.Should().OnlyContain(timeout =>
+            UnpackRetryCommand(timeout).ExpectedSource.Equals(harness.Agent.State.PendingWrite!.Source));
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(4);
+
+        harness.Dispatcher.Recover();
+        await harness.FireLatestRetryAsync();
+
+        harness.Dispatcher.Documents.Should().ContainSingle().Which.StateVersion.Should().Be(12);
+        harness.Dispatcher.UpsertAttempts.Should().Be(5);
+        var recovered = harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteRecoveredEvent>()
+            .Should().ContainSingle().Subject;
+        recovered.Source.StateVersion.Should().Be(12);
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().HaveCount(4, "no further timeout is scheduled after recovery");
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteStalledEvent>().Should().BeEmpty();
+        harness.Alerts.Published.Should().BeEmpty();
+
+        // Recovery needed nothing but the durable retries: one source event was observed, the
+        // materializer was ensured exactly once and the same actor instance stayed active.
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusTerminalStartedEvent>()
+            .Should().ContainSingle();
+        harness.Agent.State.ActivationGeneration.Should().Be(1);
+        harness.Streams.GetStream(SourceScopeActorId).UpsertCount.Should().Be(1, "no ensure command was needed");
+        harness.Outbox.Published.Should().BeEmpty();
+        harness.EventSourcing.PersistedEvents.Select(static evt => evt.GetType()).Should().Equal(
+            typeof(ProjectionScopeStatusTerminalStartedEvent),
+            typeof(ProjectionScopeStatusWriteDeferredEvent),
+            typeof(ProjectionScopeStatusWriteDeferredEvent),
+            typeof(ProjectionScopeStatusWriteDeferredEvent),
+            typeof(ProjectionScopeStatusWriteDeferredEvent),
+            typeof(ProjectionScopeStatusWriteRecoveredEvent));
+    }
+
+    [Fact]
+    public async Task HandleRetryWriteAsync_WhenFiveTransientFailures_ShouldMarkStalledOnceAndKeepRetryingAtCappedDelay()
     {
         var harness = await TerminalHarness.CreateStartedAsync();
         harness.Dispatcher.AlwaysThrow(new IOException("store unavailable"));
@@ -382,20 +465,76 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             BuildRoutedSourceState(),
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
 
-        var drained = 0;
-        while (harness.Outbox.TryDequeue(out var published))
-        {
-            drained++;
-            await harness.Agent.HandleRetryWriteAsync((RetryProjectionScopeStatusWriteCommand)published.Message);
-        }
+        // attempts 2..4: still below the stalled threshold
+        await harness.FireLatestRetryAsync();
+        await harness.FireLatestRetryAsync();
+        await harness.FireLatestRetryAsync();
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(ProjectionScopeStatusGAgent.StalledAttemptThreshold - 1);
+        harness.Agent.State.PendingWrite.Stalled.Should().BeFalse();
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteStalledEvent>().Should().BeEmpty();
+        harness.Alerts.Published.Should().BeEmpty();
 
-        drained.Should().Be(ProjectionScopeStatusGAgent.MaxImmediateWriteRetries);
-        harness.Dispatcher.UpsertAttempts.Should().Be(1 + ProjectionScopeStatusGAgent.MaxImmediateWriteRetries);
+        // attempt 5: crosses the threshold exactly once
+        await harness.FireLatestRetryAsync();
+
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(ProjectionScopeStatusGAgent.StalledAttemptThreshold);
+        harness.Agent.State.PendingWrite.Stalled.Should().BeTrue();
+        harness.Agent.State.PendingWrite.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Transient);
+        var stalled = harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteStalledEvent>()
+            .Should().ContainSingle().Subject;
+        stalled.Attempts.Should().Be(ProjectionScopeStatusGAgent.StalledAttemptThreshold);
+        stalled.Source.Should().Be(harness.Agent.State.PendingWrite.Source);
+        stalled.OccurredAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
+        var stalledDeferral = harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>()
+            .Single(static evt => evt.Pending.Attempts == ProjectionScopeStatusGAgent.StalledAttemptThreshold);
+        stalledDeferral.Pending.Stalled.Should().BeTrue("the deferred event itself carries the stalled flag");
+        harness.EventSourcing.PersistedEvents.IndexOf(stalled).Should().Be(
+            harness.EventSourcing.PersistedEvents.IndexOf(stalledDeferral) + 1,
+            "the stalled fact is persisted right after the deferral that crossed the threshold");
+        var alert = harness.Alerts.Published.Should().ContainSingle().Subject;
+        alert.Stage.Should().Be(TerminalWriteAlertStage);
+        alert.Kind.Should().Be(ProjectionFailureAlertKind.FailureRecorded);
+        alert.ScopeKey.Should().Be(new ProjectionRuntimeScopeKey(
+            SourceScopeActorId,
+            ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
+            ProjectionRuntimeMode.DurableMaterialization));
+        alert.FailureId.Should().Be($"{SourceScopeActorId}:12:evt-12");
+        alert.EventId.Should().Be("evt-12");
+        alert.SourceVersion.Should().Be(12);
+        alert.Reason.Should().Be(nameof(IOException));
+        alert.OccurredAt.Should().Be(FixedNow);
+        harness.Callbacks.Timeouts.Should().HaveCount(5);
+        harness.Callbacks.Timeouts[^1].DueTime.Should().Be(CappedRetryDelay);
+        UnpackRetryCommand(harness.Callbacks.Timeouts[^1]).Attempt.Should().Be(5);
+
+        // attempts 6 and 7: retries continue at the capped cadence, no second stalled fact/alert
+        await harness.FireLatestRetryAsync();
+        await harness.FireLatestRetryAsync();
+
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(7);
+        harness.Agent.State.PendingWrite.Stalled.Should().BeTrue();
+        harness.Agent.State.PendingWrite.NextRetryAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow + CappedRetryDelay));
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteStalledEvent>().Should().ContainSingle();
         harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>()
-            .Select(static evt => evt.Pending.Attempts)
-            .Should().Equal(1, 2, 3, 4);
-        harness.Agent.State.PendingWrite.Should().NotBeNull();
-        harness.Agent.State.PendingWrite!.Attempts.Should().Be(ProjectionScopeStatusGAgent.MaxImmediateWriteRetries + 1);
+            .Where(static evt => evt.Pending.Attempts > ProjectionScopeStatusGAgent.StalledAttemptThreshold)
+            .Should().HaveCount(2)
+            .And.OnlyContain(static evt => evt.Pending.Stalled);
+        harness.Alerts.Published.Should().ContainSingle();
+        harness.Callbacks.Timeouts.Should().HaveCount(7);
+        harness.Callbacks.Timeouts.Skip(4).Select(static timeout => timeout.DueTime)
+            .Should().Equal(CappedRetryDelay, CappedRetryDelay, CappedRetryDelay);
+        harness.Callbacks.Timeouts.Select(timeout => UnpackRetryCommand(timeout).Attempt).Should().Equal(1, 2, 3, 4, 5, 6, 7);
+        harness.Dispatcher.Documents.Should().BeEmpty();
+
+        // recovery clears the pending write, and with it the stalled flag
+        harness.Dispatcher.Recover();
+        await harness.FireLatestRetryAsync();
+
+        harness.Dispatcher.Documents.Should().ContainSingle().Which.StateVersion.Should().Be(12);
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteRecoveredEvent>().Should().ContainSingle();
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().HaveCount(7);
+        harness.Alerts.Published.Should().ContainSingle();
     }
 
     [Fact]
@@ -422,6 +561,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Dispatcher.Documents.Should().BeEmpty();
         harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
         harness.Agent.State.PendingWrite.Should().NotBeNull();
+        harness.Callbacks.Timeouts.Should().ContainSingle("a stale retry schedules nothing");
     }
 
     [Fact]
@@ -437,6 +577,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
 
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
         harness.EventSourcing.PersistedEvents.Should().ContainSingle();
+        harness.Callbacks.Timeouts.Should().BeEmpty();
     }
 
     [Fact]
@@ -458,6 +599,30 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             .Should().ContainSingle().Subject;
         recovered.Source.StateVersion.Should().Be(13);
         harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().ContainSingle("the superseded retry is not re-armed");
+    }
+
+    [Fact]
+    public async Task HandleRetryWriteAsync_AfterHigherVersionRecoveredPending_ShouldBeIgnored()
+    {
+        // The durable retry armed for the superseded pending write may still fire later; it must
+        // not write the stale document again.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.Enqueue(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        var staleRetry = UnpackRetryCommand(harness.Callbacks.Timeouts.Single());
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 13, eventId: "evt-13", new ProjectionScopeWatermarkAdvancedEvent())));
+        var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
+
+        await harness.Agent.HandleRetryWriteAsync(staleRetry);
+
+        harness.Dispatcher.Documents.Should().ContainSingle().Which.StateVersion.Should().Be(13);
+        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
+        harness.Callbacks.Timeouts.Should().ContainSingle();
     }
 
     [Fact]
@@ -476,6 +641,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Dispatcher.Documents.Should().ContainSingle().Which.StateVersion.Should().Be(11);
         harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteRecoveredEvent>().Should().BeEmpty();
         harness.Agent.State.PendingWrite!.Source.StateVersion.Should().Be(12);
+        harness.Callbacks.Timeouts.Should().ContainSingle();
     }
 
     [Fact]
@@ -487,26 +653,104 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             BuildRoutedSourceState(),
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
         var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
-        var retriesBefore = harness.Outbox.Published.Count;
+        var timeoutsBefore = harness.Callbacks.Timeouts.Count;
 
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             BuildRoutedSourceState(),
             BuildStateEvent(version: 11, eventId: "evt-11", new ProjectionScopeWatermarkAdvancedEvent())));
 
         harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore, "the newer pending write wins");
-        harness.Outbox.Published.Should().HaveCount(retriesBefore);
+        harness.Callbacks.Timeouts.Should().HaveCount(timeoutsBefore, "the newer pending write keeps its own retry");
         harness.Agent.State.PendingWrite!.Source.StateVersion.Should().Be(12);
     }
 
     [Fact]
-    public async Task ActivateAsync_WithPendingWrite_ShouldScheduleRetryAndReassertRelay()
+    public async Task HandleObservedEnvelopeAsync_FailedHigherVersionWhilePending_ShouldSupersedePendingAndRestartAttempts()
     {
         var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.AlwaysThrow(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        await harness.FireLatestRetryAsync();
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(2);
+
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 13, eventId: "evt-13", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        harness.Agent.State.PendingWrite!.Source.StateVersion.Should().Be(13);
+        harness.Agent.State.PendingWrite.Attempts.Should().Be(1, "a new source outcome starts its own retry cadence");
+        var latest = harness.Callbacks.Timeouts[^1];
+        latest.DueTime.Should().Be(ProjectionScopeStatusGAgent.WriteRetryDelays[0]);
+        UnpackRetryCommand(latest).ExpectedSource.StateVersion.Should().Be(13);
+        UnpackRetryCommand(latest).Attempt.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_WhenWriteThrowsWithoutCallbackScheduler_ShouldDeferWithoutScheduling()
+    {
+        // No durable scheduler registered: the deferral is still the durable fact (warning path),
+        // nothing is scheduled and nothing is published; a later source outcome still recovers it.
+        var harness = await TerminalHarness.CreateStartedAsync(withCallbackScheduler: false);
+        harness.Dispatcher.Enqueue(new IOException("store unavailable"));
+
+        var act = () => harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        await act.Should().NotThrowAsync();
+        var deferred = harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>()
+            .Should().ContainSingle().Subject;
+        deferred.Pending.Attempts.Should().Be(1);
+        deferred.Pending.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Transient);
+        deferred.Pending.NextRetryAtUtc.Should().Be(
+            Timestamp.FromDateTimeOffset(FixedNow + ProjectionScopeStatusGAgent.WriteRetryDelays[0]));
+        harness.Agent.State.PendingWrite.Should().Be(deferred.Pending);
+        harness.Agent.State.Active.Should().BeTrue();
+        harness.Agent.State.Released.Should().BeFalse();
+        harness.Outbox.Published.Should().BeEmpty();
+        harness.Alerts.Published.Should().BeEmpty();
+
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 13, eventId: "evt-13", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        harness.Dispatcher.Documents.Should().ContainSingle().Which.StateVersion.Should().Be(13);
+        harness.Agent.State.PendingWrite.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WithoutCallbackScheduler_AndTransientPending_ShouldActivateWithoutScheduling()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync(withCallbackScheduler: false);
         harness.Dispatcher.Enqueue(new IOException("store unavailable"));
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             BuildRoutedSourceState(),
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
-        harness.Outbox.Clear();
+
+        var reactivated = harness.CreateReplacementActor();
+        var act = () => reactivated.ActivateAsync();
+
+        await act.Should().NotThrowAsync();
+        reactivated.State.PendingWrite.Should().NotBeNull();
+        reactivated.State.PendingWrite!.Attempts.Should().Be(1);
+        harness.Outbox.Published.Should().BeEmpty();
+        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WithTransientPendingWrite_ShouldReArmDurableRetryAtPendingAttemptAndReassertRelay()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.AlwaysThrow(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        await harness.FireLatestRetryAsync();
+        await harness.FireLatestRetryAsync();
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(3);
+        harness.Callbacks.Timeouts.Clear();
         harness.Streams.GetStream(SourceScopeActorId).Relays.Clear();
 
         var reactivated = harness.CreateReplacementActor();
@@ -514,13 +758,75 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
 
         reactivated.State.PendingWrite.Should().NotBeNull();
         reactivated.State.PendingWrite!.Source.StateVersion.Should().Be(12);
-        var retry = harness.Outbox.Published.Should().ContainSingle().Subject;
-        retry.Audience.Should().Be(TopologyAudience.Self);
-        var command = retry.Message.Should().BeOfType<RetryProjectionScopeStatusWriteCommand>().Subject;
-        command.Attempt.Should().Be(1);
+        reactivated.State.PendingWrite.Attempts.Should().Be(3);
+        var timeout = harness.Callbacks.Timeouts.Should().ContainSingle().Subject;
+        timeout.ActorId.Should().Be(TerminalActorId);
+        timeout.CallbackId.Should().Be(ProjectionScopeStatusGAgent.WriteRetryCallbackId);
+        timeout.DueTime.Should().Be(ProjectionScopeStatusGAgent.WriteRetryDelays[2],
+            "the re-armed retry continues the persisted cadence, it does not restart it");
+        var command = UnpackRetryCommand(timeout);
+        command.Attempt.Should().Be(3);
         command.ExpectedSource.Should().Be(reactivated.State.PendingWrite.Source);
+        harness.Outbox.Published.Should().BeEmpty();
         (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().NotBeNull(
             "activation re-asserts the relay evidence on the source stream");
+
+        // the re-armed retry fires on the replacement actor and completes the write once the store is back
+        harness.Dispatcher.Recover();
+        await reactivated.HandleRetryWriteAsync(command);
+
+        harness.Dispatcher.Documents.Should().ContainSingle().Which.StateVersion.Should().Be(12);
+        reactivated.State.PendingWrite.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WithStalledTransientPendingWrite_ShouldReArmAtCappedDelay()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.AlwaysThrow(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        for (var attempt = 1; attempt < ProjectionScopeStatusGAgent.StalledAttemptThreshold + 1; attempt++)
+            await harness.FireLatestRetryAsync();
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(ProjectionScopeStatusGAgent.StalledAttemptThreshold + 1);
+        harness.Agent.State.PendingWrite.Stalled.Should().BeTrue();
+        harness.Callbacks.Timeouts.Clear();
+
+        var reactivated = harness.CreateReplacementActor();
+        await reactivated.ActivateAsync();
+
+        reactivated.State.PendingWrite!.Stalled.Should().BeTrue("the stalled fact is durable");
+        var timeout = harness.Callbacks.Timeouts.Should().ContainSingle().Subject;
+        timeout.DueTime.Should().Be(CappedRetryDelay);
+        UnpackRetryCommand(timeout).Attempt.Should().Be(ProjectionScopeStatusGAgent.StalledAttemptThreshold + 1);
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteStalledEvent>()
+            .Should().ContainSingle("activation persists nothing");
+        harness.Alerts.Published.Should().ContainSingle("activation alerts nothing");
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WithRejectedPendingWrite_ShouldNotScheduleRetry()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Conflict));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        harness.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        harness.Callbacks.Timeouts.Should().BeEmpty();
+        harness.Alerts.Published.Clear();
+
+        var reactivated = harness.CreateReplacementActor();
+        await reactivated.ActivateAsync();
+
+        reactivated.State.PendingWrite.Should().NotBeNull();
+        reactivated.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        harness.Callbacks.Timeouts.Should().BeEmpty("retrying identical bytes cannot heal a rejected write");
+        harness.Alerts.Published.Should().BeEmpty("activation does not re-alert");
+        harness.Outbox.Published.Should().BeEmpty();
+        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().NotBeNull();
     }
 
     [Fact]
@@ -532,7 +838,27 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         await reactivated.ActivateAsync();
 
         reactivated.State.Active.Should().BeTrue();
+        harness.Callbacks.Timeouts.Should().BeEmpty();
         harness.Outbox.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenReleased_ShouldNotReArmPendingRetry()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.Enqueue(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        await harness.Agent.HandleReleaseAsync(BuildReleaseCommand());
+        harness.Callbacks.Timeouts.Clear();
+
+        var reactivated = harness.CreateReplacementActor();
+        await reactivated.ActivateAsync();
+
+        reactivated.State.Released.Should().BeTrue();
+        reactivated.State.PendingWrite.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().BeEmpty();
     }
 
     // ─── 7. Dispositions ─────────────────────────────────────────────────────
@@ -540,7 +866,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     [Theory]
     [InlineData(ProjectionWriteDisposition.Conflict)]
     [InlineData(ProjectionWriteDisposition.Gap)]
-    public async Task HandleObservedEnvelopeAsync_RejectedDisposition_ShouldDeferWithoutSelfRetryAndNotThrow(
+    public async Task HandleObservedEnvelopeAsync_RejectedDisposition_ShouldRecordRejectedPendingAlertAndNotRetry(
         ProjectionWriteDisposition disposition)
     {
         var harness = await TerminalHarness.CreateStartedAsync();
@@ -554,10 +880,93 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         var deferred = harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>()
             .Should().ContainSingle().Subject;
         deferred.Pending.LastError.Should().Be(disposition.ToString());
-        deferred.Pending.Attempts.Should().Be(ProjectionScopeStatusGAgent.MaxImmediateWriteRetries + 1);
+        deferred.Pending.Attempts.Should().Be(1);
+        deferred.Pending.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        deferred.Pending.Stalled.Should().BeFalse();
+        deferred.Pending.NextRetryAtUtc.Should().BeNull("a rejected write has no retry");
         deferred.Pending.Source.StateVersion.Should().Be(12);
         harness.Agent.State.PendingWrite.Should().Be(deferred.Pending);
-        harness.Outbox.Published.Should().BeEmpty("retrying identical bytes cannot heal a rejected write");
+        harness.Callbacks.Timeouts.Should().BeEmpty("retrying identical bytes cannot heal a rejected write");
+        harness.Outbox.Published.Should().BeEmpty();
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteStalledEvent>().Should().BeEmpty();
+        var alert = harness.Alerts.Published.Should().ContainSingle().Subject;
+        alert.Stage.Should().Be(TerminalWriteAlertStage);
+        alert.Reason.Should().Be(disposition.ToString());
+        alert.SourceVersion.Should().Be(12);
+        alert.EventId.Should().Be("evt-12");
+        alert.FailureId.Should().Be($"{SourceScopeActorId}:12:evt-12");
+        alert.EventType.Should().Be(nameof(ProjectionScopeStatusDocument));
+        alert.UnresolvedFailureCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(ProjectionWriteDisposition.Conflict)]
+    [InlineData(ProjectionWriteDisposition.Gap)]
+    public async Task HandleRetryWriteAsync_ForRejectedPending_ShouldBeNoOp_AndHigherVersionWriteShouldClearIt(
+        ProjectionWriteDisposition disposition)
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(disposition));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        var pending = harness.Agent.State.PendingWrite!;
+        var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
+        var attemptsBefore = harness.Dispatcher.UpsertAttempts;
+
+        await harness.Agent.HandleRetryWriteAsync(new RetryProjectionScopeStatusWriteCommand
+        {
+            ExpectedSource = pending.Source.Clone(),
+            Attempt = pending.Attempts,
+        });
+
+        harness.Dispatcher.UpsertAttempts.Should().Be(attemptsBefore, "a rejected pending write is never retried");
+        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
+        harness.Agent.State.PendingWrite.Should().Be(pending);
+        harness.Callbacks.Timeouts.Should().BeEmpty();
+        harness.Alerts.Published.Should().ContainSingle();
+
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 13, eventId: "evt-13", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        harness.Dispatcher.Documents.Should().HaveCount(2).And.Subject.Last().StateVersion.Should().Be(13);
+        var recovered = harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteRecoveredEvent>()
+            .Should().ContainSingle().Subject;
+        recovered.Source.StateVersion.Should().Be(13);
+        harness.Agent.State.PendingWrite.Should().BeNull("a later higher-version terminal write supersedes the rejection");
+        harness.Callbacks.Timeouts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_RejectedDisposition_WithoutAlertSink_ShouldStillRecordRejectedPending()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync(withAlertSink: false);
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Conflict));
+
+        var act = () => harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        await act.Should().NotThrowAsync();
+        harness.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        harness.Callbacks.Timeouts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_WhenAlertSinkThrows_ShouldStillRecordRejectedPending()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Alerts.ThrowOnPublish(new InvalidOperationException("alert channel down"));
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Gap));
+
+        var act = () => harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        await act.Should().NotThrowAsync("the alert is best-effort; the durable fact is the deferral");
+        harness.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>().Should().ContainSingle();
     }
 
     [Theory]
@@ -577,7 +986,8 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.EventSourcing.PersistedEvents.Should().ContainSingle()
             .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>();
         harness.Agent.State.PendingWrite.Should().BeNull();
-        harness.Outbox.Published.Should().BeEmpty();
+        harness.Callbacks.Timeouts.Should().BeEmpty();
+        harness.Alerts.Published.Should().BeEmpty();
     }
 
     [Fact]
@@ -590,11 +1000,31 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
         harness.Dispatcher.Enqueue(ProjectionWriteResult.Duplicate());
 
-        await harness.Agent.HandleRetryWriteAsync(
-            (RetryProjectionScopeStatusWriteCommand)harness.Outbox.Published.Single().Message);
+        await harness.FireLatestRetryAsync();
 
         harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteRecoveredEvent>().Should().ContainSingle();
         harness.Agent.State.PendingWrite.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleRetryWriteAsync_WhenRetryIsRejected_ShouldTurnTransientPendingIntoRejected()
+    {
+        // The store comes back but another writer already committed different bytes at this
+        // version: the retry ends in an explicit rejected state instead of retrying forever.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.Enqueue(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Conflict));
+
+        await harness.FireLatestRetryAsync();
+
+        harness.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        harness.Agent.State.PendingWrite.Attempts.Should().Be(2);
+        harness.Agent.State.PendingWrite.NextRetryAtUtc.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().ContainSingle("no retry follows a rejection");
+        harness.Alerts.Published.Should().ContainSingle().Which.Stage.Should().Be(TerminalWriteAlertStage);
     }
 
     // ─── 8. Release ──────────────────────────────────────────────────────────
@@ -752,18 +1182,55 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
 
         harness.Agent.State.Released.Should().BeFalse("a pending write keeps the materializer alive");
         harness.Agent.State.PendingWrite.Should().NotBeNull();
-        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().NotBeNull();
-        var retry = (RetryProjectionScopeStatusWriteCommand)harness.Outbox.Published.Single().Message;
+        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().NotBeNull(
+            "the relay stays until the deferred final write lands");
+        var timeout = harness.Callbacks.Timeouts.Should().ContainSingle().Subject;
+        timeout.CallbackId.Should().Be(ProjectionScopeStatusGAgent.WriteRetryCallbackId);
+        timeout.DueTime.Should().Be(ProjectionScopeStatusGAgent.WriteRetryDelays[0]);
 
-        await harness.Agent.HandleRetryWriteAsync(retry);
+        await harness.Agent.HandleRetryWriteAsync(UnpackRetryCommand(timeout));
 
         var document = harness.Dispatcher.Documents.Should().ContainSingle().Subject;
         document.Released.Should().BeTrue();
         document.StateVersion.Should().Be(20);
         harness.Agent.State.PendingWrite.Should().BeNull();
         harness.Agent.State.Released.Should().BeTrue("the recovered write completes the release with the source");
-        harness.EventSourcing.PersistedEvents[^1].Should().BeOfType<ProjectionScopeStatusTerminalReleasedEvent>();
+        harness.EventSourcing.PersistedEvents.Select(static evt => evt.GetType()).Should().Equal(
+            typeof(ProjectionScopeStatusTerminalStartedEvent),
+            typeof(ProjectionScopeStatusWriteDeferredEvent),
+            typeof(ProjectionScopeStatusWriteRecoveredEvent),
+            typeof(ProjectionScopeStatusTerminalReleasedEvent));
         (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().BeNull();
+        harness.Callbacks.Timeouts.Should().ContainSingle("no further retry is scheduled after the release");
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_SourceReleasedAndDetached_WhenWriteKeepsFailing_ShouldKeepRetryingAndReleaseOnRecovery()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.AlwaysThrow(new IOException("store unavailable"));
+        var sourceState = BuildRoutedSourceState();
+        sourceState.Released = true;
+        sourceState.ObservationAttached = false;
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            sourceState,
+            BuildStateEvent(version: 20, eventId: "evt-20", new ProjectionScopeReleasedEvent())));
+
+        await harness.FireLatestRetryAsync();
+        await harness.FireLatestRetryAsync();
+
+        harness.Agent.State.Released.Should().BeFalse();
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(3);
+        harness.Callbacks.Timeouts.Should().HaveCount(3);
+        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().NotBeNull();
+
+        harness.Dispatcher.Recover();
+        await harness.FireLatestRetryAsync();
+
+        harness.Dispatcher.Documents.Should().ContainSingle().Which.Released.Should().BeTrue();
+        harness.Agent.State.Released.Should().BeTrue();
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().HaveCount(3);
     }
 
     [Fact]
@@ -774,12 +1241,13 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             BuildRoutedSourceState(),
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
-        var retry = (RetryProjectionScopeStatusWriteCommand)harness.Outbox.Published.Single().Message;
+        var retry = UnpackRetryCommand(harness.Callbacks.Timeouts.Single());
         await harness.Agent.HandleReleaseAsync(BuildReleaseCommand());
 
         await harness.Agent.HandleRetryWriteAsync(retry);
 
         harness.Dispatcher.Documents.Should().BeEmpty();
+        harness.Callbacks.Timeouts.Should().ContainSingle();
     }
 
     [Fact]
@@ -1008,7 +1476,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     // ─── 11. Shared document mapping ─────────────────────────────────────────
 
     [Fact]
-    public void Map_ShouldBeByteIdenticalForSameInputsAndCarryStatusRoute()
+    public void Map_ShouldBeByteIdenticalForSameInputs()
     {
         var state = BuildRoutedSourceState();
         state.LastSuccessfulVersion = 41;
@@ -1041,8 +1509,6 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         first.StateVersion.Should().Be(42);
         first.LastEventId.Should().Be("evt-42");
         first.UpdatedAtUtcValue.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
-        first.StatusRoute.Should().Be(state.StatusRoute);
-        first.StatusRoute.Should().NotBeSameAs(state.StatusRoute);
         first.LastSuccessfulVersion.Should().Be(41);
         first.SourceVersions.Select(static source => source.SourceActorId).Should().Equal("publisher-a", "publisher-b");
         first.SourceVersions[0].VersionGap.Should().Be(1);
@@ -1051,17 +1517,53 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     }
 
     [Fact]
-    public void Map_WithoutStatusRoute_ShouldLeaveStatusRouteUnset()
+    public void StatusDocument_ShouldNotCarryStatusRoute()
     {
-        var state = BuildSourceState();
-        state.StatusRoute = null;
+        // The document is written by two writers during a rolling upgrade (legacy shadow and
+        // terminal materializer, possibly on different binaries); its bytes at a given source
+        // version must not depend on which writer produced them, so the writer-selecting route
+        // stays on the source scope state and is not a document field.
+        var descriptor = ProjectionScopeStatusDocument.Descriptor;
 
-        var document = ProjectionScopeStatusDocumentMapper.Map(
-            state,
-            BuildStateEvent(version: 1, eventId: "evt-1", new ProjectionScopeStartedEvent()),
-            FixedNow);
+        descriptor.FindFieldByName("status_route").Should().BeNull();
+        descriptor.FindFieldByNumber(30).Should().BeNull("field 30 is reserved, never reused");
+        descriptor.Fields.InDeclarationOrder()
+            .Where(static field => field.FieldType == Google.Protobuf.Reflection.FieldType.Message)
+            .Should().NotContain(static field => field.MessageType == ProjectionScopeStatusRoute.Descriptor);
+        typeof(ProjectionScopeStatusDocument).GetProperty("StatusRoute").Should().BeNull();
+    }
 
-        document.StatusRoute.Should().BeNull();
+    [Fact]
+    public void Map_ShouldProduceIdenticalBytesWithAndWithoutStatusRoute()
+    {
+        var routed = BuildRoutedSourceState();
+        routed.LastSuccessfulVersion = 41;
+        routed.HighestSeenVersion = 42;
+        var unrouted = routed.Clone();
+        unrouted.StatusRoute = null;
+        var stateEvent = BuildStateEvent(version: 42, eventId: "evt-42", new ProjectionScopeWatermarkAdvancedEvent());
+
+        var fromRouted = ProjectionScopeStatusDocumentMapper.Map(routed, stateEvent.Clone(), FixedNow);
+        var fromUnrouted = ProjectionScopeStatusDocumentMapper.Map(unrouted, stateEvent.Clone(), FixedNow);
+
+        fromRouted.ToByteArray().Should().Equal(fromUnrouted.ToByteArray(),
+            "the status document bytes must not depend on the source's writer-selecting route");
+        fromRouted.Should().Be(fromUnrouted);
+    }
+
+    [Fact]
+    public void Map_WithDifferentRouteEpochs_ShouldProduceIdenticalBytes()
+    {
+        var epochOne = BuildRoutedSourceState();
+        var epochTwo = BuildRoutedSourceState();
+        epochTwo.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(2);
+        epochTwo.StatusRoute.LegacyRouteReleased = true;
+        var stateEvent = BuildStateEvent(version: 7, eventId: "evt-7", new ProjectionScopeStatusRouteActivatedEvent());
+
+        var first = ProjectionScopeStatusDocumentMapper.Map(epochOne, stateEvent.Clone(), FixedNow);
+        var second = ProjectionScopeStatusDocumentMapper.Map(epochTwo, stateEvent.Clone(), FixedNow);
+
+        first.ToByteArray().Should().Equal(second.ToByteArray());
     }
 
     [Fact]
@@ -1151,20 +1653,33 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             StreamForwardingMode.HandleThenForward);
     }
 
+    /// <summary>
+    /// A durable retry "fires" when the callback scheduler delivers the recorded trigger envelope
+    /// to the actor's own inbox; in tests that is the unpacked self command handed to the handler.
+    /// </summary>
+    private static RetryProjectionScopeStatusWriteCommand UnpackRetryCommand(RuntimeCallbackTimeoutRequest timeout)
+    {
+        timeout.TriggerEnvelope.Route.Should().NotBeNull();
+        timeout.TriggerEnvelope.Payload.Is(RetryProjectionScopeStatusWriteCommand.Descriptor).Should().BeTrue(
+            "the durable trigger carries the retry command itself");
+        return timeout.TriggerEnvelope.Payload.Unpack<RetryProjectionScopeStatusWriteCommand>();
+    }
+
     // ─── harness ─────────────────────────────────────────────────────────────
 
     /// <summary>
     /// One terminal materializer's world: the recorded status writes, the source stream's
-    /// relay registry, the actor's own durable event log (survives actor replacement) and
-    /// its self-addressed command outbox.
+    /// relay registry, the actor's own durable event log (survives actor replacement), the
+    /// durable callback scheduler that owns its backed-off retries, the failure alert sink
+    /// and a recording publisher that proves nothing is ever self-published inline.
     /// </summary>
     private sealed class TerminalHarness
     {
         private readonly IServiceProvider _services;
 
-        public TerminalHarness()
+        public TerminalHarness(bool withCallbackScheduler = true, bool withAlertSink = true)
         {
-            _services = new ServiceCollection()
+            var services = new ServiceCollection()
                 .AddSingleton<IStreamProvider>(Streams)
                 .AddSingleton<IAgentKindRegistry>(new AgentKindRegistry(
                 [
@@ -1172,24 +1687,39 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
                 ]))
                 .AddSingleton<IProjectionWriteDispatcher<ProjectionScopeStatusDocument>>(Dispatcher)
                 .AddSingleton<IProjectionClock>(new FixedProjectionClock(FixedNow))
-                .AddSingleton<TimeProvider>(new FixedTimeProvider(FixedNow))
-                .BuildServiceProvider();
+                .AddSingleton<TimeProvider>(new FixedTimeProvider(FixedNow));
+            if (withCallbackScheduler)
+                services.AddSingleton<IActorRuntimeCallbackScheduler>(Callbacks);
+            if (withAlertSink)
+                services.AddSingleton<IProjectionFailureAlertSink>(Alerts);
+            _services = services.BuildServiceProvider();
             Agent = CreateReplacementActor();
         }
 
         public RecordingStreamProvider Streams { get; } = new();
         public RecordingStatusWriteDispatcher Dispatcher { get; } = new();
         public TerminalEventSourcing EventSourcing { get; } = new();
-        public SelfCommandOutbox Outbox { get; } = new();
+        public RecordingEventPublisher Outbox { get; } = new();
+        public RecordingCallbackScheduler Callbacks { get; } = new();
+        public RecordingFailureAlertSink Alerts { get; } = new();
         public ProjectionScopeStatusGAgent Agent { get; }
 
-        public static async Task<TerminalHarness> CreateStartedAsync()
+        public static async Task<TerminalHarness> CreateStartedAsync(
+            bool withCallbackScheduler = true,
+            bool withAlertSink = true)
         {
-            var harness = new TerminalHarness();
+            var harness = new TerminalHarness(withCallbackScheduler, withAlertSink);
             await harness.Agent.HandleEnsureAsync(BuildEnsureCommand());
             harness.Agent.State.Active.Should().BeTrue();
             return harness;
         }
+
+        /// <summary>
+        /// Fires the most recently scheduled durable retry against the current actor: the
+        /// scheduler delivers the trigger envelope to the actor's inbox once its due time elapses.
+        /// </summary>
+        public Task FireLatestRetryAsync() =>
+            Agent.HandleRetryWriteAsync(UnpackRetryCommand(Callbacks.Timeouts[^1]));
 
         /// <summary>A fresh actor instance over the same durable log, as after a host restart.</summary>
         public ProjectionScopeStatusGAgent CreateReplacementActor()
@@ -1258,6 +1788,8 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
                     ProjectionScopeStatusTerminalStateApplier.ApplyWriteDeferred(current, deferred),
                 ProjectionScopeStatusWriteRecoveredEvent recovered =>
                     ProjectionScopeStatusTerminalStateApplier.ApplyWriteRecovered(current, recovered),
+                ProjectionScopeStatusWriteStalledEvent stalled =>
+                    ProjectionScopeStatusTerminalStateApplier.ApplyWriteStalled(current, stalled),
                 _ => current,
             };
     }
@@ -1275,6 +1807,9 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         public void Enqueue(Exception exception) => _outcomes.Enqueue(exception);
 
         public void AlwaysThrow(Exception exception) => _alwaysThrow = exception;
+
+        /// <summary>The store is back: writes succeed again (queued outcomes still apply first).</summary>
+        public void Recover() => _alwaysThrow = null;
 
         public Task<ProjectionWriteResult> UpsertAsync(ProjectionScopeStatusDocument readModel, CancellationToken ct = default)
         {
@@ -1300,11 +1835,12 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             throw new NotSupportedException();
     }
 
-    /// <summary>Records the actor's published messages instead of routing them anywhere.</summary>
-    private sealed class SelfCommandOutbox : IEventPublisher
+    /// <summary>
+    /// Records anything the actor publishes inline. The terminal materializer publishes
+    /// nothing this way any more: its only continuation is the durable callback retry.
+    /// </summary>
+    private sealed class RecordingEventPublisher : IEventPublisher
     {
-        private readonly Queue<PublishedMessage> _pending = new();
-
         public List<PublishedMessage> Published { get; } = [];
 
         public Task PublishAsync<TEvent>(
@@ -1315,9 +1851,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            var published = new PublishedMessage(evt, audience);
-            Published.Add(published);
-            _pending.Enqueue(published);
+            Published.Add(new PublishedMessage(evt, audience));
             return Task.CompletedTask;
         }
 
@@ -1328,19 +1862,60 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage =>
-            throw new NotSupportedException("The terminal materializer only publishes to itself.");
-
-        public bool TryDequeue([System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out PublishedMessage published) =>
-            _pending.TryDequeue(out published);
-
-        public void Clear()
-        {
-            Published.Clear();
-            _pending.Clear();
-        }
+            throw new NotSupportedException("The terminal materializer never addresses another actor.");
     }
 
     private sealed record PublishedMessage(IMessage Message, TopologyAudience Audience);
+
+    /// <summary>
+    /// Records every durable timeout the actor schedules. Firing is explicit in tests: the
+    /// recorded trigger envelope is unpacked and handed to the actor's retry handler.
+    /// </summary>
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            Timeouts.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Generation: Timeouts.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("The terminal materializer only schedules one-shot timeouts.");
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class RecordingFailureAlertSink : IProjectionFailureAlertSink
+    {
+        private Exception? _throwOnPublish;
+
+        public List<ProjectionFailureAlert> Published { get; } = [];
+
+        public void ThrowOnPublish(Exception exception) => _throwOnPublish = exception;
+
+        public Task PublishAsync(ProjectionFailureAlert alert, CancellationToken ct = default)
+        {
+            if (_throwOnPublish != null)
+                throw _throwOnPublish;
+
+            Published.Add(alert);
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class RecordingStreamProvider : IStreamProvider
     {
