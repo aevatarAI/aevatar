@@ -30,6 +30,10 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
     internal const string KeyRotateRoutingDescription =
         "Rotate one exact caller-visible NyxID API key through the browser-owned secure journey.";
     internal const string ServiceReauthorizeIntentId = "service_reauthorize";
+    internal const string ServiceReauthorizeRoutingDescription =
+        "Re-authorize one exact already-connected caller-visible UserService for an explicit " +
+        "nonempty set of requested scopes through the browser-owned secure journey. Do not " +
+        "select this intent to establish a missing connection or to invoke the service.";
     private static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(15);
     internal static AgentProfileTurnClassificationCandidate ServiceConnectCandidate { get; } =
         new(
@@ -46,11 +50,17 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
             KeyRotateIntentId,
             KeyRotateRoutingDescription,
             AgentProfileSideEffectClass.ExternalHandoff);
+    internal static AgentProfileTurnClassificationCandidate ServiceReauthorizeCandidate { get; } =
+        new(
+            ServiceReauthorizeIntentId,
+            ServiceReauthorizeRoutingDescription,
+            AgentProfileSideEffectClass.ExternalHandoff);
     private static readonly AgentProfileTurnClassificationCandidate[] Candidates =
     [
         ServiceConnectCandidate,
         KeyCreateCandidate,
         KeyRotateCandidate,
+        ServiceReauthorizeCandidate,
     ];
 
     private readonly IAgentProfileTurnClassifier _classifier;
@@ -85,6 +95,7 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
                 ServiceConnectIntentId => NyxIdChatTurnIntent.ServiceConnect,
                 KeyCreateIntentId => NyxIdChatTurnIntent.KeyCreate,
                 KeyRotateIntentId => NyxIdChatTurnIntent.KeyRotate,
+                ServiceReauthorizeIntentId => NyxIdChatTurnIntent.ServiceReauthorize,
                 _ => NyxIdChatTurnIntent.Unspecified,
             }
             : NyxIdChatTurnIntent.Unspecified;

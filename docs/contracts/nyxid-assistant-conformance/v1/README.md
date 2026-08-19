@@ -23,9 +23,10 @@ Commit the resulting `sources.json` update only after the guard passes.
 
 Aevatar pins v8 ahead of NyxID (`registry-v8.json` is the assumed exact
 descriptor set; production NyxID still serves v7). `service.reauthorize` is
-executable at v8 but deliberately unadvertised (no tool mount, no intent
-candidate) until the flip below lands. Once NyxID production serves v8
-(ChronoAIProject/NyxID#1400):
+executable at v8 and is advertised (tool-source mounts, intent candidate,
+materializer member, system-prompt line); this posture must reach production
+only after NyxID serves v8 and the Aevatar process has re-snapshotted the
+registry. Once NyxID production serves v8 (ChronoAIProject/NyxID#1400):
 
 1. Diff the served v8 manifest against `registry-v8.json`; a byte or name
    difference is a NyxID contract question, not a local patch.
@@ -46,9 +47,8 @@ candidate) until the flip below lands. Once NyxID production serves v8
    "Run" below); the manifest row therefore stays byte-identical until then.
 4. Update the `registry-v7.json` literal in
    `test/Aevatar.AI.Tests/NyxIdConformanceManifestTests.cs` to `registry-v8.json`.
-5. Merge the advertise branch (tool-source mounts, intent candidate,
-   materializer member, system-prompt line) and refresh the Aevatar pin again
-   with `--refresh-aevatar-revision`.
+5. Refresh the Aevatar pin again with `--refresh-aevatar-revision` after the
+   steps above land.
 
 `semantic-evaluation.json` is the checked-in release-gate record. The conformance guard fails while its
 status is not `passed`, while results are absent, or when the recorded aggregate cannot be reproduced

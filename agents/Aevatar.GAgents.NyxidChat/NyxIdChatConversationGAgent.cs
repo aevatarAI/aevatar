@@ -3085,6 +3085,8 @@ public sealed class NyxIdChatConversationGAgent
                     NyxIdChatTurnIntent.KeyCreate,
                 NyxIdChatTurnIntentClassifier.KeyRotateIntentId =>
                     NyxIdChatTurnIntent.KeyRotate,
+                NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId =>
+                    NyxIdChatTurnIntent.ServiceReauthorize,
                 _ => NyxIdChatTurnIntent.Unspecified,
             };
         }

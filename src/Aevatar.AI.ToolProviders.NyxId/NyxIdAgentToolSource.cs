@@ -78,6 +78,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdRequireServiceTool(_client),
             new NyxIdRequestKeyCreateTool(_client),
             new NyxIdRequestKeyRotateTool(_client),
+            new NyxIdRequestServiceReauthorizeTool(_client),
         };
 
         if (_options.EnableSshExecTool)

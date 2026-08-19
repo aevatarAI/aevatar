@@ -58,7 +58,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         request.Candidates.Select(static candidate => candidate.IntentId).Should().Equal(
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
-            NyxIdChatTurnIntentClassifier.KeyRotateIntentId);
+            NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId);
         request.Candidates.Single(candidate =>
                 candidate.IntentId == NyxIdChatTurnIntentClassifier.ServiceConnectIntentId)
             .RoutingDescription.Should()
@@ -104,6 +105,26 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         intent.Should().Be(NyxIdChatTurnIntent.KeyRotate);
         inner.LastRequest!.Candidates.Should().Contain(candidate =>
             candidate.IntentId == NyxIdChatTurnIntentClassifier.KeyRotateIntentId &&
+            candidate.SideEffectClass == AgentProfileSideEffectClass.ExternalHandoff);
+    }
+
+    [Fact]
+    public async Task TurnIntentClassifier_ServiceReauthorizePrompt_ShouldReturnTypedIntent()
+    {
+        var inner = new RecordingClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId));
+        var classifier = new NyxIdChatTurnIntentClassifier(inner);
+
+        var intent = await classifier.ClassifyAsync(
+            "turn-service-reauthorize",
+            "Re-authorize my connected GitHub service for the repo scope",
+            llmControl: null,
+            CancellationToken.None);
+
+        intent.Should().Be(NyxIdChatTurnIntent.ServiceReauthorize);
+        inner.LastRequest!.Candidates.Should().Contain(candidate =>
+            candidate.IntentId == NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId &&
             candidate.SideEffectClass == AgentProfileSideEffectClass.ExternalHandoff);
     }
 
@@ -256,6 +277,36 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeBuiltInIntentAsync_ServiceReauthorize_ShouldExposeInventoryAndTypedProducerOnly()
+    {
+        var servicesTool = new TestTool("nyxid_services");
+        var reauthorizeTool = new TestTool("nyxid_request_service_reauthorize");
+        var unrelatedTool = new TestTool("nyxid_require_service");
+        var source = new TokenBoundToolSource(
+            "request-token",
+            [servicesTool, reauthorizeTool, unrelatedTool]);
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(ToolSetNames.NyxIdAssistantAdmission, source);
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeBuiltInIntentAsync(
+            NyxIdChatTurnIntent.ServiceReauthorize,
+            ToolContext("request-token"),
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "nyxid_request_service_reauthorize");
+        catalog.RouteOwnedTools["nyxid_services"].Should().BeSameAs(servicesTool);
+        catalog.RouteOwnedTools["nyxid_request_service_reauthorize"].Should().BeSameAs(reauthorizeTool);
+        catalog.SelectedIntentId.Should().Be(
+            NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId);
+    }
+
+    [Fact]
     public async Task MaterializeBuiltInIntentAsync_WhenAdmissionToolIsMissing_ShouldFailClosed()
     {
         var registry = new RecordingToolSetRegistry();
@@ -303,6 +354,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId,
             AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
         classifier.Requests[1].Candidates.Should().ContainSingle().Which.IntentId.Should()
             .Be("intent-alpha");
@@ -451,7 +503,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
 
         preparation.Authority.CandidateRoute!.IntentId.Should().Be("intent-31");
         classifier.Requests.Should().HaveCount(2);
-        classifier.Requests[0].Candidates.Should().HaveCount(4);
+        classifier.Requests[0].Candidates.Should().HaveCount(5);
         classifier.Requests[1].Candidates.Should()
             .HaveCount(StreamingAgentProfileTurnClassifier.MaximumCandidates);
         classifier.Requests[1].Candidates.Select(static candidate => candidate.IntentId)

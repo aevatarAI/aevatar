@@ -1061,6 +1061,7 @@ public sealed class ConversationReplyGeneratorTests
             "nyxid_require_service",
             "nyxid_request_key_create",
             "nyxid_request_key_rotate",
+            "nyxid_request_service_reauthorize",
             "nyxid_service_pools",
             "nyxid_services",
             "nyxid_sessions",
