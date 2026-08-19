@@ -182,6 +182,12 @@ public sealed partial class InMemoryProjectionGraphStore
                 state?.Source);
         }
 
+        // A repair/cutover delta is the complete desired owner graph: every owned element that
+        // is absent from it is stale and deleted here, so the caller never derives deletes from
+        // a pre-read snapshot and the delta fingerprint stays a function of stable inputs.
+        if (delta.Mode == ProjectionGraphDeltaMode.RepairOrCutover)
+            delta = WithStaleOwnerElementDeletes(delta);
+
         var collisionDetail = FindCrossOwnerCollision(delta);
         if (collisionDetail.Length > 0)
         {
@@ -213,6 +219,44 @@ public sealed partial class InMemoryProjectionGraphStore
             ProjectionGraphDeltaApplyDisposition.Applied,
             "Graph delta applied.",
             delta.Source);
+    }
+
+    private ProjectionGraphDelta WithStaleOwnerElementDeletes(ProjectionGraphDelta delta)
+    {
+        var physicalNamespace = delta.Route.PhysicalNamespace;
+        var ownerId = delta.Route.OwnerId;
+        var desiredNodeIds = delta.UpsertNodes.Select(x => x.NodeId).ToHashSet(StringComparer.Ordinal);
+        var desiredEdgeIds = delta.UpsertEdges.Select(x => x.EdgeId)
+            .Concat(delta.UpsertPendingEdges.Select(x => x.EdgeId))
+            .ToHashSet(StringComparer.Ordinal);
+        var staleNodeIds = _versionedNodes.Values
+            .Where(x => BelongsTo(x.PhysicalNamespace, physicalNamespace) && BelongsTo(x.OwnerId, ownerId))
+            .Select(x => x.Node.NodeId)
+            .Where(nodeId => !desiredNodeIds.Contains(nodeId) && !delta.DeleteNodeIds.Contains(nodeId))
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+        var staleEdgeIds = _versionedEdges.Values
+            .Where(x => BelongsTo(x.PhysicalNamespace, physicalNamespace) && BelongsTo(x.OwnerId, ownerId))
+            .Select(x => x.Edge.EdgeId)
+            .Where(edgeId => !desiredEdgeIds.Contains(edgeId) && !delta.DeleteEdgeIds.Contains(edgeId))
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+        var stalePendingEdgeIds = _versionedPendingEdges.Values
+            .Where(x => BelongsTo(x.PhysicalNamespace, physicalNamespace) && BelongsTo(x.OwnerId, ownerId))
+            .Select(x => x.Edge.EdgeId)
+            .Where(edgeId => !desiredEdgeIds.Contains(edgeId) &&
+                             !delta.DeletePendingEdgeIds.Contains(edgeId) &&
+                             !delta.DeleteEdgeIds.Contains(edgeId))
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+        if (staleNodeIds.Length == 0 && staleEdgeIds.Length == 0 && stalePendingEdgeIds.Length == 0)
+            return delta;
+
+        var replacement = delta.Clone();
+        replacement.DeleteNodeIds.Add(staleNodeIds);
+        replacement.DeleteEdgeIds.Add(staleEdgeIds);
+        replacement.DeletePendingEdgeIds.Add(stalePendingEdgeIds.Where(x => !staleEdgeIds.Contains(x)));
+        return replacement;
     }
 
     private string FindCrossOwnerCollision(ProjectionGraphDelta delta)

@@ -131,6 +131,78 @@ public sealed class VersionedProjectionGraphStoreConformanceTests
         await AssertRoutesAndOwnerCollisionsAsync(store, $"{namespacePrefix}-routes");
         await AssertPendingPromotionAndRewireAsync(store, $"{namespacePrefix}-pending");
         await AssertRepairJumpAsync(store, $"{namespacePrefix}-repair");
+        await AssertRepairReplacementAsync(store, $"{namespacePrefix}-replace");
+    }
+
+    /// <summary>
+    /// A repair/cutover delta is the complete desired owner graph: the store deletes every owned
+    /// element absent from it, so the producer never derives deletes from a pre-read snapshot
+    /// and a replay after a committed-but-unacknowledged apply is an exact duplicate.
+    /// </summary>
+    private static async Task AssertRepairReplacementAsync(
+        IVersionedProjectionGraphStore store,
+        string physicalNamespace)
+    {
+        var route = Route(physicalNamespace);
+        var initial = Delta(route, 1, "event-1");
+        initial.UpsertNodes.Add(Node("root"));
+        initial.UpsertNodes.Add(Node("old-step"));
+        initial.UpsertNodes.Add(Node("dangling-target-owner"));
+        initial.UpsertEdges.Add(Edge("root->old-step", "root", "old-step"));
+        initial.UpsertPendingEdges.Add(Edge("old-step->late", "old-step", "late"));
+        (await store.ApplyDeltaAsync(initial)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+
+        // Another owner's element in the same namespace must survive the replacement untouched.
+        var otherOwnerRoute = route.Clone();
+        otherOwnerRoute.OwnerId = "owner-other";
+        var other = Delta(otherOwnerRoute, 1, "event-other-1");
+        other.UpsertNodes.Add(Node("other-root"));
+        (await store.ApplyDeltaAsync(other)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+
+        var replacement = Delta(route, 5, "event-replace");
+        replacement.Mode = ProjectionGraphDeltaMode.RepairOrCutover;
+        replacement.UpsertNodes.Add(Node("root"));
+        replacement.UpsertNodes.Add(Node("new-step"));
+        replacement.UpsertEdges.Add(Edge("root->new-step", "root", "new-step"));
+        (await store.ApplyDeltaAsync(replacement)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+
+        var replaced = await store.ReadOwnerSnapshotAsync(route);
+        replaced.Snapshot.Source.StateVersion.Should().Be(5);
+        replaced.Snapshot.Nodes.Select(x => x.NodeId).Should().BeEquivalentTo("root", "new-step");
+        replaced.Snapshot.Edges.Select(x => x.EdgeId).Should().Equal("root->new-step");
+        replaced.Snapshot.PendingEdges.Should().BeEmpty("stale pending edges are replaced too");
+        (await store.ReadOwnerSnapshotAsync(otherOwnerRoute)).Snapshot.Nodes
+            .Select(x => x.NodeId).Should().Equal("other-root");
+
+        // Replay of the identical replacement against the already-replaced graph (commit succeeded,
+        // acknowledgement lost): the fingerprint is a function of the desired graph only.
+        (await store.ApplyDeltaAsync(replacement.Clone())).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.ExactDuplicate);
+        (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Should().BeEquivalentTo(replaced.Snapshot);
+
+        // Same event id, genuinely different desired graph: still a conflict.
+        var divergent = Delta(route, 5, "event-replace");
+        divergent.Mode = ProjectionGraphDeltaMode.RepairOrCutover;
+        divergent.UpsertNodes.Add(Node("root"));
+        divergent.UpsertNodes.Add(Node("other-step"));
+        (await store.ApplyDeltaAsync(divergent)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.EventIdConflict);
+        (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Should().BeEquivalentTo(replaced.Snapshot);
+
+        // Version monotonicity survives the replacement: normal deltas continue from the watermark.
+        (await store.ApplyDeltaAsync(Delta(route, 5, "event-same-version"))).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.SameVersionConflict);
+        (await store.ApplyDeltaAsync(Delta(route, 4, "event-stale"))).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Stale);
+        var next = Delta(route, 6, "event-6");
+        next.UpsertNodes.Add(Node("late"));
+        (await store.ApplyDeltaAsync(next)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Nodes
+            .Select(x => x.NodeId).Should().BeEquivalentTo("root", "new-step", "late");
     }
 
     private static async Task AssertVersionAndFailureWatermarksAsync(

@@ -87,11 +87,17 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
         return delta;
     }
 
+    /// <summary>
+    /// The complete desired owner graph for the report, as a repair/cutover delta. Stale
+    /// elements are not listed here: a repair/cutover delta is a full replacement and the
+    /// versioned store deletes every owned element absent from it inside the apply
+    /// transaction. That keeps the delta identity a function of the report alone, so a replay
+    /// after a committed-but-unacknowledged apply is an exact duplicate rather than a conflict.
+    /// </summary>
     public ProjectionGraphDelta BuildFullCandidateDelta(
         WorkflowRunInsightReportDocument report,
         string projectionKind,
-        ProjectionMaterializationRouteFingerprint route,
-        ProjectionGraphOwnerSnapshot? existing = null)
+        ProjectionMaterializationRouteFingerprint route)
     {
         ArgumentNullException.ThrowIfNull(report);
         var stateEvent = new StateEvent
@@ -133,7 +139,6 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
                 ResolveUpdatedAt(report))));
         }
 
-        AddFullReplacementDeletes(delta, existing);
         EnsureCandidateIsBounded(delta);
         return delta;
     }
@@ -396,28 +401,6 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
         if (payload?.Is(SubWorkflowBindingUpsertedEvent.Descriptor) == true)
             return payload.Unpack<SubWorkflowBindingUpsertedEvent>().ChildActorId?.Trim() ?? string.Empty;
         return string.Empty;
-    }
-
-    private static void AddFullReplacementDeletes(
-        ProjectionGraphDelta delta,
-        ProjectionGraphOwnerSnapshot? existing)
-    {
-        if (existing == null)
-            return;
-
-        var desiredNodeIds = delta.UpsertNodes.Select(static node => node.NodeId).ToHashSet(StringComparer.Ordinal);
-        var desiredEdgeIds = delta.UpsertEdges
-            .Select(static edge => edge.EdgeId)
-            .Concat(delta.UpsertPendingEdges.Select(static edge => edge.EdgeId))
-            .ToHashSet(StringComparer.Ordinal);
-        delta.DeleteNodeIds.Add(existing.Nodes
-            .Select(static node => node.NodeId)
-            .Where(nodeId => !desiredNodeIds.Contains(nodeId)));
-        delta.DeleteEdgeIds.Add(existing.Edges
-            .Select(static edge => edge.EdgeId)
-            .Concat(existing.PendingEdges.Select(static edge => edge.EdgeId))
-            .Where(edgeId => !desiredEdgeIds.Contains(edgeId))
-            .Distinct(StringComparer.Ordinal));
     }
 
     private static void EnsureCandidateIsBounded(ProjectionGraphDelta delta)

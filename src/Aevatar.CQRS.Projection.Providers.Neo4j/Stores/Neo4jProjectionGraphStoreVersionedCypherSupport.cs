@@ -53,6 +53,21 @@ internal static class Neo4jProjectionGraphStoreVersionedCypherSupport
         "coalesce(event.sourceVersion, 0) AS sourceVersion, " +
         "coalesce(event.deltaFingerprint, '') AS deltaFingerprint";
 
+    /// <summary>
+    /// Owned element identities of one owner in one physical namespace, read inside the apply
+    /// transaction for repair/cutover replacements. Two plain label matches joined by UNION ALL:
+    /// the same predicates the owner snapshot read uses, without payloads or subqueries.
+    /// </summary>
+    internal static string BuildReadOwnedElementIdsCypher(string nodeLabel, string edgeIdentityLabel) =>
+        $"MATCH (node:{nodeLabel} {{scope: $physicalNamespace, projectionOwnerId: $ownerId}}) " +
+        "WHERE node.projectionGraphVersion = 2 " +
+        "RETURN 'node' AS kind, node.nodeId AS id " +
+        "UNION ALL " +
+        $"MATCH (identity:{edgeIdentityLabel} {{physicalNamespace: $physicalNamespace, projectionOwnerId: $ownerId}}) " +
+        "WHERE identity.projectionGraphVersion = 2 " +
+        "RETURN CASE WHEN identity.status = 'pending' THEN 'pending' ELSE 'edge' END AS kind, " +
+        "identity.edgeId AS id";
+
     internal static string BuildReadTouchedNodesCypher(string nodeLabel) =>
         $"MATCH (node:{nodeLabel} {{scope: $physicalNamespace}}) " +
         "WHERE node.nodeId IN $nodeIds " +

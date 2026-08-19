@@ -45,6 +45,7 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
             ["rel-edge-id"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateRelationshipEdgeIdIndexCypher("REL", "i3"),
             ["lock-owner"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildLockOwnerStateCypher("OwnerState"),
             ["read-event"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadEventCypher("OwnerEvent"),
+            ["owned-element-ids"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadOwnedElementIdsCypher("Node", "EdgeIdentity"),
             ["touched-nodes"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadTouchedNodesCypher("Node"),
             ["touched-edge-identities"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadTouchedEdgeIdentitiesCypher("EdgeIdentity"),
             ["touched-relationships"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadTouchedRelationshipsCypher("REL"),
@@ -73,6 +74,24 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
                 cypher.Count(static c => c == ')'),
                 because: $"{name} must have balanced parentheses");
         }
+    }
+
+    [Fact]
+    public void OwnedElementIdsCypher_ShouldReadOnlyThisOwnersV2ElementsByKind()
+    {
+        var cypher = Neo4jProjectionGraphStoreVersionedCypherSupport
+            .BuildReadOwnedElementIdsCypher("Node", "EdgeIdentity");
+
+        // Two plain label matches keyed by (namespace, owner) joined by UNION ALL: no payloads, no
+        // subqueries, and every kind the replacement can delete (node, live edge, pending edge).
+        cypher.Should().Contain("MATCH (node:Node {scope: $physicalNamespace, projectionOwnerId: $ownerId})");
+        cypher.Should().Contain("MATCH (identity:EdgeIdentity {physicalNamespace: $physicalNamespace, projectionOwnerId: $ownerId})");
+        cypher.Should().Contain("UNION ALL");
+        cypher.Should().Contain("RETURN 'node' AS kind, node.nodeId AS id");
+        cypher.Should().Contain("CASE WHEN identity.status = 'pending' THEN 'pending' ELSE 'edge' END AS kind");
+        cypher.Should().Contain("projectionGraphVersion = 2");
+        cypher.Should().NotContain("CALL {");
+        cypher.Should().NotContain("mutationPayload");
     }
 
     [Fact]

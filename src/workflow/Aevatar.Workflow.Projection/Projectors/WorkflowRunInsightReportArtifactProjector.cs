@@ -91,7 +91,10 @@ public sealed class WorkflowRunInsightReportArtifactProjector
         }
 
         var delta = WorkflowRunIncrementalGraphMaterializer.RequiresOwnerGraphReplacement(stateEvent)
-            ? await BuildOwnerGraphReplacementDeltaAsync(readModel, context, ct)
+            ? _incrementalGraphMaterializer.BuildFullCandidateDelta(
+                readModel,
+                context.ProjectionKind,
+                context.MaterializationRoute!)
             : _incrementalGraphMaterializer.BuildIncrementalDelta(
                 readModel,
                 stateEvent,
@@ -106,30 +109,6 @@ public sealed class WorkflowRunInsightReportArtifactProjector
 
         throw new InvalidOperationException(
             $"Workflow graph delta was rejected with {result.Disposition}: {result.Detail}");
-    }
-
-    private async Task<ProjectionGraphDelta> BuildOwnerGraphReplacementDeltaAsync(
-        WorkflowRunInsightReportDocument readModel,
-        WorkflowExecutionMaterializationContext context,
-        CancellationToken ct)
-    {
-        var storeRoute = _incrementalGraphMaterializer!.ResolveStoreRoute(
-            context.ProjectionKind,
-            readModel.Id,
-            context.MaterializationRoute!);
-        var existing = await _versionedGraphStore!.ReadOwnerSnapshotAsync(storeRoute, ct);
-        var existingSnapshot = existing.Disposition switch
-        {
-            ProjectionGraphOwnerSnapshotReadDisposition.Found => existing.Snapshot,
-            ProjectionGraphOwnerSnapshotReadDisposition.NotFound => null,
-            _ => throw new InvalidOperationException(
-                $"Cannot read the workflow graph owner snapshot for replacement: {existing.Disposition}: {existing.Detail}"),
-        };
-        return _incrementalGraphMaterializer.BuildFullCandidateDelta(
-            readModel,
-            context.ProjectionKind,
-            context.MaterializationRoute!,
-            existingSnapshot);
     }
 
     private static WorkflowRunInsightReportDocument ReduceReport(

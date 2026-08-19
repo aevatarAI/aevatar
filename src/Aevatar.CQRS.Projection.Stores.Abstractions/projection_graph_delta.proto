@@ -4,7 +4,15 @@ option csharp_namespace = "Aevatar.CQRS.Projection.Stores.Abstractions";
 
 enum ProjectionGraphDeltaMode {
   PROJECTION_GRAPH_DELTA_MODE_UNSPECIFIED = 0;
+  // Advances the owner watermark by exactly one source version and applies only the listed
+  // mutations.
   PROJECTION_GRAPH_DELTA_MODE_NORMAL = 1;
+  // Full replacement of the owner graph at any source version: the upsert sets ARE the desired
+  // owner graph and the store deletes every owned element (node, live edge, pending edge) that
+  // is absent from them, in the same transaction, in addition to any explicit delete list.
+  // Producers must not derive delete lists from a pre-read snapshot: the delta identity
+  // (fingerprint) then depends only on stable inputs, so a replay after a commit whose
+  // acknowledgement was lost is an exact duplicate, never an event id conflict.
   PROJECTION_GRAPH_DELTA_MODE_REPAIR_OR_CUTOVER = 2;
 }
 

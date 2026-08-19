@@ -31,19 +31,7 @@ public sealed class WorkflowProjectionGraphCutoverOrchestrator
             return null;
 
         var storeRoute = _materializer.ResolveStoreRoute(projectionKind, report.Id, candidateRoute);
-        var before = await _graphStore.ReadOwnerSnapshotAsync(storeRoute, ct);
-        var existing = before.Disposition switch
-        {
-            ProjectionGraphOwnerSnapshotReadDisposition.Found => before.Snapshot,
-            ProjectionGraphOwnerSnapshotReadDisposition.NotFound => null,
-            _ => throw new InvalidOperationException(
-                $"Cannot read workflow graph candidate route: {before.Disposition}: {before.Detail}"),
-        };
-        var delta = _materializer.BuildFullCandidateDelta(
-            report,
-            projectionKind,
-            candidateRoute,
-            existing);
+        var delta = _materializer.BuildFullCandidateDelta(report, projectionKind, candidateRoute);
         var applied = await _graphStore.ApplyDeltaAsync(delta, ct);
         if (applied.Disposition is not ProjectionGraphDeltaApplyDisposition.Applied and
             not ProjectionGraphDeltaApplyDisposition.ExactDuplicate)

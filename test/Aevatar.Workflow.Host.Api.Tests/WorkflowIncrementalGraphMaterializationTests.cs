@@ -324,6 +324,151 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
     }
 
     [Fact]
+    public async Task Projector_WhenOwnerReplacementCommittedBeforeScopeWatermark_ShouldConvergeAsExactDuplicateOnRecovery()
+    {
+        // Fault window: the full owner-graph replacement (WorkflowCommandObservedEvent) commits in the
+        // graph store, then the process dies before the scope watermark is persisted. A fresh
+        // projector replays the same source/event against a store whose snapshot no longer contains
+        // the previous run's elements; the replacement identity must not depend on that snapshot.
+        var reportStore = new RecordingDocumentStore();
+        var store = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var context = Context();
+        var route = materializer.ResolveStoreRoute(
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            "actor-1",
+            IncrementalRoute());
+        var firstProjector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            new RecordingGraphWriter(),
+            store,
+            materializer);
+        await firstProjector.ProjectAsync(context, BuildCommittedEnvelope(1, "evt-1", new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "step-1",
+            StepType = "tool_call",
+        }));
+        var replacement = BuildCommittedEnvelope(
+            2,
+            "evt-2",
+            new WorkflowCommandObservedEvent { CommandId = "cmd-2" },
+            commandId: "cmd-2");
+        await firstProjector.ProjectAsync(context, replacement);
+        var committed = (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Clone();
+        committed.Nodes.Select(static node => node.NodeId).Should().NotContain("run:actor-1:cmd-1");
+
+        // Recovery: new projector instance (no in-memory state), same source/event replayed.
+        var recoveredProjector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            new RecordingGraphWriter(),
+            store,
+            materializer);
+        var replay = () => recoveredProjector.ProjectAsync(context, replacement.Clone()).AsTask();
+        await replay.Should().NotThrowAsync("the replayed replacement is an exact duplicate, not an event id conflict");
+        (await store.ApplyDeltaAsync(materializer.BuildFullCandidateDelta(
+                reportStore.Document!,
+                WorkflowProjectionKinds.ExecutionMaterialization,
+                IncrementalRoute())))
+            .Disposition.Should().Be(ProjectionGraphDeltaApplyDisposition.ExactDuplicate);
+        (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Should().BeEquivalentTo(committed);
+
+        // Later versions keep flowing on the replaced graph.
+        await recoveredProjector.ProjectAsync(context, BuildCommittedEnvelope(
+            3,
+            "evt-3",
+            new StepRequestEvent { RunId = "run-1", StepId = "step-2", StepType = "tool_call" },
+            commandId: "cmd-2"));
+        var afterRecovery = (await store.ReadOwnerSnapshotAsync(route)).Snapshot;
+        afterRecovery.Source.StateVersion.Should().Be(3);
+        afterRecovery.Nodes.Select(static node => node.NodeId).Should().Contain("step:actor-1:cmd-2:step-2");
+        afterRecovery.Nodes.Select(static node => node.NodeId).Should().NotContain("step:actor-1:cmd-1:step-1");
+    }
+
+    [Fact]
+    public async Task CutoverOrchestrator_WhenCandidateCommittedBeforePhasePersisted_ShouldRebuildAsExactDuplicate()
+    {
+        // Fault window: the candidate backfill applied and committed in the graph store, but the
+        // scope's CandidateBuilt phase never reached durable state. The rebuild reads a store that
+        // already holds the candidate (and no longer holds pre-cutover elements) and must converge.
+        var store = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var report = BuildReport(4, "evt-4");
+        AddStep(report, new WorkflowExecutionStepTrace { StepId = "step-1", StepType = "assign" });
+        var route = materializer.ResolveStoreRoute(
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            report.Id,
+            IncrementalRoute());
+        // Pre-cutover residue owned by the same owner on the candidate namespace (a stale element
+        // that the first candidate build must delete and the rebuild must not need to know about).
+        var residue = new ProjectionGraphDelta
+        {
+            Route = route.Clone(),
+            Source = new ProjectionGraphSourceCoordinate { ActorId = report.Id, StateVersion = 1, EventId = "evt-1" },
+            Mode = ProjectionGraphDeltaMode.RepairOrCutover,
+        };
+        residue.UpsertNodes.Add(new ProjectionGraphNodeMutation { NodeId = "stale:node", NodeType = "Step" });
+        (await store.ApplyDeltaAsync(residue)).Disposition.Should().Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var reader = new MutableReportReader(report);
+        var orchestrator = new WorkflowProjectionGraphCutoverOrchestrator(reader, store, materializer);
+
+        var first = await orchestrator.BuildCandidateAsync(
+            report.RootActorId,
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            IncrementalRoute());
+        first.Should().NotBeNull();
+        var committed = (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Clone();
+        committed.Nodes.Select(static node => node.NodeId).Should().NotContain("stale:node");
+
+        var rebuilt = await new WorkflowProjectionGraphCutoverOrchestrator(reader, store, materializer)
+            .BuildCandidateAsync(
+                report.RootActorId,
+                WorkflowProjectionKinds.ExecutionMaterialization,
+                IncrementalRoute());
+
+        rebuilt.Should().NotBeNull();
+        rebuilt!.Fingerprint.Should().Be(first!.Fingerprint);
+        rebuilt.Source.Should().Be(first.Source);
+        (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Should().BeEquivalentTo(committed);
+        (await orchestrator.VerifyCandidateAsync(
+                report.RootActorId,
+                WorkflowProjectionKinds.ExecutionMaterialization,
+                IncrementalRoute(),
+                rebuilt.Source,
+                rebuilt.Fingerprint))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task OwnerReplacement_WithSameEventIdButDifferentDesiredGraph_ShouldStillConflict()
+    {
+        var store = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var report = BuildReport(2, "evt-2");
+        AddStep(report, new WorkflowExecutionStepTrace { StepId = "step-1", StepType = "assign" });
+        (await store.ApplyDeltaAsync(materializer.BuildFullCandidateDelta(
+                report,
+                WorkflowProjectionKinds.ExecutionMaterialization,
+                IncrementalRoute())))
+            .Disposition.Should().Be(ProjectionGraphDeltaApplyDisposition.Applied);
+
+        var divergent = report.Clone();
+        AddStep(divergent, new WorkflowExecutionStepTrace { StepId = "step-2", StepType = "assign" });
+        var conflict = await store.ApplyDeltaAsync(materializer.BuildFullCandidateDelta(
+            divergent,
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            IncrementalRoute()));
+
+        conflict.Disposition.Should().Be(ProjectionGraphDeltaApplyDisposition.EventIdConflict);
+        var route = materializer.ResolveStoreRoute(
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            report.Id,
+            IncrementalRoute());
+        (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Nodes
+            .Select(static node => node.NodeId).Should().NotContain(id => id.EndsWith(":step-2", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task IncrementalMaterializer_ShouldPromoteAndRewireStableNextEdge()
     {
         var store = new InMemoryProjectionGraphStore();

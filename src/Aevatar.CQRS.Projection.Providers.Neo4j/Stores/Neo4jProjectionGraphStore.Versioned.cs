@@ -85,10 +85,18 @@ public sealed partial class Neo4jProjectionGraphStore
         if (rejection != null)
             return await RollbackAsync(transaction, rejection);
 
-        var nodeIds = normalized.UpsertNodes.Select(x => x.NodeId)
-            .Concat(normalized.DeleteNodeIds)
-            .Concat(normalized.UpsertEdges.SelectMany(x => new[] { x.FromNodeId, x.ToNodeId }))
-            .Concat(normalized.UpsertPendingEdges.SelectMany(x => new[] { x.FromNodeId, x.ToNodeId }))
+        // A repair/cutover delta is the complete desired owner graph: every owned element that
+        // is absent from it is stale and deleted in this transaction (under the owner-state
+        // lock), so the caller never derives deletes from a pre-read snapshot and the delta
+        // fingerprint recorded below stays a function of stable inputs.
+        var effective = normalized.Mode == ProjectionGraphDeltaMode.RepairOrCutover
+            ? await WithStaleOwnerElementDeletesAsync(transaction, normalized, parameters, ct)
+            : normalized;
+
+        var nodeIds = effective.UpsertNodes.Select(x => x.NodeId)
+            .Concat(effective.DeleteNodeIds)
+            .Concat(effective.UpsertEdges.SelectMany(x => new[] { x.FromNodeId, x.ToNodeId }))
+            .Concat(effective.UpsertPendingEdges.SelectMany(x => new[] { x.FromNodeId, x.ToNodeId }))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         parameters["nodeIds"] = nodeIds;
@@ -117,10 +125,10 @@ public sealed partial class Neo4jProjectionGraphStore
                     state?.Source));
         }
 
-        var edgeIds = normalized.UpsertEdges.Select(x => x.EdgeId)
-            .Concat(normalized.UpsertPendingEdges.Select(x => x.EdgeId))
-            .Concat(normalized.DeleteEdgeIds)
-            .Concat(normalized.DeletePendingEdgeIds)
+        var edgeIds = effective.UpsertEdges.Select(x => x.EdgeId)
+            .Concat(effective.UpsertPendingEdges.Select(x => x.EdgeId))
+            .Concat(effective.DeleteEdgeIds)
+            .Concat(effective.DeletePendingEdgeIds)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         parameters["edgeIds"] = edgeIds;
@@ -178,7 +186,7 @@ public sealed partial class Neo4jProjectionGraphStore
 
         var hasForeignIncidentRelationship = await HasForeignIncidentRelationshipAsync(
             transaction,
-            normalized,
+            effective,
             parameters,
             ct);
         if (hasForeignIncidentRelationship)
@@ -192,9 +200,9 @@ public sealed partial class Neo4jProjectionGraphStore
         }
 
         var resultingNodeIds = nodeOwners.Keys.ToHashSet(StringComparer.Ordinal);
-        resultingNodeIds.ExceptWith(normalized.DeleteNodeIds);
-        resultingNodeIds.UnionWith(normalized.UpsertNodes.Select(x => x.NodeId));
-        var missingEndpoint = normalized.UpsertEdges
+        resultingNodeIds.ExceptWith(effective.DeleteNodeIds);
+        resultingNodeIds.UnionWith(effective.UpsertNodes.Select(x => x.NodeId));
+        var missingEndpoint = effective.UpsertEdges
             .SelectMany(edge => new[]
             {
                 (edge.EdgeId, Endpoint: edge.FromNodeId, Role: "source"),
@@ -213,7 +221,7 @@ public sealed partial class Neo4jProjectionGraphStore
 
         var mutationRejection = await ApplyNeo4jMutationsAsync(
             transaction,
-            normalized,
+            effective,
             parameters,
             ct);
         if (mutationRejection != null)
@@ -397,6 +405,60 @@ public sealed partial class Neo4jProjectionGraphStore
         }
 
         return null;
+    }
+
+    private async Task<ProjectionGraphDelta> WithStaleOwnerElementDeletesAsync(
+        IAsyncTransaction transaction,
+        ProjectionGraphDelta delta,
+        Dictionary<string, object?> parameters,
+        CancellationToken ct)
+    {
+        var rows = await RunRowsAsync(
+            transaction,
+            Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadOwnedElementIdsCypher(
+                _nodeLabel,
+                _versionedEdgeIdentityLabel),
+            parameters,
+            ct);
+        var desiredNodeIds = delta.UpsertNodes.Select(x => x.NodeId).ToHashSet(StringComparer.Ordinal);
+        var desiredEdgeIds = delta.UpsertEdges.Select(x => x.EdgeId)
+            .Concat(delta.UpsertPendingEdges.Select(x => x.EdgeId))
+            .ToHashSet(StringComparer.Ordinal);
+        var explicitDeletes = delta.DeleteNodeIds
+            .Concat(delta.DeleteEdgeIds)
+            .Concat(delta.DeletePendingEdgeIds)
+            .ToHashSet(StringComparer.Ordinal);
+        var staleNodeIds = new SortedSet<string>(StringComparer.Ordinal);
+        var staleEdgeIds = new SortedSet<string>(StringComparer.Ordinal);
+        var stalePendingEdgeIds = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var kind = ReadString(row, "kind");
+            var identifier = ReadString(row, "id");
+            if (identifier.Length == 0 || explicitDeletes.Contains(identifier))
+                continue;
+            switch (kind)
+            {
+                case "node" when !desiredNodeIds.Contains(identifier):
+                    staleNodeIds.Add(identifier);
+                    break;
+                case "edge" when !desiredEdgeIds.Contains(identifier):
+                    staleEdgeIds.Add(identifier);
+                    break;
+                case "pending" when !desiredEdgeIds.Contains(identifier):
+                    stalePendingEdgeIds.Add(identifier);
+                    break;
+            }
+        }
+
+        if (staleNodeIds.Count == 0 && staleEdgeIds.Count == 0 && stalePendingEdgeIds.Count == 0)
+            return delta;
+
+        var replacement = delta.Clone();
+        replacement.DeleteNodeIds.Add(staleNodeIds);
+        replacement.DeleteEdgeIds.Add(staleEdgeIds);
+        replacement.DeletePendingEdgeIds.Add(stalePendingEdgeIds.Where(x => !staleEdgeIds.Contains(x)));
+        return replacement;
     }
 
     private async Task<MutationRejection?> ApplyNeo4jMutationsAsync(
