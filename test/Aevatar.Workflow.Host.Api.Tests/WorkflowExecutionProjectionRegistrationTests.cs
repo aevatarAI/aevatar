@@ -178,6 +178,36 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         provider.Metadata.IndexName.Should().Be("workflow-execution-current-states");
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        var rootProperties = provider.Metadata.Mappings["properties"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        foreach (var field in new[]
+                 {
+                     "root_actor_id", "definition_actor_id", "run_id", "workflow_id", "scope_id", "schedule_id",
+                     "status", "saga_status", "run_origin", "workflow_name", "input_summary",
+                 })
+        {
+            var mapping = rootProperties[field]
+                .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+            mapping["type"].Should().Be("keyword", $"'{field}' is a current-state filter/search/sort dimension");
+        }
+
+        rootProperties["updated_at_utc_value"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject["type"].Should().Be("date");
+        AssertNotIndexedTextFields(
+            rootProperties,
+            "workflow_yaml",
+            "input",
+            "final_output",
+            "final_error",
+            "compilation_error",
+            "dead_letter_error");
+        foreach (var field in new[] { "input_file_ref_entries", "connector_approval_entries", "capability_admission_plan" })
+        {
+            var mapping = rootProperties[field]
+                .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+            mapping["enabled"].Should().Be(false);
+        }
+
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
     }

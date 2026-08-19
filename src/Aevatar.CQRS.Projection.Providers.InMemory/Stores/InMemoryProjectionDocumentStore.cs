@@ -511,7 +511,9 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
             null => null,
             DateTime dateTime => dateTime.Kind == DateTimeKind.Utc ? dateTime : dateTime.ToUniversalTime(),
             DateTimeOffset dateTimeOffset => dateTimeOffset.UtcDateTime,
-            Enum enumValue => enumValue.ToString(),
+            // Proto enums compare in their protobuf-JSON form so in-memory and document-store
+            // backed queries agree on the same filter value (see ProjectionDocumentValue.FromProtoEnum).
+            Enum enumValue => ProjectionDocumentValue.ResolveProtoEnumName(enumValue),
             Guid guid => guid.ToString(),
             _ => value,
         };
