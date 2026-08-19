@@ -199,6 +199,7 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
             $"projection_graph_v2_pending_from_{edgeIdentityLabel}".ToLowerInvariant(),
             $"projection_graph_v2_pending_to_{edgeIdentityLabel}".ToLowerInvariant(),
             $"projection_graph_relationship_scope_edge_id_{edgeType}".ToLowerInvariant(),
+            $"projection_graph_v2_edge_identity_owner_{edgeIdentityLabel}".ToLowerInvariant(),
         };
         foreach (var indexName in indexNames
                      .Concat(versionedIndexNames)

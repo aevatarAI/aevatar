@@ -132,6 +132,194 @@ public sealed class VersionedProjectionGraphStoreConformanceTests
         await AssertPendingPromotionAndRewireAsync(store, $"{namespacePrefix}-pending");
         await AssertRepairJumpAsync(store, $"{namespacePrefix}-repair");
         await AssertRepairReplacementAsync(store, $"{namespacePrefix}-replace");
+        await AssertRepairReplacementKeepsNodeAndEdgeIdentitySpacesApartAsync(
+            store,
+            $"{namespacePrefix}-identity-spaces");
+        await AssertRepairReplacementMutationBoundAsync(store, $"{namespacePrefix}-bound");
+    }
+
+    /// <summary>
+    /// Node ids and edge ids (live + pending) are separate identity spaces: a repair/cutover
+    /// replacement reconciles each category only against its own desired and explicit-delete
+    /// sets, so a node and an edge that share one id token are kept or deleted independently.
+    /// </summary>
+    private static async Task AssertRepairReplacementKeepsNodeAndEdgeIdentitySpacesApartAsync(
+        IVersionedProjectionGraphStore store,
+        string physicalNamespace)
+    {
+        var route = Route(physicalNamespace);
+        var initial = Delta(route, 1, "event-1");
+        initial.UpsertNodes.Add(Node("a"));
+        initial.UpsertNodes.Add(Node("b"));
+        initial.UpsertNodes.Add(Node("shared"));
+        initial.UpsertEdges.Add(Edge("shared", "a", "b"));
+        initial.UpsertPendingEdges.Add(Edge("shared-pending", "a", "late"));
+        (await store.ApplyDeltaAsync(initial)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var seeded = await store.ReadOwnerSnapshotAsync(route);
+        seeded.Snapshot.Nodes.Select(x => x.NodeId).Should().Equal("a", "b", "shared");
+        seeded.Snapshot.Edges.Select(x => x.EdgeId).Should().Equal("shared");
+        seeded.Snapshot.PendingEdges.Select(x => x.EdgeId).Should().Equal("shared-pending");
+
+        // Keep the node "shared"; the edge "shared" and the pending edge are stale and go.
+        var keepNode = RepairDelta(route, 2, "event-keep-node");
+        keepNode.UpsertNodes.Add(Node("a"));
+        keepNode.UpsertNodes.Add(Node("b"));
+        keepNode.UpsertNodes.Add(Node("shared"));
+        (await store.ApplyDeltaAsync(keepNode)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var nodeKept = await store.ReadOwnerSnapshotAsync(route);
+        nodeKept.Snapshot.Source.StateVersion.Should().Be(2);
+        nodeKept.Snapshot.Nodes.Select(x => x.NodeId).Should().Equal("a", "b", "shared");
+        nodeKept.Snapshot.Edges.Should().BeEmpty("the edge sharing the kept node's token is stale");
+        nodeKept.Snapshot.PendingEdges.Should().BeEmpty();
+
+        // Restore both edges, then keep them and drop the node that shares the live edge's token.
+        var restoreEdges = Delta(route, 3, "event-3");
+        restoreEdges.UpsertEdges.Add(Edge("shared", "a", "b"));
+        restoreEdges.UpsertPendingEdges.Add(Edge("shared-pending", "a", "late"));
+        (await store.ApplyDeltaAsync(restoreEdges)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var keepEdge = RepairDelta(route, 4, "event-keep-edge");
+        keepEdge.UpsertNodes.Add(Node("a"));
+        keepEdge.UpsertNodes.Add(Node("b"));
+        keepEdge.UpsertEdges.Add(Edge("shared", "a", "b"));
+        keepEdge.UpsertPendingEdges.Add(Edge("shared-pending", "a", "late"));
+        (await store.ApplyDeltaAsync(keepEdge)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var edgeKept = await store.ReadOwnerSnapshotAsync(route);
+        edgeKept.Snapshot.Source.StateVersion.Should().Be(4);
+        edgeKept.Snapshot.Nodes.Select(x => x.NodeId).Should().Equal("a", "b");
+        edgeKept.Snapshot.Edges.Select(x => x.EdgeId).Should().Equal("shared");
+        edgeKept.Snapshot.PendingEdges.Select(x => x.EdgeId).Should().Equal("shared-pending");
+
+        // Explicit deletes are category-scoped too: DeleteNodeIds=["shared"] neither targets nor
+        // protects the stale edge "shared" ...
+        var restoreNode = Delta(route, 5, "event-5");
+        restoreNode.UpsertNodes.Add(Node("shared"));
+        (await store.ApplyDeltaAsync(restoreNode)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var explicitNodeDelete = RepairDelta(route, 6, "event-explicit-node");
+        explicitNodeDelete.UpsertNodes.Add(Node("a"));
+        explicitNodeDelete.UpsertNodes.Add(Node("b"));
+        explicitNodeDelete.DeleteNodeIds.Add("shared");
+        (await store.ApplyDeltaAsync(explicitNodeDelete)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var afterExplicitNodeDelete = await store.ReadOwnerSnapshotAsync(route);
+        afterExplicitNodeDelete.Snapshot.Source.StateVersion.Should().Be(6);
+        afterExplicitNodeDelete.Snapshot.Nodes.Select(x => x.NodeId).Should().Equal("a", "b");
+        afterExplicitNodeDelete.Snapshot.Edges.Should()
+            .BeEmpty("an explicit node delete does not suppress the stale edge with the same token");
+        afterExplicitNodeDelete.Snapshot.PendingEdges.Should().BeEmpty();
+
+        // ... and DeleteEdgeIds=["shared"] neither targets nor protects the stale node "shared".
+        var restoreAll = Delta(route, 7, "event-7");
+        restoreAll.UpsertNodes.Add(Node("shared"));
+        restoreAll.UpsertEdges.Add(Edge("shared", "a", "b"));
+        restoreAll.UpsertPendingEdges.Add(Edge("shared-pending", "a", "late"));
+        (await store.ApplyDeltaAsync(restoreAll)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var explicitEdgeDelete = RepairDelta(route, 8, "event-explicit-edge");
+        explicitEdgeDelete.UpsertNodes.Add(Node("a"));
+        explicitEdgeDelete.UpsertNodes.Add(Node("b"));
+        explicitEdgeDelete.DeleteEdgeIds.Add("shared");
+        (await store.ApplyDeltaAsync(explicitEdgeDelete)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var afterExplicitEdgeDelete = await store.ReadOwnerSnapshotAsync(route);
+        afterExplicitEdgeDelete.Snapshot.Source.StateVersion.Should().Be(8);
+        afterExplicitEdgeDelete.Snapshot.Nodes.Select(x => x.NodeId).Should().Equal(
+            new[] { "a", "b" },
+            "an explicit edge delete does not suppress the stale node with the same token");
+        afterExplicitEdgeDelete.Snapshot.Edges.Should().BeEmpty();
+        afterExplicitEdgeDelete.Snapshot.PendingEdges.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// A repair/cutover replacement is bounded by <see cref="ProjectionGraphDeltaContract.MaximumRepairOrCutoverMutationCount"/>
+    /// over its effective mutations (upserts + explicit deletes + the stale deletes the store
+    /// generates), counted inside the apply after the event-id and version checks and before any
+    /// mutation. Overflow is rejected atomically: watermark, snapshot and event-id binding stay
+    /// untouched, so a corrected delta with the same event id still applies.
+    /// </summary>
+    private static async Task AssertRepairReplacementMutationBoundAsync(
+        IVersionedProjectionGraphStore store,
+        string physicalNamespace)
+    {
+        const int limit = ProjectionGraphDeltaContract.MaximumRepairOrCutoverMutationCount;
+        const int half = limit / 2;
+        var route = Route(physicalNamespace);
+        var seed = Delta(route, 1, "event-seed");
+        seed.UpsertNodes.AddRange(Nodes("old", half));
+        (await store.ApplyDeltaAsync(seed)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var seeded = await store.ReadOwnerSnapshotAsync(route);
+        seeded.Snapshot.Nodes.Should().HaveCount(half);
+
+        // half upserts + half generated stale deletes + 1 = limit + 1: rejected before any mutation.
+        var overflow = RepairDelta(route, 2, "event-cutover");
+        overflow.UpsertNodes.AddRange(Nodes("new", half + 1));
+        var overflowResult = await store.ApplyDeltaAsync(overflow);
+        overflowResult.Disposition.Should().Be(ProjectionGraphDeltaApplyDisposition.MutationBoundExceeded);
+        overflowResult.CurrentSource.Should().BeEquivalentTo(seed.Source);
+        var afterOverflow = await store.ReadOwnerSnapshotAsync(route);
+        afterOverflow.Snapshot.Source.Should().BeEquivalentTo(seed.Source);
+        NodeIds(afterOverflow).Should().Equal(NodeIds(seeded));
+        afterOverflow.Snapshot.Edges.Should().BeEmpty();
+        afterOverflow.Snapshot.PendingEdges.Should().BeEmpty();
+
+        // The rejected event id was not bound: the corrected replacement with the same event id
+        // sits exactly at the limit (half upserts + half stale deletes) and applies.
+        var corrected = RepairDelta(route, 2, "event-cutover");
+        corrected.UpsertNodes.AddRange(Nodes("new", half));
+        (await store.ApplyDeltaAsync(corrected)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var replaced = await store.ReadOwnerSnapshotAsync(route);
+        replaced.Snapshot.Source.Should().BeEquivalentTo(corrected.Source);
+        NodeIds(replaced).Should().Equal(Nodes("new", half).Select(x => x.NodeId));
+        replaced.Snapshot.Edges.Should().BeEmpty();
+
+        // Event-id and version checks run before the bound: an over-limit delta that reuses the
+        // bound event id conflicts, a stale one is stale, and the exact replay is a duplicate.
+        var reusedEventId = RepairDelta(route, 3, "event-cutover");
+        reusedEventId.UpsertNodes.AddRange(Nodes("later", half + 1));
+        (await store.ApplyDeltaAsync(reusedEventId)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.EventIdConflict);
+        var staleOverflow = RepairDelta(route, 1, "event-stale-cutover");
+        staleOverflow.UpsertNodes.AddRange(Nodes("later", half + 1));
+        (await store.ApplyDeltaAsync(staleOverflow)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Stale);
+        (await store.ApplyDeltaAsync(corrected.Clone())).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.ExactDuplicate);
+        var afterRejections = await store.ReadOwnerSnapshotAsync(route);
+        afterRejections.Snapshot.Source.Should().BeEquivalentTo(corrected.Source);
+        NodeIds(afterRejections).Should().Equal(NodeIds(replaced));
+
+        // Explicit deletes count too. An explicit delete of an owned element replaces its stale
+        // delete (no double count); an explicit delete of an element the owner never had adds one:
+        // half upserts + 1 explicit node + 1 explicit edge + (half - 1) stale = limit + 1.
+        var explicitOverflow = RepairDelta(route, 3, "event-explicit");
+        explicitOverflow.UpsertNodes.AddRange(Nodes("later", half));
+        explicitOverflow.DeleteNodeIds.Add(Nodes("new", 1).Single().NodeId);
+        explicitOverflow.DeleteEdgeIds.Add("edge-never-owned");
+        var explicitOverflowResult = await store.ApplyDeltaAsync(explicitOverflow);
+        explicitOverflowResult.Disposition.Should().Be(ProjectionGraphDeltaApplyDisposition.MutationBoundExceeded);
+        explicitOverflowResult.CurrentSource.Should().BeEquivalentTo(corrected.Source);
+        var afterExplicitOverflow = await store.ReadOwnerSnapshotAsync(route);
+        afterExplicitOverflow.Snapshot.Source.Should().BeEquivalentTo(corrected.Source);
+        NodeIds(afterExplicitOverflow).Should().Equal(NodeIds(replaced));
+
+        // (half - 1) upserts + 1 explicit node + 1 explicit edge + (half - 1) stale = limit: applied.
+        var explicitAtLimit = RepairDelta(route, 3, "event-explicit");
+        explicitAtLimit.UpsertNodes.AddRange(Nodes("later", half - 1));
+        explicitAtLimit.DeleteNodeIds.Add(Nodes("new", 1).Single().NodeId);
+        explicitAtLimit.DeleteEdgeIds.Add("edge-never-owned");
+        (await store.ApplyDeltaAsync(explicitAtLimit)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+        var afterExplicitAtLimit = await store.ReadOwnerSnapshotAsync(route);
+        afterExplicitAtLimit.Snapshot.Source.Should().BeEquivalentTo(explicitAtLimit.Source);
+        NodeIds(afterExplicitAtLimit).Should().Equal(Nodes("later", half - 1).Select(x => x.NodeId));
+        afterExplicitAtLimit.Snapshot.Edges.Should().BeEmpty();
+        afterExplicitAtLimit.Snapshot.PendingEdges.Should().BeEmpty();
     }
 
     /// <summary>
@@ -391,6 +579,23 @@ public sealed class VersionedProjectionGraphStoreConformanceTests
             Mode = ProjectionGraphDeltaMode.Normal,
         };
 
+    private static ProjectionGraphDelta RepairDelta(
+        ProjectionGraphRouteFingerprint route,
+        long version,
+        string eventId)
+    {
+        var delta = Delta(route, version, eventId);
+        delta.Mode = ProjectionGraphDeltaMode.RepairOrCutover;
+        return delta;
+    }
+
+    /// <summary>Minimal-payload nodes whose zero-padded ids sort ordinally, like snapshots do.</summary>
+    private static IEnumerable<ProjectionGraphNodeMutation> Nodes(string prefix, int count) =>
+        Enumerable.Range(0, count).Select(index => Node($"{prefix}-{index:D5}"));
+
+    private static string[] NodeIds(ProjectionGraphOwnerSnapshotReadResult snapshot) =>
+        snapshot.Snapshot.Nodes.Select(x => x.NodeId).ToArray();
+
     private static ProjectionGraphNodeMutation Node(
         string nodeId,
         params (string Key, string Value)[] properties)
@@ -419,7 +624,7 @@ public sealed class VersionedProjectionGraphStoreConformanceTests
             UpdatedAtEpochMs = 1_700_000_000_000,
         };
 
-    private static Neo4jProjectionGraphStoreOptions CreateNeo4jOptions(
+    internal static Neo4jProjectionGraphStoreOptions CreateNeo4jOptions(
         string nodeLabel,
         string edgeType) =>
         new()
@@ -434,7 +639,16 @@ public sealed class VersionedProjectionGraphStoreConformanceTests
             RequestTimeoutMs = 30_000,
         };
 
-    private static async Task CleanupNeo4jAsync(
+    /// <summary>
+    /// Name of the edge-identity owner seek index the store creates for <paramref name="nodeLabel"/>
+    /// (schema names are normalized to lower case by the store).
+    /// </summary>
+    internal static string EdgeIdentityOwnerIndexName(string nodeLabel) =>
+        $"projection_graph_v2_edge_identity_owner_{EdgeIdentityLabel(nodeLabel)}".ToLowerInvariant();
+
+    internal static string EdgeIdentityLabel(string nodeLabel) => $"{nodeLabel}EdgeIdentity";
+
+    internal static async Task CleanupNeo4jAsync(
         IDriver driver,
         string database,
         string nodeLabel,
@@ -442,7 +656,7 @@ public sealed class VersionedProjectionGraphStoreConformanceTests
     {
         var ownerStateLabel = $"{nodeLabel}OwnerState";
         var eventLabel = $"{nodeLabel}OwnerEvent";
-        var edgeIdentityLabel = $"{nodeLabel}EdgeIdentity";
+        var edgeIdentityLabel = EdgeIdentityLabel(nodeLabel);
         var schemaNames = new[]
         {
             $"projection_graph_node_scope_owner_id_{nodeLabel}".ToLowerInvariant(),
@@ -450,6 +664,7 @@ public sealed class VersionedProjectionGraphStoreConformanceTests
             $"projection_graph_relationship_scope_edge_id_{edgeType}".ToLowerInvariant(),
             $"projection_graph_v2_pending_from_{edgeIdentityLabel}".ToLowerInvariant(),
             $"projection_graph_v2_pending_to_{edgeIdentityLabel}".ToLowerInvariant(),
+            EdgeIdentityOwnerIndexName(nodeLabel),
         };
         var constraintNames = new[]
         {

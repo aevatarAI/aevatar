@@ -184,9 +184,22 @@ public sealed partial class InMemoryProjectionGraphStore
 
         // A repair/cutover delta is the complete desired owner graph: every owned element that
         // is absent from it is stale and deleted here, so the caller never derives deletes from
-        // a pre-read snapshot and the delta fingerprint stays a function of stable inputs.
+        // a pre-read snapshot and the delta fingerprint stays a function of stable inputs. The
+        // effective mutation count (upserts + explicit deletes + generated stale deletes) is
+        // bounded before any mutation; overflow is rejected atomically.
         if (delta.Mode == ProjectionGraphDeltaMode.RepairOrCutover)
+        {
             delta = WithStaleOwnerElementDeletes(delta);
+            var mutationCount = ProjectionGraphDeltaContract.CountMutations(delta);
+            if (mutationCount > ProjectionGraphDeltaContract.MaximumRepairOrCutoverMutationCount)
+            {
+                return Result(
+                    ProjectionGraphDeltaApplyDisposition.MutationBoundExceeded,
+                    $"Repair/cutover delta requires {mutationCount} effective mutations; " +
+                    $"the bounded replacement limit is {ProjectionGraphDeltaContract.MaximumRepairOrCutoverMutationCount}.",
+                    state?.Source);
+            }
+        }
 
         var collisionDetail = FindCrossOwnerCollision(delta);
         if (collisionDetail.Length > 0)
@@ -225,28 +238,32 @@ public sealed partial class InMemoryProjectionGraphStore
     {
         var physicalNamespace = delta.Route.PhysicalNamespace;
         var ownerId = delta.Route.OwnerId;
+        // Node ids and edge ids are separate identity spaces (the same token may name a node
+        // and an edge); each category is reconciled only against its own desired/explicit sets.
         var desiredNodeIds = delta.UpsertNodes.Select(x => x.NodeId).ToHashSet(StringComparer.Ordinal);
         var desiredEdgeIds = delta.UpsertEdges.Select(x => x.EdgeId)
             .Concat(delta.UpsertPendingEdges.Select(x => x.EdgeId))
             .ToHashSet(StringComparer.Ordinal);
+        var explicitNodeDeletes = delta.DeleteNodeIds.ToHashSet(StringComparer.Ordinal);
+        var explicitEdgeDeletes = delta.DeleteEdgeIds
+            .Concat(delta.DeletePendingEdgeIds)
+            .ToHashSet(StringComparer.Ordinal);
         var staleNodeIds = _versionedNodes.Values
             .Where(x => BelongsTo(x.PhysicalNamespace, physicalNamespace) && BelongsTo(x.OwnerId, ownerId))
             .Select(x => x.Node.NodeId)
-            .Where(nodeId => !desiredNodeIds.Contains(nodeId) && !delta.DeleteNodeIds.Contains(nodeId))
+            .Where(nodeId => !desiredNodeIds.Contains(nodeId) && !explicitNodeDeletes.Contains(nodeId))
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToArray();
         var staleEdgeIds = _versionedEdges.Values
             .Where(x => BelongsTo(x.PhysicalNamespace, physicalNamespace) && BelongsTo(x.OwnerId, ownerId))
             .Select(x => x.Edge.EdgeId)
-            .Where(edgeId => !desiredEdgeIds.Contains(edgeId) && !delta.DeleteEdgeIds.Contains(edgeId))
+            .Where(edgeId => !desiredEdgeIds.Contains(edgeId) && !explicitEdgeDeletes.Contains(edgeId))
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToArray();
         var stalePendingEdgeIds = _versionedPendingEdges.Values
             .Where(x => BelongsTo(x.PhysicalNamespace, physicalNamespace) && BelongsTo(x.OwnerId, ownerId))
             .Select(x => x.Edge.EdgeId)
-            .Where(edgeId => !desiredEdgeIds.Contains(edgeId) &&
-                             !delta.DeletePendingEdgeIds.Contains(edgeId) &&
-                             !delta.DeleteEdgeIds.Contains(edgeId))
+            .Where(edgeId => !desiredEdgeIds.Contains(edgeId) && !explicitEdgeDeletes.Contains(edgeId))
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToArray();
         if (staleNodeIds.Length == 0 && staleEdgeIds.Length == 0 && stalePendingEdgeIds.Length == 0)

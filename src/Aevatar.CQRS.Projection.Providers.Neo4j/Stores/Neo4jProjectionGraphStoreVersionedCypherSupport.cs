@@ -14,6 +14,16 @@ internal static class Neo4jProjectionGraphStoreVersionedCypherSupport
         $"CREATE CONSTRAINT {constraintName} IF NOT EXISTS " +
         $"FOR (n:{label}) REQUIRE (n.physicalNamespace, n.edgeId) IS UNIQUE";
 
+    /// <summary>
+    /// Owner seek for edge identities: the repair/cutover stale-element read and the owner
+    /// snapshot read match identities by (physicalNamespace, projectionOwnerId) alone; without
+    /// this index the planner can only prefix-scan the pending (…, status, fromNodeId) index or
+    /// scan the label.
+    /// </summary>
+    internal static string BuildCreateEdgeIdentityOwnerIndexCypher(string label, string indexName) =>
+        $"CREATE RANGE INDEX {indexName} IF NOT EXISTS " +
+        $"FOR (n:{label}) ON (n.physicalNamespace, n.projectionOwnerId)";
+
     internal static string BuildCreatePendingFromIndexCypher(string label, string indexName) =>
         $"CREATE RANGE INDEX {indexName} IF NOT EXISTS " +
         $"FOR (n:{label}) ON (n.physicalNamespace, n.projectionOwnerId, n.status, n.fromNodeId)";

@@ -6,8 +6,30 @@ namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
 public static class ProjectionGraphDeltaContract
 {
+    /// <summary>
+    /// Bounded replacement limit for a repair/cutover delta: the store counts the effective
+    /// mutations (upserts + explicit deletes + the stale-element deletes it generates itself)
+    /// inside the apply transaction and rejects the delta atomically when the total exceeds
+    /// this. Producers use the same constant to bound the desired graph they build.
+    /// </summary>
+    public const int MaximumRepairOrCutoverMutationCount = 20_000;
+
     private static readonly long MaximumEpochMilliseconds =
         DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+
+    /// <summary>
+    /// Total mutation count of a delta as the store applies it (after stale deletes were added).
+    /// </summary>
+    public static int CountMutations(ProjectionGraphDelta delta)
+    {
+        ArgumentNullException.ThrowIfNull(delta);
+        return delta.UpsertNodes.Count +
+               delta.DeleteNodeIds.Count +
+               delta.UpsertEdges.Count +
+               delta.DeleteEdgeIds.Count +
+               delta.UpsertPendingEdges.Count +
+               delta.DeletePendingEdgeIds.Count;
+    }
 
     public static bool TryNormalize(
         ProjectionGraphDelta? delta,

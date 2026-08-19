@@ -9,7 +9,7 @@ namespace Aevatar.Workflow.Projection.ReadModels;
 
 public sealed class WorkflowRunIncrementalGraphMaterializer
 {
-    public const int MaximumCandidateMutationCount = 20_000;
+    public const int MaximumCandidateMutationCount = ProjectionGraphDeltaContract.MaximumRepairOrCutoverMutationCount;
 
     private readonly IProjectionGraphOwnerIdentityResolver _ownerIdentityResolver;
     private readonly WorkflowRunGraphArtifactMaterializer _fullMaterializer = new();
@@ -405,12 +405,7 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
 
     private static void EnsureCandidateIsBounded(ProjectionGraphDelta delta)
     {
-        var mutationCount = delta.UpsertNodes.Count +
-                            delta.DeleteNodeIds.Count +
-                            delta.UpsertEdges.Count +
-                            delta.DeleteEdgeIds.Count +
-                            delta.UpsertPendingEdges.Count +
-                            delta.DeletePendingEdgeIds.Count;
+        var mutationCount = ProjectionGraphDeltaContract.CountMutations(delta);
         if (mutationCount > MaximumCandidateMutationCount)
         {
             throw new InvalidOperationException(

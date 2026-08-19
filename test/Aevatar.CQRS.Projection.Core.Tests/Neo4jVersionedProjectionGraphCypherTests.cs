@@ -31,6 +31,23 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
     }
 
     [Fact]
+    public void EdgeIdentityOwnerIndexCypher_ShouldBeARangeIndexOnNamespaceAndOwner()
+    {
+        var cypher = Neo4jProjectionGraphStoreVersionedCypherSupport
+            .BuildCreateEdgeIdentityOwnerIndexCypher("EdgeIdentity", "edge_identity_owner");
+
+        // Exact-match seek key of the owned-element-ids read and the owner snapshot read; the
+        // pending (…, status, fromNodeId/toNodeId) indexes only allow a prefix scan for it.
+        cypher.Should().StartWith("CREATE RANGE INDEX edge_identity_owner IF NOT EXISTS ");
+        cypher.Should().EndWith("FOR (n:EdgeIdentity) ON (n.physicalNamespace, n.projectionOwnerId)");
+        var ownedElementIds = Neo4jProjectionGraphStoreVersionedCypherSupport
+            .BuildReadOwnedElementIdsCypher("Node", "EdgeIdentity");
+        ownedElementIds.Should().Contain(
+            "(identity:EdgeIdentity {physicalNamespace: $physicalNamespace, projectionOwnerId: $ownerId})",
+            "the index must cover exactly the identity match predicates");
+    }
+
+    [Fact]
     public void EveryVersionedCypherStatement_ShouldHaveBalancedBracesAndNoEscapedBraceResidue()
     {
         // Mixed interpolated/plain string segments once left "}}" in the emitted Cypher and
@@ -43,6 +60,7 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
             ["pending-from"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreatePendingFromIndexCypher("EdgeIdentity", "i1"),
             ["pending-to"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreatePendingToIndexCypher("EdgeIdentity", "i2"),
             ["rel-edge-id"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateRelationshipEdgeIdIndexCypher("REL", "i3"),
+            ["edge-identity-owner"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateEdgeIdentityOwnerIndexCypher("EdgeIdentity", "i4"),
             ["lock-owner"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildLockOwnerStateCypher("OwnerState"),
             ["read-event"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadEventCypher("OwnerEvent"),
             ["owned-element-ids"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadOwnedElementIdsCypher("Node", "EdgeIdentity"),

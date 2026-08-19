@@ -19,6 +19,15 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class WorkflowIncrementalGraphMaterializationTests
 {
     [Fact]
+    public void IncrementalMaterializer_CandidateMutationBound_ShouldBeTheStoreRepairOrCutoverBound()
+    {
+        // One source for the bound: the materializer caps the candidate graph it builds with the
+        // same constant the stores enforce on the effective repair/cutover delta.
+        WorkflowRunIncrementalGraphMaterializer.MaximumCandidateMutationCount.Should().Be(
+            ProjectionGraphDeltaContract.MaximumRepairOrCutoverMutationCount);
+    }
+
+    [Fact]
     public void IncrementalMaterializer_ForHundredStepReport_ShouldBuildBoundedPerEventDeltas()
     {
         var materializer = CreateMaterializer();

@@ -92,6 +92,23 @@ public sealed partial class Neo4jProjectionGraphStore
         var effective = normalized.Mode == ProjectionGraphDeltaMode.RepairOrCutover
             ? await WithStaleOwnerElementDeletesAsync(transaction, normalized, parameters, ct)
             : normalized;
+        if (normalized.Mode == ProjectionGraphDeltaMode.RepairOrCutover)
+        {
+            // Bounded replacement: the effective mutation count (upserts + explicit deletes +
+            // generated stale deletes) is checked before any mutation; overflow rolls back with
+            // watermark and snapshot untouched.
+            var mutationCount = ProjectionGraphDeltaContract.CountMutations(effective);
+            if (mutationCount > ProjectionGraphDeltaContract.MaximumRepairOrCutoverMutationCount)
+            {
+                return await RollbackAsync(
+                    transaction,
+                    DeltaResult(
+                        ProjectionGraphDeltaApplyDisposition.MutationBoundExceeded,
+                        $"Repair/cutover delta requires {mutationCount} effective mutations; " +
+                        $"the bounded replacement limit is {ProjectionGraphDeltaContract.MaximumRepairOrCutoverMutationCount}.",
+                        state?.Source));
+            }
+        }
 
         var nodeIds = effective.UpsertNodes.Select(x => x.NodeId)
             .Concat(effective.DeleteNodeIds)
@@ -420,12 +437,14 @@ public sealed partial class Neo4jProjectionGraphStore
                 _versionedEdgeIdentityLabel),
             parameters,
             ct);
+        // Node ids and edge ids are separate identity spaces (the same token may name a node
+        // and an edge); each category is reconciled only against its own desired/explicit sets.
         var desiredNodeIds = delta.UpsertNodes.Select(x => x.NodeId).ToHashSet(StringComparer.Ordinal);
         var desiredEdgeIds = delta.UpsertEdges.Select(x => x.EdgeId)
             .Concat(delta.UpsertPendingEdges.Select(x => x.EdgeId))
             .ToHashSet(StringComparer.Ordinal);
-        var explicitDeletes = delta.DeleteNodeIds
-            .Concat(delta.DeleteEdgeIds)
+        var explicitNodeDeletes = delta.DeleteNodeIds.ToHashSet(StringComparer.Ordinal);
+        var explicitEdgeDeletes = delta.DeleteEdgeIds
             .Concat(delta.DeletePendingEdgeIds)
             .ToHashSet(StringComparer.Ordinal);
         var staleNodeIds = new SortedSet<string>(StringComparer.Ordinal);
@@ -435,17 +454,17 @@ public sealed partial class Neo4jProjectionGraphStore
         {
             var kind = ReadString(row, "kind");
             var identifier = ReadString(row, "id");
-            if (identifier.Length == 0 || explicitDeletes.Contains(identifier))
+            if (identifier.Length == 0)
                 continue;
             switch (kind)
             {
-                case "node" when !desiredNodeIds.Contains(identifier):
+                case "node" when !desiredNodeIds.Contains(identifier) && !explicitNodeDeletes.Contains(identifier):
                     staleNodeIds.Add(identifier);
                     break;
-                case "edge" when !desiredEdgeIds.Contains(identifier):
+                case "edge" when !desiredEdgeIds.Contains(identifier) && !explicitEdgeDeletes.Contains(identifier):
                     staleEdgeIds.Add(identifier);
                     break;
-                case "pending" when !desiredEdgeIds.Contains(identifier):
+                case "pending" when !desiredEdgeIds.Contains(identifier) && !explicitEdgeDeletes.Contains(identifier):
                     stalePendingEdgeIds.Add(identifier);
                     break;
             }

@@ -413,6 +413,8 @@ public sealed class Neo4jOwnerGraphReplacementIntegrationTests
             $"projection_graph_v2_pending_from_{edgeIdentityLabel}".ToLowerInvariant();
         var pendingToIndexName =
             $"projection_graph_v2_pending_to_{edgeIdentityLabel}".ToLowerInvariant();
+        var edgeIdentityOwnerIndexName =
+            $"projection_graph_v2_edge_identity_owner_{edgeIdentityLabel}".ToLowerInvariant();
         var versionedOwnerConstraintName =
             $"projection_graph_v2_owner_{ownerStateLabel}".ToLowerInvariant();
         var versionedEventConstraintName =
@@ -427,6 +429,7 @@ public sealed class Neo4jOwnerGraphReplacementIntegrationTests
                      $"MATCH (n:{edgeIdentityLabel}) DETACH DELETE n",
                      $"DROP INDEX {nodeIndexName} IF EXISTS",
                      $"DROP INDEX {relationshipIndexName} IF EXISTS",
+                     $"DROP INDEX {edgeIdentityOwnerIndexName} IF EXISTS",
                      $"DROP INDEX {pendingFromIndexName} IF EXISTS",
                      $"DROP INDEX {pendingToIndexName} IF EXISTS",
                      $"DROP CONSTRAINT {constraintName} IF EXISTS",
