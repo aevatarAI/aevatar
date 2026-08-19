@@ -161,6 +161,8 @@ internal static class WorkflowToolCallTelemetry
                 "protected_material_unavailable",
             WorkflowToolCallReconciliationDisposition.ApprovalDeadlineExceeded =>
                 "approval_deadline_exceeded",
+            WorkflowToolCallReconciliationDisposition.PreDispatchFailed => "pre_dispatch_failed",
+            WorkflowToolCallReconciliationDisposition.RecoveryOutcomeUnknown => "recovery_outcome_unknown",
             _ => "none",
         };
 

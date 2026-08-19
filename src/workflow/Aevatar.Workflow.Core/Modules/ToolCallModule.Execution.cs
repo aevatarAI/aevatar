@@ -255,11 +255,13 @@ public sealed partial class ToolCallModule
         if (pending.TimeoutLease != null)
             return true;
 
+        var reconciliationStartedAtTimestamp = ctx.GetTimestamp();
         if (ctx.UtcNow.ToUnixTimeMilliseconds() >= pending.TimeoutDeadlineUnixMs)
         {
             await CompletePendingDeadlineAsync(
                 pending,
                 outcomeMayBeUnknown: false,
+                reconciliationStartedAtTimestamp,
                 ctx,
                 ct);
             return false;
@@ -290,7 +292,7 @@ public sealed partial class ToolCallModule
                 pending.RunId,
                 pending.StepId,
                 exception.GetType().Name);
-            await FailBeforeToolDispatchAsync(pending, ctx, ct);
+            await FailBeforeToolDispatchAsync(pending, reconciliationStartedAtTimestamp, ctx, ct);
             return false;
         }
 
@@ -376,32 +378,27 @@ public sealed partial class ToolCallModule
         return pending;
     }
 
+    /// <param name="preparationStartedAtTimestamp">
+    /// Actor-side preparation start for this attempt (the owning handler's entry timestamp,
+    /// so admission / discovery / request build / protected-material store are measured).
+    /// Telemetry only; deadlines are never derived from it.
+    /// </param>
     private async Task StartToolExecutionAsync(
         ToolCallModuleState state,
         PendingToolCallExecutionState pending,
         IWorkflowTool tool,
         WorkflowToolExecutionRequest executionRequest,
         WorkflowToolResponseProjection? responseProjection,
+        long preparationStartedAtTimestamp,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var preparationStartedAtTimestamp = ctx.GetTimestamp();
         var pendingKey = BuildExecutionKey(pending.CallId, pending.ExecutionId);
         state.PendingExecutions[pendingKey] = pending;
         try
         {
             await SaveStateAsync(state, ctx, ct);
-            var pendingPersisted = CreateToolCallTimingObservation(
-                ctx,
-                pending.RunId,
-                pending.StepId,
-                pending.CallId,
-                pending.ExecutionId,
-                pending.ContinuationId,
-                pending.Attempt,
-                WorkflowToolCallAttemptWaterline.PendingStatePersisted);
-            pendingPersisted.PreparationElapsedMs = ElapsedMilliseconds(ctx, preparationStartedAtTimestamp);
-            RecordToolCallTiming(pendingPersisted);
+            RecordPendingStatePersisted(ctx, pending, preparationStartedAtTimestamp);
         }
         catch (Exception saveException)
         {
@@ -437,7 +434,7 @@ public sealed partial class ToolCallModule
                 pending.RunId,
                 pending.StepId,
                 exception.GetType().Name);
-            await FailBeforeToolDispatchAsync(pending, ctx, ct);
+            await FailBeforeToolDispatchAsync(pending, preparationStartedAtTimestamp, ctx, ct);
             return;
         }
 
@@ -463,6 +460,7 @@ public sealed partial class ToolCallModule
             await CompletePendingDeadlineAsync(
                 persistedPending,
                 outcomeMayBeUnknown: false,
+                preparationStartedAtTimestamp,
                 ctx,
                 ct);
             return;
@@ -511,12 +509,14 @@ public sealed partial class ToolCallModule
         await CompletePendingDeadlineAsync(
             persistedPending,
             outcomeMayBeUnknown: false,
+            preparationStartedAtTimestamp,
             ctx,
             ct);
     }
 
     private async Task FailBeforeToolDispatchAsync(
         PendingToolCallExecutionState pending,
+        long reconciliationStartedAtTimestamp,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
@@ -540,6 +540,11 @@ public sealed partial class ToolCallModule
             resolved.Material,
             ctx,
             ct);
+        RecordPendingReconciliation(
+            ctx,
+            persistedPending,
+            reconciliationStartedAtTimestamp,
+            WorkflowToolCallReconciliationDisposition.PreDispatchFailed);
     }
 
     private async Task ExecuteToolAndSignalAsync(
@@ -1031,6 +1036,7 @@ public sealed partial class ToolCallModule
     private async Task CompletePendingDeadlineAsync(
         PendingToolCallExecutionState pending,
         bool outcomeMayBeUnknown,
+        long reconciliationStartedAtTimestamp,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
@@ -1049,6 +1055,11 @@ public sealed partial class ToolCallModule
             resolved.Material,
             ctx,
             ct);
+        RecordPendingReconciliation(
+            ctx,
+            pending,
+            reconciliationStartedAtTimestamp,
+            ResolveDeadlineReconciliationDisposition(outcomeMayBeUnknown));
     }
 
     private async Task HandleToolAttemptCompletedAsync(
@@ -1363,22 +1374,20 @@ public sealed partial class ToolCallModule
             return;
         }
 
-        var timeoutDisposition = pending.ExecutionPhase == WorkflowToolCallExecutionPhase.RetryPending
-            ? WorkflowToolCallReconciliationDisposition.RetryDeadlineExceeded
-            : WorkflowToolCallReconciliationDisposition.TimeoutOutcomeUnknown;
-        RecordTimeoutAccepted(ctx, timeout, pending.Attempt, timeoutDisposition);
-        await CompletePendingDeadlineAsync(
-            pending,
-            outcomeMayBeUnknown:
-                pending.ExecutionPhase != WorkflowToolCallExecutionPhase.RetryPending,
-            ctx,
-            ct);
-        RecordTimeoutReconciliation(
+        var outcomeMayBeUnknown = pending.ExecutionPhase != WorkflowToolCallExecutionPhase.RetryPending;
+        RecordTimeoutAccepted(
             ctx,
             timeout,
+            pending.Attempt,
+            ResolveDeadlineReconciliationDisposition(outcomeMayBeUnknown));
+        // actor_reconciliation_completed[timeout_outcome_unknown|retry_deadline_exceeded] is
+        // recorded by CompletePendingDeadlineAsync on the matched pending identity.
+        await CompletePendingDeadlineAsync(
+            pending,
+            outcomeMayBeUnknown,
             reconciliationStartedAtTimestamp,
-            timeoutDisposition,
-            pending.Attempt);
+            ctx,
+            ct);
     }
 
     private async Task CompletePendingApprovalDeadlineAsync(
@@ -1535,9 +1544,23 @@ public sealed partial class ToolCallModule
         if (pending.Attempt != retry.Attempt ||
             pending.ExecutionPhase != WorkflowToolCallExecutionPhase.RetryPending ||
             !MatchesExecutionIdentity(pending, retry.RunId, retry.StepId, retry.CallId, retry.ExecutionId) ||
-            !MatchesContinuationId(pending, retry.ContinuationId) ||
-            !MatchesExecutionRetry(envelope, pending))
+            !MatchesContinuationId(pending, retry.ContinuationId))
         {
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.Stale);
+            return;
+        }
+
+        if (!MatchesExecutionRetry(envelope, pending))
+        {
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.Untrusted);
             return;
         }
 
@@ -1546,6 +1569,7 @@ public sealed partial class ToolCallModule
             await CompletePendingDeadlineAsync(
                 pending,
                 outcomeMayBeUnknown: false,
+                preparationStartedAtTimestamp,
                 ctx,
                 ct);
             return;
@@ -1573,6 +1597,11 @@ public sealed partial class ToolCallModule
                 material: null,
                 ctx,
                 ct);
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.ProtectedMaterialUnavailable);
             return;
         }
 
@@ -1592,6 +1621,11 @@ public sealed partial class ToolCallModule
                 material,
                 ctx,
                 ct);
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.PreDispatchFailed);
             return;
         }
 
@@ -1609,6 +1643,11 @@ public sealed partial class ToolCallModule
                 material,
                 ctx,
                 ct);
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.PreDispatchFailed);
             return;
         }
 
@@ -1644,6 +1683,11 @@ public sealed partial class ToolCallModule
                 material,
                 ctx,
                 ct);
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.PreDispatchFailed);
             return;
         }
 
@@ -1652,6 +1696,7 @@ public sealed partial class ToolCallModule
             await CompletePendingDeadlineAsync(
                 pending,
                 outcomeMayBeUnknown: false,
+                preparationStartedAtTimestamp,
                 ctx,
                 ct);
             return;
@@ -1663,6 +1708,7 @@ public sealed partial class ToolCallModule
         pending.ExecutionPhase = WorkflowToolCallExecutionPhase.ExecutionPending;
         state.PendingExecutions[pendingKey] = pending;
         await SaveStateAsync(state, ctx, ct);
+        RecordPendingStatePersisted(ctx, pending, preparationStartedAtTimestamp);
 
         if (ctx.UtcNow.ToUnixTimeMilliseconds() >= pending.TimeoutDeadlineUnixMs ||
             !DispatchToolExecution(
@@ -1678,6 +1724,7 @@ public sealed partial class ToolCallModule
             await CompletePendingDeadlineAsync(
                 pending,
                 outcomeMayBeUnknown: false,
+                preparationStartedAtTimestamp,
                 ctx,
                 ct);
         }
@@ -1713,9 +1760,23 @@ public sealed partial class ToolCallModule
                 recovery.StepId,
                 recovery.CallId,
                 recovery.ExecutionId) ||
-            !MatchesContinuationId(pending, recovery.ContinuationId) ||
-            !IsTrustedExecutionRecoveryEnvelope(envelope, ctx, pending))
+            !MatchesContinuationId(pending, recovery.ContinuationId))
         {
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.Stale);
+            return;
+        }
+
+        if (!IsTrustedExecutionRecoveryEnvelope(envelope, ctx, pending))
+        {
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.Untrusted);
             return;
         }
 
@@ -1730,6 +1791,7 @@ public sealed partial class ToolCallModule
             await CompletePendingDeadlineAsync(
                 pending,
                 outcomeMayBeUnknown: true,
+                preparationStartedAtTimestamp,
                 ctx,
                 ct);
             return;
@@ -1753,6 +1815,11 @@ public sealed partial class ToolCallModule
                 material: null,
                 ctx,
                 ct);
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.RecoveryOutcomeUnknown);
             return;
         }
 
@@ -1768,6 +1835,11 @@ public sealed partial class ToolCallModule
                 material,
                 ctx,
                 ct);
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.RecoveryOutcomeUnknown);
             return;
         }
 
@@ -1782,6 +1854,11 @@ public sealed partial class ToolCallModule
                 material,
                 ctx,
                 ct);
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.RecoveryOutcomeUnknown);
             return;
         }
 
@@ -1795,6 +1872,11 @@ public sealed partial class ToolCallModule
                 material,
                 ctx,
                 ct);
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.RecoveryOutcomeUnknown);
             return;
         }
 
@@ -1826,6 +1908,11 @@ public sealed partial class ToolCallModule
                 material,
                 ctx,
                 ct);
+            RecordPendingReconciliation(
+                ctx,
+                pending,
+                preparationStartedAtTimestamp,
+                WorkflowToolCallReconciliationDisposition.RecoveryOutcomeUnknown);
             return;
         }
 
@@ -1843,6 +1930,7 @@ public sealed partial class ToolCallModule
             await CompletePendingDeadlineAsync(
                 pending,
                 outcomeMayBeUnknown: true,
+                preparationStartedAtTimestamp,
                 ctx,
                 ct);
         }

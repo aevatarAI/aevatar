@@ -128,6 +128,56 @@ public sealed partial class ToolCallModule
         RecordToolCallTiming(observation);
     }
 
+    /// <summary>
+    /// Records <c>actor_reconciliation_completed</c> for an attempt that the actor settled
+    /// without a provider completion signal (pre-dispatch failure, deadline before dispatch,
+    /// recovery terminalization, stale/untrusted wakeups). Identity comes from the persisted
+    /// pending execution; no dispatch id exists at this layer.
+    /// </summary>
+    private void RecordPendingReconciliation(
+        IWorkflowExecutionContext ctx,
+        PendingToolCallExecutionState pending,
+        long reconciliationStartedAtTimestamp,
+        WorkflowToolCallReconciliationDisposition disposition)
+    {
+        var observation = CreateToolCallTimingObservation(
+            ctx,
+            pending.RunId,
+            pending.StepId,
+            pending.CallId,
+            pending.ExecutionId,
+            pending.ContinuationId,
+            pending.Attempt,
+            WorkflowToolCallAttemptWaterline.ActorReconciliationCompleted);
+        observation.ReconciliationDisposition = disposition;
+        observation.ActorReconciliationElapsedMs = ElapsedMilliseconds(ctx, reconciliationStartedAtTimestamp);
+        RecordToolCallTiming(observation);
+    }
+
+    private void RecordPendingStatePersisted(
+        IWorkflowExecutionContext ctx,
+        PendingToolCallExecutionState pending,
+        long preparationStartedAtTimestamp)
+    {
+        var observation = CreateToolCallTimingObservation(
+            ctx,
+            pending.RunId,
+            pending.StepId,
+            pending.CallId,
+            pending.ExecutionId,
+            pending.ContinuationId,
+            pending.Attempt,
+            WorkflowToolCallAttemptWaterline.PendingStatePersisted);
+        observation.PreparationElapsedMs = ElapsedMilliseconds(ctx, preparationStartedAtTimestamp);
+        RecordToolCallTiming(observation);
+    }
+
+    private static WorkflowToolCallReconciliationDisposition ResolveDeadlineReconciliationDisposition(
+        bool outcomeMayBeUnknown) =>
+        outcomeMayBeUnknown
+            ? WorkflowToolCallReconciliationDisposition.TimeoutOutcomeUnknown
+            : WorkflowToolCallReconciliationDisposition.RetryDeadlineExceeded;
+
     private void RecordTimeoutAccepted(
         IWorkflowExecutionContext ctx,
         WorkflowToolCallTimeoutFiredEvent timeout,

@@ -211,6 +211,7 @@ public sealed partial class ToolCallModule :
             return;
         }
 
+        var preparationStartedAtTimestamp = ctx.GetTimestamp();
         var request = payload.Unpack<StepRequestEvent>();
         if (request.StepType != "tool_call") return;
 
@@ -358,6 +359,7 @@ public sealed partial class ToolCallModule :
             tool,
             executionRequest,
             request.ExternalInvocation?.ResponseProjection,
+            preparationStartedAtTimestamp,
             ctx,
             ct);
     }
@@ -1430,6 +1432,7 @@ public sealed partial class ToolCallModule :
         if (resumed.ToolApproval == null)
             return;
 
+        var preparationStartedAtTimestamp = ctx.GetTimestamp();
         var state = WorkflowExecutionStateAccess.Load<ToolCallModuleState>(ctx, ModuleStateKey);
         if (await TryHandleResumeRedeliveryAsync(state, resumed, ctx, ct))
         {
@@ -1632,6 +1635,7 @@ public sealed partial class ToolCallModule :
             tool,
             executionRequest,
             resumedRequest.ExternalInvocation?.ResponseProjection,
+            preparationStartedAtTimestamp,
             ctx,
             ct);
     }

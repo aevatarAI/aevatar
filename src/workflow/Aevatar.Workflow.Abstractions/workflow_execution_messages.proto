@@ -1666,6 +1666,12 @@ enum WorkflowToolCallReconciliationDisposition
   WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_NO_PENDING_EXECUTION = 11;
   WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_PROTECTED_MATERIAL_UNAVAILABLE = 12;
   WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_APPROVAL_DEADLINE_EXCEEDED = 13;
+  // The attempt was terminalized inside the actor before any external dispatch
+  // (watchdog unavailable, tool missing, admission or request build failure).
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_PRE_DISPATCH_FAILED = 14;
+  // Actor recovery could not prove or redispatch the external execution and
+  // settled the attempt with an unknown outcome (non-deadline cause).
+  WORKFLOW_TOOL_CALL_RECONCILIATION_DISPOSITION_RECOVERY_OUTCOME_UNKNOWN = 15;
 }
 
 message WorkflowToolCallProviderTiming

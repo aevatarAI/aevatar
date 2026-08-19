@@ -4384,7 +4384,7 @@ public sealed class ToolCallModuleContextTests
             "user-service-1",
             WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract);
 
-    private static ToolCallModule CreateModule(
+    internal static ToolCallModule CreateModule(
         IWorkflowTool tool,
         IWorkflowCallerAccessTokenProvider? tokenProvider = null,
         ILogger<ToolCallModule>? logger = null) =>
@@ -4543,7 +4543,7 @@ public sealed class ToolCallModuleContextTests
         await DrainToolCallContinuationsAsync(module, ctx);
     }
 
-    private static StepRequestEvent ToolRequest(
+    internal static StepRequestEvent ToolRequest(
         RecordingWorkflowContext ctx,
         string toolName,
         string stepId,
@@ -4619,7 +4619,7 @@ public sealed class ToolCallModuleContextTests
         pending.DisplayName.Should().BeEmpty();
     }
 
-    private static EventEnvelope Envelope(
+    internal static EventEnvelope Envelope(
         IMessage evt,
         DateTimeOffset? issuedAt = null,
         string publisherActorId = "test")
@@ -4635,7 +4635,7 @@ public sealed class ToolCallModuleContextTests
         };
     }
 
-    private static EventEnvelope CallbackEnvelope(ScheduledToolCallback callback)
+    internal static EventEnvelope CallbackEnvelope(ScheduledToolCallback callback)
     {
         var envelope = Envelope(callback.Event);
         envelope.Runtime = new EnvelopeRuntime
@@ -4730,7 +4730,7 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
-    private sealed class BlockingWorkflowTool(
+    internal sealed class BlockingWorkflowTool(
         string name,
         WorkflowToolRecoverySafety recoverySafety = WorkflowToolRecoverySafety.Unspecified) : IWorkflowTool
     {
@@ -4760,12 +4760,12 @@ public sealed class ToolCallModuleContextTests
             _invocations.Reader.ReadAsync();
     }
 
-    private sealed record BlockingToolInvocation(
+    internal sealed record BlockingToolInvocation(
         WorkflowToolExecutionRequest Request,
         TaskCompletionSource<WorkflowToolExecutionResult> Completion,
         CancellationToken CancellationToken);
 
-    private sealed record ScheduledToolCallback(
+    internal sealed record ScheduledToolCallback(
         TimeSpan DueTime,
         IMessage Event,
         RuntimeCallbackLease Lease);
@@ -4933,10 +4933,11 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
-    private sealed class RecordingToolCallLogger : ILogger<ToolCallModule>
+    internal sealed class RecordingToolCallLogger : ILogger<ToolCallModule>
     {
         private readonly object _gate = new();
         private readonly List<LogEntry> _entries = [];
+        private readonly List<(Func<LogEntry, bool> Predicate, TaskCompletionSource<LogEntry> Completion)> _waiters = [];
 
         public IReadOnlyList<LogEntry> Entries
         {
@@ -4945,6 +4946,27 @@ public sealed class ToolCallModuleContextTests
                 lock (_gate)
                     return _entries.ToList();
             }
+        }
+
+        /// <summary>
+        /// Completes when an entry matching <paramref name="predicate"/> has been logged (already
+        /// recorded or arriving later, e.g. from a background tool worker). Deterministic sync
+        /// point; never polls.
+        /// </summary>
+        public Task<LogEntry> WaitForEntryAsync(Func<LogEntry, bool> predicate)
+        {
+            TaskCompletionSource<LogEntry> completion;
+            lock (_gate)
+            {
+                var existing = _entries.FirstOrDefault(predicate);
+                if (existing != null)
+                    return Task.FromResult(existing);
+
+                completion = new TaskCompletionSource<LogEntry>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters.Add((predicate, completion));
+            }
+
+            return completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
 
         public IDisposable? BeginScope<TState>(TState state)
@@ -4964,8 +4986,19 @@ public sealed class ToolCallModuleContextTests
                     .Where(static value => !string.Equals(value.Key, "{OriginalFormat}", StringComparison.Ordinal))
                     .ToDictionary(static value => value.Key, static value => value.Value, StringComparer.Ordinal)
                 : new Dictionary<string, object?>(StringComparer.Ordinal);
+            var entry = new LogEntry(logLevel, formatter(state, exception), properties);
             lock (_gate)
-                _entries.Add(new LogEntry(logLevel, formatter(state, exception), properties));
+            {
+                _entries.Add(entry);
+                for (var index = _waiters.Count - 1; index >= 0; index--)
+                {
+                    if (!_waiters[index].Predicate(entry))
+                        continue;
+
+                    _waiters[index].Completion.TrySetResult(entry);
+                    _waiters.RemoveAt(index);
+                }
+            }
         }
 
         public sealed record LogEntry(
@@ -4974,7 +5007,7 @@ public sealed class ToolCallModuleContextTests
             IReadOnlyDictionary<string, object?> Properties);
     }
 
-    private sealed class RecordingWorkflowContext
+    internal sealed class RecordingWorkflowContext
         : IWorkflowExecutionContext,
           IWorkflowExecutionRuntimeContextAccessor,
           IWorkflowExecutionStateHost,
