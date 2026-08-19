@@ -1006,7 +1006,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task StartTurn_EnforcedProfileAuthoredServiceReauthorizeRoute_ShouldStayOrdinaryProfileRoute()
+    public async Task StartTurn_EnforcedProfileAuthoredServiceReauthorizeRoute_ShouldMapToBuiltInServiceReauthorizeIntent()
     {
         const string conversationActorId = "conversation-profile-authored-service-reauthorize";
         const string prompt =
@@ -1085,6 +1085,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId,
             AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
         independentClassifier.UserMessages.Should().BeEmpty();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
@@ -1092,12 +1093,12 @@ public sealed partial class NyxIdChatConversationGAgentTests
         agent.State.ActiveTurn.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should()
             .Equal("lark-message-create");
         agent.State.ActiveTurn.Intent.Should().Be(
-            NyxIdChatTurnIntent.Unspecified,
-            "a profile-authored service_reauthorize route stays an ordinary profile route " +
-            "while service.reauthorize is not advertised");
+            NyxIdChatTurnIntent.ServiceReauthorize,
+            "the advertised service.reauthorize verb maps the committed profile route to the " +
+            "built-in intent without reclassification");
         var command = dispatch.OperationCalls.Should().ContainSingle().Which.Envelope.Payload
             .Unpack<NyxIdChatOperationDispatchCommand>();
-        command.Llm.Intent.Should().Be(NyxIdChatTurnIntent.Unspecified);
+        command.Llm.Intent.Should().Be(NyxIdChatTurnIntent.ServiceReauthorize);
         command.Llm.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
             .Be(NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId);
         command.Llm.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should()
