@@ -307,6 +307,14 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         string.Equals(left.ContractId, right.ContractId, StringComparison.Ordinal) &&
         string.Equals(left.PhysicalNamespace, right.PhysicalNamespace, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Deterministic breadth-first neighbourhood of <paramref name="rootNodeId"/> over the owner
+    /// snapshot. <paramref name="take"/> is the edge budget: at most <c>take</c> edges are
+    /// returned, chosen level by level in the snapshot's stable edge order, and the returned
+    /// nodes are exactly the root plus every endpoint of a returned edge (so at most
+    /// <c>take + 1</c> nodes and never a dangling edge reference). An edge is only selected
+    /// when it still fits the budget and both of its endpoints exist in the snapshot.
+    /// </summary>
     private static ProjectionGraphSubgraph FilterSnapshot(
         ProjectionGraphOwnerSnapshot snapshot,
         string rootNodeId,
@@ -316,13 +324,21 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
     {
         var direction = NormalizeDirection(options?.Direction ?? WorkflowRunGraphExportDirection.Both);
         var edgeTypes = NormalizeEdgeTypes(options?.EdgeTypes);
+        var nodesById = snapshot.Nodes
+            .GroupBy(static node => node.NodeId, StringComparer.Ordinal)
+            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
         var allEdges = snapshot.Edges
             .Where(edge => edgeTypes.Count == 0 || edgeTypes.Contains(edge.EdgeType))
+            .Where(edge => nodesById.ContainsKey(edge.FromNodeId) && nodesById.ContainsKey(edge.ToNodeId))
+            .OrderBy(static edge => edge.EdgeId, StringComparer.Ordinal)
             .ToArray();
-        var visited = new HashSet<string>(StringComparer.Ordinal) { rootNodeId };
+        var visited = new List<string> { rootNodeId };
+        var visitedSet = new HashSet<string>(StringComparer.Ordinal) { rootNodeId };
         var frontier = new HashSet<string>(StringComparer.Ordinal) { rootNodeId };
-        var selectedEdges = new Dictionary<string, ProjectionGraphEdgeMutation>(StringComparer.Ordinal);
-        for (var level = 0; level < depth && frontier.Count > 0 && selectedEdges.Count < take; level++)
+        var selectedEdges = new List<ProjectionGraphEdgeMutation>();
+        var selectedEdgeIds = new HashSet<string>(StringComparer.Ordinal);
+        var budgetExhausted = false;
+        for (var level = 0; level < depth && frontier.Count > 0 && !budgetExhausted; level++)
         {
             var next = new HashSet<string>(StringComparer.Ordinal);
             foreach (var edge in allEdges)
@@ -333,16 +349,25 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
                 var inbound =
                     (direction is WorkflowRunGraphExportDirection.Inbound or WorkflowRunGraphExportDirection.Both) &&
                     frontier.Contains(edge.ToNodeId);
-                if (!outbound && !inbound)
+                if ((!outbound && !inbound) || selectedEdgeIds.Contains(edge.EdgeId))
                     continue;
-
-                selectedEdges.TryAdd(edge.EdgeId, edge);
                 if (selectedEdges.Count >= take)
+                {
+                    budgetExhausted = true;
                     break;
-                if (outbound && visited.Add(edge.ToNodeId))
-                    next.Add(edge.ToNodeId);
-                if (inbound && visited.Add(edge.FromNodeId))
-                    next.Add(edge.FromNodeId);
+                }
+
+                selectedEdgeIds.Add(edge.EdgeId);
+                selectedEdges.Add(edge);
+                // Both endpoints of every selected edge are part of the result, whichever side
+                // the traversal reached it from; only newly discovered nodes extend the frontier.
+                foreach (var endpoint in new[] { edge.FromNodeId, edge.ToNodeId })
+                {
+                    if (!visitedSet.Add(endpoint))
+                        continue;
+                    visited.Add(endpoint);
+                    next.Add(endpoint);
+                }
             }
 
             frontier = next;
@@ -350,13 +375,11 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
 
         return new ProjectionGraphSubgraph
         {
-            Nodes = snapshot.Nodes
-                .Where(node => visited.Contains(node.NodeId))
-                .Take(take)
-                .Select(ToGraphNode)
+            Nodes = visited
+                .Where(nodesById.ContainsKey)
+                .Select(nodeId => ToGraphNode(nodesById[nodeId]))
                 .ToArray(),
-            Edges = selectedEdges.Values
-                .Take(take)
+            Edges = selectedEdges
                 .Select(ToGraphEdge)
                 .ToArray(),
         };
