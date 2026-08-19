@@ -54,6 +54,25 @@ message ProjectionScopeState {
   // this value and must never choose or advance it.
   ProjectionMaterializationRouteFingerprint active_materialization_route = 27;
   ProjectionMaterializationCutoverState materialization_cutover = 28;
+  // Actor-owned status write route. Absent means the legacy event-sourced
+  // status shadow scope is the writer; a terminal route names the exact
+  // contract that may write ProjectionScopeStatusDocument for this scope.
+  // Status writers only replicate this decision and never choose it.
+  ProjectionScopeStatusRoute status_route = 29;
+}
+
+message ProjectionScopeStatusRoute {
+  string contract_id = 1;
+  int64 contract_version = 2;
+  // Monotonic per source scope; a higher epoch is the only way to move the
+  // status writer between routes.
+  int64 route_epoch = 3;
+  google.protobuf.Timestamp activated_at_utc = 4;
+  ProjectionMaterializationActivationProof activation_proof = 5;
+  // Set once the legacy status shadow relay and scope were released for
+  // this source; before that the source actor retries the release on
+  // activation.
+  bool legacy_route_released = 6;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -275,4 +294,14 @@ message ProjectionMaterializationCutoverActivatedEvent {
   string candidate_fingerprint = 3;
   google.protobuf.Timestamp occurred_at_utc = 4;
   ProjectionMaterializationActivationProof activation_proof = 5;
+}
+
+message ProjectionScopeStatusRouteActivatedEvent {
+  ProjectionScopeStatusRoute route = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionScopeStatusLegacyRouteReleasedEvent {
+  int64 route_epoch = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
 }

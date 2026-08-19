@@ -71,7 +71,8 @@ public static class ProjectionMaterializationRuntimeRegistration
             return materializeScopeStatus
                 ? new ProjectionScopeStatusActivationService<TRuntimeLease>(
                     activationService,
-                    sp.GetService<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>())
+                    sp.GetService<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>(),
+                    sp.GetService<IStreamForwardingBindingAuthority>())
                 : activationService;
         });
         services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
@@ -94,23 +95,29 @@ public static class ProjectionMaterializationRuntimeRegistration
         return services;
     }
 
-    // Refactor (iter17/cluster-034):
-    //   Old pattern: Replay-based projection scope watermark query via IEventStore (EventStoreProjectionScopeWatermarkQueryPort).
-    //   New principle: Materialized ProjectionScopeStatusDocument readmodel; ProjectionScopeStatusQueryPort reads document only; never replays IEventStore.
-    //   refactor helper, no behavior change beyond ensuring the existing status materialization scope.
+    /// <summary>
+    /// Ensures the status writer of a durable materialization scope alongside the scope itself.
+    /// The source scope actor owns the status write route: once it has adopted the terminal
+    /// materializer (durable relay evidence on its stream), the legacy event-sourced status
+    /// shadow is no longer ensured for it; until then the legacy shadow is ensured exactly as
+    /// before. Steady state after adoption costs one relay-evidence read and no legacy work.
+    /// </summary>
     private sealed class ProjectionScopeStatusActivationService<TRuntimeLease>
         : IProjectionScopeActivationService<TRuntimeLease>
         where TRuntimeLease : class, IProjectionRuntimeLease
     {
         private readonly IProjectionScopeActivationService<TRuntimeLease> _inner;
         private readonly IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>? _statusActivationService;
+        private readonly IStreamForwardingBindingAuthority? _bindingAuthority;
 
         public ProjectionScopeStatusActivationService(
             IProjectionScopeActivationService<TRuntimeLease> inner,
-            IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>? statusActivationService)
+            IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>? statusActivationService,
+            IStreamForwardingBindingAuthority? bindingAuthority)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
             _statusActivationService = statusActivationService;
+            _bindingAuthority = bindingAuthority;
         }
 
         public async Task<TRuntimeLease> EnsureAsync(
@@ -120,15 +127,38 @@ public static class ProjectionMaterializationRuntimeRegistration
             ArgumentNullException.ThrowIfNull(request);
 
             var lease = await _inner.EnsureAsync(request, ct);
-            if (_statusActivationService != null &&
-                !ProjectionScopeStatusRuntimeRegistration.IsProjectionScopeStatusKind(request.ProjectionKind))
+            if (_statusActivationService == null ||
+                ProjectionScopeStatusRuntimeRegistration.IsProjectionScopeStatusKind(request.ProjectionKind))
             {
-                await _statusActivationService.EnsureAsync(
-                    ProjectionScopeStatusRuntimeRegistration.BuildStatusScopeStartRequest(request),
-                    ct);
+                return lease;
             }
 
+            if (await HasTerminalStatusRouteAsync(request, ct))
+                return lease;
+
+            await _statusActivationService.EnsureAsync(
+                ProjectionScopeStatusRuntimeRegistration.BuildStatusScopeStartRequest(request),
+                ct);
             return lease;
+        }
+
+        private async Task<bool> HasTerminalStatusRouteAsync(ProjectionScopeStartRequest request, CancellationToken ct)
+        {
+            if (_bindingAuthority == null)
+                return false;
+
+            var sourceScopeActorId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+                request.RootActorId ?? string.Empty,
+                request.ProjectionKind ?? string.Empty,
+                ProjectionRuntimeMode.DurableMaterialization,
+                request.SessionId));
+            var terminalActorId = ProjectionScopeStatusRoutes.BuildTerminalActorId(sourceScopeActorId);
+            var binding = await _bindingAuthority.GetAsync(sourceScopeActorId, terminalActorId, ct);
+            return ProjectionScopeObservationRelayBinding.IsExactActivationEvidence(
+                binding,
+                sourceScopeActorId,
+                terminalActorId,
+                ProjectionScopeStatusGAgent.AgentKind);
         }
     }
 }

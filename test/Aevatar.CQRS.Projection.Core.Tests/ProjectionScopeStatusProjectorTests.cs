@@ -1,7 +1,9 @@
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
@@ -249,6 +251,147 @@ public sealed class ProjectionScopeStatusProjectorTests
             envelope);
 
         dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotWrite_WhenSourceCommittedTerminalStatusRoute()
+    {
+        var dispatcher = new RecordingStatusDispatcher();
+        var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "channel-bot-registration",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+            LastSuccessfulVersion = 21,
+            StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1),
+        };
+
+        await sut.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
+            CreateCommittedEnvelope(state, version: 8, eventId: "state-event-8"));
+
+        dispatcher.Upserts.Should().BeEmpty("the legacy shadow is no longer an authoritative writer once the source flipped");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotWrite_WhenTerminalRouteIsStillDrainingBeforeLegacyRelease()
+    {
+        var dispatcher = new RecordingStatusDispatcher();
+        var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "channel-bot-registration",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+            StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 2),
+        };
+        state.StatusRoute.LegacyRouteReleased = false;
+
+        await sut.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
+            CreateCommittedEnvelope(state, version: 9, eventId: "state-event-9"));
+
+        dispatcher.Upserts.Should().BeEmpty("the gate is the committed route itself, not the legacy release flag");
+    }
+
+    public enum NonTerminalRouteShape
+    {
+        NoRoute,
+        ZeroEpoch,
+        MissingContractId,
+        ZeroContractVersion,
+    }
+
+    [Theory]
+    [InlineData(NonTerminalRouteShape.NoRoute)]
+    [InlineData(NonTerminalRouteShape.ZeroEpoch)]
+    [InlineData(NonTerminalRouteShape.MissingContractId)]
+    [InlineData(NonTerminalRouteShape.ZeroContractVersion)]
+    public async Task ProjectAsync_ShouldWrite_WhenStatusRouteIsNotATerminalRoute(NonTerminalRouteShape shape)
+    {
+        var dispatcher = new RecordingStatusDispatcher();
+        var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "channel-bot-registration",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+            LastSuccessfulVersion = 5,
+        };
+        state.StatusRoute = shape switch
+        {
+            NonTerminalRouteShape.NoRoute => null,
+            NonTerminalRouteShape.ZeroEpoch => ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 0),
+            NonTerminalRouteShape.MissingContractId => new ProjectionScopeStatusRoute
+            {
+                ContractVersion = ProjectionScopeStatusGAgent.ContractVersion,
+                RouteEpoch = 1,
+            },
+            NonTerminalRouteShape.ZeroContractVersion => new ProjectionScopeStatusRoute
+            {
+                ContractId = ProjectionScopeStatusGAgent.ContractId,
+                RouteEpoch = 1,
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+        };
+
+        await sut.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
+            CreateCommittedEnvelope(state, version: 3, eventId: "state-event-3"));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Which;
+        document.StateVersion.Should().Be(3);
+        (document.StatusRoute == null).Should().Be(state.StatusRoute == null);
+        if (state.StatusRoute != null)
+            document.StatusRoute.Should().Be(state.StatusRoute);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_LegacyWrite_ShouldBeByteIdenticalToSharedMapperAtSameVersion()
+    {
+        var dispatcher = new RecordingStatusDispatcher();
+        var clock = new FixedProjectionClock(new DateTimeOffset(2026, 8, 19, 9, 0, 0, TimeSpan.Zero));
+        var sut = new ProjectionScopeStatusProjector(dispatcher, clock);
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "channel-bot-registration",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+            ObservationAttached = true,
+            HighestSeenVersion = 12,
+            LastSuccessfulVersion = 11,
+            ReceivedEnvelopeTotal = 13,
+        };
+        state.HighestSeenVersionsByActor["actor-alpha"] = 12;
+        state.LastSuccessfulVersionsByActor["actor-alpha"] = 11;
+        state.Failures.Add(new ProjectionScopeFailure { FailureId = "failure-1", Reason = "boom" });
+        var envelope = CreateCommittedEnvelope(state, version: 7, eventId: "state-event-7");
+
+        await sut.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
+            envelope);
+
+        CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
+                envelope,
+                out _,
+                out var stateEvent,
+                out var unpackedState)
+            .Should().BeTrue();
+        var mapped = ProjectionScopeStatusDocumentMapper.Map(
+            unpackedState!,
+            stateEvent!,
+            CommittedStateEventEnvelope.ResolveTimestamp(envelope, clock.UtcNow));
+        var legacyWrite = dispatcher.Upserts.Should().ContainSingle().Which;
+        legacyWrite.ToByteString().Equals(mapped.ToByteString()).Should().BeTrue();
+        ProjectionWriteResultEvaluator.Evaluate(legacyWrite, mapped).Disposition
+            .Should().Be(ProjectionWriteDisposition.Duplicate, "the terminal writer's same-version write must be an exact duplicate, never a conflict");
+        ProjectionWriteResultEvaluator.Evaluate(mapped, legacyWrite).Disposition
+            .Should().Be(ProjectionWriteDisposition.Duplicate);
     }
 
     private static EventEnvelope CreateCommittedEnvelope(

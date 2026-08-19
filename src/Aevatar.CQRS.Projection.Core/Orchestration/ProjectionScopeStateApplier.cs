@@ -347,4 +347,32 @@ internal static class ProjectionScopeStateApplier
         left.StateVersion == right.StateVersion &&
         string.Equals(left.ActorId, right.ActorId, StringComparison.Ordinal) &&
         string.Equals(left.EventId, right.EventId, StringComparison.Ordinal);
+
+    public static ProjectionScopeState ApplyStatusRouteActivated(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRouteActivatedEvent evt)
+    {
+        var route = evt.Route;
+        if (route == null || route.RouteEpoch <= (current.StatusRoute?.RouteEpoch ?? 0))
+            return current; // epoch fence: a stale or replayed activation never moves the route
+
+        var next = current.Clone();
+        next.StatusRoute = route.Clone();
+        next.StatusRoute.LegacyRouteReleased = false;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyStatusLegacyRouteReleased(
+        ProjectionScopeState current,
+        ProjectionScopeStatusLegacyRouteReleasedEvent evt)
+    {
+        if (current.StatusRoute == null || current.StatusRoute.RouteEpoch != evt.RouteEpoch)
+            return current;
+
+        var next = current.Clone();
+        next.StatusRoute.LegacyRouteReleased = true;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
 }

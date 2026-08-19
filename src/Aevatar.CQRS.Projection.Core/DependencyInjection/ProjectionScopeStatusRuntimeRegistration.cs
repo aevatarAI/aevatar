@@ -21,8 +21,13 @@ public static class ProjectionScopeStatusRuntimeRegistration
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddAevatarAgentKindRegistry(builder =>
+        {
             builder.Register(ProjectionScopeAgentRegistration
-                .Create<ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>>()));
+                .Create<ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>>());
+            // Terminal status materializer (#3476): its own kind and protobuf state, activated by
+            // the source scope actor once the fleet admits the terminal contract.
+            builder.Register(ProjectionScopeAgentRegistration.Create<ProjectionScopeStatusGAgent>());
+        });
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
             ProjectionScopeCommittedStateRedactionHook>());
@@ -93,6 +98,10 @@ public static class ProjectionScopeStatusRuntimeRegistration
         string.Equals(
             projectionKind,
             ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
+            StringComparison.Ordinal) ||
+        string.Equals(
+            projectionKind,
+            ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
             StringComparison.Ordinal);
 
     internal static ProjectionScopeStartRequest BuildStatusScopeStartRequest(ProjectionScopeStartRequest sourceRequest) =>

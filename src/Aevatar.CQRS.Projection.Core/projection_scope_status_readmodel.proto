@@ -35,6 +35,7 @@ message ProjectionScopeStatusDocument {
   ProjectionSourceCoordinate in_flight_source = 27;
   ProjectionMaterializationRouteFingerprint active_materialization_route = 28;
   ProjectionMaterializationCutoverState materialization_cutover = 29;
+  ProjectionScopeStatusRoute status_route = 30;
 }
 
 message ProjectionSourceVersionStatus {

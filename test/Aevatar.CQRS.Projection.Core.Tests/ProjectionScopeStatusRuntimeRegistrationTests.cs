@@ -194,6 +194,188 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
         dispatchPort.Dispatched.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task AddProjectionScopeStatusRuntimeCore_ShouldRegisterTerminalStatusMaterializerKind()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddProjectionScopeStatusRuntimeCore();
+
+        await using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>();
+
+        registry.TryResolve(ProjectionScopeStatusGAgent.AgentKind, out var implementation).Should().BeTrue();
+        implementation.StateContractType.Should().Be(typeof(ProjectionScopeStatusTerminalState));
+        registry.TryGetKindForAgentType(typeof(ProjectionScopeStatusGAgent), out var kind).Should().BeTrue();
+        kind.Should().Be(ProjectionScopeStatusGAgent.AgentKind);
+    }
+
+    [Theory]
+    [InlineData(ProjectionScopeStatusMaterializationContext.ProjectionKindValue, true)]
+    [InlineData(ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue, true)]
+    [InlineData("channel-bot-registration", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsProjectionScopeStatusKind_ShouldCoverBothStatusWriterKinds(string? projectionKind, bool expected)
+    {
+        ProjectionScopeStatusRuntimeRegistration.IsProjectionScopeStatusKind(projectionKind).Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task MaterializationActivation_WithTerminalRouteEvidence_ShouldNotEnsureLegacyStatusScope()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddProjectionScopeStatusRuntimeCore();
+        services.AddProjectionMaterializationRuntimeCore<
+            TestMaterializationContext,
+            TestMaterializationLease,
+            ProjectionMaterializationScopeGAgent<TestMaterializationContext>>(
+            scopeKey => new TestMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new TestMaterializationLease(context));
+        var mainScopeKey = new ProjectionRuntimeScopeKey(
+            "root-terminal",
+            "projection-terminal",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var sourceScopeActorId = ProjectionScopeActorId.Build(mainScopeKey);
+        var terminalActorId = ProjectionScopeStatusRoutes.BuildTerminalActorId(sourceScopeActorId);
+        var legacyActorId = ProjectionScopeStatusRoutes.BuildLegacyActorId(sourceScopeActorId);
+        // The source scope adopted the terminal route: exact terminal evidence lives on its stream.
+        await dispatchPort.UpsertAsync(ProjectionScopeObservationRelayBinding.Create(
+            sourceScopeActorId,
+            terminalActorId,
+            ProjectionScopeStatusGAgent.AgentKind,
+            1));
+
+        await using var provider = services.BuildServiceProvider();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestMaterializationLease>>();
+        await activation.EnsureAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = mainScopeKey.RootActorId,
+            ProjectionKind = mainScopeKey.ProjectionKind,
+            Mode = mainScopeKey.Mode,
+        });
+
+        runtime.CreatedActorIds.Should().ContainSingle().Which.Should().Be(sourceScopeActorId);
+        runtime.CreatedActorIds.Should().NotContain(legacyActorId);
+        var ensure = dispatchPort.Dispatched.Should().ContainSingle().Subject;
+        ensure.actorId.Should().Be(sourceScopeActorId);
+        ensure.command.Payload!.Unpack<EnsureProjectionScopeCommand>().ProjectionKind
+            .Should().Be(mainScopeKey.ProjectionKind);
+        (await dispatchPort.GetAsync(sourceScopeActorId, legacyActorId)).Should().BeNull();
+    }
+
+    public enum NonTerminalEvidence
+    {
+        LegacyStatusKind,
+        LegacyCompatibleShape,
+        ZeroActivationGeneration,
+    }
+
+    [Theory]
+    [InlineData(NonTerminalEvidence.LegacyStatusKind)]
+    [InlineData(NonTerminalEvidence.LegacyCompatibleShape)]
+    [InlineData(NonTerminalEvidence.ZeroActivationGeneration)]
+    public async Task MaterializationActivation_WithNonTerminalBindingForTerminalId_ShouldStillEnsureLegacyStatusScope(
+        NonTerminalEvidence evidence)
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddProjectionScopeStatusRuntimeCore();
+        services.AddProjectionMaterializationRuntimeCore<
+            TestMaterializationContext,
+            TestMaterializationLease,
+            ProjectionMaterializationScopeGAgent<TestMaterializationContext>>(
+            scopeKey => new TestMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new TestMaterializationLease(context));
+        var mainScopeKey = new ProjectionRuntimeScopeKey(
+            "root-mixed",
+            "projection-mixed",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var sourceScopeActorId = ProjectionScopeActorId.Build(mainScopeKey);
+        var terminalActorId = ProjectionScopeStatusRoutes.BuildTerminalActorId(sourceScopeActorId);
+        var legacyActorId = ProjectionScopeStatusRoutes.BuildLegacyActorId(sourceScopeActorId);
+        var binding = ProjectionScopeObservationRelayBinding.Create(
+            sourceScopeActorId,
+            terminalActorId,
+            ProjectionScopeStatusGAgent.AgentKind,
+            1);
+        switch (evidence)
+        {
+            case NonTerminalEvidence.LegacyStatusKind:
+                binding.TargetActorKind = "projection.materialization-scope.projection-scope-status-materialization-context";
+                break;
+            case NonTerminalEvidence.LegacyCompatibleShape:
+                binding.TargetActorKind = string.Empty;
+                binding.ActivationGeneration = 0;
+                break;
+            case NonTerminalEvidence.ZeroActivationGeneration:
+                binding.ActivationGeneration = 0;
+                break;
+        }
+
+        await dispatchPort.UpsertAsync(binding);
+
+        await using var provider = services.BuildServiceProvider();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestMaterializationLease>>();
+        await activation.EnsureAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = mainScopeKey.RootActorId,
+            ProjectionKind = mainScopeKey.ProjectionKind,
+            Mode = mainScopeKey.Mode,
+        });
+
+        runtime.CreatedActorIds.Should().Equal(sourceScopeActorId, legacyActorId);
+        dispatchPort.Dispatched
+            .Select(x => x.command.Payload!.Unpack<EnsureProjectionScopeCommand>().ProjectionKind)
+            .Should()
+            .Equal(mainScopeKey.ProjectionKind, ProjectionScopeStatusMaterializationContext.ProjectionKindValue);
+    }
+
+    [Fact]
+    public async Task MaterializationActivation_ForTerminalStatusKind_ShouldNotEnsureStatusScopeOfItsOwn()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddProjectionScopeStatusRuntimeCore();
+        services.AddProjectionMaterializationRuntimeCore<
+            TestMaterializationContext,
+            TestMaterializationLease,
+            ProjectionMaterializationScopeGAgent<TestMaterializationContext>>(
+            scopeKey => new TestMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            context => new TestMaterializationLease(context));
+
+        await using var provider = services.BuildServiceProvider();
+        var activation = provider.GetRequiredService<IProjectionScopeActivationService<TestMaterializationLease>>();
+        await activation.EnsureAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = "projection.durable.scope:some-kind:root-actor",
+            ProjectionKind = ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
+            Mode = ProjectionRuntimeMode.DurableMaterialization,
+        });
+
+        runtime.CreatedActorIds.Should().ContainSingle();
+        dispatchPort.Dispatched.Should().ContainSingle()
+            .Which.command.Payload!.Unpack<EnsureProjectionScopeCommand>().ProjectionKind
+            .Should().Be(ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue);
+    }
+
     private static ServiceCollection CreateServices(
         RecordingActorRuntime runtime,
         RecordingActorDispatchPort dispatchPort)
