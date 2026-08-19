@@ -641,21 +641,23 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 ServiceProvider?.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
                 ct);
         }
-        catch (RuntimeActorStateMigrationPersistenceException exception) when (!createdIdentity)
+        catch (RuntimeActorStateMigrationPersistenceException exception)
         {
-            // Adoption is fail-closed, activation is not: the persisted row still carries the
-            // legacy schema (the helper restored it), so the actor keeps running exactly as it
-            // would without a fleet grant and the migration is retried on a later activation.
-            // Refusing to activate here would strand every actor whose row the store cannot
-            // rewrite, which is a far worse failure than a deferred adoption.
+            // Migration write failure leaves the actor unavailable, never partially migrated:
+            // the store may have committed the new schema before the acknowledgement was lost,
+            // so neither the restored in-memory shape nor the target shape is known to match
+            // the durable row. This activation is discarded without constructing, binding or
+            // serving the agent (its inbox is not consumed); the next activation re-reads the
+            // durable state and activates at whichever schema is actually persisted.
             _logger.LogError(
                 exception,
-                "Runtime actor state schema migration could not be persisted; activating at persisted schema version. actorId={ActorId} kind={Kind} persistedVersion={PersistedVersion} targetVersion={TargetVersion}",
+                "Runtime actor state schema migration persistence failed or is unknown; the activation is discarded and the actor stays unavailable until durable state is re-read. actorId={ActorId} kind={Kind} persistedVersion={PersistedVersion} targetVersion={TargetVersion}",
                 SafeGetActorIdForLog(),
                 exception.AgentKind,
                 exception.PersistedStateSchemaVersion,
                 exception.TargetStateSchemaVersion);
-            return false;
+            DeactivateOnIdle();
+            throw;
         }
     }
 

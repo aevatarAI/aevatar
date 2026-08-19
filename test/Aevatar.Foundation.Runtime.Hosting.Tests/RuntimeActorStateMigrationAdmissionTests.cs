@@ -173,7 +173,10 @@ public sealed class RuntimeActorStateMigrationAdmissionTests
             CurrentMembership());
 
         // The storage failure surfaces as the typed persistence exception (with the store's
-        // exception inner) so the grain can keep activating at the persisted schema version.
+        // exception inner). The in-memory row is put back to the pre-write shape so the
+        // observing activation holds no half-migrated bytes, but that is not evidence about the
+        // durable row: the grain discards the activation and re-reads durable state (see
+        // RuntimeActorGrainMigrationFailClosedIntegrationTests).
         var thrown = await act.Should().ThrowAsync<RuntimeActorStateMigrationPersistenceException>();
         thrown.Which.InnerException.Should().BeOfType<InvalidOperationException>()
             .Which.Message.Should().Be("write failed");

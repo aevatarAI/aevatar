@@ -53,6 +53,7 @@ Lazy state migration 只适用于同一 actor 的内部 state schema 演进：
 4. 迁移必须可重放同态、幂等、总定义；registry 只接受同一 Protobuf state contract 上从 `0` 到当前版本的完整连续链。
 5. 每个 step 必须声明 exact fleet capability、contract id 与 minimum reader contract version；runtime 只在 live admission 通过后，于 agent 构造/激活前原子写入 snapshot、schema version 与 adoption receipt。
 6. adoption receipt 是历史采用证据，不是永久 live grant；已采用 state 保持可读，需要启动新 logical mutation 的能力应使用同一 admission policy 重验当前 gate。
+7. 迁移写入失败或结果未知（store 可能已提交但 ACK 丢失）时 actor 必须不可用而不是部分迁移：观察到失败的这次 activation 不得构造、绑定或激活 agent，也不消费 inbox；不得假设“写抛异常即未提交”，重试前必须由新的 activation 重新读取 durable state 并按实际持久化的 schema 激活。Orleans（`RuntimeActorGrain` 丢弃 activation 并 rethrow）与 Local（`CompareExchange` 失败即 create 失败，下次 activation 重读）语义一致。
 
 Projection-driven bootstrap 只适用于 owner 变化：
 

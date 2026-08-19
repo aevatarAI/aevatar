@@ -79,6 +79,10 @@ internal static class RuntimeActorStateMigrationPersistence
         }
         catch (Exception exception)
         {
+            // The in-memory row is put back to the pre-write shape only so the activation that
+            // observed the failure holds no half-migrated bytes; it is NOT evidence that the
+            // durable row is unchanged (the write may have committed before the acknowledgement
+            // was lost). The caller must discard the activation and re-read durable state.
             persisted.AgentStateSnapshot = originalSnapshot;
             persisted.AgentStateTypeName = originalStateTypeName;
             persisted.Identity = originalIdentity;
@@ -92,9 +96,10 @@ internal static class RuntimeActorStateMigrationPersistence
 }
 
 /// <summary>
-/// The admitted migration could not be durably written. The in-memory grain state has been
-/// restored to the persisted schema, so the actor may still activate at that version; the
-/// adoption is simply retried on a later activation.
+/// The admitted migration write failed or its durable outcome is unknown (the store may have
+/// committed the new schema before acknowledging). The actor must not be constructed, bound or
+/// served by the activation that observed this; it stays unavailable until a later activation
+/// re-reads durable state and activates at whichever schema is actually persisted.
 /// </summary>
 public sealed class RuntimeActorStateMigrationPersistenceException(
     string agentKind,
