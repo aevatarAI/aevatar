@@ -655,6 +655,15 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                             ResourceUri = action.Params.ServiceAccessReview.ResourceUri,
                         },
                 },
+            NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
+                new NyxIdChatConversationActionParamsDocument
+                {
+                    ServiceReauthorize = new NyxIdChatConversationServiceReauthorizeDocument
+                    {
+                        UserServiceId = action.Params.ServiceReauthorize.UserServiceId,
+                        RequestedScopes = { action.Params.ServiceReauthorize.RequestedScopes },
+                    },
+                },
             _ => null,
         };
         return parameters is null

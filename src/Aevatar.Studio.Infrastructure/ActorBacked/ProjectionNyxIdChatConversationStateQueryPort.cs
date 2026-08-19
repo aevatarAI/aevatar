@@ -580,6 +580,11 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                         request.Params.ServiceAccessReview.UserServiceId,
                         request.Params.ServiceAccessReview.ServiceSlug,
                         request.Params.ServiceAccessReview.ResourceUri)),
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.ServiceReauthorize =>
+                new NyxIdChatActionParamsSnapshot(
+                    ServiceReauthorize: new NyxIdChatServiceReauthorizeSnapshot(
+                        request.Params.ServiceReauthorize.UserServiceId,
+                        request.Params.ServiceReauthorize.RequestedScopes.ToArray())),
             _ => null,
         };
         return parameters is null

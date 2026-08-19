@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using static Aevatar.AI.ToolProviders.NyxId.Tools.NyxIdBrowserActionRequestToolHelpers;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
@@ -89,18 +90,20 @@ public sealed class NyxIdRequestKeyRotateTool : INyxIdBuiltInTool, IAgentToolCap
             return ErrorReceipt(
                 callId,
                 toolName,
+                Name,
                 ArgumentsInvalidCode,
                 "key_id must be one exact safe identity");
         }
 
         if (TryReadError(resultJson, out var errorCode, out var errorMessage))
-            return ErrorReceipt(callId, toolName, errorCode, errorMessage);
+            return ErrorReceipt(callId, toolName, Name, errorCode, errorMessage);
 
         if (!ResultMatches(resultJson, keyId))
         {
             return ErrorReceipt(
                 callId,
                 toolName,
+                Name,
                 ResultInvalidCode,
                 "NyxID key rotation readiness returned an invalid result.");
         }
@@ -134,7 +137,7 @@ public sealed class NyxIdRequestKeyRotateTool : INyxIdBuiltInTool, IAgentToolCap
                    root.EnumerateObject().All(static property => property.Name == "key_id") &&
                    root.TryGetProperty("key_id", out var element) &&
                    element.ValueKind == JsonValueKind.String &&
-                   TryNormalizeIdentity(element.GetString(), out keyId) &&
+                   TryNormalizeSafeIdentity(element.GetString(), out keyId) &&
                    string.Equals(element.GetString(), keyId, StringComparison.Ordinal);
         }
         catch (JsonException)
@@ -142,26 +145,6 @@ public sealed class NyxIdRequestKeyRotateTool : INyxIdBuiltInTool, IAgentToolCap
             return false;
         }
     }
-
-    private static bool TryNormalizeIdentity(string? value, out string normalized)
-    {
-        normalized = value?.Trim() ?? string.Empty;
-        return normalized.Length is > 0 and <= 256 &&
-               !normalized.Any(char.IsControl) &&
-               !normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) &&
-               !normalized.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase) &&
-               !normalized.Any(char.IsWhiteSpace) &&
-               !normalized.Any(static character => character is '/' or '\\' or '?' or '#');
-    }
-
-    private static string? ResolveOwnerReadToken()
-        => AgentToolHumanSessionNyxIdCredential.ResolveBearerToken(
-            AgentToolRequestContext.Current);
-
-    private static bool HasVerifiedOwnerAuthority() =>
-        !string.IsNullOrWhiteSpace(AgentToolRequestContext.OwnerScopeId) &&
-        AgentToolRequestContext.NyxIdAuthority.IsComplete &&
-        !string.IsNullOrWhiteSpace(AgentToolRequestContext.NyxIdAuthority.ExternalUserId);
 
     private static bool ResultMatches(string resultJson, string keyId)
     {
@@ -186,56 +169,4 @@ public sealed class NyxIdRequestKeyRotateTool : INyxIdBuiltInTool, IAgentToolCap
             return false;
         }
     }
-
-    private static bool TryReadError(
-        string resultJson,
-        out string errorCode,
-        out string errorMessage)
-    {
-        errorCode = string.Empty;
-        errorMessage = string.Empty;
-        try
-        {
-            using var document = JsonDocument.Parse(resultJson);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.True ||
-                !root.TryGetProperty("error_code", out var code) || code.ValueKind != JsonValueKind.String ||
-                !root.TryGetProperty("safe_message", out var message) || message.ValueKind != JsonValueKind.String)
-            {
-                return false;
-            }
-
-            errorCode = code.GetString() ?? ResultInvalidCode;
-            errorMessage = message.GetString() ?? "NyxID key rotation readiness failed.";
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static string ErrorResult(string code, string safeMessage) =>
-        JsonSerializer.Serialize(new
-        {
-            error = true,
-            error_code = code,
-            safe_message = safeMessage,
-        });
-
-    private static AgentToolReceipt ErrorReceipt(
-        string callId,
-        string toolName,
-        string code,
-        string safeMessage) =>
-        new()
-        {
-            CallId = callId ?? string.Empty,
-            ToolName = string.IsNullOrWhiteSpace(toolName) ? "nyxid_request_key_rotate" : toolName,
-            Status = AgentToolReceiptStatus.Error,
-            ErrorCode = code,
-            ErrorMessage = safeMessage,
-            ResultJson = ErrorResult(code, safeMessage),
-        };
 }

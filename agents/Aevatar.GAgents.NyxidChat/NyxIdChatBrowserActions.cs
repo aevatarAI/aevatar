@@ -69,6 +69,7 @@ public static class NyxIdChatBrowserActions
             !string.IsNullOrWhiteSpace(blocker?.ServiceSlug);
         var hasKeyCreate = blocker?.KeyCreate is not null;
         var hasKeyRotate = blocker?.KeyRotate is not null;
+        var hasServiceReauthorize = blocker?.ServiceReauthorize is not null;
         if (receipt?.Status != AgentToolReceiptStatus.AuthorizationRequired ||
             blocker is null ||
             signalKey is null ||
@@ -77,7 +78,8 @@ public static class NyxIdChatBrowserActions
             (hasServiceAccessReview ? 1 : 0) +
             (hasCatalogServiceConnect ? 1 : 0) +
             (hasKeyCreate ? 1 : 0) +
-            (hasKeyRotate ? 1 : 0) != 1 ||
+            (hasKeyRotate ? 1 : 0) +
+            (hasServiceReauthorize ? 1 : 0) != 1 ||
             state.ActiveTurn is null ||
             state.ActiveTask is null)
         {
@@ -106,7 +108,9 @@ public static class NyxIdChatBrowserActions
             : hasKeyCreate
             ? registry.ResolveKeyCreate(blocker.KeyCreate)
             : hasKeyRotate
-                ? registry.ResolveKeyRotate(blocker.KeyRotate)
+            ? registry.ResolveKeyRotate(blocker.KeyRotate)
+            : hasServiceReauthorize
+                ? registry.ResolveServiceReauthorize(blocker.ServiceReauthorize)
                 : registry.ResolveCatalogServiceConnect(
                     blocker.ServiceSlug,
                     blocker.RequestedScopes);
@@ -1221,6 +1225,8 @@ public static class NyxIdChatBrowserActions
                 IsValidServiceAccessReviewParams(request.Params?.ServiceAccessReview),
             NyxIdAssistantActionKind.KeyCreate => IsValidKeyCreateParams(request.Params?.KeyCreate),
             NyxIdAssistantActionKind.KeyRotate => IsValidKeyRotateParams(request.Params?.KeyRotate),
+            NyxIdAssistantActionKind.ServiceReauthorize =>
+                IsValidServiceReauthorizeParams(request.Params?.ServiceReauthorize),
             _ => false,
         };
 
@@ -1267,8 +1273,22 @@ public static class NyxIdChatBrowserActions
     private static bool IsValidKeyRotateParams(NyxIdKeyRotateParams? value) =>
         value is not null &&
         IsNormalizedActionValue(value.KeyId, 256) &&
-        !value.KeyId.Any(char.IsWhiteSpace) &&
-        !value.KeyId.Any(static character => character is '/' or '\\' or '?' or '#');
+        NyxIdAssistantActionRegistry.IsSafeIdentity(value.KeyId);
+
+    private static bool IsValidServiceReauthorizeParams(NyxIdServiceReauthorizeParams? value)
+    {
+        if (value is null ||
+            !IsNormalizedActionValue(value.UserServiceId, 256) ||
+            !NyxIdAssistantActionRegistry.IsSafeIdentity(value.UserServiceId) ||
+            value.RequestedScopes.Count is < 1 or > 64)
+        {
+            return false;
+        }
+
+        var scopes = new HashSet<string>(StringComparer.Ordinal);
+        return value.RequestedScopes.All(scope =>
+            IsNormalizedActionValue(scope, 256) && scopes.Add(scope));
+    }
 
     private static bool IsNormalizedActionValue(string? value, int maxLength) =>
         !string.IsNullOrWhiteSpace(value) &&

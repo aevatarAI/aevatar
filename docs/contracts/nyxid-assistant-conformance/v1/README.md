@@ -19,6 +19,37 @@ bash tools/ci/nyxid_conformance_guard.sh
 
 Commit the resulting `sources.json` update only after the guard passes.
 
+## When NyxID publishes `nyxid-assistant-actions.v8`
+
+Aevatar pins v8 ahead of NyxID (`registry-v8.json` is the assumed exact
+descriptor set; production NyxID still serves v7). `service.reauthorize` is
+executable at v8 but deliberately unadvertised (no tool mount, no intent
+candidate) until the flip below lands. Once NyxID production serves v8
+(ChronoAIProject/NyxID#1400):
+
+1. Diff the served v8 manifest against `registry-v8.json`; a byte or name
+   difference is a NyxID contract question, not a local patch.
+2. In `sources.json`, set `assistant_registry.revision` to
+   `nyxid-assistant-actions.v8`, point `checked_in_payload` /
+   `checked_in_payload_sha256` at `registry-v8.json`, and refresh
+   `nyxid_source_sha256` plus `nyxid.revision` / `nyxid.tree` from the
+   publishing NyxID commit.
+3. In `coverage-manifest.json`, flip the `service scopes`
+   (`service.reauthorize`) row to `status: shipped`, `availability:
+   executable`, `outcome_class: browser_action`, `mechanism:
+   typed_browser_action`, `evidence_type: typed_postcondition_read_model`,
+   and name its four artifacts (registry, `NyxIdRequestServiceReauthorizeTool`,
+   AG-UI frame builder, postcondition port); then recompute
+   `generated_artifacts["coverage-manifest.json"]`. Because
+   `semantic-evaluation.json` pins the raw `coverage_manifest_sha256`, this
+   flip also requires a fresh authenticated semantic evaluation run (see
+   "Run" below); the manifest row therefore stays byte-identical until then.
+4. Update the `registry-v7.json` literal in
+   `test/Aevatar.AI.Tests/NyxIdConformanceManifestTests.cs` to `registry-v8.json`.
+5. Merge the advertise branch (tool-source mounts, intent candidate,
+   materializer member, system-prompt line) and refresh the Aevatar pin again
+   with `--refresh-aevatar-revision`.
+
 `semantic-evaluation.json` is the checked-in release-gate record. The conformance guard fails while its
 status is not `passed`, while results are absent, or when the recorded aggregate cannot be reproduced
 from the case evidence.

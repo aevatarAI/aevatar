@@ -2,21 +2,23 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "10b445740479b263dc61f9ec0d37a62ba6793346",
-    "contract_files_sha256": "64a7efebf275d30f20d41576d92cd91896225cb657c943946c8cea10e479e92c",
+    "revision": "c923ae7bcfd50efca7505b934a7a1da68bd437d6",
+    "contract_files_sha256": "91f9391008ee17b16c4e8f05848349cd6bc458c36a91cd6564e0b9bbde2ce78b",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "23fd2cf48541c4b8da3fa1ef07277a7700c8478f9c638be8221465bf877fbb31",
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "3854a0847baee04bd8dac537ed7b76d157aca6e56716d5541187f828780d5a95",
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatBrowserActions.cs": "7d4cadee813442087dc74ff7d5ab9bc074749372ab1037c7e037431bb38d81e1",
-      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "5f976c9924229431a4350d08d0501526651fbf7f183693489ec79d066ffa6670",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "7015dfa39b79bd50df81a2684d7a336442bca2e9ccb0bb5265db05dc8d65c323",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatBrowserActions.cs": "b659e0d2fcd4c28d4d1909475d10c8cbd1f9ca68cf7b0b945e13f1364e054f92",
+      "agents/Aevatar.GAgents.NyxidChat/NyxIdChatConversationAguiFrameBuilder.cs": "35f013c7b8a754ac89734475ca09ef31140279c2198777d82c730fef3a61e9ed",
       "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_recovery_secret.proto": "07dbc449a732df6c7a6d0a97054ddbe35a517f4af4c5670b05ed0bea0bf2011a",
-      "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "04081dd86ae6d22154a343bc4d2e951b8377d669b9724b00f5b0dbef99baafcc",
+      "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "76ea1f6eeffd2ec70f5f2d5241637fcf7ccce4ff54de8d7dbf1edd40f87a849b",
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "884aca09774e773e68154c923fec8078610b2cf8e97f581fedc36e10451ccec3",
-      "src/Aevatar.AI.Abstractions/ai_messages.proto": "099251f2623800c2b8dcf1a63958b0456d6d898ca5a7ede5f49bf392b3a8aa5b",
+      "src/Aevatar.AI.Abstractions/ai_messages.proto": "e00e0bb46cf93f73dfedf83c2c08463e2df22333921d88070643bf7373d65142",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "9aaf3d1e8f071bdf2bc81e3a82f861440dade2a02d040c906477065cc147082e",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "1b033df9cb55c741e9b52054cbd4a91067f03c8c3797bd076a7e3d6133eb0fcb",
-      "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "2c4f2cda99154f2e667c6cfd291497e697ef11df17f081f96ec70070a8af8b8c",
-      "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs": "18212bb64644cfbca401065bccce439ea5fa00316deff57d730a0d9ac2650e53",
+      "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdBrowserActionRequestToolHelpers.cs": "ee0badbba33a19d967899a7efacedd9d68e70d79995a7438c90dcb3d0b6e8e49",
+      "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "1d2449545c6e5dff21fae3e1c923a64fa44ad1bda62c0ca2a1311198fdd8eccd",
+      "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs": "ba3498dd0202f2f9ba0a4d73ea26d18bfe86001af45bba0e47d79e6e966fc378",
+      "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestServiceReauthorizeTool.cs": "2fe3bd8d1c2d93e70386342e1b1733e90a547e7fd225fc912a168736fb3641f1",
       "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "6281ec9394f937f55b1ff9dd800b92d9625f09219a33e31c87f8885430523f13"
     }
   },
@@ -41,7 +43,8 @@
       "nyxid-assistant-actions.v4",
       "nyxid-assistant-actions.v5",
       "nyxid-assistant-actions.v6",
-      "nyxid-assistant-actions.v7"
+      "nyxid-assistant-actions.v7",
+      "nyxid-assistant-actions.v8"
     ],
     "nyxid_source": "backend/src/handlers/assistant_actions.rs",
     "nyxid_source_sha256": "7350930688e5fbe08355c0bfc1b95b1c8546c4db6c999d400c2e8d88b9c70f36",
@@ -63,6 +66,10 @@
       "nyxid-assistant-actions.v7": {
         "checked_in_payload": "registry-v7.json",
         "checked_in_payload_sha256": "b029b8fb295a213f7c4f4da8bde0ec0b74a5bcdfe502818bfdd0fb16d9bdf941"
+      },
+      "nyxid-assistant-actions.v8": {
+        "checked_in_payload": "registry-v8.json",
+        "checked_in_payload_sha256": "788c6628977f29f1c357d4f7b172be904540ad0bbea84ccb2878c5cafaa1f818"
       }
     }
   },

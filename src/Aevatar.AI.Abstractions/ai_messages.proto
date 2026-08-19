@@ -474,6 +474,7 @@ message NyxIdAuthorizationRequiredEvent {
   repeated string requested_scopes = 7;
   NyxIdKeyCreateActionRequirement key_create = 8;
   NyxIdKeyRotateActionRequirement key_rotate = 9;
+  NyxIdServiceReauthorizeActionRequirement service_reauthorize = 10;
 }
 
 message NyxIdKeyCreateActionRequirement {
@@ -484,6 +485,11 @@ message NyxIdKeyCreateActionRequirement {
 
 message NyxIdKeyRotateActionRequirement {
   string key_id = 1;
+}
+
+message NyxIdServiceReauthorizeActionRequirement {
+  string user_service_id = 1;
+  repeated string requested_scopes = 2;
 }
 
 message AgentToolReceipt {

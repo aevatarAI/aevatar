@@ -198,6 +198,51 @@ public sealed class ProjectionNyxIdChatConversationStateQueryPortTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldExposeNestedReloadableServiceReauthorizeParameters()
+    {
+        var document = BuildDocument(stateVersion: 8);
+        var reauthorize = document.PendingActions.Single();
+        reauthorize.Action = "service.reauthorize";
+        reauthorize.Request.Action = "service.reauthorize";
+        reauthorize.Request.Params = new NyxIdChatConversationActionParamsDocument
+        {
+            ServiceReauthorize = new NyxIdChatConversationServiceReauthorizeDocument
+            {
+                UserServiceId = "service-alpha",
+                RequestedScopes = { "repo", "read:org" },
+            },
+        };
+        var port = new ProjectionNyxIdChatConversationStateQueryPort(
+            new RecordingReader { Document = document });
+
+        var result = await port.GetAsync(new NyxIdChatConversationStateQuery(
+            "scope-alpha",
+            "conversation-alpha"));
+
+        var request = result.Snapshot!.PendingActions.Single().Request!;
+        request.Action.Should().Be("service.reauthorize");
+        request.Params.ServiceReauthorize.Should().BeEquivalentTo(
+            new NyxIdChatServiceReauthorizeSnapshot("service-alpha", ["repo", "read:org"]));
+        request.Params.KeyId.Should().BeNull();
+        request.Params.Name.Should().BeNull();
+        request.Params.Platform.Should().BeNull();
+        request.Params.AllowedServiceIds.Should().BeNull();
+        request.Params.ServiceAccessReview.Should().BeNull();
+
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            request.Params,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        using var parsed = System.Text.Json.JsonDocument.Parse(json);
+        var root = parsed.RootElement;
+        root.EnumerateObject().Select(property => property.Name).Should()
+            .BeEquivalentTo("serviceReauthorize");
+        var nested = root.GetProperty("serviceReauthorize");
+        nested.GetProperty("userServiceId").GetString().Should().Be("service-alpha");
+        nested.GetProperty("requestedScopes").EnumerateArray().Select(scope => scope.GetString())
+            .Should().Equal("repo", "read:org");
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldExposeReloadableServiceAccessReviewParameters()
     {
         var document = BuildDocument(stateVersion: 8);
