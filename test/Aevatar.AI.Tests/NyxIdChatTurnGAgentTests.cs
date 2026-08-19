@@ -2007,6 +2007,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
     [InlineData(NyxIdChatTurnIntent.ServiceConnect)]
     [InlineData(NyxIdChatTurnIntent.KeyCreate)]
     [InlineData(NyxIdChatTurnIntent.KeyRotate)]
+    [InlineData(NyxIdChatTurnIntent.ServiceReauthorize)]
     public async Task OperationExecutor_UnprofiledBuiltInIntent_ShouldMaterializeOnlyAdmissionTools(
         NyxIdChatTurnIntent intent)
     {
@@ -2018,6 +2019,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
             new NamedProfileTool("nyxid_request_key_create"),
             new NamedProfileTool("nyxid_api_keys"),
             new NamedProfileTool("nyxid_request_key_rotate"),
+            new NamedProfileTool("nyxid_request_service_reauthorize"),
             new NamedProfileTool("github_get_current_user"),
         ];
         var registry = new BuiltInIntentToolSetRegistry(tools);
@@ -2044,6 +2046,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
                                 "Connect GitHub and verify the connection",
                             NyxIdChatTurnIntent.KeyCreate =>
                                 "Create a least-scope key for one exact service",
+                            NyxIdChatTurnIntent.ServiceReauthorize =>
+                                "Re-authorize one exact connected service for the repo scope",
                             _ => "Rotate one exact key",
                         },
                         SessionId = "turn-alpha",
@@ -2062,6 +2066,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 ["nyxid_catalog", "nyxid_require_service"],
             NyxIdChatTurnIntent.KeyCreate =>
                 ["nyxid_services", "nyxid_request_key_create"],
+            NyxIdChatTurnIntent.ServiceReauthorize =>
+                ["nyxid_services", "nyxid_request_service_reauthorize"],
             _ => ["nyxid_api_keys", "nyxid_request_key_rotate"],
         };
         generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should()

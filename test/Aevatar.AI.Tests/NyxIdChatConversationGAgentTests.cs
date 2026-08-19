@@ -930,6 +930,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId,
             AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
         phaseOneInput.RootElement.GetProperty("intents")[0]
             .GetProperty("routing_description").GetString().Should()
@@ -1195,6 +1196,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId,
             AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
         serverClassifier.UserMessages.Should().BeEmpty();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
@@ -1476,6 +1478,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
                 NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
                 NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+                NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId,
                 AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
         intents[0]
             .GetProperty("side_effect_class").GetString().Should().Be("external_handoff");
@@ -2682,10 +2685,9 @@ public sealed partial class NyxIdChatConversationGAgentTests
     [Fact]
     public async Task ServiceReauthorizeAuthorizationRequired_WhenRegistryIsStillV7_ShouldFailTurnClosed()
     {
-        // Rollout window: Aevatar pins registry v8 before NyxID publishes it, so a process
-        // that snapshotted v7 may still receive a service.reauthorize blocker. Until the
-        // process snapshots v8, the blocker must fail the turn closed with
-        // NYXID_ACTION_UNSUPPORTED instead of committing a browser action.
+        // Rollout window: Aevatar advertises nyxid_request_service_reauthorize before NyxID
+        // publishes revision v8. Until the process snapshots v8, the blocker must fail the
+        // turn closed with NYXID_ACTION_UNSUPPORTED instead of committing a browser action.
         const string conversationActorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         using var services = BuildEventSourcingServices(

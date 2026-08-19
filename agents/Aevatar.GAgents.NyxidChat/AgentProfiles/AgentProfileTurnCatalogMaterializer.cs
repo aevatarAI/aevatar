@@ -44,6 +44,12 @@ public sealed class AgentProfileTurnCatalogMaterializer
             "nyxid_api_keys",
             "nyxid_request_key_rotate",
         };
+    private static readonly IReadOnlySet<string> ServiceReauthorizeToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "nyxid_services",
+            "nyxid_request_service_reauthorize",
+        };
 
     private readonly IToolSetRegistry _toolSetRegistry;
     private readonly IAgentProfileTurnClassifier _classifier;
@@ -627,6 +633,10 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     member.IntentId,
                     NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
                     StringComparison.Ordinal)) ?? CreateBuiltInKeyRotateMember(),
+                profile.Members.FirstOrDefault(member => string.Equals(
+                    member.IntentId,
+                    NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId,
+                    StringComparison.Ordinal)) ?? CreateBuiltInServiceReauthorizeMember(),
             };
             var builtInResult = await ClassifyAsync(
                 userMessage,
@@ -634,6 +644,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                     NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
                     NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
                     NyxIdChatTurnIntentClassifier.KeyRotateCandidate,
+                    NyxIdChatTurnIntentClassifier.ServiceReauthorizeCandidate,
                     ProfileTaskRouteCandidate,
                 ],
                 profile.ClassifierTimeoutMs,
@@ -786,6 +797,18 @@ public sealed class AgentProfileTurnCatalogMaterializer
             SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
         };
 
+    private static AgentProfileSkillMember CreateBuiltInServiceReauthorizeMember() =>
+        new()
+        {
+            IntentId = NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId,
+            RoutingDescription = NyxIdChatTurnIntentClassifier.ServiceReauthorizeRoutingDescription,
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { "nyxid_services", "nyxid_request_service_reauthorize" },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
+        };
+
     private static BuiltInIntent? ResolveBuiltInIntent(NyxIdChatTurnIntent intent) => intent switch
     {
         NyxIdChatTurnIntent.ServiceConnect => new BuiltInIntent(
@@ -797,6 +820,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
         NyxIdChatTurnIntent.KeyRotate => new BuiltInIntent(
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
             KeyRotateToolNames),
+        NyxIdChatTurnIntent.ServiceReauthorize => new BuiltInIntent(
+            NyxIdChatTurnIntentClassifier.ServiceReauthorizeIntentId,
+            ServiceReauthorizeToolNames),
         _ => null,
     };
 
