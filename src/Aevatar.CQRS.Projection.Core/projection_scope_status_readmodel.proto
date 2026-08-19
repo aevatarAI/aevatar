@@ -35,13 +35,13 @@ message ProjectionScopeStatusDocument {
   ProjectionSourceCoordinate in_flight_source = 27;
   ProjectionMaterializationRouteFingerprint active_materialization_route = 28;
   ProjectionMaterializationCutoverState materialization_cutover = 29;
-  // 30 was status_route: never carried by the status document. The document is written by
-  // two writers during a rolling upgrade (legacy shadow projector and terminal materializer,
-  // possibly on different binaries) and its bytes at a given source version must not depend
-  // on which writer produced them, so writer-specific route facts stay on the source scope
-  // state only.
-  reserved 30;
-  reserved "status_route";
+  // The source scope's committed status route at the time of this write. Its route_epoch is
+  // the write fence for this read model: at the same source version a write may take over an
+  // existing document only under a strictly higher route epoch (epoch-fenced same-version
+  // takeover, evaluated atomically with the document write); equal epochs must be
+  // byte-identical (duplicate) or are conflicts; a lower epoch is stale. Documents written by
+  // binaries that did not carry the route have epoch 0.
+  ProjectionScopeStatusRoute status_route = 30;
 }
 
 message ProjectionSourceVersionStatus {

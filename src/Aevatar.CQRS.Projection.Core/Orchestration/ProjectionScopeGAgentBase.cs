@@ -17,26 +17,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
-public abstract class ProjectionScopeGAgentBase<TContext>
+public abstract partial class ProjectionScopeGAgentBase<TContext>
     : GAgentBase<ProjectionScopeState>
     , IEventSourcingVersionDriftRecoverableActor
     where TContext : class, IProjectionMaterializationContext
 {
-    internal const string StatusRouteAdoptionRetryCallbackId = "projection-scope-status-route-adoption";
-
-    /// <summary>
-    /// Backed-off retry schedule for adopting the terminal status route after a scope activated
-    /// while the fleet gate was still closed (~15 minutes in total, covering a rolling upgrade).
-    /// </summary>
-    internal static readonly TimeSpan[] StatusRouteAdoptionRetryDelays =
-    [
-        TimeSpan.FromSeconds(30),
-        TimeSpan.FromMinutes(1),
-        TimeSpan.FromMinutes(2),
-        TimeSpan.FromMinutes(4),
-        TimeSpan.FromMinutes(8),
-    ];
-
     private ILogger _logger = NullLogger.Instance;
     private ProjectionScopeFailureTracker? _failureTracker;
     private bool _isReplayingFailure;
@@ -65,7 +50,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         // observation relay (the activation evidence every activation service reads) is
         // (re)asserted, so no activation service can observe a half-adopted scope on either
         // the cold ensure path or the activation path.
-        await AdoptTerminalStatusRouteAsync(ct);
+        await AdvanceStatusRouteAsync(ct);
         await EnsureObservationRelayAsync(State.RootActorId, ct);
         if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
             await ScheduleInFlightObservationRecoveryAsync(ct);
@@ -73,245 +58,6 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             await ScheduleFailureRecoveryAsync(ct);
 
         await OnScopeReadyAsync(ct);
-    }
-
-    /// <summary>
-    /// Adopts the terminal status write route for this scope on its own turn: with a fresh
-    /// fleet admission for the terminal contract it commits the epoch-fenced route first (the
-    /// committed route is the fact; relay and materializer are derived from it and healed on
-    /// every activation), then writes the terminal materializer relay on its own stream (it
-    /// owns its relays, so no cross-actor wait is needed), ensures the materializer actor and
-    /// releases the legacy shadow. Without a fresh grant the scope simply stays on the legacy
-    /// route. Called only on the cold ensure / activation path, never per observed envelope.
-    /// </summary>
-    private async Task AdoptTerminalStatusRouteAsync(CancellationToken ct, int attempt = 0)
-    {
-        if (!State.Active || State.Released || RuntimeMode != ProjectionRuntimeMode.DurableMaterialization)
-            return;
-        // Status writers have no status writer of their own (no mirror of the mirror).
-        if (DependencyInjection.ProjectionScopeStatusRuntimeRegistration.IsProjectionScopeStatusKind(State.ProjectionKind))
-            return;
-        var terminalActorId = ProjectionScopeStatusRoutes.BuildTerminalActorId(Id);
-        var runtime = Services.GetService<IActorRuntime>();
-        var dispatchPort = Services.GetService<IActorDispatchPort>();
-        if (ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
-                State.StatusRoute,
-                ProjectionScopeStatusGAgent.ContractId,
-                ProjectionScopeStatusGAgent.ContractVersion))
-        {
-            // The relay is the durable evidence every activation service reads; re-asserting it
-            // is idempotent and heals a lost registry entry (or a released materializer relay
-            // after this scope was re-ensured) without a second route decision. The materializer
-            // restarts itself on the first routed publication, so no lifecycle command is needed.
-            await UpsertTerminalStatusRelayAsync(terminalActorId, ct);
-            if (runtime != null && !await runtime.ExistsAsync(terminalActorId))
-                _ = await runtime.CreateByKindAsync(ProjectionScopeStatusGAgent.AgentKind, terminalActorId, ct);
-            await ReleaseLegacyStatusRouteIfPendingAsync(ct);
-            await ReconcileReappearedLegacyStatusRelayAsync(ct);
-            return;
-        }
-
-        if (runtime == null || dispatchPort == null)
-        {
-            _logger.LogInformation(
-                "Projection scope status route stays legacy: actor runtime ports unavailable. actorId={ActorId}",
-                Id);
-            return;
-        }
-
-        var admissionReader = Services.GetService<IRuntimeFleetCapabilityAdmissionReader>();
-        var membershipReader = Services.GetService<IRuntimeLocalMembershipIdentityReader>();
-        if (admissionReader == null || membershipReader == null)
-        {
-            _logger.LogInformation(
-                "Projection scope status route stays legacy: fleet admission readers unavailable. actorId={ActorId}",
-                Id);
-            return;
-        }
-
-        var grant = await RuntimeFleetCapabilityAdmissionValidation.GetGrantedAdmissionAsync(
-            RuntimeFleetCapability.ProjectionScopeStatusTerminalV1,
-            ProjectionScopeStatusGAgent.ContractId,
-            (int)ProjectionScopeStatusGAgent.ContractVersion,
-            admissionReader,
-            membershipReader,
-            Services.GetService<TimeProvider>(),
-            Services.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
-            ct);
-        if (grant == null)
-        {
-            _logger.LogInformation(
-                "Projection scope status route stays legacy: no fresh terminal admission. actorId={ActorId} attempt={Attempt}",
-                Id,
-                attempt);
-            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
-            return;
-        }
-
-        var admission = grant.Admission;
-        var route = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
-            (State.StatusRoute?.RouteEpoch ?? 0) + 1);
-        route.ActivatedAtUtc = Timestamp.FromDateTimeOffset(grant.ValidatedAt);
-        route.ActivationProof = new ProjectionMaterializationActivationProof
-        {
-            AuthorityStateVersion = admission.AuthorityStateVersion,
-            CapabilityEpoch = admission.CapabilityEpoch,
-            MembershipEpoch = admission.MembershipEpoch,
-            MembershipDigest = admission.MembershipDigest,
-            DeploymentRevision = admission.DeploymentRevision,
-            ValidatedAtUtc = Timestamp.FromDateTimeOffset(grant.ValidatedAt),
-            ValidUntilUtc = admission.MembershipValidUntil?.Clone(),
-        };
-        await PersistDomainEventAsync(new ProjectionScopeStatusRouteActivatedEvent
-        {
-            Route = route,
-            OccurredAtUtc = Timestamp.FromDateTimeOffset(grant.ValidatedAt),
-        });
-        _logger.LogInformation(
-            "Projection scope status route adopted terminal materializer. actorId={ActorId} routeEpoch={RouteEpoch}",
-            Id,
-            route.RouteEpoch);
-
-        await UpsertTerminalStatusRelayAsync(terminalActorId, ct);
-        await EnsureTerminalStatusMaterializerAsync(runtime, dispatchPort, terminalActorId, ct);
-        await ReleaseLegacyStatusRouteIfPendingAsync(ct);
-    }
-
-    /// <summary>
-    /// A durable scope that activates before the terminal fleet gate opens (a long-lived
-    /// scope right after silo boot, or during a rolling upgrade) would otherwise stay on the
-    /// legacy route until its next activation, which for an always-active scope never comes.
-    /// The retry is a bounded, backed-off self continuation through the durable callback
-    /// scheduler; the attempt count travels in the command, never in actor memory.
-    /// </summary>
-    private async Task ScheduleStatusRouteAdoptionRetryAsync(int attempt, CancellationToken ct)
-    {
-        if (Services.GetService<IActorRuntimeCallbackScheduler>() == null)
-            return;
-
-        // The schedule backs off to its last delay and then keeps that cadence for as long as
-        // the gate stays closed: a fleet gate can open long after silo boot (rolling upgrades,
-        // late silos), and a scope that stopped retrying would stay on the legacy route forever.
-        var nextAttempt = attempt + 1;
-        _ = await ScheduleSelfDurableTimeoutAsync(
-            StatusRouteAdoptionRetryCallbackId,
-            StatusRouteAdoptionRetryDelays[Math.Min(attempt, StatusRouteAdoptionRetryDelays.Length - 1)],
-            new RetryProjectionScopeStatusRouteAdoptionCommand { Attempt = nextAttempt },
-            ct: ct);
-    }
-
-    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
-    public Task HandleRetryStatusRouteAdoptionAsync(RetryProjectionScopeStatusRouteAdoptionCommand command)
-    {
-        ArgumentNullException.ThrowIfNull(command);
-        return AdoptTerminalStatusRouteAsync(CancellationToken.None, command.Attempt);
-    }
-
-    private Task UpsertTerminalStatusRelayAsync(string terminalActorId, CancellationToken ct) =>
-        Services
-            .GetRequiredService<IStreamProvider>()
-            .GetStream(Id)
-            .UpsertRelayAsync(
-                ProjectionScopeObservationRelayBinding.Create(
-                    Id,
-                    terminalActorId,
-                    ProjectionScopeStatusGAgent.AgentKind,
-                    activationGeneration: 1),
-                ct);
-
-    private async Task EnsureTerminalStatusMaterializerAsync(
-        IActorRuntime runtime,
-        IActorDispatchPort dispatchPort,
-        string terminalActorId,
-        CancellationToken ct)
-    {
-        if (!await runtime.ExistsAsync(terminalActorId))
-            _ = await runtime.CreateByKindAsync(ProjectionScopeStatusGAgent.AgentKind, terminalActorId, ct);
-
-        var ensure = ProjectionScopeCommandEnvelopeFactory.Create(
-            new EnsureProjectionScopeCommand
-            {
-                RootActorId = Id,
-                ProjectionKind = ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
-                Mode = ProjectionScopeMode.DurableMaterialization,
-            },
-            terminalActorId);
-        ensure.Route = EnvelopeRouteSemantics.CreateDirect(Id, terminalActorId);
-        _ = await dispatchPort.DispatchAsync(terminalActorId, ensure, ct);
-    }
-
-    /// <summary>
-    /// After the route flip the legacy status shadow of this scope is no longer a writer;
-    /// remove its relay from this scope's stream and release the shadow scope actor if it
-    /// exists. Retried on activation until it is durably recorded.
-    /// </summary>
-    private async Task ReleaseLegacyStatusRouteIfPendingAsync(CancellationToken ct)
-    {
-        var route = State.StatusRoute;
-        if (!ProjectionScopeStatusRoutePolicy.IsTerminalRoute(route) || route!.LegacyRouteReleased)
-            return;
-
-        var legacyActorId = ProjectionScopeStatusRoutes.BuildLegacyActorId(Id);
-        await RemoveLegacyStatusRelayAndReleaseShadowAsync(legacyActorId, ct);
-
-        await PersistDomainEventAsync(new ProjectionScopeStatusLegacyRouteReleasedEvent
-        {
-            RouteEpoch = route.RouteEpoch,
-            OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
-        });
-    }
-
-    /// <summary>
-    /// The legacy shadow may reappear after this scope recorded its release (an activation
-    /// service on an older node ensured the shadow again, or a delayed legacy relay upsert
-    /// landed after the cleanup). The committed route already says the shadow is not a writer,
-    /// so on every activation the authoritative relay evidence is reconciled: a legacy relay
-    /// that exists again is removed and the shadow actor is released once more.
-    /// </summary>
-    private async Task ReconcileReappearedLegacyStatusRelayAsync(CancellationToken ct)
-    {
-        var route = State.StatusRoute;
-        if (!ProjectionScopeStatusRoutePolicy.IsTerminalRoute(route) || !route!.LegacyRouteReleased)
-            return;
-
-        var authority = Services.GetService<IStreamForwardingBindingAuthority>();
-        if (authority == null)
-            return;
-
-        var legacyActorId = ProjectionScopeStatusRoutes.BuildLegacyActorId(Id);
-        var binding = await authority.GetAsync(Id, legacyActorId, ct);
-        if (binding == null)
-            return;
-
-        _logger.LogWarning(
-            "Projection scope legacy status relay reappeared after the terminal route was adopted; removing it and releasing the shadow again. actorId={ActorId} routeEpoch={RouteEpoch}",
-            Id,
-            route.RouteEpoch);
-        await RemoveLegacyStatusRelayAndReleaseShadowAsync(legacyActorId, ct);
-    }
-
-    private async Task RemoveLegacyStatusRelayAndReleaseShadowAsync(string legacyActorId, CancellationToken ct)
-    {
-        await Services
-            .GetRequiredService<IStreamProvider>()
-            .GetStream(Id)
-            .RemoveRelayAsync(legacyActorId, ct);
-
-        var runtime = Services.GetService<IActorRuntime>();
-        var dispatchPort = Services.GetService<IActorDispatchPort>();
-        if (runtime != null && dispatchPort != null && await runtime.ExistsAsync(legacyActorId))
-        {
-            var release = ProjectionScopeCommandEnvelopeFactory.Create(
-                new ReleaseProjectionScopeCommand
-                {
-                    RootActorId = Id,
-                    ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
-                    Mode = ProjectionScopeMode.DurableMaterialization,
-                },
-                legacyActorId);
-            release.Route = EnvelopeRouteSemantics.CreateDirect(Id, legacyActorId);
-            _ = await dispatchPort.DispatchAsync(legacyActorId, release, ct);
-        }
     }
 
     protected override async Task OnCommittedStatePublicationRecoveredAsync(
@@ -366,7 +112,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         // that relay is the activation evidence the activation service waits for, and it must
         // not observe a half-adopted scope (it would ensure the legacy shadow this scope is
         // about to release).
-        await AdoptTerminalStatusRouteAsync(CancellationToken.None);
+        await AdvanceStatusRouteAsync(CancellationToken.None);
 
         await EnsureObservationRelayAsync(command.RootActorId, CancellationToken.None);
         if (!State.ObservationAttached)
@@ -523,7 +269,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             StreamForwardingRules.IsTransitOnlyForwarding(envelope))
             return;
 
-        if (await TryReleaseLegacyStatusShadowOfFlippedSourceAsync(envelope))
+        if (await ReconcileStatusRouteOnObservationAsync(envelope))
             return;
 
         try
@@ -558,50 +304,6 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         }
     }
 
-    /// <summary>
-    /// A legacy status shadow can be (re)ensured after its source adopted the terminal route
-    /// (an activation service that raced the adoption, or a delayed legacy relay upsert). The
-    /// source publishes its committed <c>status_route</c> in every observed state, so the
-    /// shadow reconciles on its own turn: once the source names the terminal contract the
-    /// shadow releases itself (relay removed, Released committed) instead of paying per-envelope
-    /// bookkeeping until the source's next activation removes it.
-    /// </summary>
-    private async Task<bool> TryReleaseLegacyStatusShadowOfFlippedSourceAsync(EventEnvelope envelope)
-    {
-        if (RuntimeMode != ProjectionRuntimeMode.DurableMaterialization ||
-            !string.Equals(
-                State.ProjectionKind,
-                ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
-                StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        if (!CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
-                envelope,
-                out _,
-                out _,
-                out var sourceState) ||
-            sourceState == null ||
-            !ProjectionScopeStatusRoutePolicy.IsTerminalRoute(sourceState.StatusRoute))
-        {
-            return false;
-        }
-
-        _logger.LogInformation(
-            "Legacy status shadow observed a source on the terminal status route; releasing itself. actorId={ActorId} routeEpoch={RouteEpoch}",
-            Id,
-            sourceState.StatusRoute!.RouteEpoch);
-        await HandleReleaseAsync(new ReleaseProjectionScopeCommand
-        {
-            RootActorId = State.RootActorId,
-            ProjectionKind = State.ProjectionKind,
-            SessionId = State.SessionId,
-            Mode = State.Mode,
-        });
-        return true;
-    }
-
     protected override ProjectionScopeState TransitionState(ProjectionScopeState current, Google.Protobuf.IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
@@ -628,6 +330,9 @@ public abstract class ProjectionScopeGAgentBase<TContext>
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverGoldenVerified)
             .On<ProjectionMaterializationCutoverActivatedEvent>(
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverActivated)
+            .On<ProjectionScopeStatusRouteWarmingStartedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteWarmingStarted)
+            .On<ProjectionScopeStatusRouteCaughtUpEvent>(ProjectionScopeStateApplier.ApplyStatusRouteCaughtUp)
+            .On<ProjectionScopeStatusRouteBlockedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteBlocked)
             .On<ProjectionScopeStatusRouteActivatedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteActivated)
             .On<ProjectionScopeStatusLegacyRouteReleasedEvent>(ProjectionScopeStateApplier.ApplyStatusLegacyRouteReleased)
             .OrCurrent();
@@ -663,6 +368,11 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         CancellationToken ct,
         ProjectionObservationDispatchOrigin origin = ProjectionObservationDispatchOrigin.Observed)
     {
+        // A blocked status route refuses every dispatch — observed, replayed or resumed — so
+        // nothing new is published until the cutover flips; the caller redelivers.
+        if (State.StatusRoute?.Phase == ProjectionScopeStatusRoutePhase.Blocked)
+            throw new ProjectionScopeStatusRouteBlockedException(Id, State.StatusRoute.RouteEpoch);
+
         var context = ResolveScopeContext();
         var sourceActorId = ResolveSourceActorId(envelope);
         var eventKind = ResolveEventKind(envelope);

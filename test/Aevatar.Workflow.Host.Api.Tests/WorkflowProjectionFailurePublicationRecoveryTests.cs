@@ -120,8 +120,7 @@ public sealed class WorkflowProjectionFailurePublicationRecoveryTests
                 RootActorId = scopeKey.RootActorId,
                 ProjectionKind = scopeKey.ProjectionKind,
             },
-            context => new WorkflowExecutionMaterializationRuntimeLease(context),
-            materializeScopeStatus: false);
+            context => new WorkflowExecutionMaterializationRuntimeLease(context));
         services.AddCurrentStateProjectionMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowExecutionCurrentStateProjector>();

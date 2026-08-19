@@ -5,8 +5,9 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Maps one committed <see cref="ProjectionScopeState"/> at one authoritative state-event
 /// version to the status read model. Both status writers (the legacy shadow scope and the
-/// terminal materializer) share this mapping so a same-version write from either is
-/// byte-identical and therefore an exact duplicate, never a conflict.
+/// terminal materializer) share this mapping so a same-version write from either under the
+/// same route epoch is byte-identical (exact duplicate); the mapped route epoch is the
+/// document's write fence, so a writer under a higher route epoch takes the same version over.
 /// </summary>
 internal static class ProjectionScopeStatusDocumentMapper
 {
@@ -52,6 +53,7 @@ internal static class ProjectionScopeStatusDocumentMapper
             InFlightSource = state.InFlightObservation?.Source?.Clone(),
             ActiveMaterializationRoute = state.ActiveMaterializationRoute?.Clone(),
             MaterializationCutover = state.MaterializationCutover?.Clone(),
+            StatusRoute = state.StatusRoute?.Clone(),
         };
         document.OldestUnresolvedFailureAtUtc = failureSummary.OldestUnresolvedFailureAtUtc?.Clone();
         document.RecentObservedEnvelopes.Add(state.RecentObservedEnvelopes);

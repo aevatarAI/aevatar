@@ -26,6 +26,12 @@ public static class RuntimeFleetCapabilityContracts
     public const string ProjectionScopeStatusTerminalV1 =
         "aevatar.projection.scope-status-terminal.v1";
 
+    // The status document contract (ProjectionScopeStatusDocument incl. its status_route write
+    // fence) is unchanged since the terminal materializer shipped; the phased cutover and the
+    // epoch fence are additive route/evaluator semantics that older readers tolerate (they
+    // treat any terminal route as writable and produce byte-identical documents for the same
+    // route epoch). Keeping the reader version at 1 keeps every source rollback-safe: a v1
+    // reader can still serve every route this reader creates.
     public const int ProjectionScopeStatusTerminalReaderVersion = 1;
 
     public const string ProjectionIncrementalGraphV1 =

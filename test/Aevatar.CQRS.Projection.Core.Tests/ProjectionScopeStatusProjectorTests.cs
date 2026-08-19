@@ -111,6 +111,8 @@ public sealed class ProjectionScopeStatusProjectorTests
             state.LastSuccessfulSourceCoordinatesByActor.Values);
         document.InFlightSource.Should().Be(state.InFlightObservation.Source);
         document.ActiveMaterializationRoute.Should().Be(state.ActiveMaterializationRoute);
+        document.StatusRoute.Should().BeNull("a pre-route source has no status route to carry");
+        ((IProjectionRouteFencedReadModel)document).RouteEpoch.Should().Be(0);
         typeof(ProjectionScopeStatusDocument).GetProperty("InFlightObservation").Should().BeNull();
     }
 
@@ -253,8 +255,14 @@ public sealed class ProjectionScopeStatusProjectorTests
         dispatcher.Upserts.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task ProjectAsync_ShouldNotWrite_WhenSourceCommittedTerminalStatusRoute()
+    // ── the gate: ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite ──────────────
+
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Unspecified)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Active)]
+    public async Task ProjectAsync_ShouldNotWrite_WhenSourceCommittedTerminalRouteInWritingPhase(
+        ProjectionScopeStatusRoutePhase phase)
     {
         var dispatcher = new RecordingStatusDispatcher();
         var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
@@ -265,14 +273,15 @@ public sealed class ProjectionScopeStatusProjectorTests
             Mode = ProjectionScopeMode.DurableMaterialization,
             Active = true,
             LastSuccessfulVersion = 21,
-            StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1),
+            StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1, phase),
         };
 
         await sut.ProjectAsync(
             new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
             CreateCommittedEnvelope(state, version: 8, eventId: "state-event-8"));
 
-        dispatcher.Upserts.Should().BeEmpty("the legacy shadow is no longer an authoritative writer once the source flipped");
+        dispatcher.Upserts.Should().BeEmpty(
+            "once the terminal route is blocked or active (or phase-less, i.e. active by definition) the legacy shadow may still be draining but must not write");
     }
 
     [Fact]
@@ -295,6 +304,147 @@ public sealed class ProjectionScopeStatusProjectorTests
             CreateCommittedEnvelope(state, version: 9, eventId: "state-event-9"));
 
         dispatcher.Upserts.Should().BeEmpty("the gate is the committed route itself, not the legacy release flag");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotWrite_WhenTerminalRouteIsNewerThanThisReader()
+    {
+        // The gate is the route contract: a terminal route of any contract version in a writing
+        // phase selects the terminal, whether or not this binary could serve it.
+        var dispatcher = new RecordingStatusDispatcher();
+        var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "channel-bot-registration",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+            StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 2),
+        };
+        state.StatusRoute.ContractVersion = ProjectionScopeStatusGAgent.ContractVersion + 1;
+
+        await sut.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
+            CreateCommittedEnvelope(state, version: 9, eventId: "state-event-9"));
+
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldWrite_WhenTerminalRouteIsWarming()
+    {
+        // Phase 1 of the cutover: the terminal observes and reports; the legacy shadow is still
+        // the writer and its document carries the warming route (the fence epoch of the cutover).
+        var dispatcher = new RecordingStatusDispatcher();
+        var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "channel-bot-registration",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+            LastSuccessfulVersion = 21,
+            StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+                routeEpoch: 2,
+                ProjectionScopeStatusRoutePhase.Warming),
+        };
+        state.StatusRoute.WarmStartedVersion = 10;
+
+        await sut.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
+            CreateCommittedEnvelope(state, version: 10, eventId: "state-event-10"));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Which;
+        document.StateVersion.Should().Be(10);
+        document.StatusRoute.Should().Be(state.StatusRoute);
+        document.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Warming);
+        ((IProjectionRouteFencedReadModel)document).RouteEpoch.Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Unspecified)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Active)]
+    public async Task ProjectAsync_ShouldWrite_WhenLegacyRouteIsInWritingPhase(ProjectionScopeStatusRoutePhase phase)
+    {
+        // Durable rollback completed (or a phase-less legacy route from the previous binary):
+        // the legacy shadow is the writer again.
+        var dispatcher = new RecordingStatusDispatcher();
+        var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "channel-bot-registration",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+            LastSuccessfulVersion = 21,
+            StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(routeEpoch: 3, phase),
+        };
+
+        await sut.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
+            CreateCommittedEnvelope(state, version: 11, eventId: "state-event-11"));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Which;
+        document.StateVersion.Should().Be(11);
+        document.StatusRoute.Should().Be(state.StatusRoute);
+        document.StatusRoute.ContractId.Should().Be(ProjectionScopeStatusRoutePolicy.LegacyContractId);
+        ((IProjectionRouteFencedReadModel)document).RouteEpoch.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotWrite_WhenLegacyRouteIsWarming()
+    {
+        // Rollback in flight: the legacy shadow is warming (it reports caught-up to the source
+        // from its own scope actor); the terminal remains the writer until the source blocks.
+        var dispatcher = new RecordingStatusDispatcher();
+        var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "channel-bot-registration",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+            LastSuccessfulVersion = 21,
+            StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(
+                routeEpoch: 3,
+                ProjectionScopeStatusRoutePhase.Warming),
+        };
+
+        await sut.ProjectAsync(
+            new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" },
+            CreateCommittedEnvelope(state, version: 12, eventId: "state-event-12"));
+
+        dispatcher.Upserts.Should().BeEmpty("during a rollback warming the terminal is still the writer");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_AcrossRollbackPhases_ShouldWriteOnlyOnceTheLegacyRouteBlocks()
+    {
+        var dispatcher = new RecordingStatusDispatcher();
+        var sut = new ProjectionScopeStatusProjector(dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var context = new ProjectionScopeStatusMaterializationContext { RootActorId = "root-actor" };
+        var state = new ProjectionScopeState
+        {
+            RootActorId = "root-actor",
+            ProjectionKind = "channel-bot-registration",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            Active = true,
+        };
+
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 2);
+        await sut.ProjectAsync(context, CreateCommittedEnvelope(state, version: 20, eventId: "state-event-20"));
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(routeEpoch: 3, ProjectionScopeStatusRoutePhase.Warming);
+        await sut.ProjectAsync(context, CreateCommittedEnvelope(state, version: 21, eventId: "state-event-21"));
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(routeEpoch: 3, ProjectionScopeStatusRoutePhase.Blocked);
+        await sut.ProjectAsync(context, CreateCommittedEnvelope(state, version: 22, eventId: "state-event-22"));
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(routeEpoch: 3, ProjectionScopeStatusRoutePhase.Active);
+        await sut.ProjectAsync(context, CreateCommittedEnvelope(state, version: 23, eventId: "state-event-23"));
+
+        dispatcher.Upserts.Select(static document => document.StateVersion).Should().Equal(22, 23);
+        dispatcher.Upserts.Select(static document => document.StatusRoute.Phase).Should().Equal(
+            ProjectionScopeStatusRoutePhase.Blocked,
+            ProjectionScopeStatusRoutePhase.Active);
     }
 
     public enum NonTerminalRouteShape
@@ -345,30 +495,40 @@ public sealed class ProjectionScopeStatusProjectorTests
 
         var document = dispatcher.Upserts.Should().ContainSingle().Which;
         document.StateVersion.Should().Be(3);
-        // The status document never carries the writer-specific route: at one source version
-        // its bytes must not depend on the source state's StatusRoute (or on which writer
-        // produced them), so a route-less mapping of the same state is byte-identical.
-        typeof(ProjectionScopeStatusDocument).GetProperty("StatusRoute").Should().BeNull();
-        var routelessState = state.Clone();
-        routelessState.StatusRoute = null;
-        var envelope = CreateCommittedEnvelope(routelessState, version: 3, eventId: "state-event-3");
+        // The document carries whatever route the source committed (even a malformed one) and
+        // fences on its epoch; the mapping is the shared one, so the same state maps to the
+        // same bytes for either writer.
+        document.StatusRoute.Should().Be(state.StatusRoute);
+        ((IProjectionRouteFencedReadModel)document).RouteEpoch.Should().Be(state.StatusRoute?.RouteEpoch ?? 0);
+        var envelope = CreateCommittedEnvelope(state, version: 3, eventId: "state-event-3");
         CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
                 envelope,
                 out _,
                 out var stateEvent,
-                out var unpackedRoutelessState)
+                out var unpackedState)
             .Should().BeTrue();
-        var routelessDocument = ProjectionScopeStatusDocumentMapper.Map(
-            unpackedRoutelessState!,
+        var mapped = ProjectionScopeStatusDocumentMapper.Map(
+            unpackedState!,
             stateEvent!,
             CommittedStateEventEnvelope.ResolveTimestamp(envelope, DateTimeOffset.UtcNow));
-        document.ToByteString().Equals(routelessDocument.ToByteString()).Should().BeTrue();
-        ProjectionWriteResultEvaluator.Evaluate(document, routelessDocument).Disposition
+        document.ToByteString().Equals(mapped.ToByteString()).Should().BeTrue();
+        ProjectionWriteResultEvaluator.Evaluate(document, mapped).Disposition
             .Should().Be(ProjectionWriteDisposition.Duplicate);
     }
 
-    [Fact]
-    public async Task ProjectAsync_LegacyWrite_ShouldBeByteIdenticalToSharedMapperAtSameVersion()
+    public enum LegacyWriterRouteShape
+    {
+        NoRoute,
+        TerminalWarming,
+        LegacyActive,
+    }
+
+    [Theory]
+    [InlineData(LegacyWriterRouteShape.NoRoute)]
+    [InlineData(LegacyWriterRouteShape.TerminalWarming)]
+    [InlineData(LegacyWriterRouteShape.LegacyActive)]
+    public async Task ProjectAsync_LegacyWrite_ShouldBeByteIdenticalToSharedMapperAtSameVersionIncludingRoute(
+        LegacyWriterRouteShape shape)
     {
         var dispatcher = new RecordingStatusDispatcher();
         var clock = new FixedProjectionClock(new DateTimeOffset(2026, 8, 19, 9, 0, 0, TimeSpan.Zero));
@@ -383,6 +543,15 @@ public sealed class ProjectionScopeStatusProjectorTests
             HighestSeenVersion = 12,
             LastSuccessfulVersion = 11,
             ReceivedEnvelopeTotal = 13,
+            StatusRoute = shape switch
+            {
+                LegacyWriterRouteShape.NoRoute => null,
+                LegacyWriterRouteShape.TerminalWarming => ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+                    routeEpoch: 2,
+                    ProjectionScopeStatusRoutePhase.Warming),
+                LegacyWriterRouteShape.LegacyActive => ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(routeEpoch: 3),
+                _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+            },
         };
         state.HighestSeenVersionsByActor["actor-alpha"] = 12;
         state.LastSuccessfulVersionsByActor["actor-alpha"] = 11;
@@ -405,8 +574,10 @@ public sealed class ProjectionScopeStatusProjectorTests
             CommittedStateEventEnvelope.ResolveTimestamp(envelope, clock.UtcNow));
         var legacyWrite = dispatcher.Upserts.Should().ContainSingle().Which;
         legacyWrite.ToByteString().Equals(mapped.ToByteString()).Should().BeTrue();
+        legacyWrite.StatusRoute.Should().Be(state.StatusRoute);
+        ((IProjectionRouteFencedReadModel)legacyWrite).RouteEpoch.Should().Be(state.StatusRoute?.RouteEpoch ?? 0);
         ProjectionWriteResultEvaluator.Evaluate(legacyWrite, mapped).Disposition
-            .Should().Be(ProjectionWriteDisposition.Duplicate, "the terminal writer's same-version write must be an exact duplicate, never a conflict");
+            .Should().Be(ProjectionWriteDisposition.Duplicate, "the terminal writer's same-version write under the same route must be an exact duplicate, never a conflict");
         ProjectionWriteResultEvaluator.Evaluate(mapped, legacyWrite).Disposition
             .Should().Be(ProjectionWriteDisposition.Duplicate);
     }

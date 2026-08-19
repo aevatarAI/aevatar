@@ -637,8 +637,7 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
                     RootActorId = scopeKey.RootActorId,
                     ProjectionKind = scopeKey.ProjectionKind,
                 },
-                context => new WorkflowExecutionMaterializationRuntimeLease(context),
-                materializeScopeStatus: false);
+                context => new WorkflowExecutionMaterializationRuntimeLease(context));
             return services.BuildServiceProvider();
         }
 

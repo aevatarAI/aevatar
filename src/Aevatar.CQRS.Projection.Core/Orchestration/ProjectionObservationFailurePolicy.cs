@@ -14,6 +14,9 @@ internal static class ProjectionObservationFailurePolicy
             ProjectionScopeInFlightObservationPendingException => true,
             ProjectionSourceCoordinateConflictException => true,
             ProjectionSourceCoordinateInvalidException => true,
+            // A blocked status route refuses the observation until the route is flipped; the
+            // envelope must be redelivered, never swallowed.
+            ProjectionScopeStatusRouteBlockedException => true,
             ProjectionDispatchAggregateException aggregate =>
                 aggregate.Failures.Any(static failure => ShouldPropagate(failure.Exception)),
             AggregateException aggregate =>

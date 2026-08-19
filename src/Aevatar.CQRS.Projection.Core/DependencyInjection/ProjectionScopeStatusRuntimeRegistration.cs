@@ -53,50 +53,6 @@ public static class ProjectionScopeStatusRuntimeRegistration
             {
                 RootActorId = scopeKey.RootActorId,
             });
-        services.TryAddSingleton<Func<ProjectionScopeStatusMaterializationContext, ProjectionScopeStatusRuntimeLease>>(
-            static _ => static context => new ProjectionScopeStatusRuntimeLease(context));
-        services.TryAddSingleton<IProjectionScopeAttachExistingLeaseLookup<ProjectionScopeStatusRuntimeLease>>(sp =>
-            new ProjectionScopeAttachExistingLeaseLookup<
-                ProjectionScopeStatusRuntimeLease,
-                ProjectionScopeStatusMaterializationContext>(
-                sp.GetRequiredService<IActorRuntime>(),
-                request => new ProjectionScopeStatusMaterializationContext
-                {
-                    RootActorId = request.RootActorId,
-                },
-                (_, context) => new ProjectionScopeStatusRuntimeLease(context)));
-        services.TryAddSingleton<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>(sp =>
-            new ProjectionScopeActivationService<
-                ProjectionScopeStatusRuntimeLease,
-                ProjectionScopeStatusMaterializationContext,
-                ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                request => new ProjectionScopeStatusMaterializationContext
-                {
-                    RootActorId = request.RootActorId,
-                },
-                (_, context) => new ProjectionScopeStatusRuntimeLease(context),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindVerifier>(),
-                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
-                sp.GetService<IStreamPubSubMaintenance>(),
-                sp.GetService<ILoggerFactory>(),
-                sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
-                sp.GetRequiredService<IStreamForwardingRegistry>()));
-        services.TryAddSingleton<IProjectionScopeReleaseService<ProjectionScopeStatusRuntimeLease>>(sp =>
-            new ProjectionScopeReleaseService<
-                ProjectionScopeStatusRuntimeLease,
-                ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>>(
-                sp.GetRequiredService<IActorRuntime>(),
-                sp.GetRequiredService<IActorDispatchPort>(),
-                lease => new ProjectionRuntimeScopeKey(
-                    lease.Context.RootActorId,
-                    lease.Context.ProjectionKind,
-                    ProjectionRuntimeMode.DurableMaterialization),
-                sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindVerifier>(),
-                sp.GetRequiredService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentKindRegistry>(),
-                sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
-                sp.GetRequiredService<IStreamForwardingRegistry>()));
         return services;
     }
 
@@ -109,16 +65,4 @@ public static class ProjectionScopeStatusRuntimeRegistration
             projectionKind,
             ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
             StringComparison.Ordinal);
-
-    internal static ProjectionScopeStartRequest BuildStatusScopeStartRequest(ProjectionScopeStartRequest sourceRequest) =>
-        new()
-        {
-            RootActorId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
-                sourceRequest.RootActorId ?? string.Empty,
-                sourceRequest.ProjectionKind ?? string.Empty,
-                ProjectionRuntimeMode.DurableMaterialization,
-                sourceRequest.SessionId)),
-            ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
-            Mode = ProjectionRuntimeMode.DurableMaterialization,
-        };
 }

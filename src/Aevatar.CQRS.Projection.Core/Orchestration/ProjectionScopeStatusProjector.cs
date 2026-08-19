@@ -42,10 +42,12 @@ public sealed class ProjectionScopeStatusProjector
             return;
         }
 
-        // The source scope actor owns the status write route. Once it has committed a terminal
-        // route this legacy shadow scope is no longer an authoritative writer: it may still be
-        // draining already-delivered envelopes before it is released, and must not write.
-        if (ProjectionScopeStatusRoutePolicy.IsTerminalRoute(state.StatusRoute))
+        // The source scope actor owns the status write route. This legacy shadow writes only
+        // while the route selects it: no route, a rolled-back legacy route in a writing phase,
+        // or a terminal route that is still warming. Once the terminal route is blocked or
+        // active this shadow may still be draining already-delivered envelopes before it is
+        // released, and must not write.
+        if (!ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(state.StatusRoute))
             return;
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);

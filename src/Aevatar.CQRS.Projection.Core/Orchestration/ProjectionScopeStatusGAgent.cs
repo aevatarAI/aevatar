@@ -61,12 +61,17 @@ public sealed class ProjectionScopeStatusGAgent
         // A durable retry survives deactivation on its own; re-arming it here only covers a
         // scheduler that lost it (and is idempotent: the same callback id, one live retry).
         var pending = State.PendingWrite;
-        if (pending?.Source != null &&
-            pending.FailureKind == ProjectionScopeStatusWriteFailureKind.Transient)
-        {
+        if (pending?.Source != null && IsRetryablePendingWrite(pending))
             await ScheduleWriteRetryAsync(pending.Source, pending.Attempts, ct);
-        }
     }
+
+    /// <summary>
+    /// A pending write persisted by a binary that did not record a failure kind (Unspecified)
+    /// was deferred on a store exception and is retried like a transient failure; only an
+    /// explicitly rejected write is not retried with the same bytes.
+    /// </summary>
+    private static bool IsRetryablePendingWrite(ProjectionScopeStatusPendingWrite pending) =>
+        pending.FailureKind != ProjectionScopeStatusWriteFailureKind.Rejected;
 
     protected override async Task OnDeactivateAsync(CancellationToken ct)
     {
@@ -135,22 +140,21 @@ public sealed class ProjectionScopeStatusGAgent
         }
 
         var sourceScopeActorId = BuildSourceScopeActorId(sourceState);
+        var route = sourceState.StatusRoute;
+        var namesThisWriter =
+            ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(route, ContractId, ContractVersion) ||
+            ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(route, ContractId, ContractVersion);
         if (!State.Active || State.Released)
         {
             // The source scope writes our relay and commits the route on its own turn; its
             // first routed publication can reach us before the lifecycle command does, and a
             // re-ensured source re-asserts our relay after we released with it. Only a
-            // publication whose committed route names this contract may start us, it must be
-            // the source the relay was written for (the relay is addressed to this actor), and
-            // a released materializer never restarts for a source that is itself released.
-            if (!ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
-                    sourceState.StatusRoute,
-                    ContractId,
-                    ContractVersion) ||
-                (State.Released && sourceState.Released))
-            {
+            // publication whose committed route names this contract (warming or writing) may
+            // start us, it must be the source the relay was written for (the relay is addressed
+            // to this actor), and a released materializer never restarts for a source that is
+            // itself released.
+            if (!namesThisWriter || (State.Released && sourceState.Released))
                 return;
-            }
 
             await StartAsync(sourceScopeActorId);
         }
@@ -159,15 +163,37 @@ public sealed class ProjectionScopeStatusGAgent
             return;
         }
 
-        if (!ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
-                sourceState.StatusRoute,
-                ContractId,
-                ContractVersion))
+        if (ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(route, ContractId, ContractVersion))
         {
-            // Warm phase or a different route: observe only. The legacy shadow (or the route
-            // named by the source) is the authoritative writer until the source flips to us.
+            // Warming: the legacy shadow still writes; we prove delivery by reporting the
+            // observed version to the source, which blocks, drains and flips on its own turn.
+            await SendToAsync(State.SourceScopeActorId, new ProjectionScopeStatusWriterCaughtUpEvent
+            {
+                SourceScopeActorId = State.SourceScopeActorId,
+                RouteEpoch = route!.RouteEpoch,
+                ObservedVersion = stateEvent.Version,
+                ObservedAtUtc = Timestamp.FromDateTimeOffset(Now()),
+            });
             return;
         }
+
+        if (ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route) &&
+            ProjectionScopeStatusRoutePolicy.IsWritingPhase(route!))
+        {
+            // Rolled back: the legacy shadow took the route over (blocked/active). We are no
+            // longer a writer for this source.
+            await ReleaseAsync();
+            return;
+        }
+
+        var mayWrite =
+            ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(route, ContractId, ContractVersion) ||
+            // A legacy route that is still warming (rollback in flight): we remain the writer
+            // until the source blocks the route.
+            (ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route) &&
+             route!.Phase == ProjectionScopeStatusRoutePhase.Warming);
+        if (!mayWrite)
+            return;
 
         if (!ProjectionScopeStatusRoutePolicy.IsTerminalOutcome(stateEvent.EventData))
             return;
@@ -201,7 +227,7 @@ public sealed class ProjectionScopeStatusGAgent
             return;
         if (command.ExpectedSource == null || !SameSource(command.ExpectedSource, pending.Source))
             return;
-        if (pending.FailureKind == ProjectionScopeStatusWriteFailureKind.Rejected)
+        if (!IsRetryablePendingWrite(pending))
             return; // explicit failure state: same bytes cannot heal; a higher-version write supersedes it
 
         if (!CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(

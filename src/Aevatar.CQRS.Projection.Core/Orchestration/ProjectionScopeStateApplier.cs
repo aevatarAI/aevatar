@@ -348,17 +348,97 @@ internal static class ProjectionScopeStateApplier
         string.Equals(left.ActorId, right.ActorId, StringComparison.Ordinal) &&
         string.Equals(left.EventId, right.EventId, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Phase 1: a warming route at a strictly higher epoch replaces the current route (epoch
+    /// fence); the previous writer's release flag is reset for the new epoch.
+    /// </summary>
+    public static ProjectionScopeState ApplyStatusRouteWarmingStarted(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRouteWarmingStartedEvent evt)
+    {
+        var route = evt.Route;
+        if (route == null || route.RouteEpoch <= (current.StatusRoute?.RouteEpoch ?? 0))
+            return current;
+
+        var next = current.Clone();
+        next.StatusRoute = route.Clone();
+        next.StatusRoute.Phase = ProjectionScopeStatusRoutePhase.Warming;
+        next.StatusRoute.LegacyRouteReleased = false;
+        next.StatusRoute.CaughtUpVersion = 0;
+        next.StatusRoute.FlipVersion = 0;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyStatusRouteCaughtUp(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRouteCaughtUpEvent evt)
+    {
+        var route = current.StatusRoute;
+        if (route == null ||
+            route.RouteEpoch != evt.RouteEpoch ||
+            route.Phase != ProjectionScopeStatusRoutePhase.Warming ||
+            evt.ObservedVersion <= route.CaughtUpVersion)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.StatusRoute.CaughtUpVersion = evt.ObservedVersion;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyStatusRouteBlocked(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRouteBlockedEvent evt)
+    {
+        var route = current.StatusRoute;
+        if (route == null ||
+            route.RouteEpoch != evt.RouteEpoch ||
+            route.Phase != ProjectionScopeStatusRoutePhase.Warming)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.StatusRoute.Phase = ProjectionScopeStatusRoutePhase.Blocked;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    /// <summary>
+    /// Phase 5 (flip) for the current epoch's warming/blocked route, or a direct activation at
+    /// a strictly higher epoch (a phase-less route written by an earlier binary); a stale or
+    /// replayed activation at a lower epoch never moves the route.
+    /// </summary>
     public static ProjectionScopeState ApplyStatusRouteActivated(
         ProjectionScopeState current,
         ProjectionScopeStatusRouteActivatedEvent evt)
     {
         var route = evt.Route;
-        if (route == null || route.RouteEpoch <= (current.StatusRoute?.RouteEpoch ?? 0))
-            return current; // epoch fence: a stale or replayed activation never moves the route
+        if (route == null)
+            return current;
+
+        var currentEpoch = current.StatusRoute?.RouteEpoch ?? 0;
+        var flipsCurrentCutover =
+            route.RouteEpoch == currentEpoch &&
+            current.StatusRoute!.Phase is ProjectionScopeStatusRoutePhase.Warming
+                or ProjectionScopeStatusRoutePhase.Blocked;
+        if (route.RouteEpoch < currentEpoch || (route.RouteEpoch == currentEpoch && !flipsCurrentCutover))
+            return current; // epoch fence
 
         var next = current.Clone();
         next.StatusRoute = route.Clone();
-        next.StatusRoute.LegacyRouteReleased = false;
+        if (next.StatusRoute.Phase == ProjectionScopeStatusRoutePhase.Unspecified ||
+            next.StatusRoute.Phase == ProjectionScopeStatusRoutePhase.Warming ||
+            next.StatusRoute.Phase == ProjectionScopeStatusRoutePhase.Blocked)
+        {
+            next.StatusRoute.Phase = ProjectionScopeStatusRoutePhase.Active;
+        }
+
+        if (!flipsCurrentCutover)
+            next.StatusRoute.LegacyRouteReleased = false;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }

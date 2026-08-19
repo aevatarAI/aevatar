@@ -141,6 +141,13 @@ internal sealed class ProjectionScopeFailureTracker
                         "Replay did not produce a materialization result.");
                 }
             }
+            catch (ProjectionScopeStatusRouteBlockedException)
+            {
+                // The status route is blocked for a cutover: nothing was re-attempted, so the
+                // refusal must not consume the failure's replay budget. The replay is simply
+                // retried after the flip (activation resumes the cutover first).
+                break;
+            }
             catch (Exception ex)
             {
                 await RecordReplayFailureAsync(failure, ex.Message);

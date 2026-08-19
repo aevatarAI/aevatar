@@ -61,18 +61,41 @@ message ProjectionScopeState {
   ProjectionScopeStatusRoute status_route = 29;
 }
 
+// Cutover phases of a status route. A route is created WARMING (the new writer observes and
+// reports, the previous writer still writes), becomes BLOCKED once the new writer has caught up
+// (the source stops consuming observations; the previous writer is drained and released;
+// the new writer performs the epoch-fenced same-version takeover) and is flipped to ACTIVE.
+// Routes written before phases existed carry UNSPECIFIED and are treated as ACTIVE.
+enum ProjectionScopeStatusRoutePhase {
+  PROJECTION_SCOPE_STATUS_ROUTE_PHASE_UNSPECIFIED = 0;
+  PROJECTION_SCOPE_STATUS_ROUTE_PHASE_WARMING = 1;
+  PROJECTION_SCOPE_STATUS_ROUTE_PHASE_BLOCKED = 2;
+  PROJECTION_SCOPE_STATUS_ROUTE_PHASE_ACTIVE = 3;
+}
+
 message ProjectionScopeStatusRoute {
+  // Contract of the writer this route selects: the terminal materializer contract, or the
+  // legacy shadow contract after a durable rollback.
   string contract_id = 1;
   int64 contract_version = 2;
   // Monotonic per source scope; a higher epoch is the only way to move the
-  // status writer between routes.
+  // status writer between routes, and the only way a same-version status
+  // document write may take over an existing one.
   int64 route_epoch = 3;
   google.protobuf.Timestamp activated_at_utc = 4;
   ProjectionMaterializationActivationProof activation_proof = 5;
-  // Set once the legacy status shadow relay and scope were released for
-  // this source; before that the source actor retries the release on
+  // Set once the previous writer's relay and scope were released for this
+  // route epoch; before that the source actor retries the release on
   // activation.
   bool legacy_route_released = 6;
+  ProjectionScopeStatusRoutePhase phase = 7;
+  // Source scope version at which warming started; the new writer must report
+  // an observed version at or above it to be caught up.
+  int64 warm_started_version = 8;
+  // Highest version the new writer reported during warming (0 until reported).
+  int64 caught_up_version = 9;
+  // Source scope version at which the route was flipped to ACTIVE (0 until flipped).
+  int64 flip_version = 10;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -303,11 +326,51 @@ message ProjectionMaterializationCutoverActivatedEvent {
   ProjectionMaterializationActivationProof activation_proof = 5;
 }
 
+// Phase 1 of a cutover: the route is committed WARMING at a new epoch.
+message ProjectionScopeStatusRouteWarmingStartedEvent {
+  ProjectionScopeStatusRoute route = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+// Phase 2: the new writer reported an observed version at or above warm_started_version.
+message ProjectionScopeStatusRouteCaughtUpEvent {
+  int64 route_epoch = 1;
+  int64 observed_version = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Phase 3: the route is BLOCKED — the source stops consuming observations until the flip.
+message ProjectionScopeStatusRouteBlockedEvent {
+  int64 route_epoch = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+// Phase 5: the route is flipped to ACTIVE at flip_version (route carries the full fingerprint).
+// Routes committed by binaries without phases are ACTIVE by definition.
 message ProjectionScopeStatusRouteActivatedEvent {
   ProjectionScopeStatusRoute route = 1;
   google.protobuf.Timestamp occurred_at_utc = 2;
 }
 
+// Sent by the warming status writer (terminal materializer or legacy shadow) to its source
+// scope: it observed the source at observed_version through the warming route's relay. The
+// source treats an observed version at or above the route's warm_started_version as caught up.
+message ProjectionScopeStatusWriterCaughtUpEvent {
+  string source_scope_actor_id = 1;
+  int64 route_epoch = 2;
+  int64 observed_version = 3;
+  google.protobuf.Timestamp observed_at_utc = 4;
+}
+
+// A no-op committed fact the source records while a route is warming and no observation has
+// been committed since warming started: its publication carries the warming route through the
+// relay so the warming writer can report caught-up even for an otherwise idle source.
+message ProjectionScopeStatusRouteWarmingProbedEvent {
+  int64 route_epoch = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+// Phase 4: the previous writer's relay was removed and its scope released for this epoch.
 message ProjectionScopeStatusLegacyRouteReleasedEvent {
   int64 route_epoch = 1;
   google.protobuf.Timestamp occurred_at_utc = 2;
