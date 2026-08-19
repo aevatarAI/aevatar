@@ -345,9 +345,26 @@ public sealed class ProjectionScopeStatusProjectorTests
 
         var document = dispatcher.Upserts.Should().ContainSingle().Which;
         document.StateVersion.Should().Be(3);
-        (document.StatusRoute == null).Should().Be(state.StatusRoute == null);
-        if (state.StatusRoute != null)
-            document.StatusRoute.Should().Be(state.StatusRoute);
+        // The status document never carries the writer-specific route: at one source version
+        // its bytes must not depend on the source state's StatusRoute (or on which writer
+        // produced them), so a route-less mapping of the same state is byte-identical.
+        typeof(ProjectionScopeStatusDocument).GetProperty("StatusRoute").Should().BeNull();
+        var routelessState = state.Clone();
+        routelessState.StatusRoute = null;
+        var envelope = CreateCommittedEnvelope(routelessState, version: 3, eventId: "state-event-3");
+        CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
+                envelope,
+                out _,
+                out var stateEvent,
+                out var unpackedRoutelessState)
+            .Should().BeTrue();
+        var routelessDocument = ProjectionScopeStatusDocumentMapper.Map(
+            unpackedRoutelessState!,
+            stateEvent!,
+            CommittedStateEventEnvelope.ResolveTimestamp(envelope, DateTimeOffset.UtcNow));
+        document.ToByteString().Equals(routelessDocument.ToByteString()).Should().BeTrue();
+        ProjectionWriteResultEvaluator.Evaluate(document, routelessDocument).Disposition
+            .Should().Be(ProjectionWriteDisposition.Duplicate);
     }
 
     [Fact]

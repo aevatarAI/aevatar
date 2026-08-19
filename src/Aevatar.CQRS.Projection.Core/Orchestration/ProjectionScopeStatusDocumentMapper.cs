@@ -52,7 +52,6 @@ internal static class ProjectionScopeStatusDocumentMapper
             InFlightSource = state.InFlightObservation?.Source?.Clone(),
             ActiveMaterializationRoute = state.ActiveMaterializationRoute?.Clone(),
             MaterializationCutover = state.MaterializationCutover?.Clone(),
-            StatusRoute = state.StatusRoute?.Clone(),
         };
         document.OldestUnresolvedFailureAtUtc = failureSummary.OldestUnresolvedFailureAtUtc?.Clone();
         document.RecentObservedEnvelopes.Add(state.RecentObservedEnvelopes);
