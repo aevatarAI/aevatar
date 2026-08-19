@@ -31,7 +31,8 @@ public sealed class NyxIdAssistantActionRegistry
     public const string LegacyRegistryRevision = "nyxid-assistant-actions.v4";
     public const string WaveOneDraftRegistryRevision = "nyxid-assistant-actions.v5";
     public const string LeastScopeRegistryRevision = "nyxid-assistant-actions.v6";
-    public const string SupportedRegistryRevision = "nyxid-assistant-actions.v7";
+    public const string KeyRotationRegistryRevision = "nyxid-assistant-actions.v7";
+    public const string SupportedRegistryRevision = "nyxid-assistant-actions.v8";
     public const string ServiceAccessReviewRegistryRevision =
         "aevatar-nyxid-actions.v1";
 
@@ -223,9 +224,16 @@ public sealed class NyxIdAssistantActionRegistry
                 "service.connect",
                 "key.create",
             }.ToFrozenSet(StringComparer.Ordinal),
+            [KeyRotationRegistryRevision] = new[]
+            {
+                "service.connect",
+                "key.create",
+                "key.rotate",
+            }.ToFrozenSet(StringComparer.Ordinal),
             [SupportedRegistryRevision] = new[]
             {
                 "service.connect",
+                "service.reauthorize",
                 "key.create",
                 "key.rotate",
             }.ToFrozenSet(StringComparer.Ordinal),
@@ -234,6 +242,8 @@ public sealed class NyxIdAssistantActionRegistry
     // A manifest contract can be known without being executable by Aevatar.
     // Each revision exposes only actions that have a typed producer, wire
     // mapper, and typed postcondition reader on the canonical actor path.
+    // Revision v8 pins service.reauthorize so the manifest loads, but the
+    // action stays closed until that path exists.
     private static readonly FrozenDictionary<string, FrozenSet<string>> ExecutableActionsByRevision =
         new Dictionary<string, FrozenSet<string>>(StringComparer.Ordinal)
         {
@@ -242,6 +252,8 @@ public sealed class NyxIdAssistantActionRegistry
             [WaveOneDraftRegistryRevision] = new[] { "service.connect" }
                 .ToFrozenSet(StringComparer.Ordinal),
             [LeastScopeRegistryRevision] = new[] { "service.connect", "key.create" }
+                .ToFrozenSet(StringComparer.Ordinal),
+            [KeyRotationRegistryRevision] = new[] { "service.connect", "key.create", "key.rotate" }
                 .ToFrozenSet(StringComparer.Ordinal),
             [SupportedRegistryRevision] = new[] { "service.connect", "key.create", "key.rotate" }
                 .ToFrozenSet(StringComparer.Ordinal),
@@ -883,7 +895,9 @@ public sealed class NyxIdAssistantActionRegistry
         NyxIdAssistantActionRisk risk,
         bool rememberEligible)
     {
-        var pinnedParamsSchema = revision is LeastScopeRegistryRevision or SupportedRegistryRevision &&
+        var pinnedParamsSchema = revision is LeastScopeRegistryRevision
+                                     or KeyRotationRegistryRevision
+                                     or SupportedRegistryRevision &&
                                  contract.Action == NyxIdAssistantActionKind.KeyCreate
             ? LeastScopeKeyCreateParamsSchema
             : contract.PinnedParamsSchema;

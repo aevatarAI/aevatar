@@ -41,7 +41,8 @@
       "nyxid-assistant-actions.v4",
       "nyxid-assistant-actions.v5",
       "nyxid-assistant-actions.v6",
-      "nyxid-assistant-actions.v7"
+      "nyxid-assistant-actions.v7",
+      "nyxid-assistant-actions.v8"
     ],
     "nyxid_source": "backend/src/handlers/assistant_actions.rs",
     "nyxid_source_sha256": "7350930688e5fbe08355c0bfc1b95b1c8546c4db6c999d400c2e8d88b9c70f36",
@@ -63,6 +64,10 @@
       "nyxid-assistant-actions.v7": {
         "checked_in_payload": "registry-v7.json",
         "checked_in_payload_sha256": "b029b8fb295a213f7c4f4da8bde0ec0b74a5bcdfe502818bfdd0fb16d9bdf941"
+      },
+      "nyxid-assistant-actions.v8": {
+        "checked_in_payload": "registry-v8.json",
+        "checked_in_payload_sha256": "b7dcc3784ae482e2c42ef21557ef70f2b677e38348df11797ee8278e65970457"
       }
     }
   },
