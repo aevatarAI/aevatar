@@ -96,6 +96,10 @@ message ProjectionScopeStatusRoute {
   int64 caught_up_version = 9;
   // Source scope version at which the route was flipped to ACTIVE (0 until flipped).
   int64 flip_version = 10;
+  // Source scope version at which the route was BLOCKED (0 until blocked). The previous
+  // writer confirms its committed release with the highest source version it observed; a
+  // confirmation below this version is recorded as released-before-drained.
+  int64 blocked_version = 11;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -194,6 +198,11 @@ message ReleaseProjectionScopeCommand {
   string projection_kind = 2;
   string session_id = 3;
   ProjectionScopeMode mode = 4;
+  // Set (> 0) when the release is the previous-writer release of a status-route cutover
+  // owned by root_actor_id at this route epoch: the released writer confirms its committed
+  // release to root_actor_id with ProjectionScopeStatusWriterReleasedEvent, also when it was
+  // already released (the source re-dispatches until it holds the confirmation).
+  int64 status_route_epoch = 5;
 }
 
 message ReplayProjectionFailuresCommand {
@@ -343,6 +352,9 @@ message ProjectionScopeStatusRouteCaughtUpEvent {
 message ProjectionScopeStatusRouteBlockedEvent {
   int64 route_epoch = 1;
   google.protobuf.Timestamp occurred_at_utc = 2;
+  // Source scope version of this commit (the last publication the previous writer must have
+  // observed to be drained).
+  int64 blocked_version = 3;
 }
 
 // Phase 5: the route is flipped to ACTIVE at flip_version (route carries the full fingerprint).
@@ -373,5 +385,29 @@ message ProjectionScopeStatusRouteWarmingProbedEvent {
 // Phase 4: the previous writer's relay was removed and its scope released for this epoch.
 message ProjectionScopeStatusLegacyRouteReleasedEvent {
   int64 route_epoch = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+  // Highest source version the released writer confirmed it observed (0 when the previous
+  // writer did not exist, so nothing had to be confirmed).
+  int64 released_writer_observed_version = 3;
+}
+
+// Sent by the previous status writer (legacy shadow or terminal materializer) to its source
+// scope after it COMMITTED its release for a status-route cutover at route_epoch: the typed
+// handled/committed continuation the source waits for before it flips the route to ACTIVE.
+// Re-sent on every re-dispatched release, so a lost confirmation is recovered by the
+// source's durable continuation.
+message ProjectionScopeStatusWriterReleasedEvent {
+  string source_scope_actor_id = 1;
+  int64 route_epoch = 2;
+  // Highest source version the writer observed before it released (0 if unknown).
+  int64 last_observed_version = 3;
+  google.protobuf.Timestamp released_at_utc = 4;
+}
+
+// The writer of an ACTIVE terminal route is unchanged but the route contract is upgraded in
+// place under a fresh admission of the newer contract (higher route epoch, no cutover: there
+// is no previous writer to release). Applies only over a terminal route in a writing phase.
+message ProjectionScopeStatusRouteContractUpgradedEvent {
+  ProjectionScopeStatusRoute route = 1;
   google.protobuf.Timestamp occurred_at_utc = 2;
 }

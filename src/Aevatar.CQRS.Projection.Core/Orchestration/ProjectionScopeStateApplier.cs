@@ -403,6 +403,7 @@ internal static class ProjectionScopeStateApplier
 
         var next = current.Clone();
         next.StatusRoute.Phase = ProjectionScopeStatusRoutePhase.Blocked;
+        next.StatusRoute.BlockedVersion = evt.BlockedVersion;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }
@@ -452,6 +453,33 @@ internal static class ProjectionScopeStateApplier
 
         var next = current.Clone();
         next.StatusRoute.LegacyRouteReleased = true;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    /// <summary>
+    /// In-place contract upgrade of a terminal route in a writing phase: the writer is unchanged,
+    /// the route moves to the newer contract at a strictly higher epoch. Never applies over a
+    /// cutover in flight, a legacy route or a lower/equal epoch.
+    /// </summary>
+    public static ProjectionScopeState ApplyStatusRouteContractUpgraded(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRouteContractUpgradedEvent evt)
+    {
+        var route = evt.Route;
+        var currentRoute = current.StatusRoute;
+        if (route == null ||
+            !ProjectionScopeStatusRoutePolicy.IsTerminalRoute(currentRoute) ||
+            !ProjectionScopeStatusRoutePolicy.IsWritingPhase(currentRoute!) ||
+            !ProjectionScopeStatusRoutePolicy.IsTerminalRoute(route) ||
+            route.RouteEpoch <= currentRoute.RouteEpoch)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.StatusRoute = route.Clone();
+        next.StatusRoute.Phase = ProjectionScopeStatusRoutePhase.Active;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }

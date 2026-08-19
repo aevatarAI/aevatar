@@ -594,9 +594,12 @@ public sealed record RuntimeFleetCapabilityAuthorityOptions
             RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
             RuntimeFleetCapabilityContracts.WorkflowNormalizedStateV1,
             RuntimeFleetCapabilityContracts.WorkflowNormalizedStateReaderVersion),
+        // The phase-unaware V1 status contract is intentionally not managed any more: a binary
+        // that still needs it (8d47b5e5 / 416e80f4 / 59c6b4e9 source scopes) finds no admission
+        // and stays on its current writer, while V2 opens only once every silo advertises it.
         new(
-            RuntimeFleetCapability.ProjectionScopeStatusTerminalV1,
-            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1,
+            RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2,
             RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion),
         new(
             RuntimeFleetCapability.ProjectionIncrementalGraphV1,

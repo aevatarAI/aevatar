@@ -119,20 +119,62 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
         services.AddProjectionScopeStatusRuntimeCore();
 
         await using var provider = services.BuildServiceProvider();
-        var advertisement = provider
+        var advertisements = provider
             .GetServices<Aevatar.Foundation.Abstractions.Runtime.IRuntimeFleetCapabilityAdvertisement>()
+            .ToArray();
+        var advertisement = advertisements
             .Should().ContainSingle(candidate =>
                 candidate.GetCapability().Capability ==
-                Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapability.ProjectionScopeStatusTerminalV1)
+                Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapability.ProjectionScopeStatusTerminalV2)
             .Subject;
 
         // The fleet authority opens the terminal gate only when every silo advertises exactly the
         // contract the source scope demands before warming the terminal route.
         var capability = advertisement.GetCapability();
         capability.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        capability.ContractId.Should().Be(
+            Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapabilityContracts
+                .ProjectionScopeStatusTerminalV2);
         capability.ReaderContractVersion.Should().Be((int)ProjectionScopeStatusGAgent.ContractVersion);
-        capability.ReaderContractVersion.Should().Be(1, "the terminal reader contract is pinned at v1 for rollback safety");
+        capability.ReaderContractVersion.Should().Be(
+            Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapabilityContracts
+                .ProjectionScopeStatusTerminalReaderVersion);
+        capability.ReaderContractVersion.Should().Be(
+            2,
+            "the phased status route bumped the terminal reader contract to v2");
         advertisement.GetReaderImplementationType().Should().Be(typeof(ProjectionScopeStatusGAgent));
+    }
+
+    [Fact]
+    public async Task AddProjectionScopeStatusRuntimeCore_ShouldNotAdvertiseThePhaseUnawareTerminalStatusCapability()
+    {
+        // The absence of the v1 advertisement is what makes a mixed fleet fail closed: this binary
+        // never lets the (unmanaged) v1 gate look unanimous, and a phase-unaware binary that does
+        // not advertise v2 keeps the v2 gate shut for the whole fleet.
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddProjectionScopeStatusRuntimeCore();
+
+        await using var provider = services.BuildServiceProvider();
+        var capabilities = provider
+            .GetServices<Aevatar.Foundation.Abstractions.Runtime.IRuntimeFleetCapabilityAdvertisement>()
+            .Select(static candidate => candidate.GetCapability())
+            .ToArray();
+
+        capabilities.Should().NotContain(static candidate =>
+            candidate.Capability ==
+            Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapability.ProjectionScopeStatusTerminalV1);
+        capabilities.Should().NotContain(static candidate =>
+            candidate.ContractId ==
+            Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapabilityContracts
+                .ProjectionScopeStatusTerminalV1);
+        capabilities.Should().NotContain(static candidate =>
+            candidate.Capability ==
+                Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapability.ProjectionScopeStatusTerminalV2 &&
+            candidate.ReaderContractVersion <
+                Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapabilityContracts
+                    .ProjectionScopeStatusTerminalReaderVersion);
     }
 
     [Theory]

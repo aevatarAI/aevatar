@@ -35,17 +35,23 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 /// represented by the B0 fixture fed a routed state. Its terminal gate was B1's (<c>== 1</c>), its
 /// legacy projector skipped every terminal route, its evaluator was the plain byte evaluator.</item>
 /// <item><b>B3 = this worktree</b>: the document carries <c>status_route</c> again and implements
-/// <see cref="IProjectionRouteFencedReadModel"/> (route epoch 0 when absent); the terminal reader
-/// version stays 1, so every route B3 commits (fresh adoption, re-adoption at a higher epoch,
-/// any phase) is a v1 route that a B1/B2 terminal can serve after a rollback (their gate ignores
-/// the phase); <see cref="ProjectionWriteResultEvaluator"/> is epoch
-/// fenced at the same source version; the legacy shadow projector is gated by
-/// <c>ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite</c>; the source drives a phased
-/// cutover (WARMING, caught up, BLOCKED, previous writer released, ACTIVE).</item>
+/// <see cref="IProjectionRouteFencedReadModel"/> (route epoch 0 when absent);
+/// <see cref="ProjectionWriteResultEvaluator"/> is epoch fenced at the same source version; the
+/// legacy shadow projector is gated by <c>ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite</c>;
+/// the source drives a phased cutover (WARMING, caught up, BLOCKED, previous writer released,
+/// ACTIVE). Its terminal contract was REVISED to
+/// <c>aevatar.projection.scope-status-terminal.v2</c> at reader version 2: every route it commits
+/// is a v2 route, it still SERVES the v1 routes older binaries created (a source keeps its writer
+/// across the upgrade), and it advertises only v2 — so a fleet that still contains a
+/// phase-unaware binary opens neither gate and neither binary can adopt.</item>
 /// </list>
 /// Provenance commands: <c>git show b64c96a45:src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeStatusProjector.cs</c>,
 /// <c>git show 8d47b5e5c:src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeStatusDocumentMapper.cs</c>,
 /// <c>git show 8d47b5e5c:src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeStatusRoutePolicy.cs</c>,
+/// <c>git show 416e80f4a:src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeGAgentBase.cs</c> (the old
+/// SOURCE scope: <c>AdoptTerminalStatusRouteAsync</c>, <c>ReleaseLegacyStatusRouteIfPendingAsync</c>,
+/// <c>TryReleaseLegacyStatusShadowOfFlippedSourceAsync</c>),
+/// <c>git show 416e80f4a:src/Aevatar.CQRS.Projection.Core/Orchestration/{ProjectionScopeStatusRoutePolicy,ProjectionScopeStatusProjector,ProjectionScopeStatusTerminalCapabilityAdvertisement}.cs</c>,
 /// <c>git show 416e80f4a:src/Aevatar.CQRS.Projection.Core/projection_scope_status_readmodel.proto</c>,
 /// <c>git show {b64c96a45,8d47b5e5c,416e80f4a}:src/Aevatar.CQRS.Projection.Stores.Abstractions/Abstractions/ReadModels/ProjectionWriteResultEvaluator.cs</c>
 /// (byte-identical in all three: one plain evaluator). Fields 1..29 of the document are unchanged
@@ -66,7 +72,25 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 /// <item><b>Rolling forward</b>: epoch-0 documents (B0/B2) are taken over at the same version by the
 /// first epoch-1 write (B3 legacy shadow while warming, or B3 terminal from BLOCKED on); the
 /// takeover repeats as a duplicate; every higher version is applied whoever writes it. B1 and B3
-/// on the same v1 route produce identical bytes at every version: always duplicates.</item>
+/// on the same v1 route produce identical bytes at every version: always duplicates; the in-place
+/// contract upgrade of that v1 route to v2 at the next epoch is an epoch-fenced takeover by the
+/// same writer, and the old terminal's now-stale v1 write at that version is fenced as Stale.</item>
+/// <item><b>Contract revision (what it closes, and what it does not)</b>: the phase-unaware
+/// WRITE and SOURCE-ACTIVATION gates of B1/B2 (contract id <c>...terminal.v1</c> AND reader
+/// version exactly 1) match no route B3 commits, so an old source binary never treats a WARMING
+/// or BLOCKED route as ACTIVE any more. Two things survive the revision and are asserted here
+/// rather than claimed away: (i) B2's legacy shadow releases itself on observing ANY non-empty
+/// route (416e80f4a's <c>IsTerminalRoute</c>), a v2 WARMING route included, so a fleet downgraded
+/// mid-cutover leaves the warming route with no writer at all — the status document FREEZES until
+/// the cutover completes, and is never rewritten by a phase-unaware binary; (ii) an old source
+/// binary admitted through an open v1 gate would still adopt a FRESH v1 route at a strictly
+/// higher epoch, which the current appliers and the current materializer accept. Only the closed
+/// v1 capability gate stops (ii). That the gates themselves stay shut while the fleet is mixed is
+/// a fleet-authority fact proven against the real authority in
+/// <c>test/Aevatar.Foundation.Core.Tests/RuntimeFleetCapabilityAuthorityTests.cs</c>
+/// (<c>Reconcile_WhenOneActiveMemberIsPhaseUnaware_ShouldLeaveTheTerminalStatusGatesShut</c>);
+/// this file asserts only the two projection-side inputs to it — what B3 advertises and what its
+/// authority manages.</item>
 /// <item><b>Delayed legacy delivery</b>: an old-binary write for a version the store already holds
 /// under a higher epoch is Stale under the current evaluator (Conflict only in the old binary's
 /// own log, store untouched); a lower version is Stale; a version the new writer has not processed
@@ -75,10 +99,13 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 /// <item><b>Rollback / drain</b>: an old binary after rollback writes higher versions with a lower
 /// epoch (version wins, Applied); its same-version redelivery over a higher-epoch document is
 /// Stale/Conflict-in-its-own-log; rolling forward again the new writer takes over at the same
-/// version and continues. Revocation rolls the route to the legacy writer through the same phases
-/// at the next epoch: the terminal writes while the legacy route warms, releases itself when it
-/// blocks, and the legacy shadow writes from BLOCKED on. Never a Conflict from the current store,
-/// one authoritative document.</item>
+/// version and continues. Revocation of the route's OWN (current) contract rolls the route to the
+/// legacy writer through the same phases at the next epoch: the terminal writes while the legacy
+/// route warms, releases itself when it blocks, and the legacy shadow writes from BLOCKED on.
+/// Never a Conflict from the current store, one authoritative document. A route of the previous
+/// terminal contract is never rolled back — that gate is revoked as a consequence of the revision,
+/// not as an operator decision — it only moves in place to the current contract under a fresh
+/// grant.</item>
 /// <item><b>Sanity</b>: under one epoch a genuinely different fact at the same version (different
 /// event id, or same event id with different state bytes) is still a Conflict; byte equality is
 /// not relaxed inside an epoch.</item>
@@ -129,7 +156,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         var route = V1TerminalRoute(epoch: 1);
         var state = BuildSourceState(version, route);
         ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(route, ProjectionScopeStatusGAgent.ContractId, ProjectionScopeStatusGAgent.ContractVersion)
-            .Should().BeTrue("B3 is a v1 reader and writes v1 routes");
+            .Should().BeTrue("the current terminal materializer serves routes of every earlier terminal contract");
         PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(route)
             .Should().BeTrue("B1 wrote this route");
 
@@ -141,6 +168,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         current.ToByteArray().Should().Equal(previousBytes, "same (state, stateEvent, timestamp) gives the same bytes on B1 and B3");
         current.StatusRoute.Should().NotBeNull();
         current.StatusRoute.RouteEpoch.Should().Be(1);
+        current.StatusRoute.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1);
         current.StatusRoute.ContractVersion.Should().Be(PreviousBinaryProjectionScopeStatusTerminalWriter.ReaderVersion);
         AssertFullMappingSurface(current);
 
@@ -156,7 +184,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         const long version = 7;
         var clock = new FixedProjectionClock(Now);
         var unroutedState = BuildSourceState(version, route: null);
-        var routedState = BuildSourceState(version, TerminalRoute(epoch: 1));
+        var routedState = BuildSourceState(version, V2TerminalRoute(epoch: 1));
 
         var oldUnrouted = await WriteThroughOldBinaryLegacyAsync(unroutedState, version, clock);
         var oldRouted = await WriteThroughOldBinaryLegacyAsync(routedState, version, clock);
@@ -250,32 +278,64 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
             (StatusWriter.Terminal, WriteEvaluator.CurrentStore, 7, ProjectionWriteDisposition.Applied),
             (StatusWriter.Terminal, WriteEvaluator.CurrentStore, 8, ProjectionWriteDisposition.Applied));
 
-        // Rollback safety: a source that adopts the terminal writer FRESH under B3 (phased cutover)
-        // also gets a v1 route, which B2's terminal gate accepts in any phase — so a rollback to B2
-        // after a fresh B3 adoption still has a writer (see the next test).
-        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(TerminalRoute(epoch: 1)).Should().BeTrue();
-        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(TerminalRoute(epoch: 2, ProjectionScopeStatusRoutePhase.Blocked)).Should().BeTrue();
+        // The contract revision draws the line here: only a route an OLD binary created (v1) is
+        // shared ground. A source that adopts the terminal writer FRESH under B3 gets a v2 route,
+        // and B2's terminal gate (contract id AND reader version exactly 1) matches it in no
+        // phase — which is exactly why a fresh adoption may only happen once the v2 gate is
+        // unanimous, i.e. once no B2 silo is left in the fleet (see the mixed-fleet tests).
+        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(V2TerminalRoute(epoch: 1)).Should().BeFalse();
+        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(V2TerminalRoute(epoch: 2, ProjectionScopeStatusRoutePhase.Blocked)).Should().BeFalse();
     }
 
     [Fact]
-    public async Task RollbackToB2AfterAFreshB3Adoption_B2TerminalKeepsWriting_HigherVersionWins_SameVersionNeverCorruptsTheStore()
+    public async Task RollbackToB2AfterAFreshB3Adoption_NoB2WriterAdoptsTheV2Route_TheDocumentIsFrozenNotCorrupted()
     {
-        // The route a B3 phased cutover committed: v1 contract, epoch 1, phase ACTIVE.
-        var route = TerminalRoute(epoch: 1);
-        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(route).Should().BeTrue("B2's gate ignores the phase");
+        // The route a B3 phased cutover commits after the contract revision: v2 contract, epoch 1,
+        // phase ACTIVE. NEITHER of B2's writers claims it — its terminal gate wants contract id
+        // ".v1" at reader version exactly 1, and its legacy projector skips every routed source
+        // (416e80f4a IsTerminalRoute is "any non-empty route").
+        var route = V2TerminalRoute(epoch: 1);
+        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(route)
+            .Should().BeFalse("the revised contract closes B2's phase-unaware terminal gate");
+        PreviousBinaryRouteGatedLegacyProjector.WritesFor(route)
+            .Should().BeFalse("B2's legacy shadow projector skips every routed source");
+
+        // Positive control for that fixture, so "B2 has no writer for a v2 route" below is not the
+        // same observation as "the fixture cannot write". On a source with NO committed route its
+        // gate opens and the write reaches the shared store as B0 bytes; an inverted gate or an
+        // early return in its unpack path would fail here instead of passing silently below.
+        PreviousBinaryRouteGatedLegacyProjector.WritesFor(route: null).Should().BeTrue();
+        var control = new MixedBinaryWorld();
+        (await control.PreviousBinaryLegacyWriteAsync(Publication(8, route: null)))
+            .Should().Be(ProjectionWriteDisposition.Applied);
+        await control.AssertStoreIsByteImageOfAsync(8, carriedRoute: null);
+        control.Journal.Writes.Should().ContainSingle()
+            .Which.Writer.Should().Be(StatusWriter.PreviousBinaryLegacy);
+
         var world = new MixedBinaryWorld();
 
         // B3's terminal owns v8 (document carries the route, epoch 1).
         (await world.TerminalObserveAsync(Publication(8, route))).Should().Be(ProjectionWriteDisposition.Applied);
         await world.AssertStoreIsByteImageOfAsync(8, carriedRoute: route);
 
-        // Rollback to B2: its terminal (route-less bytes, plain evaluator) redelivers v8 — Conflict
-        // on B2's side only (Stale on B3's side), store untouched — then writes v9: version wins.
-        (await world.OldBinaryWriteAsync(Publication(8, route), WriteEvaluator.OldBinaryPlain)).Should().Be(ProjectionWriteDisposition.Conflict);
-        (await world.OldBinaryWriteAsync(Publication(8, route))).Should().Be(ProjectionWriteDisposition.Stale);
+        // Rollback to B2 (reachable only by rolling the binary back — the v2 gate opened because
+        // every silo advertised v2). B2 has no writer for this route at any version: the document
+        // freezes at B3's last write instead of being rewritten by a phase-unaware binary.
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(8, route))).Should().BeNull();
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(9, route))).Should().BeNull();
+        (await world.PreviousBinaryLegacyWriteAsync(Publication(9, route))).Should().BeNull();
         await world.AssertStoreIsByteImageOfAsync(8, carriedRoute: route);
-        (await world.OldBinaryWriteAsync(Publication(9, route), WriteEvaluator.OldBinaryPlain)).Should().Be(ProjectionWriteDisposition.Applied);
+        world.Journal.Writes.Should().ContainSingle("only B3's terminal ever reached the store");
+        await world.AssertExactlyOneStoredDocumentAsync();
+
+        // A binary from before routes existed (B0) still writes unconditionally; there the epoch
+        // fence, not the route gate, protects the document: a higher version wins, the same
+        // version under a higher epoch is stale.
+        (await world.OldBinaryWriteAsync(Publication(9, route))).Should().Be(ProjectionWriteDisposition.Applied);
         await world.AssertStoreIsByteImageOfAsync(9, carriedRoute: null);
+        (await world.OldBinaryWriteAsync(Publication(8, route))).Should().Be(ProjectionWriteDisposition.Stale);
+        (await world.OldBinaryWriteAsync(Publication(9, route), WriteEvaluator.OldBinaryPlain))
+            .Should().Be(ProjectionWriteDisposition.Duplicate, "B0 rewrote its own bytes");
 
         // Roll forward again: B3's terminal takes v9 over (epoch 1 > 0) and continues.
         (await world.TerminalObserveAsync(Publication(9, route))).Should().Be(ProjectionWriteDisposition.Applied);
@@ -289,7 +349,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
     // ── 4. rolling 8d47b5e5c (B1) <-> B3 on a v1 route ─────────────────────────────────
 
     [Fact]
-    public async Task RollingB1AndB3OnV1Route_AreDuplicatesAtEveryVersion_AndReadoptionAtAHigherEpochTakesOver()
+    public async Task RollingB1AndB3OnV1Route_AreDuplicatesAtEveryVersion_AndTheInPlaceContractUpgradeTakesOver()
     {
         var route = V1TerminalRoute(epoch: 1);
         var world = new MixedBinaryWorld();
@@ -312,36 +372,48 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         (await world.TerminalObserveAsync(Publication(5, route))).Should().Be(ProjectionWriteDisposition.Duplicate);
         await world.AssertStoreIsByteImageOfAsync(5, carriedRoute: route);
 
-        // Re-adoption at a strictly higher epoch under B3: the source commits another v1 terminal
-        // route at epoch 2 (any strictly higher epoch behaves the same; phase ACTIVE). B1's gate
-        // accepts every v1 route whatever its phase, so B1's terminal writes it too — same mapper,
-        // same route: byte-identical, duplicates in both orders.
-        var readopted = TerminalRoute(epoch: 2);
-        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(readopted).Should().BeTrue();
-        (await world.TerminalObserveAsync(Publication(6, readopted))).Should().Be(ProjectionWriteDisposition.Applied);
-        (await world.PreviousBinaryTerminalWriteAsync(Publication(6, readopted))).Should().Be(ProjectionWriteDisposition.Duplicate);
-        (await world.PreviousBinaryTerminalWriteAsync(Publication(6, readopted), WriteEvaluator.OldBinaryPlain)).Should().Be(ProjectionWriteDisposition.Duplicate);
-        await world.AssertStoreIsByteImageOfAsync(6, carriedRoute: readopted);
-        (await world.PreviousBinaryTerminalWriteAsync(Publication(7, readopted), WriteEvaluator.OldBinaryPlain)).Should().Be(ProjectionWriteDisposition.Applied, "B1 first");
-        (await world.TerminalObserveAsync(Publication(7, readopted))).Should().Be(ProjectionWriteDisposition.Duplicate, "B3 second");
-        await world.AssertStoreIsByteImageOfAsync(7, carriedRoute: readopted);
+        // In-place contract upgrade under B3 (ProjectionScopeGAgentBase.StatusRoute.cs
+        // MaintainActiveTerminalRouteAsync -> UpgradeTerminalRouteContractAsync): the writer is
+        // unchanged, the route moves to the CURRENT contract at a strictly higher epoch. Driven
+        // through the real applier so the epoch/phase rules are production's.
+        var upgraded = UpgradeContractInPlace(route, flipVersion: 6);
+        upgraded.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        upgraded.ContractVersion.Should().Be(ProjectionScopeStatusGAgent.ContractVersion);
+        upgraded.RouteEpoch.Should().Be(2);
+        upgraded.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                upgraded,
+                ProjectionScopeStatusGAgent.ContractId,
+                ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().BeTrue("the same materializer keeps the route across the upgrade");
+        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(upgraded)
+            .Should().BeFalse("B1's gate never matches the upgraded contract");
 
-        // Evaluator-level: a B1-shaped epoch-1 document at the re-adoption version (a late B1
-        // write that still carries the previous route — not producible from one committed source
-        // history, one version has one route) is Stale under the current evaluator — never a
-        // conflict; only B1's own plain evaluator would log Conflict. And B3's epoch-2 document
-        // takes over an epoch-1 B1 document at the same version.
+        // B3 keeps writing under epoch 2; B1 has no route it may write for any more.
+        (await world.TerminalObserveAsync(Publication(6, upgraded))).Should().Be(ProjectionWriteDisposition.Applied);
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(6, upgraded))).Should().BeNull();
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(7, upgraded))).Should().BeNull();
+        (await world.TerminalObserveAsync(Publication(7, upgraded))).Should().Be(ProjectionWriteDisposition.Applied);
+        await world.AssertStoreIsByteImageOfAsync(7, carriedRoute: upgraded);
+
+        // A B1 write that still carries the pre-upgrade route at the same version (its last
+        // in-flight publication) is fenced as Stale under the current evaluator — never a
+        // conflict; only B1's own plain evaluator logs Conflict, and its store write is refused
+        // either way. The reverse order is the takeover the upgrade epoch buys.
         var stored = (await world.Journal.Store.GetAsync(SourceScopeActorId))!;
         var lateB1 = await WriteThroughPreviousBinaryTerminalAsync(BuildSourceState(7, route), 7, new FixedProjectionClock(Now));
         ProjectionWriteResultEvaluator.Evaluate(stored, lateB1).Disposition.Should().Be(ProjectionWriteDisposition.Stale);
         PreviousBinaryProjectionWriteResultEvaluator.Evaluate(stored, lateB1).Disposition.Should().Be(ProjectionWriteDisposition.Conflict);
         ProjectionWriteResultEvaluator.Evaluate(lateB1, stored).Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(7, route))).Should().Be(ProjectionWriteDisposition.Stale);
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(7, route), WriteEvaluator.OldBinaryPlain)).Should().Be(ProjectionWriteDisposition.Conflict);
+        await world.AssertStoreIsByteImageOfAsync(7, carriedRoute: upgraded);
 
         (await world.PreviousBinaryTerminalWriteAsync(Publication(5, route))).Should().Be(ProjectionWriteDisposition.Stale, "a B1 straggler of a lower version");
 
         world.AssertNoConflictFromTheCurrentStore();
         world.Terminal.Agent.State.PendingWrite.Should().BeNull();
-        await world.AssertStoreIsByteImageOfAsync(7, carriedRoute: readopted);
+        await world.AssertStoreIsByteImageOfAsync(7, carriedRoute: upgraded);
         world.Journal.Writes.Select(static w => (w.Writer, w.Evaluator, w.Version, w.Disposition)).Should().Equal(
             (StatusWriter.PreviousBinaryTerminal, WriteEvaluator.CurrentStore, 1, ProjectionWriteDisposition.Applied),
             (StatusWriter.PreviousBinaryTerminal, WriteEvaluator.CurrentStore, 2, ProjectionWriteDisposition.Applied),
@@ -354,22 +426,22 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
             (StatusWriter.PreviousBinaryTerminal, WriteEvaluator.OldBinaryPlain, 5, ProjectionWriteDisposition.Applied),
             (StatusWriter.Terminal, WriteEvaluator.CurrentStore, 5, ProjectionWriteDisposition.Duplicate),
             (StatusWriter.Terminal, WriteEvaluator.CurrentStore, 6, ProjectionWriteDisposition.Applied),
-            (StatusWriter.PreviousBinaryTerminal, WriteEvaluator.CurrentStore, 6, ProjectionWriteDisposition.Duplicate),
-            (StatusWriter.PreviousBinaryTerminal, WriteEvaluator.OldBinaryPlain, 6, ProjectionWriteDisposition.Duplicate),
-            (StatusWriter.PreviousBinaryTerminal, WriteEvaluator.OldBinaryPlain, 7, ProjectionWriteDisposition.Applied),
-            (StatusWriter.Terminal, WriteEvaluator.CurrentStore, 7, ProjectionWriteDisposition.Duplicate),
+            (StatusWriter.Terminal, WriteEvaluator.CurrentStore, 7, ProjectionWriteDisposition.Applied),
+            (StatusWriter.PreviousBinaryTerminal, WriteEvaluator.CurrentStore, 7, ProjectionWriteDisposition.Stale),
+            (StatusWriter.PreviousBinaryTerminal, WriteEvaluator.OldBinaryPlain, 7, ProjectionWriteDisposition.Conflict),
             (StatusWriter.PreviousBinaryTerminal, WriteEvaluator.CurrentStore, 5, ProjectionWriteDisposition.Stale));
     }
 
     // ── 4b. old-binary terminal on an old silo during a B3 WARMING cutover ──────────────
 
     [Fact]
-    public async Task OldBinaryTerminalDuringAB3WarmingRoute_WritesTheSameBytesAsTheNewLegacyShadow_DuplicateNeverConflict()
+    public async Task OldBinaryTerminalDuringAB3WarmingRoute_NeverMatchesTheV2Route_SoTheCutoverKeepsExactlyOneWriterPerPhase()
     {
-        // Rolling B1/B2-shaped terminal (8d47b5e5c gate: any v1 route, phase ignored) on an old
-        // silo while a B3 source warms the terminal route at epoch 1: the old terminal writes the
-        // warming versions; so does the B3 legacy shadow (both copy the warming route through the
-        // same mapping); the B3 terminal only reports. Same bytes, duplicates in either order.
+        // Before the contract revision a B1/B2-shaped terminal (8d47b5e5c gate: any v1 route,
+        // phase ignored) on an old silo wrote the warming versions alongside the B3 legacy
+        // shadow. The revised route contract closes that gate: through the whole cutover the old
+        // terminal matches nothing, so each phase has exactly one writer — the legacy shadow
+        // while WARMING, the terminal from BLOCKED on.
         var world = new MixedBinaryWorld();
         var routeCarrier = new ProjectionScopeState();
         var warming = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, ProjectionScopeStatusRoutePhase.Warming);
@@ -377,35 +449,44 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         warming.ActivatedAtUtc = Timestamp.FromDateTimeOffset(Now);
         var warmingStarted = new ProjectionScopeStatusRouteWarmingStartedEvent { Route = warming, OccurredAtUtc = Timestamp.FromDateTimeOffset(Now) };
         routeCarrier = ProjectionScopeStateApplier.ApplyStatusRouteWarmingStarted(routeCarrier, warmingStarted);
-        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(routeCarrier.StatusRoute).Should().BeTrue("the old gate ignores WARMING");
+        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(routeCarrier.StatusRoute)
+            .Should().BeFalse("the v2 contract closes the phase-unaware gate, WARMING included");
         ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(routeCarrier.StatusRoute).Should().BeTrue();
 
         var v4 = Publication(4, routeCarrier.StatusRoute, eventData: warmingStarted);
         (await world.NewBinaryLegacyWriteAsync(v4)).Should().Be(ProjectionWriteDisposition.Applied);
-        (await world.PreviousBinaryTerminalWriteAsync(v4)).Should().Be(ProjectionWriteDisposition.Duplicate);
-        (await world.PreviousBinaryTerminalWriteAsync(v4, WriteEvaluator.OldBinaryPlain)).Should().Be(ProjectionWriteDisposition.Duplicate);
+        (await world.PreviousBinaryTerminalWriteAsync(v4)).Should().BeNull("the old terminal's gate refuses a v2 route");
         (await world.TerminalObserveAsync(v4)).Should().BeNull("the B3 terminal reports while warming");
         world.Terminal.CaughtUpReports.Select(static r => r.ObservedVersion).Should().Equal(4);
+
+        // What changed is the route CONTRACT, not the wire shape: the document the B3 legacy
+        // shadow stored is byte-identical to what B1's mapper produces for the same publication.
+        var storedWhileWarming = (await world.Journal.Store.GetAsync(SourceScopeActorId))!;
+        storedWhileWarming.ToByteArray().Should().Equal(
+            MapThroughPreviousBinary(v4).ToByteArray(),
+            "B1's mapper and B3's mapper are the same code; only the gate differs");
 
         var caughtUp = new ProjectionScopeStatusRouteCaughtUpEvent { RouteEpoch = 1, ObservedVersion = 4, OccurredAtUtc = Timestamp.FromDateTimeOffset(Now) };
         routeCarrier = ProjectionScopeStateApplier.ApplyStatusRouteCaughtUp(routeCarrier, caughtUp);
         var v5 = Publication(5, routeCarrier.StatusRoute, eventData: caughtUp);
-        (await world.PreviousBinaryTerminalWriteAsync(v5, WriteEvaluator.OldBinaryPlain)).Should().Be(ProjectionWriteDisposition.Applied, "old terminal first");
-        (await world.NewBinaryLegacyWriteAsync(v5)).Should().Be(ProjectionWriteDisposition.Duplicate, "new legacy shadow second");
+        (await world.PreviousBinaryTerminalWriteAsync(v5, WriteEvaluator.OldBinaryPlain)).Should().BeNull();
+        (await world.NewBinaryLegacyWriteAsync(v5)).Should().Be(ProjectionWriteDisposition.Applied, "the legacy shadow is the only warming writer");
         await world.AssertStoreIsByteImageOfAsync(5, carriedRoute: routeCarrier.StatusRoute);
 
-        // BLOCKED: the B3 legacy shadow stops; the B3 terminal writes; the old terminal (phase
-        // ignored) writes the same bytes.
-        var blocked = new ProjectionScopeStatusRouteBlockedEvent { RouteEpoch = 1, OccurredAtUtc = Timestamp.FromDateTimeOffset(Now) };
+        // BLOCKED: the B3 legacy shadow stops; the B3 terminal writes; the old terminal still
+        // matches nothing, so no second writer appears at the takeover version either.
+        var blocked = new ProjectionScopeStatusRouteBlockedEvent { RouteEpoch = 1, BlockedVersion = 6, OccurredAtUtc = Timestamp.FromDateTimeOffset(Now) };
         routeCarrier = ProjectionScopeStateApplier.ApplyStatusRouteBlocked(routeCarrier, blocked);
+        routeCarrier.StatusRoute!.BlockedVersion.Should().Be(6);
         var v6 = Publication(6, routeCarrier.StatusRoute, eventData: blocked);
         (await world.NewBinaryLegacyWriteAsync(v6)).Should().BeNull();
         (await world.TerminalObserveAsync(v6)).Should().Be(ProjectionWriteDisposition.Applied);
-        (await world.PreviousBinaryTerminalWriteAsync(v6)).Should().Be(ProjectionWriteDisposition.Duplicate);
-        (await world.PreviousBinaryTerminalWriteAsync(v6, WriteEvaluator.OldBinaryPlain)).Should().Be(ProjectionWriteDisposition.Duplicate);
+        (await world.PreviousBinaryTerminalWriteAsync(v6)).Should().BeNull();
+        (await world.PreviousBinaryTerminalWriteAsync(v6, WriteEvaluator.OldBinaryPlain)).Should().BeNull();
 
         world.AssertNoConflictFromTheCurrentStore();
         world.Journal.Writes.Should().NotContain(static w => w.Disposition == ProjectionWriteDisposition.Conflict);
+        world.Journal.Writes.Should().NotContain(static w => w.Writer == StatusWriter.PreviousBinaryTerminal);
         world.Terminal.Agent.State.PendingWrite.Should().BeNull();
         await world.AssertStoreIsByteImageOfAsync(6, carriedRoute: routeCarrier.StatusRoute);
     }
@@ -644,13 +725,17 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         {
             (await world.PreviousBinaryTerminalWriteAsync(Publication(version, route, "source-evt-3-from-b1")))
                 .Should().Be(ProjectionWriteDisposition.Applied);
-            (await world.TerminalObserveAsync(Publication(version, route, "source-evt-3-different-fact")))
-                .Should().Be(ProjectionWriteDisposition.Conflict);
-            var pending = world.Terminal.Agent.State.PendingWrite;
-            pending.Should().NotBeNull("the terminal records a rejected write as an explicit failure state");
-            pending!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
-            pending.Source.StateVersion.Should().Be(version);
-            pending.Source.EventId.Should().Be("source-evt-3-different-fact");
+
+            // A rejected OBSERVED write never advances delivery and persists nothing: the
+            // observation fails so the provider redelivers it without moving its checkpoint.
+            var rejected = await world.TerminalObserveRejectedAsync(Publication(version, route, "source-evt-3-different-fact"));
+            rejected.Disposition.Should().Be(ProjectionWriteDisposition.Conflict);
+            rejected.MaterializerActorId.Should().Be(TerminalActorId);
+            rejected.Source.StateVersion.Should().Be(version);
+            rejected.Source.EventId.Should().Be("source-evt-3-different-fact");
+            world.Terminal.Agent.State.PendingWrite.Should().BeNull("nothing about a rejected observation is persisted");
+            world.Terminal.EventSourcing.Committed.OfType<ProjectionScopeStatusWriteDeferredEvent>().Should().BeEmpty();
+            await world.AssertStoreIsByteImageOfAsync(version, carriedRoute: route, eventId: "source-evt-3-from-b1");
         }
         else
         {
@@ -691,23 +776,503 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
 
         var divergedState = BuildSourceState(version, route);
         divergedState.LastSuccessfulVersion += 1;
-        (await world.TerminalObserveAsync(Publication(version, divergedState)))
-            .Should().Be(ProjectionWriteDisposition.Conflict, "same version, event id and epoch but different bytes is a different fact");
+        var rejected = await world.TerminalObserveRejectedAsync(Publication(version, divergedState));
+        rejected.Disposition.Should().Be(
+            ProjectionWriteDisposition.Conflict,
+            "same version, event id and epoch but different bytes is a different fact");
 
-        world.Terminal.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        world.Terminal.Agent.State.PendingWrite.Should().BeNull("a rejected observation persists nothing and is redelivered");
         await world.AssertStoreIsByteImageOfAsync(version, carriedRoute: route);
     }
+
+    // ── 8. mixed-binary SOURCE activation (the P1 the contract revision closes) ─────────
+
+    /// <summary>
+    /// (a) The counterexample. An old, phase-unaware SOURCE binary admitted through the v1 gate
+    /// treats ANY route it matches as ACTIVE — it cannot see the phase — so on activation it
+    /// re-asserts the terminal relay and releases the legacy shadow while the current binary has
+    /// the route only WARMING (the shadow is the writer) or BLOCKED (the cutover is waiting for
+    /// the previous writer's typed release confirmation). Its legacy shadow scope releases itself
+    /// on the very first routed publication as well. Both rules verbatim from 416e80f4a.
+    /// (b) What the revision actually removes, and what it does not. The route contract closes the
+    /// old source's "route already active" branch for every route this binary commits — that
+    /// branch, and only that branch. The same activation record still adopts a FRESH v1 route at a
+    /// strictly higher epoch whenever a v1 grant is open (closed by the capability revision, not by
+    /// the route contract), and the old legacy shadow still releases itself on every one of those
+    /// routes, WARMING included. Both residuals are asserted below against the current appliers and
+    /// policy; the freeze they cause is
+    /// <see cref="DowngradedFleetDuringAV2WarmingCutover_LosesTheShadowWriter_TheDocumentFreezesUntilTheCutoverCompletes"/>.
+    /// </summary>
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Warming)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
+    public async Task OldBinarySourceOnAPhasedPreviousContractRoute_WouldStealTheCutover_TheRevisionClosesItsActiveBranchOnly(
+        ProjectionScopeStatusRoutePhase phase)
+    {
+        // The route shape a phased cutover committed BEFORE the revision: previous contract,
+        // reader version 1, carrying a phase the old binary cannot decode.
+        var route = PhasedPreviousContractRoute(epoch: 1, phase);
+        var warming = phase == ProjectionScopeStatusRoutePhase.Warming;
+
+        // The current binary's writers for that route.
+        ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(route)
+            .Should().Be(warming, "the legacy shadow is the writer while the route warms, and only then");
+        ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(
+                route,
+                ProjectionScopeStatusGAgent.ContractId,
+                ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().Be(warming, "a warming terminal only reports its observed version");
+        ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                route,
+                ProjectionScopeStatusGAgent.ContractId,
+                ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().Be(!warming, "BLOCKED is the writing phase in which the terminal takes the document over");
+        route.LegacyRouteReleased.Should().BeFalse("the cutover has not been confirmed by the previous writer yet");
+
+        // The old SOURCE binary takes its "route already active" branch in BOTH phases.
+        var activation = PreviousBinarySourceScopeStatusRouteRules.OnActivation(route, freshV1Grant: true);
+        activation.TreatsRouteAsActive.Should().BeTrue("its gate is contract id + exact reader version and knows no phase");
+        activation.ReassertsTerminalRelay.Should().BeTrue();
+        activation.ReleasesLegacyShadow.Should().BeTrue(
+            warming
+                ? "it would release the only writer the warming route has"
+                : "it would release the previous writer without ever collecting its typed confirmation");
+        activation.PersistsLegacyRouteReleasedForEpoch.Should().Be(1);
+        activation.AdoptsFreshTerminalRouteAtEpoch.Should().BeNull("the active branch returns before the adoption path");
+
+        // Its legacy shadow scope releases itself on the first publication carrying ANY route.
+        PreviousBinarySourceScopeStatusRouteRules.LegacyShadowReleasesItselfOnObserving(route).Should().BeTrue();
+
+        // The damage, spelled out against the CURRENT appliers: the release fact the old binary
+        // persists is accepted at the same epoch, so the current source would record the previous
+        // writer as released — and flip out of BLOCKED — without ever having seen the writer
+        // confirm that it drained (ProjectionScopeStatusWriterReleasedEvent).
+        var stolen = ProjectionScopeStateApplier.ApplyStatusLegacyRouteReleased(
+            new ProjectionScopeState { StatusRoute = route.Clone() },
+            new ProjectionScopeStatusLegacyRouteReleasedEvent
+            {
+                RouteEpoch = route.RouteEpoch,
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+            });
+        stolen.StatusRoute!.LegacyRouteReleased.Should().BeTrue();
+        stolen.StatusRoute.Phase.Should().Be(phase, "the phase is untouched: only the release fact was forged");
+
+        // (b, route level) The revision removes ONE branch at its root: every route this binary can
+        // commit for a cutover — terminal in any phase, or the legacy rollback route — is one the
+        // old source's ACTIVE gate does not match, and one its terminal writer refuses. The rest of
+        // the old binary's behaviour on those very routes is unchanged, so it is asserted here in
+        // full instead of being narrowed to the one field the revision moves.
+        foreach (var committed in AllPhases.Select(p => ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, p))
+                     .Concat(AllPhases.Select(p => ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(2, p))))
+        {
+            committed.ContractId.Should().NotBe(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1);
+            var onCommitted = PreviousBinarySourceScopeStatusRouteRules.OnActivation(committed, freshV1Grant: true);
+            onCommitted.TreatsRouteAsActive.Should().BeFalse("the v1 activation gate matches no route this binary commits");
+            PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(committed).Should().BeFalse();
+
+            // RESIDUAL 1 (source): with an open v1 grant the SAME activation falls through to the
+            // fresh-adoption branch and builds a v1 route at the next epoch — releasing the legacy
+            // shadow and re-asserting the terminal relay on the way. The route contract does not
+            // close this; only the closed v1 capability gate does.
+            onCommitted.AdoptsFreshTerminalRouteAtEpoch.Should().Be(committed.RouteEpoch + 1);
+            onCommitted.PersistsLegacyRouteReleasedForEpoch.Should().Be(committed.RouteEpoch + 1);
+            onCommitted.ReleasesLegacyShadow.Should().BeTrue();
+            onCommitted.ReassertsTerminalRelay.Should().BeTrue();
+
+            // And that fresh route is one the CURRENT binary would then serve and let win: it is a
+            // v1 terminal route (an earlier contract, so IsActiveTerminalRoute accepts it) at a
+            // strictly higher epoch, so ApplyStatusRouteActivated replaces the committed cutover
+            // route wholesale — phase forced ACTIVE, LegacyRouteReleased reset.
+            var forged = V1TerminalRoute(onCommitted.AdoptsFreshTerminalRouteAtEpoch!.Value);
+            ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                    forged,
+                    ProjectionScopeStatusGAgent.ContractId,
+                    ProjectionScopeStatusGAgent.ContractVersion)
+                .Should().BeTrue("a materializer of a later contract serves every earlier terminal route");
+            var replaced = ProjectionScopeStateApplier.ApplyStatusRouteActivated(
+                new ProjectionScopeState { StatusRoute = committed.Clone() },
+                new ProjectionScopeStatusRouteActivatedEvent
+                {
+                    Route = forged,
+                    OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+                });
+            replaced.StatusRoute!.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1);
+            replaced.StatusRoute.RouteEpoch.Should().Be(committed.RouteEpoch + 1);
+            replaced.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+            replaced.StatusRoute.LegacyRouteReleased.Should().BeFalse("a direct activation at a higher epoch is not the flip of this cutover");
+
+            // RESIDUAL 2 (shadow): 416e80f4a's shadow self-release is gated by its IsTerminalRoute
+            // = ANY non-empty route, so it fires on every route this binary commits — the legacy
+            // rollback route it is itself the writer for, and a WARMING terminal route the current
+            // policy says it must keep writing. The revision does not reach this rule at all.
+            PreviousBinarySourceScopeStatusRouteRules.LegacyShadowReleasesItselfOnObserving(committed)
+                .Should().BeTrue("the old shadow releases itself on ANY committed route, not only on one that supersedes it");
+            if (ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(committed))
+            {
+                ProjectionScopeStatusRoutePolicy.LegacyShadowIsSuperseded(committed)
+                    .Should().BeFalse("the current shadow releases itself only once a terminal route is in a writing phase");
+            }
+        }
+
+        ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, phase).ContractId
+            .Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2);
+        ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, phase).ContractVersion
+            .Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion);
+
+        // (c) The steal residual 1 buys, driven through the real writers: B3's terminal owns v9
+        // under its committed v2 route at epoch 1; the v1 route an old source binary adopts under
+        // a fresh grant sits at epoch 2, so the old terminal's own gate accepts it AND the epoch
+        // fence hands it the document at the very same version. Nothing about the route contract
+        // prevents that — the closed v1 capability gate is the whole defence.
+        var world = new MixedBinaryWorld();
+        var committedV2 = V2TerminalRoute(epoch: 1, phase);
+        var v9 = Publication(9, committedV2);
+        if (warming)
+        {
+            (await world.NewBinaryLegacyWriteAsync(v9)).Should().Be(
+                ProjectionWriteDisposition.Applied,
+                "the legacy shadow is the writer while the v2 route warms");
+            (await world.TerminalObserveAsync(v9)).Should().BeNull("a warming terminal only reports");
+        }
+        else
+        {
+            (await world.NewBinaryLegacyWriteAsync(v9)).Should().BeNull("the shadow stops once the route blocks");
+            (await world.TerminalObserveAsync(v9)).Should().Be(ProjectionWriteDisposition.Applied);
+        }
+
+        await world.AssertStoreIsByteImageOfAsync(9, carriedRoute: committedV2);
+        var freshV1 = V1TerminalRoute(epoch: 2);
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(9, freshV1)))
+            .Should().Be(ProjectionWriteDisposition.Applied);
+        await world.AssertStoreIsByteImageOfAsync(9, carriedRoute: freshV1);
+        await world.AssertExactlyOneStoredDocumentAsync();
+        world.AssertNoConflictFromTheCurrentStore();
+    }
+
+    /// <summary>
+    /// The residual of (a) that the revision does NOT remove, and its exact blast radius. A legacy
+    /// status shadow scope hosted on a silo rolled back to 416e80f4a decides by that binary's
+    /// <c>IsTerminalRoute</c> (ANY non-empty route), so it releases itself on a v2 route the
+    /// current binary has only WARMING — the phase in which the shadow is the one and only writer.
+    /// Nothing else on that fleet writes for a warming v2 route: B2's legacy projector skips every
+    /// routed source, B1/B2's terminal gate refuses a v2 route, and the current terminal only
+    /// reports while warming. The status document therefore FREEZES at the last version the shadow
+    /// wrote. It is never corrupted, never forked into a second document and never written twice
+    /// for one version, and the freeze ends on its own when the source blocks the route and the
+    /// current terminal takes the frozen document over. This behaviour lives in a binary that is
+    /// already released, so the test's job is to state it exactly — not to hide it behind the
+    /// half of the counterexample the revision did close.
+    /// </summary>
+    [Fact]
+    public async Task DowngradedFleetDuringAV2WarmingCutover_LosesTheShadowWriter_TheDocumentFreezesUntilTheCutoverCompletes()
+    {
+        var world = new MixedBinaryWorld();
+        var routeCarrier = new ProjectionScopeState();
+        var warming = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, ProjectionScopeStatusRoutePhase.Warming);
+        warming.WarmStartedVersion = 4;
+        warming.ActivatedAtUtc = Timestamp.FromDateTimeOffset(Now);
+        var warmingStarted = new ProjectionScopeStatusRouteWarmingStartedEvent
+        {
+            Route = warming,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        };
+        routeCarrier = ProjectionScopeStateApplier.ApplyStatusRouteWarmingStarted(routeCarrier, warmingStarted);
+        var warmingRoute = routeCarrier.StatusRoute!;
+
+        // While every silo runs B3 the shadow is the writer for this exact route, and the current
+        // policy keeps it alive: a WARMING terminal route does not supersede it.
+        ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(warmingRoute).Should().BeTrue();
+        ProjectionScopeStatusRoutePolicy.LegacyShadowIsSuperseded(warmingRoute)
+            .Should().BeFalse("the current shadow releases itself only once a terminal route is in a writing phase");
+        (await world.NewBinaryLegacyWriteAsync(Publication(4, warmingRoute, eventData: warmingStarted)))
+            .Should().Be(ProjectionWriteDisposition.Applied);
+        await world.AssertStoreIsByteImageOfAsync(4, carriedRoute: warmingRoute);
+
+        // The downgrade mid-cutover. The shadow scope activates on a rolled-back silo, observes
+        // this very route and releases itself; ReleaseScopeAsync is a durable scope fact, so it
+        // stays gone for the rest of the cutover.
+        PreviousBinarySourceScopeStatusRouteRules.LegacyShadowReleasesItselfOnObserving(warmingRoute)
+            .Should().BeTrue("416e80f4a releases the shadow on ANY committed route, and a v2 WARMING route is one");
+        PreviousBinaryRouteGatedLegacyProjector.WritesFor(warmingRoute)
+            .Should().BeFalse("and while it drains, that binary's projector skips the routed source anyway");
+
+        // v5 and v6 therefore reach NO writer at all — same route, same phase and same publication
+        // shape as the v4 write above, so the only thing that changed is that the shadow is gone.
+        foreach (var version in new long[] { 5, 6 })
+        {
+            var publication = Publication(version, warmingRoute);
+            (await world.PreviousBinaryLegacyWriteAsync(publication)).Should().BeNull();
+            (await world.PreviousBinaryTerminalWriteAsync(publication)).Should().BeNull();
+            (await world.PreviousBinaryTerminalWriteAsync(publication, WriteEvaluator.OldBinaryPlain)).Should().BeNull();
+            (await world.TerminalObserveAsync(publication)).Should().BeNull("a warming terminal reports, it never writes");
+        }
+
+        // FROZEN, not corrupt: not one write was attempted at 5 or 6, the stored document is still
+        // the byte image of v4, and this source scope still has exactly one document.
+        world.Journal.Writes.Should().ContainSingle("only the pre-downgrade shadow write ever reached the store");
+        await world.AssertStoreIsByteImageOfAsync(4, carriedRoute: warmingRoute);
+        await world.AssertExactlyOneStoredDocumentAsync();
+
+        // Delivery is still proven while the document is frozen, so the cutover can finish: the
+        // terminal reported every version it observed to the source.
+        world.Terminal.CaughtUpReports.Select(static r => r.ObservedVersion).Should().Equal(5, 6);
+
+        // The freeze is temporary. The source blocks the route (v7) and the terminal — a writer
+        // from BLOCKED on — takes the frozen document over under the same epoch-1 fence. The frozen
+        // versions never appear on the document: it jumps 4 -> 7, forward only.
+        var blocked = new ProjectionScopeStatusRouteBlockedEvent
+        {
+            RouteEpoch = 1,
+            BlockedVersion = 7,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        };
+        routeCarrier = ProjectionScopeStateApplier.ApplyStatusRouteBlocked(routeCarrier, blocked);
+        routeCarrier.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+        var v7 = Publication(7, routeCarrier.StatusRoute, eventData: blocked);
+        (await world.NewBinaryLegacyWriteAsync(v7)).Should().BeNull();
+        (await world.PreviousBinaryTerminalWriteAsync(v7)).Should().BeNull();
+        (await world.TerminalObserveAsync(v7)).Should().Be(ProjectionWriteDisposition.Applied);
+        await world.AssertStoreIsByteImageOfAsync(7, carriedRoute: routeCarrier.StatusRoute);
+        await world.AssertExactlyOneStoredDocumentAsync();
+
+        world.AssertNoConflictFromTheCurrentStore();
+        world.Terminal.Agent.State.PendingWrite.Should().BeNull();
+        // Never double-written: exactly one writer per version, and no version written twice.
+        world.Journal.Writes.Select(static w => (w.Writer, w.Version, w.Disposition)).Should().Equal(
+            (StatusWriter.NewBinaryLegacy, 4, ProjectionWriteDisposition.Applied),
+            (StatusWriter.Terminal, 7, ProjectionWriteDisposition.Applied));
+    }
+
+    /// <summary>
+    /// (b) The two projection-side inputs the fleet authority reads for the status terminal: this
+    /// binary advertises only the v2 contract, and its authority's managed set names only the v2
+    /// capability (so an open v1 gate is revoked "capability-no-longer-managed"). Together with a
+    /// phase-unaware silo, which advertises the v1 capability under the v1 contract id, that is
+    /// what makes both status gates fail closed in a mixed fleet — but the gate transition itself
+    /// is the AUTHORITY's behaviour and is NOT re-derived here from a copy of its unanimity
+    /// predicate. It is proven against the real <c>RuntimeFleetCapabilityAuthorityGAgent</c> in
+    /// <c>test/Aevatar.Foundation.Core.Tests/RuntimeFleetCapabilityAuthorityTests.cs</c>:
+    /// <c>Reconcile_WhenOneActiveMemberIsPhaseUnaware_ShouldLeaveTheTerminalStatusGatesShut</c>,
+    /// <c>Reconcile_WhenAPhaseUnawareMemberRejoins_ShouldRevokeTheOpenTerminalStatusV2Gate</c> and
+    /// <c>Reconcile_WhenTheV1StatusCapabilityIsNoLongerManaged_ShouldRevokeItsOpenGate</c>.
+    /// </summary>
+    [Fact]
+    public void CurrentBinaryAdvertisesAndManagesOnlyTheV2StatusCapability_SoAPhaseUnawareSiloCanNeverMatchIt()
+    {
+        var current = new ProjectionScopeStatusTerminalCapabilityAdvertisement().GetCapability();
+        current.Capability.Should().Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV2);
+        current.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2);
+        current.ReaderContractVersion.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion);
+
+        // The authority manages the v2 capability INSTEAD of v1 — one requirement, not two.
+        var managed = new Aevatar.Foundation.Core.Runtime.RuntimeFleetCapabilityAuthorityOptions().ManagedCapabilities;
+        var statusRequirements = managed
+            .Where(static requirement =>
+                requirement.Capability is RuntimeFleetCapability.ProjectionScopeStatusTerminalV1
+                    or RuntimeFleetCapability.ProjectionScopeStatusTerminalV2)
+            .ToList();
+        var statusRequirement = statusRequirements.Should().ContainSingle(
+            "the v1 capability is no longer managed, so an open v1 gate is revoked as capability-no-longer-managed and never re-opened").Subject;
+        statusRequirement.Capability.Should().Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV2);
+        statusRequirement.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2);
+        statusRequirement.MinimumReaderContractVersion
+            .Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion);
+
+        // The only managed status requirement is one a phase-unaware silo cannot satisfy: it
+        // advertises a different capability under a different contract id at a lower reader
+        // version. (What the authority DOES with that — leave both gates shut — is asserted
+        // against the real authority in RuntimeFleetCapabilityAuthorityTests, see the summary.)
+        var previous = PreviousBinaryAdvertisedCapability();
+        previous.Capability.Should().Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV1);
+        previous.Capability.Should().NotBe(statusRequirement.Capability);
+        previous.ContractId.Should().NotBe(statusRequirement.ContractId);
+        previous.ReaderContractVersion.Should().BeLessThan(statusRequirement.MinimumReaderContractVersion);
+        current.Capability.Should().Be(statusRequirement.Capability, "this binary satisfies the requirement its own authority manages");
+        current.ContractId.Should().Be(statusRequirement.ContractId);
+        current.ReaderContractVersion.Should().BeGreaterThanOrEqualTo(statusRequirement.MinimumReaderContractVersion);
+
+        // The consequence for the OLD source binary of having no v1 admission: its adoption path
+        // commits nothing — it keeps its current writer and never creates a route the phased
+        // binary would have to share. The second call is the window that stays open for as long as
+        // any v1 gate is: it commits a v1 terminal route and flips it ACTIVE in one step, with no
+        // warming, no blocked phase and no drained previous writer.
+        var withoutGrant = PreviousBinarySourceScopeStatusRouteRules.OnActivation(route: null, freshV1Grant: false);
+        withoutGrant.AdoptsFreshTerminalRouteAtEpoch.Should().BeNull();
+        withoutGrant.ReleasesLegacyShadow.Should().BeFalse();
+        withoutGrant.ReassertsTerminalRelay.Should().BeFalse();
+        PreviousBinarySourceScopeStatusRouteRules.OnActivation(route: null, freshV1Grant: true)
+            .AdoptsFreshTerminalRouteAtEpoch.Should().Be(1);
+    }
+
+    /// <summary>
+    /// (c) A v1 route an old binary created keeps its writer across the upgrade: the current
+    /// terminal materializer serves it, and the current binary creates no v1 route of its own.
+    /// (d) On that shared route the two binaries' same-version writes are byte-identical
+    /// duplicates, never a silent Conflict.
+    /// </summary>
+    [Fact]
+    public async Task V1RouteOfAnOldBinary_IsStillServedByTheCurrentTerminal_AndTheCurrentBinaryNeverCreatesOne()
+    {
+        var v1 = V1TerminalRoute(epoch: 1);
+        ProjectionScopeStatusRoutePolicy.IsTerminalRoute(v1).Should().BeTrue();
+        ProjectionScopeStatusRoutePolicy.IsPreviousTerminalContractRoute(v1, ProjectionScopeStatusGAgent.ContractId)
+            .Should().BeTrue();
+        ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                v1,
+                ProjectionScopeStatusGAgent.ContractId,
+                ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().BeTrue("a materializer of a later contract serves every earlier terminal route");
+        PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(v1)
+            .Should().BeTrue("the binary that created it still serves it too");
+
+        // The current binary creates no v1 route in any phase, and a v1 materializer would match
+        // none of the routes it does create: the mixed fleet fails closed in both directions.
+        foreach (var phase in AllPhases)
+        {
+            var built = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, phase);
+            built.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2);
+            built.ContractVersion.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion);
+            ProjectionScopeStatusRoutePolicy.IsPreviousTerminalContractRoute(built, ProjectionScopeStatusGAgent.ContractId)
+                .Should().BeFalse();
+        }
+
+        // The real terminal materializer starts on the old binary's route and writes it.
+        var world = new MixedBinaryWorld();
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(3, v1))).Should().Be(ProjectionWriteDisposition.Applied);
+        (await world.TerminalObserveAsync(Publication(3, v1)))
+            .Should().Be(ProjectionWriteDisposition.Duplicate, "same epoch, same bytes: a duplicate, never a Conflict");
+        world.Terminal.Agent.State.Active.Should().BeTrue();
+        world.Terminal.Agent.State.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        world.Terminal.Agent.State.ContractVersion.Should().Be(ProjectionScopeStatusGAgent.ContractVersion);
+        (await world.TerminalObserveAsync(Publication(4, v1))).Should().Be(ProjectionWriteDisposition.Applied);
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(4, v1))).Should().Be(ProjectionWriteDisposition.Duplicate);
+        (await world.PreviousBinaryTerminalWriteAsync(Publication(4, v1), WriteEvaluator.OldBinaryPlain))
+            .Should().Be(ProjectionWriteDisposition.Duplicate, "the old binary's own evaluator agrees");
+        await world.AssertStoreIsByteImageOfAsync(4, carriedRoute: v1);
+
+        world.AssertNoConflictFromTheCurrentStore();
+        world.Terminal.Agent.State.PendingWrite.Should().BeNull();
+    }
+
+    private static readonly ProjectionScopeStatusRoutePhase[] AllPhases =
+    [
+        ProjectionScopeStatusRoutePhase.Unspecified,
+        ProjectionScopeStatusRoutePhase.Warming,
+        ProjectionScopeStatusRoutePhase.Blocked,
+        ProjectionScopeStatusRoutePhase.Active,
+    ];
+
+    /// <summary>
+    /// The capability advertisement of B1 (8d47b5e5c) and B2 (416e80f4a), verbatim
+    /// (<c>git show 416e80f4a:src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeStatusTerminalCapabilityAdvertisement.cs</c>):
+    /// capability and contract id of the v1 status terminal at their reader version 1.
+    /// </summary>
+    private static RuntimeFleetMemberCapability PreviousBinaryAdvertisedCapability() =>
+        new()
+        {
+            Capability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV1,
+            ReaderContractVersion = (int)PreviousBinaryProjectionScopeStatusTerminalWriter.ReaderVersion,
+            ContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1,
+        };
+
+    /// <summary>
+    /// VERBATIM decision rules of the OLD SOURCE binary's status-route activation
+    /// (<c>git show 416e80f4a:src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeGAgentBase.cs</c>:
+    /// <c>AdoptTerminalStatusRouteAsync</c>, <c>ReleaseLegacyStatusRouteIfPendingAsync</c>,
+    /// <c>TryReleaseLegacyStatusShadowOfFlippedSourceAsync</c>; the gates from
+    /// <c>ProjectionScopeStatusRoutePolicy</c> of the same commit). B1 (8d47b5e5c) shared them.
+    /// That binary has no cutover phase — <c>phase</c> is field 7 and its
+    /// <c>ProjectionScopeStatusRoute</c> had fields 1..6 — so a route it matches is ACTIVE by
+    /// construction. Do not "modernize" these rules; their value is that they are the old binary.
+    /// </summary>
+    private static class PreviousBinarySourceScopeStatusRouteRules
+    {
+        /// <summary>Verbatim <c>IsTerminalRoute</c> of 416e80f4a: ANY non-empty route.</summary>
+        public static bool IsTerminalRoute(ProjectionScopeStatusRoute? route) =>
+            route != null &&
+            route.RouteEpoch > 0 &&
+            route.ContractVersion > 0 &&
+            !string.IsNullOrWhiteSpace(route.ContractId);
+
+        /// <summary>
+        /// Verbatim <c>IsActiveTerminalRoute</c> of 416e80f4a, applied with that binary's own
+        /// <c>ProjectionScopeStatusGAgent.ContractId</c> / <c>ContractVersion</c> (v1 / 1):
+        /// an exact contract id AND an exact reader version, no phase.
+        /// </summary>
+        public static bool IsActiveTerminalRoute(ProjectionScopeStatusRoute? route) =>
+            IsTerminalRoute(route) &&
+            string.Equals(
+                route!.ContractId,
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1,
+                StringComparison.Ordinal) &&
+            route.ContractVersion == PreviousBinaryProjectionScopeStatusTerminalWriter.ReaderVersion;
+
+        /// <summary>Verbatim <c>AdoptTerminalStatusRouteAsync</c> of 416e80f4a, as a decision.</summary>
+        public static PreviousBinarySourceActivation OnActivation(
+            ProjectionScopeStatusRoute? route,
+            bool freshV1Grant)
+        {
+            if (IsActiveTerminalRoute(route))
+            {
+                // UpsertTerminalStatusRelayAsync, CreateByKind if missing,
+                // ReleaseLegacyStatusRouteIfPendingAsync (removes the legacy relay, dispatches
+                // Release to the shadow and persists ProjectionScopeStatusLegacyRouteReleasedEvent
+                // when IsTerminalRoute(route) && !route.LegacyRouteReleased),
+                // ReconcileReappearedLegacyStatusRelayAsync — then return.
+                var releases = !route!.LegacyRouteReleased;
+                return new PreviousBinarySourceActivation(
+                    TreatsRouteAsActive: true,
+                    ReassertsTerminalRelay: true,
+                    ReleasesLegacyShadow: releases,
+                    PersistsLegacyRouteReleasedForEpoch: releases ? route.RouteEpoch : null,
+                    AdoptsFreshTerminalRouteAtEpoch: null);
+            }
+
+            // "Projection scope status route stays legacy: no fresh terminal admission" plus a
+            // backed-off durable retry; the committed route is not touched.
+            if (!freshV1Grant)
+                return new PreviousBinarySourceActivation(false, false, false, null, null);
+
+            // A fresh v1 grant makes it build a v1 terminal route at the next epoch and commit it
+            // ACTIVE immediately (ProjectionScopeStatusRouteActivatedEvent — no warming, no
+            // blocked phase), then release the legacy shadow for that epoch.
+            var adopted = (route?.RouteEpoch ?? 0) + 1;
+            return new PreviousBinarySourceActivation(
+                TreatsRouteAsActive: false,
+                ReassertsTerminalRelay: true,
+                ReleasesLegacyShadow: true,
+                PersistsLegacyRouteReleasedForEpoch: adopted,
+                AdoptsFreshTerminalRouteAtEpoch: adopted);
+        }
+
+        /// <summary>
+        /// Verbatim <c>TryReleaseLegacyStatusShadowOfFlippedSourceAsync</c> of 416e80f4a: the
+        /// legacy shadow scope releases itself as soon as the observed source carries ANY route.
+        /// </summary>
+        public static bool LegacyShadowReleasesItselfOnObserving(ProjectionScopeStatusRoute? route) =>
+            IsTerminalRoute(route);
+    }
+
+    private sealed record PreviousBinarySourceActivation(
+        bool TreatsRouteAsActive,
+        bool ReassertsTerminalRelay,
+        bool ReleasesLegacyShadow,
+        long? PersistsLegacyRouteReleasedForEpoch,
+        long? AdoptsFreshTerminalRouteAtEpoch);
 
     // ── routes ──────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The route B1 (8d47b5e5c) and B2 (416e80f4a) committed on adoption: terminal contract,
-    /// contract version 1 (their reader version), phase-less, released legacy shadow.
+    /// The route B1 (8d47b5e5c) and B2 (416e80f4a) committed on adoption: the PREVIOUS terminal
+    /// contract (<c>RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1</c>) at contract version 1
+    /// (their reader version), phase-less, released legacy shadow. The current binary still serves
+    /// it — <c>IsActiveTerminalRoute</c> accepts every earlier terminal contract — but never
+    /// creates one.
     /// </summary>
     private static ProjectionScopeStatusRoute V1TerminalRoute(long epoch) =>
         new()
         {
-            ContractId = ProjectionScopeStatusGAgent.ContractId,
+            ContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1,
             ContractVersion = PreviousBinaryProjectionScopeStatusTerminalWriter.ReaderVersion,
             RouteEpoch = epoch,
             ActivatedAtUtc = Timestamp.FromDateTimeOffset(Now),
@@ -715,11 +1280,12 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         };
 
     /// <summary>
-    /// A route committed by B3's phased cutover: terminal contract at the current reader version
-    /// (1, the same as B1/B2's) with a phase. It differs from <see cref="V1TerminalRoute"/> only by
-    /// the phase field; B1/B2 terminal gates accept both.
+    /// A route committed by B3: the CURRENT terminal contract
+    /// (<see cref="ProjectionScopeStatusGAgent.ContractId"/>, reader version 2) with a phase, as
+    /// <c>ProjectionScopeStatusRoutePolicy.BuildTerminalRoute</c> builds it. B1/B2 terminal gates
+    /// (contract id <c>...terminal.v1</c> AND version exactly 1) match none of these.
     /// </summary>
-    private static ProjectionScopeStatusRoute TerminalRoute(
+    private static ProjectionScopeStatusRoute V2TerminalRoute(
         long epoch,
         ProjectionScopeStatusRoutePhase phase = ProjectionScopeStatusRoutePhase.Active)
     {
@@ -727,6 +1293,57 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         route.ActivatedAtUtc = Timestamp.FromDateTimeOffset(Now);
         route.LegacyRouteReleased = phase == ProjectionScopeStatusRoutePhase.Active;
         return route;
+    }
+
+    /// <summary>
+    /// The shape a phased cutover committed BEFORE the contract revision: the previous
+    /// (phase-unaware) terminal contract carrying a cutover phase. It is the counterexample route
+    /// — an old binary's gate matches it and cannot see the phase (<c>phase</c> is field 7 and the
+    /// <c>ProjectionScopeStatusRoute</c> of 8d47b5e5c/416e80f4a had fields 1..6). The current
+    /// binary can no longer produce it: <c>BuildTerminalRoute</c> is v2 in every phase.
+    /// </summary>
+    private static ProjectionScopeStatusRoute PhasedPreviousContractRoute(
+        long epoch,
+        ProjectionScopeStatusRoutePhase phase) =>
+        new()
+        {
+            ContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1,
+            ContractVersion = PreviousBinaryProjectionScopeStatusTerminalWriter.ReaderVersion,
+            RouteEpoch = epoch,
+            Phase = phase,
+            WarmStartedVersion = 4,
+            ActivatedAtUtc = Timestamp.FromDateTimeOffset(Now),
+        };
+
+    /// <summary>
+    /// The in-place contract upgrade of a route of the previous terminal contract
+    /// (<c>ProjectionScopeGAgentBase.StatusRoute.cs UpgradeTerminalRouteContractAsync</c>): same
+    /// writer, current contract, strictly higher epoch, phase ACTIVE — replayed through the REAL
+    /// applier so the epoch and phase rules are production's.
+    /// </summary>
+    private static ProjectionScopeStatusRoute UpgradeContractInPlace(
+        ProjectionScopeStatusRoute route,
+        long flipVersion)
+    {
+        ProjectionScopeStatusRoutePolicy.IsPreviousTerminalContractRoute(route, ProjectionScopeStatusGAgent.ContractId)
+            .Should().BeTrue("only a route of an earlier terminal contract is upgraded in place");
+
+        var upgraded = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+            route.RouteEpoch + 1,
+            ProjectionScopeStatusRoutePhase.Active);
+        upgraded.ActivatedAtUtc = Timestamp.FromDateTimeOffset(Now);
+        upgraded.LegacyRouteReleased = route.LegacyRouteReleased;
+        upgraded.FlipVersion = flipVersion;
+
+        var next = ProjectionScopeStateApplier.ApplyStatusRouteContractUpgraded(
+            new ProjectionScopeState { StatusRoute = route.Clone() },
+            new ProjectionScopeStatusRouteContractUpgradedEvent
+            {
+                Route = upgraded,
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+            });
+        next.StatusRoute.Should().NotBeNull();
+        return next.StatusRoute!;
     }
 
     // ── source state / envelope builders ────────────────────────────────────────────────
@@ -933,6 +1550,22 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         return dispatcher.Upserts.Should().ContainSingle().Which;
     }
 
+    /// <summary>B1's mapper (identical code to B3's) for one publication, without its route gate.</summary>
+    private static ProjectionScopeStatusDocument MapThroughPreviousBinary(SourcePublication publication)
+    {
+        var envelope = BuildCommittedSourceEnvelope(TerminalActorId, publication);
+        CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
+                envelope,
+                out _,
+                out var stateEvent,
+                out var unpackedState)
+            .Should().BeTrue();
+        return PreviousBinaryProjectionScopeStatusMapper.Map(
+            unpackedState!,
+            stateEvent!,
+            CommittedStateEventEnvelope.ResolveTimestamp(envelope, Now));
+    }
+
     private static ProjectionScopeStatusDocument MapThroughNewBinary(ProjectionScopeState state, long version) =>
         MapThroughNewBinary(Publication(version, state));
 
@@ -960,6 +1593,9 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
 
         /// <summary>B1 (8d47b5e5c) terminal materializer: route carried, v1 gate.</summary>
         PreviousBinaryTerminal,
+
+        /// <summary>B2 (416e80f4a) legacy shadow projector: skips every routed source, B0 byte shape.</summary>
+        PreviousBinaryLegacy,
 
         /// <summary>B3 gated legacy shadow projector (real <see cref="ProjectionScopeStatusProjector"/>).</summary>
         NewBinaryLegacy,
@@ -1072,6 +1708,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         private readonly LegacyBinaryProjectionScopeStatusProjector _oldBinaryOnPlainEvaluator;
         private readonly PreviousBinaryProjectionScopeStatusTerminalWriter _previousBinaryTerminal;
         private readonly PreviousBinaryProjectionScopeStatusTerminalWriter _previousBinaryTerminalOnPlainEvaluator;
+        private readonly PreviousBinaryRouteGatedLegacyProjector _previousBinaryLegacy;
         private readonly ProjectionScopeStatusProjector _newBinaryLegacy;
         private readonly ProjectionScopeStatusMaterializationContext _legacyContext =
             new() { RootActorId = SourceScopeActorId };
@@ -1089,6 +1726,9 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
                 _clock);
             _previousBinaryTerminalOnPlainEvaluator = new PreviousBinaryProjectionScopeStatusTerminalWriter(
                 Journal.DispatcherFor(StatusWriter.PreviousBinaryTerminal, WriteEvaluator.OldBinaryPlain),
+                _clock);
+            _previousBinaryLegacy = new PreviousBinaryRouteGatedLegacyProjector(
+                Journal.DispatcherFor(StatusWriter.PreviousBinaryLegacy, WriteEvaluator.CurrentStore),
                 _clock);
             _newBinaryLegacy = new ProjectionScopeStatusProjector(
                 Journal.DispatcherFor(StatusWriter.NewBinaryLegacy, WriteEvaluator.CurrentStore),
@@ -1127,6 +1767,16 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
             return SingleNewWrite(before, StatusWriter.PreviousBinaryTerminal, evaluator).Disposition;
         }
 
+        /// <summary>B2 legacy shadow projector: skips every routed source; null when it did not write.</summary>
+        public async Task<ProjectionWriteDisposition?> PreviousBinaryLegacyWriteAsync(SourcePublication publication)
+        {
+            var before = Journal.Writes.Count;
+            await _previousBinaryLegacy.ProjectAsync(_legacyContext, BuildCommittedSourceEnvelope(LegacyActorId, publication));
+            return Journal.Writes.Count == before
+                ? null
+                : SingleNewWrite(before, StatusWriter.PreviousBinaryLegacy, WriteEvaluator.CurrentStore).Disposition;
+        }
+
         /// <summary>B3 legacy shadow projector: gated by the source's committed route; null when it did not write.</summary>
         public async Task<ProjectionWriteDisposition?> NewBinaryLegacyWriteAsync(SourcePublication publication)
         {
@@ -1145,6 +1795,24 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
             return Journal.Writes.Count == before
                 ? null
                 : SingleNewWrite(before, StatusWriter.Terminal, WriteEvaluator.CurrentStore).Disposition;
+        }
+
+        /// <summary>
+        /// The real B3 terminal materializer observing a publication whose write the store
+        /// rejects: the observation FAILS (<see cref="ProjectionScopeStatusWriteRejectedException"/>)
+        /// so the provider redelivers it without advancing its checkpoint, and nothing about the
+        /// observation is persisted.
+        /// </summary>
+        public async Task<ProjectionScopeStatusWriteRejectedException> TerminalObserveRejectedAsync(
+            SourcePublication publication)
+        {
+            var before = Journal.Writes.Count;
+            var envelope = BuildCommittedSourceEnvelope(TerminalActorId, publication);
+            Func<Task> observe = () => Terminal.Agent.HandleObservedEnvelopeAsync(envelope);
+            var rejection = (await observe.Should().ThrowAsync<ProjectionScopeStatusWriteRejectedException>()).Which;
+            SingleNewWrite(before, StatusWriter.Terminal, WriteEvaluator.CurrentStore)
+                .Disposition.Should().Be(ProjectionWriteDisposition.Conflict);
+            return rejection;
         }
 
         /// <summary>The current store never produced a Conflict or Gap for any writer.</summary>
@@ -1168,6 +1836,22 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
             var expected = MapThroughNewBinary(Publication(version, carriedRoute, eventId));
             stored.ToByteArray().Should().Equal(expected.ToByteArray());
             ((IProjectionRouteFencedReadModel)stored).RouteEpoch.Should().Be(carriedRoute?.RouteEpoch ?? 0);
+        }
+
+        /// <summary>
+        /// One source scope has exactly ONE status document, whichever binaries wrote it: a mixed
+        /// fleet never forks the document into a second key (every writer of every binary resolves
+        /// the same <see cref="ProjectionScopeActorId"/> from the same source state).
+        /// </summary>
+        public async Task AssertExactlyOneStoredDocumentAsync()
+        {
+            var all = await Journal.Store.QueryAsync(new ProjectionDocumentQuery
+            {
+                Take = 10,
+                IncludeTotalCount = true,
+            });
+            all.TotalCount.Should().Be(1);
+            all.Items.Should().ContainSingle().Which.Id.Should().Be(SourceScopeActorId);
         }
 
         private StatusWrite SingleNewWrite(int before, StatusWriter writer, WriteEvaluator evaluator)
@@ -1365,6 +2049,56 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         }
 
         public DateTimeOffset UtcNow { get; }
+    }
+
+    /// <summary>
+    /// VERBATIM fixture (B2): the route gate of
+    /// <c>git show 416e80f4a:src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionScopeStatusProjector.cs</c>
+    /// — "once the source has committed a terminal route this legacy shadow scope is no longer an
+    /// authoritative writer", where that binary's <c>IsTerminalRoute</c> matches ANY non-empty
+    /// route. The document it writes is the B0 byte shape (field 30 was <c>reserved</c> at that
+    /// commit), so the write itself is delegated to
+    /// <see cref="LegacyBinaryProjectionScopeStatusProjector"/>. Do not "modernize" this gate.
+    /// </summary>
+    private sealed class PreviousBinaryRouteGatedLegacyProjector
+        : ICurrentStateProjectionMaterializer<ProjectionScopeStatusMaterializationContext>
+    {
+        private readonly LegacyBinaryProjectionScopeStatusProjector _write;
+
+        public PreviousBinaryRouteGatedLegacyProjector(
+            IProjectionWriteDispatcher<ProjectionScopeStatusDocument> writeDispatcher,
+            IProjectionClock clock)
+        {
+            _write = new LegacyBinaryProjectionScopeStatusProjector(writeDispatcher, clock);
+        }
+
+        public static bool WritesFor(ProjectionScopeStatusRoute? route) =>
+            !PreviousBinarySourceScopeStatusRouteRules.IsTerminalRoute(route);
+
+        public async ValueTask ProjectAsync(
+            ProjectionScopeStatusMaterializationContext context,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            ArgumentNullException.ThrowIfNull(envelope);
+
+            if (!CommittedStateEventEnvelope.TryUnpackState<ProjectionScopeState>(
+                    envelope,
+                    out _,
+                    out var stateEvent,
+                    out var state) ||
+                stateEvent == null ||
+                state == null)
+            {
+                return;
+            }
+
+            if (!WritesFor(state.StatusRoute))
+                return;
+
+            await _write.ProjectAsync(context, envelope, ct);
+        }
     }
 
     private sealed class RecordingOnlyStatusDispatcher : IProjectionWriteDispatcher<ProjectionScopeStatusDocument>
@@ -1596,9 +2330,13 @@ internal static class PreviousBinaryProjectionScopeStatusMapper
 internal sealed class PreviousBinaryProjectionScopeStatusTerminalWriter
 {
     /// <summary>
-    /// <c>RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion</c> of 8d47b5e5c
-    /// and 416e80f4a (and of B3, which deliberately keeps 1 so every route it commits stays
-    /// serviceable by these binaries after a rollback).
+    /// <c>RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion</c> as those
+    /// two binaries defined it. It is a historical fact about B1/B2, NOT the current constant of
+    /// the same name: the contract revision moved B3 to the v2 contract at reader version 2, so a
+    /// route B3 commits is deliberately NOT serviceable by these binaries after a rollback (that
+    /// is the point of the revision — the phase-unaware writer must not take a phased route over).
+    /// Asserted against production in
+    /// <see cref="ProjectionScopeStatusMixedBinaryTests.V1RouteOfAnOldBinary_IsStillServedByTheCurrentTerminal_AndTheCurrentBinaryNeverCreatesOne"/>.
     /// </summary>
     public const long ReaderVersion = 1;
 

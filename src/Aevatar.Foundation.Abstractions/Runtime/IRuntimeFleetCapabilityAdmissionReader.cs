@@ -23,16 +23,20 @@ public static class RuntimeFleetCapabilityContracts
     public const int WorkflowNormalizedStateReaderVersion =
         WorkflowNormalizedStateReaderVersionV2;
 
+    // Previous terminal status contract (phase-unaware source binaries): routes carrying it are
+    // still served by the current terminal materializer, but no new route is created under it
+    // and the current binary does not advertise it, so a fleet that mixes phase-unaware and
+    // phased binaries never opens either gate.
     public const string ProjectionScopeStatusTerminalV1 =
         "aevatar.projection.scope-status-terminal.v1";
 
-    // The status document contract (ProjectionScopeStatusDocument incl. its status_route write
-    // fence) is unchanged since the terminal materializer shipped; the phased cutover and the
-    // epoch fence are additive route/evaluator semantics that older readers tolerate (they
-    // treat any terminal route as writable and produce byte-identical documents for the same
-    // route epoch). Keeping the reader version at 1 keeps every source rollback-safe: a v1
-    // reader can still serve every route this reader creates.
-    public const int ProjectionScopeStatusTerminalReaderVersion = 1;
+    // Phased status-route cutover + epoch-fenced status document. Only binaries running the
+    // phased source scope advertise this contract; a source adopts (or upgrades) its status route
+    // to this contract only under a fresh V2 admission.
+    public const string ProjectionScopeStatusTerminalV2 =
+        "aevatar.projection.scope-status-terminal.v2";
+
+    public const int ProjectionScopeStatusTerminalReaderVersion = 2;
 
     public const string ProjectionIncrementalGraphV1 =
         "aevatar.projection.incremental-graph.v1";

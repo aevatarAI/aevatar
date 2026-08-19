@@ -31,13 +31,43 @@ internal static class ProjectionScopeStatusRoutePolicy
         route.ContractVersion > 0 &&
         !string.IsNullOrWhiteSpace(route.ContractId);
 
-    /// <summary>A route selecting the terminal materializer contract, in any cutover phase.</summary>
+    /// <summary>
+    /// Terminal materializer contracts in the order they were introduced. A materializer of a
+    /// later contract serves every route created under an earlier one (a source keeps its
+    /// writer across the upgrade); a materializer of an earlier contract never matches a later
+    /// route, and a phase-unaware source binary never advertises the later capability, so a
+    /// mixed fleet fails closed in both directions.
+    /// </summary>
+    private static int TerminalContractRank(string? contractId) =>
+        contractId switch
+        {
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1 => 1,
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2 => 2,
+            _ => 0,
+        };
+
+    /// <summary>A route selecting a terminal materializer contract (any revision), in any cutover phase.</summary>
     public static bool IsTerminalRoute(ProjectionScopeStatusRoute? route) =>
-        IsRoute(route) &&
-        string.Equals(
-            route!.ContractId,
-            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1,
-            StringComparison.Ordinal);
+        IsRoute(route) && TerminalContractRank(route!.ContractId) > 0;
+
+    /// <summary>A terminal route created under a contract older than <paramref name="contractId"/>.</summary>
+    public static bool IsPreviousTerminalContractRoute(ProjectionScopeStatusRoute? route, string contractId) =>
+        IsTerminalRoute(route) &&
+        TerminalContractRank(route!.ContractId) < TerminalContractRank(contractId);
+
+    /// <summary>
+    /// The terminal materializer of <paramref name="contractId"/> with reader version
+    /// <paramref name="contractVersion"/> serves the route: same contract at or below its reader
+    /// version, or any earlier terminal contract.
+    /// </summary>
+    private static bool IsServedTerminalRoute(
+        ProjectionScopeStatusRoute? route,
+        string contractId,
+        long contractVersion) =>
+        IsTerminalRoute(route) &&
+        (string.Equals(route!.ContractId, contractId, StringComparison.Ordinal)
+            ? route.ContractVersion <= contractVersion
+            : TerminalContractRank(route.ContractId) < TerminalContractRank(contractId));
 
     /// <summary>A route selecting the legacy shadow again (rollback), in any cutover phase.</summary>
     public static bool IsLegacyRoute(ProjectionScopeStatusRoute? route) =>
@@ -54,28 +84,24 @@ internal static class ProjectionScopeStatusRoutePolicy
 
     /// <summary>
     /// The terminal materializer of <paramref name="contractId"/> with reader version
-    /// <paramref name="contractVersion"/> is the writer: a terminal route at or below its
-    /// reader version (a v2 reader keeps writing v1 routes) in a writing phase (ACTIVE, or
-    /// BLOCKED for the epoch-fenced same-version takeover, or a phase-less legacy-binary route).
+    /// <paramref name="contractVersion"/> is the writer: a served terminal route in a writing
+    /// phase (ACTIVE, or BLOCKED for the epoch-fenced same-version takeover, or a phase-less
+    /// route of a binary that adopted without phases).
     /// </summary>
     public static bool IsActiveTerminalRoute(
         ProjectionScopeStatusRoute? route,
         string contractId,
         long contractVersion) =>
-        IsTerminalRoute(route) &&
-        string.Equals(route!.ContractId, contractId, StringComparison.Ordinal) &&
-        route.ContractVersion <= contractVersion &&
-        IsWritingPhase(route);
+        IsServedTerminalRoute(route, contractId, contractVersion) &&
+        IsWritingPhase(route!);
 
     /// <summary>The terminal route is warming: the materializer observes and reports, never writes.</summary>
     public static bool IsWarmingTerminalRoute(
         ProjectionScopeStatusRoute? route,
         string contractId,
         long contractVersion) =>
-        IsTerminalRoute(route) &&
-        string.Equals(route!.ContractId, contractId, StringComparison.Ordinal) &&
-        route.ContractVersion <= contractVersion &&
-        route.Phase == ProjectionScopeStatusRoutePhase.Warming;
+        IsServedTerminalRoute(route, contractId, contractVersion) &&
+        route!.Phase == ProjectionScopeStatusRoutePhase.Warming;
 
     /// <summary>
     /// The legacy event-sourced status shadow is the writer: no route, a legacy (rollback)
@@ -117,7 +143,7 @@ internal static class ProjectionScopeStatusRoutePolicy
         ProjectionScopeStatusRoutePhase phase = ProjectionScopeStatusRoutePhase.Active) =>
         new()
         {
-            ContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1,
+            ContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2,
             ContractVersion = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion,
             RouteEpoch = routeEpoch,
             Phase = phase,

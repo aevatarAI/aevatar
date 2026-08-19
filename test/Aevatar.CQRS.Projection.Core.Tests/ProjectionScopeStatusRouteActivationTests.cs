@@ -22,9 +22,10 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 /// Source-scope ownership of the status write route (#3476), phased cutover edition: a durable
 /// projection scope actor ensures its own legacy status shadow, warms the terminal materializer
 /// once the fleet admits the terminal contract, blocks and flips only after the new writer has
-/// reported caught-up, releases the previous writer, fences the route by epoch, resumes the
-/// cutover from any committed phase on restart, and rolls back to the legacy writer through the
-/// same phases when the fleet revokes the gate. Also covers the legacy shadow's observation-side
+/// reported caught-up AND the previous writer confirmed that its release is committed, fences the
+/// route by epoch, resumes the cutover from any committed phase on restart, upgrades a route of
+/// the previous terminal contract in place, and rolls back to the legacy writer through the same
+/// phases when the fleet revokes the gate. Also covers the legacy shadow's observation-side
 /// behaviour and the rolling window in which two status writers overlap on one source.
 /// </summary>
 public sealed class ProjectionScopeStatusRouteActivationTests
@@ -32,6 +33,14 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     private const string RootActorId = "root-actor";
     private const string ProjectionKind = "test-kind";
     private const string TestScopeAgentKind = "projection.materialization-scope.test-context";
+
+    /// <summary>
+    /// The previous terminal contract as an older binary wrote it into a route. This binary
+    /// neither advertises nor re-admits it, so it lives only in routes and fixtures.
+    /// </summary>
+    private const string PreviousTerminalContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1;
+
+    private const long PreviousTerminalContractVersion = 1;
 
     private static readonly DateTimeOffset Now = new(2026, 8, 19, 10, 0, 0, TimeSpan.Zero);
 
@@ -142,6 +151,46 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         ], "the legacy ensure is idempotent: no re-creation, the lifecycle command is still dispatched");
         harness.Runtime.CreatedByKind.Should().BeEmpty();
         harness.Agent.State.StatusRoute.Should().BeNull();
+    }
+
+    /// <summary>
+    /// Mixed fleet, adoption side: a fleet that still contains binaries of the PREVIOUS terminal
+    /// contract can have that contract's gate wide open. It is not a grant for the current
+    /// contract — this binary reads the current capability only — so the source stays on the
+    /// legacy writer, creates no route and merely arms the adoption retry. Admitting the open
+    /// previous gate would adopt the phased terminal writer in a fleet whose other binaries do
+    /// not implement the phased cutover at all: exactly the mixed-binary failure the contract
+    /// revision exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task HandleEnsureAsync_UnderAnOpenPreviousContractGateOnly_StaysLegacyAndOnlyArmsTheAdoptionRetry()
+    {
+        var harness = SourceScopeHarness.Build(
+            admission: CreatePreviousContractAdmission(RuntimeFleetCapabilityGateStatus.Open),
+            registerCallbackScheduler: true);
+        await AssertOnlyThePreviousContractGateWouldGrantAsync(harness);
+
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+
+        harness.Journal.Should().Equal(
+        [
+            Commit(ProjectionScopeStartedEvent.Descriptor),
+            ActorCreate(LegacyStatusShadowKind, LegacyActorId),
+            Dispatch(EnsureProjectionScopeCommand.Descriptor, LegacyActorId),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
+            RelayUpsert(RootActorId, SourceScopeActorId),
+            Commit(ProjectionObservationAttachmentUpdatedEvent.Descriptor),
+        ], "an open gate of the previous terminal contract admits nothing here: the legacy shadow stays the writer");
+        harness.Agent.State.StatusRoute.Should().BeNull("no route is ever created under the previous contract's gate");
+        harness.EventSourcing.Committed.Should().NotContain(evt => evt is ProjectionScopeStatusRouteWarmingStartedEvent);
+        harness.Streams.Relays.Keys.Should().Equal(
+            [(RootActorId, SourceScopeActorId)],
+            "the terminal materializer is never installed on this scope's stream");
+        harness.Runtime.CreatedByKind.Should().ContainSingle()
+            .Which.Should().Be((LegacyStatusShadowKind, LegacyActorId), "only the legacy shadow is created");
+        harness.DispatchPort.Dispatched.Should().ContainSingle().Which.actorId.Should().Be(LegacyActorId);
+        harness.Callbacks!.Timeouts.Should().ContainSingle()
+            .Which.TriggerEnvelope.Payload!.Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>().Attempt.Should().Be(1);
     }
 
     [Fact]
@@ -396,17 +445,18 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         terminalEnsure.command.Route.Direct.TargetActorId.Should().Be(TerminalActorId);
         terminalEnsure.command.Propagation.CorrelationId.Should().Be(TerminalActorId);
 
-        // The warming route: epoch 1, the terminal contract (reader v1), phase WARMING, the
-        // warm-started version is the version of the WarmingStarted commit itself (Started = 1,
-        // WarmingStarted = 2), and the activation proof is the fleet grant.
+        // The warming route: epoch 1, the CURRENT terminal contract (v2 — a new route is never
+        // created under the previous contract), phase WARMING, the warm-started version is the
+        // version of the WarmingStarted commit itself (Started = 1, WarmingStarted = 2), and the
+        // activation proof is the fleet grant.
         var warming = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteWarmingStartedEvent>()
             .Should().ContainSingle().Subject;
         warming.OccurredAtUtc.Should().Be(Timestamp.FromDateTimeOffset(Now));
         warming.Route.RouteEpoch.Should().Be(1);
         warming.Route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Warming);
-        warming.Route.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1);
+        warming.Route.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2);
         warming.Route.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
-        warming.Route.ContractVersion.Should().Be(1, "the terminal reader contract is pinned at v1 for rollback safety");
+        warming.Route.ContractVersion.Should().Be(2, "the phased cutover contract is the second terminal revision");
         warming.Route.ContractVersion.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion);
         warming.Route.ContractVersion.Should().Be(ProjectionScopeStatusGAgent.ContractVersion);
         warming.Route.WarmStartedVersion.Should().Be(2);
@@ -439,6 +489,11 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
                 route, ProjectionScopeStatusGAgent.ContractId, ProjectionScopeStatusGAgent.ContractVersion)
             .Should().BeFalse();
+        ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(
+                route,
+                PreviousTerminalContractId,
+                PreviousTerminalContractVersion)
+            .Should().BeFalse("a materializer of the previous contract never serves a route of the newer one");
         ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(route).Should().BeTrue("the legacy shadow writes until the flip");
         ProjectionScopeStatusRoutePolicy.LegacyShadowIsSuperseded(route).Should().BeFalse();
     }
@@ -498,40 +553,46 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         route.LegacyRouteReleased.Should().BeFalse();
     }
 
-    // ── C. the caught-up report drives block → release → flip ─────────────────────────
+    // ── C. the caught-up report drives block → release request → (confirmation) → flip ──
 
     [Fact]
-    public async Task HandleStatusWriterCaughtUpAsync_AtWarmStartedVersion_BlocksReleasesLegacyAndFlipsInOrder()
+    public async Task HandleStatusWriterCaughtUpAsync_AtWarmStartedVersion_BlocksAndRequestsTheLegacyReleaseWithoutFlipping()
     {
         var harness = SourceScopeHarness.Build(admission: CreateAdmission(), registerCallbackScheduler: true);
         await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
         harness.Callbacks!.Timeouts.Should().ContainSingle("warming scheduled its continuation");
         var warmStartedVersion = harness.Agent.State.StatusRoute!.WarmStartedVersion;
         warmStartedVersion.Should().Be(2);
+        // The shadow wrote its own relay on the source's stream while it was the writer.
+        harness.Streams.Relays[(SourceScopeActorId, LegacyActorId)] = BuildLegacyStatusRelayBinding();
         harness.Journal.Clear();
 
         await harness.Agent.HandleStatusWriterCaughtUpAsync(BuildCaughtUpReport(routeEpoch: 1, observedVersion: warmStartedVersion));
 
-        // CaughtUp → Blocked → (legacy relay removed, Release dispatched, release recorded)
-        // → Activated: each a committed fact of this turn, in this order.
+        // CaughtUp → Blocked → the release is DISPATCHED to the legacy shadow and the durable
+        // continuation is armed. Inbox acceptance of that command is not the release: nothing is
+        // recorded as released, the shadow's relay stays (it must still observe the BLOCKED
+        // publication and drain) and the route does not flip.
         harness.Journal.Should().Equal(
         [
             Commit(ProjectionScopeStatusRouteCaughtUpEvent.Descriptor),
             Commit(ProjectionScopeStatusRouteBlockedEvent.Descriptor),
-            RelayRemove(SourceScopeActorId, LegacyActorId),
             Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
-            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
-            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
         ]);
 
         var caughtUp = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteCaughtUpEvent>().Should().ContainSingle().Subject;
         caughtUp.RouteEpoch.Should().Be(1);
         caughtUp.ObservedVersion.Should().Be(warmStartedVersion);
         caughtUp.OccurredAtUtc.Should().Be(Timestamp.FromDateTimeOffset(Now));
-        harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteBlockedEvent>().Should().ContainSingle()
-            .Which.RouteEpoch.Should().Be(1);
-        harness.EventSourcing.Committed.OfType<ProjectionScopeStatusLegacyRouteReleasedEvent>().Should().ContainSingle()
-            .Which.RouteEpoch.Should().Be(1);
+        // Started 1, WarmingStarted 2, Attachment 3, CaughtUp 4, Blocked 5.
+        var blocked = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteBlockedEvent>().Should().ContainSingle().Subject;
+        blocked.RouteEpoch.Should().Be(1);
+        blocked.BlockedVersion.Should().Be(5, "the blocked version is the version of the Blocked commit itself");
+        harness.EventSourcing.CurrentVersion.Should().Be(5);
+        harness.EventSourcing.Committed.Should().NotContain(evt =>
+            evt is ProjectionScopeStatusLegacyRouteReleasedEvent ||
+            evt is ProjectionScopeStatusRouteActivatedEvent);
 
         var legacyRelease = harness.DispatchPort.Dispatched
             .Should().ContainSingle(x => x.command.Payload!.Is(ReleaseProjectionScopeCommand.Descriptor)).Subject;
@@ -542,50 +603,43 @@ public sealed class ProjectionScopeStatusRouteActivationTests
                 RootActorId = SourceScopeActorId,
                 ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
                 Mode = ProjectionScopeMode.DurableMaterialization,
+                StatusRouteEpoch = 1,
             });
         legacyRelease.command.Route.Direct.TargetActorId.Should().Be(LegacyActorId);
 
-        var activated = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteActivatedEvent>().Should().ContainSingle().Subject;
-        activated.OccurredAtUtc.Should().Be(Timestamp.FromDateTimeOffset(Now));
-        activated.Route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
-        activated.Route.RouteEpoch.Should().Be(1);
-        activated.Route.LegacyRouteReleased.Should().BeTrue();
-        activated.Route.WarmStartedVersion.Should().Be(warmStartedVersion);
-        activated.Route.CaughtUpVersion.Should().Be(warmStartedVersion);
-        // Started 1, WarmingStarted 2, Attachment 3, CaughtUp 4, Blocked 5, Released 6, Activated 7.
-        harness.EventSourcing.CurrentVersion.Should().Be(7);
-        activated.Route.FlipVersion.Should().Be(7, "the flip version is the version of the Activated commit itself");
-        activated.Route.ActivationProof.Should().Be(BuildExpectedActivationProof());
-
         var route = harness.Agent.State.StatusRoute!;
-        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
         route.RouteEpoch.Should().Be(1);
-        route.FlipVersion.Should().Be(7);
+        route.BlockedVersion.Should().Be(5);
+        route.FlipVersion.Should().Be(0);
         route.CaughtUpVersion.Should().Be(warmStartedVersion);
-        route.LegacyRouteReleased.Should().BeTrue();
-        ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
-                route, ProjectionScopeStatusGAgent.ContractId, ProjectionScopeStatusGAgent.ContractVersion)
-            .Should().BeTrue();
-        ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(route).Should().BeFalse();
-        ProjectionScopeStatusRoutePolicy.LegacyShadowIsSuperseded(route).Should().BeTrue();
+        route.LegacyRouteReleased.Should().BeFalse();
+        harness.Streams.Removed.Should().BeEmpty("the previous writer keeps its relay until it confirms");
         harness.Streams.Relays.Keys.Should().BeEquivalentTo(
         [
+            (SourceScopeActorId, LegacyActorId),
             (SourceScopeActorId, TerminalActorId),
             (RootActorId, SourceScopeActorId),
-        ], "the legacy relay is gone, the terminal relay stays");
-        harness.Callbacks.Timeouts.Should().ContainSingle("the flip schedules no further continuation");
+        ]);
+        harness.Callbacks.Timeouts.Should().HaveCount(2, "the blocked cutover re-arms the durable continuation");
         harness.Journal.Clear();
 
-        // A duplicate report after the flip is ignored: the route is no longer warming.
+        // A duplicate report is ignored: the route is no longer warming.
         await harness.Agent.HandleStatusWriterCaughtUpAsync(BuildCaughtUpReport(routeEpoch: 1, observedVersion: warmStartedVersion));
         await harness.Agent.HandleStatusWriterCaughtUpAsync(BuildCaughtUpReport(routeEpoch: 1, observedVersion: 99));
 
         harness.Journal.Should().BeEmpty();
-        harness.EventSourcing.CurrentVersion.Should().Be(7);
+        harness.EventSourcing.CurrentVersion.Should().Be(5);
+        harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
     }
 
+    /// <summary>
+    /// (d) No previous writer: nothing can ever confirm a release, so the cutover completes in
+    /// the same turn — the stale relay is removed, the release is recorded with observed version
+    /// 0 and the route flips, without a Release command being dispatched anywhere.
+    /// </summary>
     [Fact]
-    public async Task HandleStatusWriterCaughtUpAsync_WhenLegacyActorDoesNotExist_ReleasesWithoutDispatchingToIt()
+    public async Task HandleStatusWriterCaughtUpAsync_WhenLegacyActorDoesNotExist_CompletesTheCutoverInTheSameTurn()
     {
         var harness = SourceScopeHarness.Build(admission: CreateAdmission(), initialState: BuildActiveSourceState());
         await harness.Agent.ActivateForTestAsync();
@@ -602,8 +656,18 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
             Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
         ], "no Release is sent to a legacy actor that does not exist; the release is still recorded");
+        harness.DispatchPort.Dispatched.Should().NotContain(x => x.command.Payload!.Is(ReleaseProjectionScopeCommand.Descriptor));
+        var released = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusLegacyRouteReleasedEvent>()
+            .Should().ContainSingle().Subject;
+        released.RouteEpoch.Should().Be(1);
+        released.ReleasedWriterObservedVersion.Should().Be(
+            0,
+            "there was no previous writer, so no drained version was ever confirmed");
         harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
         harness.Agent.State.StatusRoute.LegacyRouteReleased.Should().BeTrue();
+        // WarmingStarted 1, CaughtUp 2, Blocked 3, Released 4, Activated 5.
+        harness.Agent.State.StatusRoute.FlipVersion.Should().Be(5);
+        harness.EventSourcing.CurrentVersion.Should().Be(5);
     }
 
     [Fact]
@@ -631,19 +695,18 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         harness.Journal.Should().BeEmpty();
         harness.Agent.State.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Warming);
 
-        // Reaching the warm-started version completes the cutover.
+        // Reaching the warm-started version blocks the route and requests the legacy shadow's
+        // release; the flip waits for its confirmation.
         await harness.Agent.HandleStatusWriterCaughtUpAsync(BuildCaughtUpReport(routeEpoch: 1, observedVersion: warmStartedVersion));
 
         harness.Journal.Should().Equal(
         [
             Commit(ProjectionScopeStatusRouteCaughtUpEvent.Descriptor),
             Commit(ProjectionScopeStatusRouteBlockedEvent.Descriptor),
-            RelayRemove(SourceScopeActorId, LegacyActorId),
             Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
-            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
-            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
         ]);
-        harness.Agent.State.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        harness.Agent.State.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+        harness.Agent.State.StatusRoute.LegacyRouteReleased.Should().BeFalse();
     }
 
     public enum IgnoredReportReason
@@ -741,7 +804,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     [Theory]
     [InlineData(AdoptedScopePath.Activation)]
     [InlineData(AdoptedScopePath.Ensure)]
-    public async Task RestartWhileWarmingCaughtUp_BlocksReleasesAndFlips(AdoptedScopePath path)
+    public async Task RestartWhileWarmingCaughtUp_BlocksAndRequestsThePreviousWriterRelease(AdoptedScopePath path)
     {
         var state = BuildActiveSourceState();
         state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1, ProjectionScopeStatusRoutePhase.Warming);
@@ -759,26 +822,26 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             RelayUpsert(SourceScopeActorId, TerminalActorId),
             Dispatch(EnsureProjectionScopeCommand.Descriptor, TerminalActorId),
             Commit(ProjectionScopeStatusRouteBlockedEvent.Descriptor),
-            RelayRemove(SourceScopeActorId, LegacyActorId),
             Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
-            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
-            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
             RelayUpsert(RootActorId, SourceScopeActorId),
         ]);
-        harness.Callbacks!.Timeouts.Should().BeEmpty("a completed cutover schedules no warming continuation");
-        var activated = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteActivatedEvent>().Single();
-        activated.Route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
-        activated.Route.FlipVersion.Should().Be(3, "Blocked 1, Released 2, Activated 3");
-        activated.Route.LegacyRouteReleased.Should().BeTrue();
+        harness.Callbacks!.Timeouts.Should().ContainSingle("the blocked cutover arms the durable continuation")
+            .Which.TriggerEnvelope.Payload!.Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>().Attempt.Should().Be(1);
+        harness.EventSourcing.Committed.Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionScopeStatusRouteBlockedEvent>()
+            .Which.BlockedVersion.Should().Be(1, "the Blocked commit is this scope's first event after the restart");
         harness.Streams.Relays.Keys.Should().BeEquivalentTo(
         [
+            (SourceScopeActorId, LegacyActorId),
             (SourceScopeActorId, TerminalActorId),
             (RootActorId, SourceScopeActorId),
-        ]);
+        ], "the previous writer keeps its relay until it confirms its committed release");
         var route = harness.Agent.State.StatusRoute!;
-        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
-        route.FlipVersion.Should().Be(3);
-        route.LegacyRouteReleased.Should().BeTrue();
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+        route.BlockedVersion.Should().Be(1);
+        route.FlipVersion.Should().Be(0);
+        route.LegacyRouteReleased.Should().BeFalse();
     }
 
     [Fact]
@@ -833,7 +896,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     }
 
     [Fact]
-    public async Task HandleRetryStatusRouteAdoptionAsync_WhileWarmingCaughtUp_CompletesCutoverAndSchedulesNothingMore()
+    public async Task HandleRetryStatusRouteAdoptionAsync_WhileWarmingCaughtUp_BlocksAndRestartsTheContinuationForTheReleasePhase()
     {
         var state = BuildActiveSourceState();
         state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1, ProjectionScopeStatusRoutePhase.Warming);
@@ -847,35 +910,40 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         await harness.Agent.HandleRetryStatusRouteAdoptionAsync(
             new RetryProjectionScopeStatusRouteAdoptionCommand { Attempt = 3 });
 
+        // The cutover blocks and asks the legacy shadow to release; the warming attempt count
+        // does not travel into the release phase — the new phase re-arms its own continuation
+        // chain from the first delay and re-dispatches the release until the shadow confirms.
         harness.Journal.Should().Equal(
         [
             RelayUpsert(SourceScopeActorId, TerminalActorId),
             Dispatch(EnsureProjectionScopeCommand.Descriptor, TerminalActorId),
             Commit(ProjectionScopeStatusRouteBlockedEvent.Descriptor),
-            RelayRemove(SourceScopeActorId, LegacyActorId),
             Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
-            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
-            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
         ]);
-        harness.Callbacks!.Timeouts.Should().BeEmpty("the cutover completed; the continuation chain ends");
+        var continuation = harness.Callbacks!.Timeouts.Should().ContainSingle().Subject;
+        continuation.DueTime.Should().Be(TimeSpan.FromSeconds(30));
+        continuation.TriggerEnvelope.Payload!.Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>().Attempt.Should().Be(1);
         var route = harness.Agent.State.StatusRoute!;
-        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
-        route.LegacyRouteReleased.Should().BeTrue();
-        route.FlipVersion.Should().Be(3);
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+        route.LegacyRouteReleased.Should().BeFalse();
+        route.FlipVersion.Should().Be(0);
+        harness.Streams.Removed.Should().BeEmpty();
     }
 
     [Fact]
     public async Task HandleRetryStatusRouteAdoptionAsync_AfterTheFlip_OnlyMaintainsTheActiveTerminalRoute()
     {
-        // The warming continuation scheduled at warming start fires after the writer already
-        // caught up and the route flipped: it is a plain maintenance pass (no event, no retry).
+        // A continuation scheduled during the cutover fires after the writer caught up, the
+        // previous writer confirmed its release and the route flipped: it is a plain maintenance
+        // pass (no event, no release, no retry).
         var harness = SourceScopeHarness.Build(admission: CreateAdmission(), registerCallbackScheduler: true);
         await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
-        await harness.Agent.HandleStatusWriterCaughtUpAsync(
-            BuildCaughtUpReport(routeEpoch: 1, observedVersion: harness.Agent.State.StatusRoute!.WarmStartedVersion));
-        harness.Agent.State.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
-        var continuation = harness.Callbacks!.Timeouts.Should().ContainSingle().Subject;
+        await CompleteTerminalAdoptionAsync(harness);
+        var timeoutsBefore = harness.Callbacks!.Timeouts.Count;
+        var continuation = harness.Callbacks.Timeouts[^1];
         var committedBefore = harness.EventSourcing.Committed.Count;
+        var dispatchedBefore = harness.DispatchPort.Dispatched.Count;
         harness.Journal.Clear();
 
         await harness.Agent.HandleRetryStatusRouteAdoptionAsync(
@@ -883,19 +951,24 @@ public sealed class ProjectionScopeStatusRouteActivationTests
 
         harness.Journal.Should().Equal([RelayUpsert(SourceScopeActorId, TerminalActorId)]);
         harness.EventSourcing.Committed.Should().HaveCount(committedBefore);
-        harness.Callbacks.Timeouts.Should().ContainSingle("an active route schedules nothing");
+        harness.Callbacks.Timeouts.Should().HaveCount(timeoutsBefore, "an active route schedules nothing");
+        harness.DispatchPort.Dispatched.Should().HaveCount(
+            dispatchedBefore,
+            "a confirmed release is never requested again");
         harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        harness.Agent.State.StatusRoute.LegacyRouteReleased.Should().BeTrue();
     }
 
     [Theory]
     [InlineData(AdoptedScopePath.Activation)]
     [InlineData(AdoptedScopePath.Ensure)]
-    public async Task RestartWhileBlockedBeforeRelease_ReleasesPreviousWriterAndFlips(AdoptedScopePath path)
+    public async Task RestartWhileBlockedBeforeRelease_RedispatchesTheReleaseAndStaysBlocked(AdoptedScopePath path)
     {
         var state = BuildActiveSourceState();
         state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1, ProjectionScopeStatusRoutePhase.Blocked);
         state.StatusRoute.WarmStartedVersion = 5;
         state.StatusRoute.CaughtUpVersion = 6;
+        state.StatusRoute.BlockedVersion = 7;
         var harness = SourceScopeHarness.Build(registerFleetReaders: false, initialState: state);
         harness.Runtime.ExistingActorIds.Add(LegacyActorId);
         harness.Runtime.ExistingActorIds.Add(TerminalActorId);
@@ -903,24 +976,23 @@ public sealed class ProjectionScopeStatusRouteActivationTests
 
         await RunAdoptedScopePathAsync(harness, path);
 
+        // The release was requested before the restart but never confirmed; the resumed cutover
+        // re-dispatches it for the same epoch and commits nothing.
         harness.Journal.Should().Equal(
         [
-            RelayRemove(SourceScopeActorId, LegacyActorId),
             Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
-            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
-            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
             RelayUpsert(RootActorId, SourceScopeActorId),
         ]);
-        harness.EventSourcing.Committed.OfType<ProjectionScopeStatusLegacyRouteReleasedEvent>().Single().RouteEpoch.Should().Be(1);
-        var activated = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteActivatedEvent>().Single();
-        activated.Route.FlipVersion.Should().Be(2);
-        activated.Route.CaughtUpVersion.Should().Be(6);
-        activated.Route.WarmStartedVersion.Should().Be(5);
+        harness.EventSourcing.Committed.Should().BeEmpty();
+        harness.DispatchPort.Dispatched.Should().ContainSingle().Which
+            .command.Payload!.Unpack<ReleaseProjectionScopeCommand>().StatusRouteEpoch.Should().Be(1);
+        harness.Streams.Removed.Should().BeEmpty();
         harness.Runtime.CreatedByKind.Should().BeEmpty();
         var route = harness.Agent.State.StatusRoute!;
-        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
-        route.LegacyRouteReleased.Should().BeTrue();
-        route.FlipVersion.Should().Be(2);
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+        route.LegacyRouteReleased.Should().BeFalse();
+        route.FlipVersion.Should().Be(0);
+        route.BlockedVersion.Should().Be(7);
     }
 
     [Theory]
@@ -931,6 +1003,9 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         var state = BuildActiveSourceState();
         state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1, ProjectionScopeStatusRoutePhase.Blocked);
         state.StatusRoute.LegacyRouteReleased = true;
+        state.StatusRoute.WarmStartedVersion = 5;
+        state.StatusRoute.CaughtUpVersion = 6;
+        state.StatusRoute.BlockedVersion = 7;
         var harness = SourceScopeHarness.Build(registerFleetReaders: false, initialState: state);
         harness.Runtime.ExistingActorIds.Add(LegacyActorId);
         harness.Runtime.ExistingActorIds.Add(TerminalActorId);
@@ -944,10 +1019,20 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         ]);
         harness.DispatchPort.Dispatched.Should().BeEmpty();
         harness.Streams.Removed.Should().BeEmpty();
+        // The flip clones the blocked route it resumes; it never rebuilds one, so the cutover
+        // bookkeeping of this epoch survives the restart into the committed active route.
+        var activated = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteActivatedEvent>()
+            .Should().ContainSingle().Subject;
+        activated.Route.WarmStartedVersion.Should().Be(5);
+        activated.Route.CaughtUpVersion.Should().Be(6);
+        activated.Route.BlockedVersion.Should().Be(7);
         var route = harness.Agent.State.StatusRoute!;
         route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
         route.FlipVersion.Should().Be(1);
         route.LegacyRouteReleased.Should().BeTrue();
+        route.WarmStartedVersion.Should().Be(5);
+        route.CaughtUpVersion.Should().Be(6);
+        route.BlockedVersion.Should().Be(7);
     }
 
     [Fact]
@@ -1008,8 +1093,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     {
         var harness = SourceScopeHarness.Build(admission: CreateAdmission());
         await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
-        await harness.Agent.HandleStatusWriterCaughtUpAsync(
-            BuildCaughtUpReport(routeEpoch: 1, observedVersion: harness.Agent.State.StatusRoute!.WarmStartedVersion));
+        await CompleteTerminalAdoptionAsync(harness);
         var committedAfterCutover = harness.EventSourcing.Committed.Count;
         var dispatchedAfterCutover = harness.DispatchPort.Dispatched.Count;
         harness.Journal.Clear();
@@ -1091,10 +1175,10 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     public async Task HandleReplayAsync_WhileRouteBlocked_RefusesTheReplayedDispatchUntilTheFlip()
     {
         // The Blocked window is reached through the agent's own transition: the caught-up report
-        // commits CaughtUp and Blocked, then the release of the legacy relay fails (relay store
-        // down), leaving the route Blocked until the next activation completes the cutover. A
-        // failure replay arriving inside that window is refused at dispatch (recorded as a failed
-        // replay attempt, nothing attempted/published); after the flip the same replay dispatches.
+        // commits CaughtUp and Blocked and asks the legacy shadow to release, and the route stays
+        // Blocked for as long as that release is unconfirmed. A failure replay arriving inside
+        // that window is refused at dispatch (nothing attempted, nothing recorded as a replay);
+        // once the shadow confirms, the route flips and the same replay dispatches.
         var state = BuildActiveSourceState();
         state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1, ProjectionScopeStatusRoutePhase.Warming);
         state.StatusRoute.WarmStartedVersion = 1;
@@ -1125,19 +1209,16 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             Publish(ReplayProjectionFailuresCommand.Descriptor, TopologyAudience.Self),
         ]);
         harness.Journal.Clear();
-        harness.Streams.RemoveRelayFailure = new IOException("relay store unavailable");
 
-        var blockedCutover = () => harness.Agent.HandleStatusWriterCaughtUpAsync(BuildCaughtUpReport(routeEpoch: 1, observedVersion: 1));
+        await harness.Agent.HandleStatusWriterCaughtUpAsync(BuildCaughtUpReport(routeEpoch: 1, observedVersion: 1));
 
-        await blockedCutover.Should().ThrowAsync<IOException>();
         harness.Journal.Should().Equal(
         [
             Commit(ProjectionScopeStatusRouteCaughtUpEvent.Descriptor),
             Commit(ProjectionScopeStatusRouteBlockedEvent.Descriptor),
-            $"relay-remove-failed:{SourceScopeActorId}->{LegacyActorId}",
+            Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
         ]);
         harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
-        harness.Streams.RemoveRelayFailure = null;
         harness.Journal.Clear();
 
         await harness.Agent.HandleReplayAsync(new ReplayProjectionFailuresCommand { MaxItems = 1 });
@@ -1151,18 +1232,16 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         harness.Agent.State.Failures.Should().ContainSingle().Which.Attempts.Should().Be(0, "a refused replay is not a failed attempt");
         harness.Journal.Clear();
 
-        // The next activation completes the cutover (the relay store is back); the replay then
+        // The legacy shadow confirms its committed release; the route flips and the replay then
         // dispatches and attempts the envelope.
-        await harness.Agent.ActivateForTestAsync();
+        await harness.Agent.HandleStatusWriterReleasedAsync(
+            BuildReleaseConfirmation(routeEpoch: 1, lastObservedVersion: harness.Agent.State.StatusRoute!.BlockedVersion));
 
         harness.Journal.Should().Equal(
         [
             RelayRemove(SourceScopeActorId, LegacyActorId),
-            Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
             Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
             Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
-            RelayUpsert(RootActorId, SourceScopeActorId),
-            Publish(ReplayProjectionFailuresCommand.Descriptor, TopologyAudience.Self),
         ]);
         harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
         harness.Journal.Clear();
@@ -1263,11 +1342,12 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
     [InlineData(ProjectionScopeStatusRoutePhase.Active)]
     [InlineData(ProjectionScopeStatusRoutePhase.Unspecified)]
-    public async Task LegacyShadow_WhenSourceRouteIsTerminalInWritingPhase_ReleasesItselfAndSkipsObservation(
+    public async Task LegacyShadow_WhenSourceRouteIsTerminalInWritingPhase_ReleasesItselfConfirmsAndSkipsObservation(
         ProjectionScopeStatusRoutePhase phase)
     {
         // A shadow that was (re)ensured after the block/flip sees the committed terminal route
-        // in the very next source publication and releases itself on its own turn.
+        // in the very next source publication, releases itself on its own turn and confirms the
+        // committed release to its source with the version it drained.
         var harness = BuildLegacyShadowHarness();
         await harness.Agent.ActivateForTestAsync();
         harness.Journal.Clear();
@@ -1277,16 +1357,27 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         await harness.Agent.HandleObservedEnvelopeAsync(BuildCommittedSourceEnvelope(LegacyActorId, sourceState, 3));
 
         // The Released event detaches the observation as part of its transition, so no separate
-        // attachment event follows it.
+        // attachment event follows it; the confirmation is sent only after that commit.
         harness.Journal.Should().Equal(
         [
             Commit(ProjectionScopeReleasedEvent.Descriptor),
             RelayRemove(SourceScopeActorId, LegacyActorId),
+            SendTo(ProjectionScopeStatusWriterReleasedEvent.Descriptor, SourceScopeActorId),
         ]);
         harness.EventSourcing.Committed.Should().NotContain(evt => evt is ProjectionScopeEnvelopeReceivedEvent);
         harness.EventSourcing.Committed.Should().NotContain(evt => evt is ProjectionScopeEnvelopeAttemptedEvent);
         harness.Streams.Relays.Should().BeEmpty("afterwards the source stream carries no legacy relay");
-        harness.Publisher.SentTo.Should().BeEmpty();
+        var confirmation = harness.Publisher.SentTo.Should().ContainSingle().Subject;
+        confirmation.TargetActorId.Should().Be(SourceScopeActorId);
+        confirmation.Event.Should().BeOfType<ProjectionScopeStatusWriterReleasedEvent>().Which.Should().Be(
+            new ProjectionScopeStatusWriterReleasedEvent
+            {
+                SourceScopeActorId = SourceScopeActorId,
+                RouteEpoch = 1,
+                LastObservedVersion = 3,
+                ReleasedAtUtc = Timestamp.FromDateTimeOffset(Now),
+            },
+            "this publication is the last one the shadow observed through the source's relay");
         harness.Agent.State.Released.Should().BeTrue();
         harness.Agent.State.ObservationAttached.Should().BeFalse();
         harness.Agent.State.ReceivedEnvelopeTotal.Should().Be(0);
@@ -1300,6 +1391,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
 
         harness.Journal.Should().BeEmpty();
         harness.EventSourcing.Committed.OfType<ProjectionScopeReleasedEvent>().Should().ContainSingle();
+        harness.Publisher.SentTo.Should().ContainSingle("a released shadow confirms once per release, not per drained envelope");
     }
 
     [Fact]
@@ -1459,6 +1551,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
                 RootActorId = SourceScopeActorId,
                 ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
                 Mode = ProjectionScopeMode.DurableMaterialization,
+                StatusRouteEpoch = 5,
             });
         release.command.Route.Direct.TargetActorId.Should().Be(LegacyActorId);
         harness.Streams.Relays.Keys.Should().BeEquivalentTo(
@@ -1607,18 +1700,17 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(route).Should().BeFalse("the warming legacy shadow does not write yet");
         harness.Journal.Clear();
 
-        // 2. The legacy shadow reports caught-up at epoch 2: block, release the terminal
-        //    (relay removed, Release dispatched), record it, flip to the legacy route.
+        // 2. The legacy shadow reports caught-up at epoch 2: block and ask the terminal
+        //    materializer to release. Its relay stays until it confirms (it must still observe
+        //    the BLOCKED publication and drain), so nothing flips yet.
         await harness.Agent.HandleStatusWriterCaughtUpAsync(BuildCaughtUpReport(routeEpoch: 2, observedVersion: 1));
 
         harness.Journal.Should().Equal(
         [
             Commit(ProjectionScopeStatusRouteCaughtUpEvent.Descriptor),
             Commit(ProjectionScopeStatusRouteBlockedEvent.Descriptor),
-            RelayRemove(SourceScopeActorId, TerminalActorId),
             Dispatch(ReleaseProjectionScopeCommand.Descriptor, TerminalActorId),
-            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
-            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
         ]);
         var terminalRelease = harness.DispatchPort.Dispatched
             .Should().ContainSingle(x => x.command.Payload!.Is(ReleaseProjectionScopeCommand.Descriptor)).Subject;
@@ -1629,7 +1721,24 @@ public sealed class ProjectionScopeStatusRouteActivationTests
                 RootActorId = SourceScopeActorId,
                 ProjectionKind = ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
                 Mode = ProjectionScopeMode.DurableMaterialization,
+                StatusRouteEpoch = 2,
             });
+        harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+        harness.Agent.State.StatusRoute.LegacyRouteReleased.Should().BeFalse();
+        harness.Streams.Relays.Should().ContainKey((SourceScopeActorId, TerminalActorId));
+        harness.Journal.Clear();
+
+        // 2b. The terminal materializer confirms its committed release for epoch 2: its relay is
+        //     removed, the release is recorded and the route flips to the legacy writer.
+        await harness.Agent.HandleStatusWriterReleasedAsync(
+            BuildReleaseConfirmation(routeEpoch: 2, lastObservedVersion: harness.Agent.State.StatusRoute.BlockedVersion));
+
+        harness.Journal.Should().Equal(
+        [
+            RelayRemove(SourceScopeActorId, TerminalActorId),
+            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
+            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
+        ]);
         harness.EventSourcing.Committed.OfType<ProjectionScopeStatusLegacyRouteReleasedEvent>().Single().RouteEpoch.Should().Be(2);
         var activated = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteActivatedEvent>().Single();
         activated.Route.ContractId.Should().Be(ProjectionScopeStatusRoutePolicy.LegacyContractId);
@@ -1638,7 +1747,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         activated.Route.FlipVersion.Should().Be(5, "WarmingStarted 1, CaughtUp 2, Blocked 3, Released 4, Activated 5");
         activated.Route.LegacyRouteReleased.Should().BeTrue();
         harness.Streams.Relays.Keys.Should().Equal((RootActorId, SourceScopeActorId));
-        harness.Callbacks.Timeouts.Should().ContainSingle("the flip schedules nothing more");
+        harness.Callbacks.Timeouts.Should().HaveCount(2, "the flip schedules nothing more");
         route = harness.Agent.State.StatusRoute!;
         ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route).Should().BeTrue();
         route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
@@ -1661,7 +1770,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             RelayUpsert(RootActorId, SourceScopeActorId),
         ]);
         harness.EventSourcing.CurrentVersion.Should().Be(5);
-        harness.Callbacks.Timeouts.Should().HaveCount(2);
+        harness.Callbacks.Timeouts.Should().HaveCount(3);
         harness.Journal.Clear();
 
         // 4. A fresh grant again: warming the terminal starts at epoch 3 (the terminal actor
@@ -1685,7 +1794,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         route.WarmStartedVersion.Should().Be(6);
         route.LegacyRouteReleased.Should().BeFalse();
         route.ActivationProof.Should().Be(BuildExpectedActivationProof());
-        harness.Callbacks.Timeouts.Should().HaveCount(3, "the adoption retry chain stops; the new warming schedules exactly one continuation");
+        harness.Callbacks.Timeouts.Should().HaveCount(4, "the adoption retry chain stops; the new warming schedules exactly one continuation");
         harness.Callbacks.Timeouts[^1].TriggerEnvelope.Payload!.Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>().Attempt.Should().Be(1);
     }
 
@@ -1737,6 +1846,723 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         harness.Agent.State.StatusRoute!.RouteEpoch.Should().Be(1);
         harness.Agent.State.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
         ProjectionScopeStatusRoutePolicy.IsTerminalRoute(harness.Agent.State.StatusRoute).Should().BeTrue();
+    }
+
+    // ── J. the previous writer's committed-release confirmation ──────────────────────
+
+    /// <summary>
+    /// Acceptance of the release command by the previous writer's inbox is NOT its release. A
+    /// terminal cutover whose legacy shadow exists stays BLOCKED — refusing every observation and
+    /// re-dispatching the release on every activation, ensure and durable continuation — until
+    /// the shadow confirms, with the typed continuation, that its release is committed.
+    /// </summary>
+    [Fact]
+    public async Task TerminalCutover_WithAnExistingLegacyShadow_FlipsOnlyOnItsCommittedReleaseConfirmation()
+    {
+        var harness = SourceScopeHarness.Build(admission: CreateAdmission(), registerCallbackScheduler: true);
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+        harness.Runtime.ExistingActorIds.Should().Contain(LegacyActorId, "the source ensured its own shadow");
+        harness.Streams.Relays[(SourceScopeActorId, LegacyActorId)] = BuildLegacyStatusRelayBinding();
+        var warmStartedVersion = harness.Agent.State.StatusRoute!.WarmStartedVersion;
+        harness.Journal.Clear();
+
+        // 1. Caught up → BLOCKED, and the release is dispatched to the shadow. Nothing is
+        //    recorded as released, nothing flips, and the shadow keeps its relay so it can still
+        //    observe the BLOCKED publication and drain.
+        await harness.Agent.HandleStatusWriterCaughtUpAsync(BuildCaughtUpReport(routeEpoch: 1, observedVersion: warmStartedVersion));
+
+        harness.Journal.Should().Equal(
+        [
+            Commit(ProjectionScopeStatusRouteCaughtUpEvent.Descriptor),
+            Commit(ProjectionScopeStatusRouteBlockedEvent.Descriptor),
+            Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
+        ]);
+        var blocked = harness.Agent.State.StatusRoute!;
+        blocked.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+        blocked.LegacyRouteReleased.Should().BeFalse();
+        blocked.BlockedVersion.Should().Be(5);
+        blocked.FlipVersion.Should().Be(0);
+        harness.EventSourcing.Committed.Should().NotContain(evt =>
+            evt is ProjectionScopeStatusLegacyRouteReleasedEvent ||
+            evt is ProjectionScopeStatusRouteActivatedEvent);
+        harness.Streams.Removed.Should().BeEmpty();
+        harness.Streams.Relays.Should().ContainKey((SourceScopeActorId, LegacyActorId));
+
+        // 2. The blocked route refuses every observation until the flip.
+        var observe = () => harness.Agent.HandleObservedEnvelopeAsync(
+            BuildForwardedRootEnvelope(BuildSourceStateAtVersion(3, flipVersion: 10), version: 3));
+
+        (await observe.Should().ThrowAsync<ProjectionScopeStatusRouteBlockedException>())
+            .Which.RouteEpoch.Should().Be(1);
+        harness.Agent.State.ReceivedEnvelopeTotal.Should().Be(0);
+
+        // 3. Activation, a fresh ensure and the durable continuation each re-dispatch the SAME
+        //    release for the SAME epoch, and still nothing flips.
+        harness.Journal.Clear();
+        await harness.Agent.ActivateForTestAsync();
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+        await harness.Agent.HandleRetryStatusRouteAdoptionAsync(
+            new RetryProjectionScopeStatusRouteAdoptionCommand { Attempt = 1 });
+
+        harness.Journal.Should().Equal(
+        [
+            Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
+            RelayUpsert(RootActorId, SourceScopeActorId),
+            Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
+            RelayUpsert(RootActorId, SourceScopeActorId),
+            Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
+            RetryTimeout(TestScopeAgent.RetryDelays[1]),
+        ]);
+        var releases = harness.DispatchPort.Dispatched
+            .Where(static x => x.command.Payload!.Is(ReleaseProjectionScopeCommand.Descriptor))
+            .ToList();
+        releases.Should().HaveCount(4);
+        releases.Should().OnlyContain(x => x.actorId == LegacyActorId);
+        releases.Select(static x => x.command.Payload!.Unpack<ReleaseProjectionScopeCommand>())
+            .Should().OnlyContain(command => command.StatusRouteEpoch == 1);
+        harness.EventSourcing.CurrentVersion.Should().Be(5, "a re-dispatched release commits nothing");
+        harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+        harness.Agent.State.StatusRoute.LegacyRouteReleased.Should().BeFalse();
+        harness.Journal.Clear();
+
+        // 4. The shadow confirms its committed release at the blocked version: the relay goes,
+        //    the release is recorded with the confirmed version and only then does the route flip.
+        await harness.Agent.HandleStatusWriterReleasedAsync(
+            BuildReleaseConfirmation(routeEpoch: 1, lastObservedVersion: blocked.BlockedVersion));
+
+        harness.Journal.Should().Equal(
+        [
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
+            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
+        ]);
+        var released = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusLegacyRouteReleasedEvent>()
+            .Should().ContainSingle().Subject;
+        released.RouteEpoch.Should().Be(1);
+        released.ReleasedWriterObservedVersion.Should().Be(5, "the confirmed drained version is recorded");
+        var activated = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteActivatedEvent>()
+            .Should().ContainSingle().Subject;
+        activated.Route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        activated.Route.RouteEpoch.Should().Be(1);
+        activated.Route.LegacyRouteReleased.Should().BeTrue();
+        activated.Route.ActivationProof.Should().Be(BuildExpectedActivationProof());
+        // The flip carries the cutover bookkeeping of the route it flips: it clones the blocked
+        // route rather than building a fresh one, so the warm/caught-up/blocked versions of this
+        // cutover survive into the committed active route (and into the status document).
+        activated.Route.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        activated.Route.ContractVersion.Should().Be(ProjectionScopeStatusGAgent.ContractVersion);
+        activated.Route.WarmStartedVersion.Should().Be(warmStartedVersion);
+        activated.Route.CaughtUpVersion.Should().Be(warmStartedVersion);
+        activated.Route.BlockedVersion.Should().Be(5);
+        // Started 1, WarmingStarted 2, Attachment 3, CaughtUp 4, Blocked 5, Released 6, Activated 7.
+        harness.EventSourcing.CurrentVersion.Should().Be(7);
+        activated.Route.FlipVersion.Should().Be(7, "the flip version is the version of the Activated commit itself");
+        var route = harness.Agent.State.StatusRoute!;
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        route.LegacyRouteReleased.Should().BeTrue();
+        route.FlipVersion.Should().Be(7);
+        route.WarmStartedVersion.Should().Be(warmStartedVersion);
+        route.CaughtUpVersion.Should().Be(warmStartedVersion);
+        route.BlockedVersion.Should().Be(5);
+        harness.Streams.Relays.Keys.Should().BeEquivalentTo(
+        [
+            (SourceScopeActorId, TerminalActorId),
+            (RootActorId, SourceScopeActorId),
+        ], "the legacy relay is gone, the terminal relay stays");
+        ProjectionScopeStatusRoutePolicy.LegacyShadowIsSuperseded(route).Should().BeTrue();
+        harness.Journal.Clear();
+
+        // 5. Observations are accepted again.
+        await harness.Agent.HandleObservedEnvelopeAsync(
+            BuildForwardedRootEnvelope(BuildSourceStateAtVersion(3, flipVersion: 10), version: 3));
+
+        harness.Journal.Should().Equal(
+        [
+            Commit(ProjectionScopeEnvelopeReceivedEvent.Descriptor),
+            Commit(ProjectionScopeEnvelopeAttemptedEvent.Descriptor),
+        ]);
+        harness.Agent.State.HighestSeenVersion.Should().Be(3);
+    }
+
+    /// <summary>
+    /// An ACTIVE route whose previous writer never confirmed (a route flipped by a binary that
+    /// took dispatch acceptance for a release, or a lost confirmation): the release is requested
+    /// again on every activation and the durable continuation keeps asking. The route is already
+    /// flipped, so nothing else moves.
+    /// </summary>
+    [Fact]
+    public async Task ActiveRouteWithAnUnconfirmedRelease_WhenTheLegacyShadowExists_RerequestsItAndKeepsTheContinuation()
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 3);
+        state.StatusRoute.LegacyRouteReleased = false;
+        var harness = SourceScopeHarness.Build(
+            registerFleetReaders: false,
+            registerCallbackScheduler: true,
+            initialState: state);
+        harness.Runtime.ExistingActorIds.Add(TerminalActorId);
+        harness.Runtime.ExistingActorIds.Add(LegacyActorId);
+        harness.Streams.Relays[(SourceScopeActorId, LegacyActorId)] = BuildLegacyStatusRelayBinding();
+
+        await harness.Agent.ActivateForTestAsync();
+
+        harness.Journal.Should().Equal(
+        [
+            RelayUpsert(SourceScopeActorId, TerminalActorId),
+            Dispatch(ReleaseProjectionScopeCommand.Descriptor, LegacyActorId),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
+            RelayUpsert(RootActorId, SourceScopeActorId),
+        ]);
+        harness.EventSourcing.Committed.Should().BeEmpty("an unconfirmed release records nothing");
+        harness.DispatchPort.Dispatched.Should().ContainSingle().Which
+            .command.Payload!.Unpack<ReleaseProjectionScopeCommand>().StatusRouteEpoch.Should().Be(3);
+        harness.Callbacks!.Timeouts.Should().ContainSingle();
+        harness.Streams.Relays.Should().ContainKey((SourceScopeActorId, LegacyActorId));
+        harness.BindingAuthority!.Lookups.Should().BeEmpty(
+            "the relay of a writer that has not confirmed is not a reappeared relay");
+        var route = harness.Agent.State.StatusRoute!;
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        route.RouteEpoch.Should().Be(3);
+        route.LegacyRouteReleased.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ActiveRouteWithAnUnconfirmedRelease_WhenTheLegacyShadowIsGone_RecordsTheReleaseAndReconcilesTheRelay()
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 3);
+        state.StatusRoute.LegacyRouteReleased = false;
+        var harness = SourceScopeHarness.Build(
+            registerFleetReaders: false,
+            registerCallbackScheduler: true,
+            initialState: state);
+        harness.Runtime.ExistingActorIds.Add(TerminalActorId);
+        harness.Streams.Relays[(SourceScopeActorId, LegacyActorId)] = BuildLegacyStatusRelayBinding();
+
+        await harness.Agent.ActivateForTestAsync();
+
+        harness.Journal.Should().Equal(
+        [
+            RelayUpsert(SourceScopeActorId, TerminalActorId),
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
+            RelayUpsert(RootActorId, SourceScopeActorId),
+        ], "nothing can confirm, so the release is recorded on the spot and no continuation is armed");
+        harness.EventSourcing.Committed.Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionScopeStatusLegacyRouteReleasedEvent>()
+            .Which.ReleasedWriterObservedVersion.Should().Be(0);
+        harness.Callbacks!.Timeouts.Should().BeEmpty();
+        harness.DispatchPort.Dispatched.Should().BeEmpty();
+        harness.BindingAuthority!.Lookups.Should().Equal(
+            [(SourceScopeActorId, LegacyActorId)],
+            "the reconciliation reads the release this turn recorded, not the stale route it started from");
+        var route = harness.Agent.State.StatusRoute!;
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        route.RouteEpoch.Should().Be(3);
+        route.LegacyRouteReleased.Should().BeTrue();
+    }
+
+    public enum IgnoredReleaseConfirmation
+    {
+        WrongEpoch,
+        WrongSource,
+        RouteStillWarming,
+        AlreadyReleased,
+    }
+
+    /// <summary>
+    /// The confirmation is fenced exactly like every other route fact: it must name this scope,
+    /// this epoch, and a route that is past warming and still unreleased.
+    /// </summary>
+    [Theory]
+    [InlineData(IgnoredReleaseConfirmation.WrongEpoch)]
+    [InlineData(IgnoredReleaseConfirmation.WrongSource)]
+    [InlineData(IgnoredReleaseConfirmation.RouteStillWarming)]
+    [InlineData(IgnoredReleaseConfirmation.AlreadyReleased)]
+    public async Task HandleStatusWriterReleasedAsync_ForAnotherEpochSourceOrPhase_ChangesNothing(
+        IgnoredReleaseConfirmation reason)
+    {
+        var stillWarming = reason == IgnoredReleaseConfirmation.RouteStillWarming;
+        var state = BuildActiveSourceState();
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+            routeEpoch: 1,
+            stillWarming ? ProjectionScopeStatusRoutePhase.Warming : ProjectionScopeStatusRoutePhase.Blocked);
+        state.StatusRoute.WarmStartedVersion = 4;
+        state.StatusRoute.CaughtUpVersion = 4;
+        state.StatusRoute.BlockedVersion = stillWarming ? 0 : 5;
+        state.StatusRoute.LegacyRouteReleased = reason == IgnoredReleaseConfirmation.AlreadyReleased;
+        var harness = SourceScopeHarness.Build(registerFleetReaders: false, initialState: state);
+        harness.Runtime.ExistingActorIds.Add(LegacyActorId);
+        harness.Runtime.ExistingActorIds.Add(TerminalActorId);
+        harness.Streams.Relays[(SourceScopeActorId, LegacyActorId)] = BuildLegacyStatusRelayBinding();
+
+        await harness.Agent.HandleStatusWriterReleasedAsync(reason switch
+        {
+            IgnoredReleaseConfirmation.WrongEpoch => BuildReleaseConfirmation(routeEpoch: 2, lastObservedVersion: 5),
+            IgnoredReleaseConfirmation.WrongSource => BuildReleaseConfirmation(
+                routeEpoch: 1,
+                lastObservedVersion: 5,
+                sourceScopeActorId: "some-other-scope"),
+            _ => BuildReleaseConfirmation(routeEpoch: 1, lastObservedVersion: 5),
+        });
+
+        harness.Journal.Should().BeEmpty();
+        harness.EventSourcing.Committed.Should().BeEmpty();
+        harness.Streams.Removed.Should().BeEmpty();
+        harness.Streams.Relays.Should().ContainKey((SourceScopeActorId, LegacyActorId));
+        var route = harness.Agent.State.StatusRoute!;
+        route.RouteEpoch.Should().Be(1);
+        route.Phase.Should().Be(
+            stillWarming ? ProjectionScopeStatusRoutePhase.Warming : ProjectionScopeStatusRoutePhase.Blocked);
+        route.LegacyRouteReleased.Should().Be(reason == IgnoredReleaseConfirmation.AlreadyReleased);
+        route.FlipVersion.Should().Be(0);
+    }
+
+    /// <summary>
+    /// The route is already the writer's own (this binary flipped it earlier, or an older binary
+    /// wrote it phase-less) and only the previous writer's release was still unconfirmed: the
+    /// confirmation records that fact and NOTHING else — no second activation. The applier's
+    /// epoch fence would swallow a re-activation at the same epoch on an already-writing route
+    /// (<c>ApplyStatusRouteActivated</c>), so only the committed event stream can prove that the
+    /// handler never persisted one.
+    /// </summary>
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Active)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Unspecified)]
+    public async Task HandleStatusWriterReleasedAsync_OnAWritingUnreleasedRoute_RecordsOnlyTheReleaseWithoutActivatingAgain(
+        ProjectionScopeStatusRoutePhase phase)
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 3, phase);
+        state.StatusRoute.WarmStartedVersion = 4;
+        state.StatusRoute.CaughtUpVersion = 4;
+        state.StatusRoute.FlipVersion = 6;
+        state.StatusRoute.LegacyRouteReleased = false;
+        var harness = SourceScopeHarness.Build(registerFleetReaders: false, initialState: state);
+        harness.Runtime.ExistingActorIds.Add(LegacyActorId);
+        harness.Runtime.ExistingActorIds.Add(TerminalActorId);
+        harness.Streams.Relays[(SourceScopeActorId, LegacyActorId)] = BuildLegacyStatusRelayBinding();
+
+        await harness.Agent.HandleStatusWriterReleasedAsync(
+            BuildReleaseConfirmation(routeEpoch: 3, lastObservedVersion: 11));
+
+        harness.Journal.Should().Equal(
+        [
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
+        ], "a route that is already writing is not flipped a second time by the late confirmation");
+        harness.EventSourcing.Committed.Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionScopeStatusLegacyRouteReleasedEvent>()
+            .Which.ReleasedWriterObservedVersion.Should().Be(11, "the confirmed drained version is what is recorded");
+        harness.EventSourcing.Committed.Should().NotContain(evt => evt is ProjectionScopeStatusRouteActivatedEvent);
+        harness.Streams.Relays.Should().NotContainKey((SourceScopeActorId, LegacyActorId));
+        var route = harness.Agent.State.StatusRoute!;
+        route.RouteEpoch.Should().Be(3);
+        route.Phase.Should().Be(phase, "recording the release never changes the phase");
+        route.LegacyRouteReleased.Should().BeTrue();
+        route.FlipVersion.Should().Be(6, "the flip version of the epoch that is already active is not rewritten");
+    }
+
+    /// <summary>
+    /// Released-before-drained: the previous writer confirms a version below the blocked one (it
+    /// released before it saw the BLOCKED publication). The cutover still completes — a writer
+    /// that released cannot write any more — and the lower version it confirmed is what the
+    /// release fact records.
+    /// </summary>
+    [Fact]
+    public async Task HandleStatusWriterReleasedAsync_BelowTheBlockedVersion_StillFlipsAndRecordsTheLowerObservedVersion()
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1, ProjectionScopeStatusRoutePhase.Blocked);
+        state.StatusRoute.WarmStartedVersion = 4;
+        state.StatusRoute.CaughtUpVersion = 4;
+        state.StatusRoute.BlockedVersion = 5;
+        var harness = SourceScopeHarness.Build(registerFleetReaders: false, initialState: state);
+        harness.Runtime.ExistingActorIds.Add(LegacyActorId);
+        harness.Runtime.ExistingActorIds.Add(TerminalActorId);
+        harness.Streams.Relays[(SourceScopeActorId, LegacyActorId)] = BuildLegacyStatusRelayBinding();
+
+        await harness.Agent.HandleStatusWriterReleasedAsync(
+            BuildReleaseConfirmation(routeEpoch: 1, lastObservedVersion: 2));
+
+        harness.Journal.Should().Equal(
+        [
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
+            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
+        ]);
+        harness.EventSourcing.Committed.OfType<ProjectionScopeStatusLegacyRouteReleasedEvent>()
+            .Should().ContainSingle().Subject
+            .ReleasedWriterObservedVersion.Should().Be(2, "the release fact records what was actually confirmed");
+        var route = harness.Agent.State.StatusRoute!;
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        route.LegacyRouteReleased.Should().BeTrue();
+        route.FlipVersion.Should().Be(2, "Released 1, Activated 2");
+        route.BlockedVersion.Should().Be(5);
+        harness.Streams.Relays.Should().NotContainKey((SourceScopeActorId, LegacyActorId));
+    }
+
+    /// <summary>
+    /// The confirmation removes the previous writer's relay before it records anything: if that
+    /// removal fails, no release and no flip are committed, and the re-dispatched release brings
+    /// a fresh confirmation that completes the cutover once the relay store is back.
+    /// </summary>
+    [Fact]
+    public async Task HandleStatusWriterReleasedAsync_WhenTheRelayRemovalFails_CommitsNothingAndStaysBlocked()
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 1, ProjectionScopeStatusRoutePhase.Blocked);
+        state.StatusRoute.BlockedVersion = 5;
+        var harness = SourceScopeHarness.Build(registerFleetReaders: false, initialState: state);
+        harness.Runtime.ExistingActorIds.Add(LegacyActorId);
+        harness.Streams.Relays[(SourceScopeActorId, LegacyActorId)] = BuildLegacyStatusRelayBinding();
+        harness.Streams.RemoveRelayFailure = new IOException("relay store unavailable");
+
+        var failedConfirmation = () => harness.Agent.HandleStatusWriterReleasedAsync(
+            BuildReleaseConfirmation(routeEpoch: 1, lastObservedVersion: 5));
+
+        await failedConfirmation.Should().ThrowAsync<IOException>();
+        harness.Journal.Should().Equal([$"relay-remove-failed:{SourceScopeActorId}->{LegacyActorId}"]);
+        harness.EventSourcing.Committed.Should().BeEmpty();
+        harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+        harness.Agent.State.StatusRoute.LegacyRouteReleased.Should().BeFalse();
+        harness.Streams.RemoveRelayFailure = null;
+        harness.Journal.Clear();
+
+        await harness.Agent.HandleStatusWriterReleasedAsync(
+            BuildReleaseConfirmation(routeEpoch: 1, lastObservedVersion: 5));
+
+        harness.Journal.Should().Equal(
+        [
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
+            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
+        ]);
+        harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+    }
+
+    // ── J2. the previous writer's side of the confirmation (the legacy shadow) ────────
+
+    [Fact]
+    public async Task LegacyShadow_ReleaseWithARouteEpoch_CommitsItsReleaseThenConfirmsTheDrainedVersion()
+    {
+        var harness = BuildLegacyShadowHarness(highestSeenVersion: 12);
+        await harness.Agent.ActivateForTestAsync();
+        harness.Journal.Clear();
+
+        await harness.Agent.HandleReleaseAsync(BuildLegacyShadowReleaseCommand(statusRouteEpoch: 3));
+
+        // The confirmation is sent only after the release is a committed fact of this shadow.
+        harness.Journal.Should().Equal(
+        [
+            Commit(ProjectionScopeReleasedEvent.Descriptor),
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+            SendTo(ProjectionScopeStatusWriterReleasedEvent.Descriptor, SourceScopeActorId),
+        ]);
+        var expectedConfirmation = new ProjectionScopeStatusWriterReleasedEvent
+        {
+            SourceScopeActorId = SourceScopeActorId,
+            RouteEpoch = 3,
+            LastObservedVersion = 12,
+            ReleasedAtUtc = Timestamp.FromDateTimeOffset(Now),
+        };
+        harness.Publisher.SentTo.Should().ContainSingle().Which.Event
+            .Should().BeOfType<ProjectionScopeStatusWriterReleasedEvent>()
+            .Which.Should().Be(expectedConfirmation, "the shadow confirms the highest source version it saw");
+        harness.Agent.State.Released.Should().BeTrue();
+        harness.Journal.Clear();
+
+        // The source re-dispatches until it holds the confirmation: an already released shadow
+        // commits nothing new and confirms again.
+        await harness.Agent.HandleReleaseAsync(BuildLegacyShadowReleaseCommand(statusRouteEpoch: 3));
+
+        harness.Journal.Should().Equal([SendTo(ProjectionScopeStatusWriterReleasedEvent.Descriptor, SourceScopeActorId)]);
+        harness.EventSourcing.Committed.OfType<ProjectionScopeReleasedEvent>().Should().ContainSingle();
+        harness.Publisher.SentTo.Should().HaveCount(2);
+        harness.Publisher.SentTo[^1].Event.Should().BeOfType<ProjectionScopeStatusWriterReleasedEvent>()
+            .Which.Should().Be(expectedConfirmation);
+    }
+
+    [Fact]
+    public async Task LegacyShadow_ReleaseWithoutARouteEpoch_ReleasesWithoutConfirming()
+    {
+        var harness = BuildLegacyShadowHarness(highestSeenVersion: 12);
+        await harness.Agent.ActivateForTestAsync();
+        harness.Journal.Clear();
+
+        await harness.Agent.HandleReleaseAsync(BuildLegacyShadowReleaseCommand(statusRouteEpoch: 0));
+
+        harness.Journal.Should().Equal(
+        [
+            Commit(ProjectionScopeReleasedEvent.Descriptor),
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+        ]);
+        harness.Publisher.SentTo.Should().BeEmpty("a release outside a status-route cutover confirms nothing");
+        harness.Agent.State.Released.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task LegacyShadow_SelfReleaseOnASupersedingRoute_ConfirmsTheHighestVersionItDrained()
+    {
+        // Its own watermark is ahead of the publication that supersedes it (later publications
+        // were observed before this one was handled), so the confirmation carries the watermark.
+        var harness = BuildLegacyShadowHarness(highestSeenVersion: 9);
+        await harness.Agent.ActivateForTestAsync();
+        harness.Journal.Clear();
+        var sourceState = BuildSourceStateAtVersion(3, flipVersion: 10);
+        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+            routeEpoch: 4,
+            ProjectionScopeStatusRoutePhase.Blocked);
+
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildCommittedSourceEnvelope(LegacyActorId, sourceState, 3));
+
+        harness.Journal.Should().Equal(
+        [
+            Commit(ProjectionScopeReleasedEvent.Descriptor),
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+            SendTo(ProjectionScopeStatusWriterReleasedEvent.Descriptor, SourceScopeActorId),
+        ]);
+        harness.Publisher.SentTo.Should().ContainSingle().Which.Event
+            .Should().BeOfType<ProjectionScopeStatusWriterReleasedEvent>()
+            .Which.Should().Be(new ProjectionScopeStatusWriterReleasedEvent
+            {
+                SourceScopeActorId = SourceScopeActorId,
+                RouteEpoch = 4,
+                LastObservedVersion = 9,
+                ReleasedAtUtc = Timestamp.FromDateTimeOffset(Now),
+            });
+        harness.Agent.State.Released.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Both halves of the confirmation contract, wired to each other: the release command the
+    /// SOURCE dispatches for its cutover is fed to a real legacy shadow, and the confirmation
+    /// that shadow actually sends is fed back to the source — no hand-built message in between.
+    /// The route flips only on that round trip, and the version the source records is the one the
+    /// shadow drained. (The terminal materializer's half of the same contract — its release and
+    /// self-release confirmations — belongs to the terminal materializer's own suite.)
+    /// </summary>
+    [Fact]
+    public async Task TerminalCutover_ReleaseAndConfirmationRoundTripThroughTheRealLegacyShadow_FlipsTheRoute()
+    {
+        var source = SourceScopeHarness.Build(admission: CreateAdmission(), registerCallbackScheduler: true);
+        await source.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+        var warmStartedVersion = source.Agent.State.StatusRoute!.WarmStartedVersion;
+        var shadow = BuildLegacyShadowHarness(highestSeenVersion: 5);
+        await shadow.Agent.ActivateForTestAsync();
+        shadow.Journal.Clear();
+
+        // 1. Caught up: the source blocks and dispatches the release for its route epoch.
+        await source.Agent.HandleStatusWriterCaughtUpAsync(
+            BuildCaughtUpReport(routeEpoch: 1, observedVersion: warmStartedVersion));
+        var releaseCommand = source.DispatchPort.Dispatched
+            .Should().ContainSingle(x => x.command.Payload!.Is(ReleaseProjectionScopeCommand.Descriptor)).Subject
+            .command.Payload!.Unpack<ReleaseProjectionScopeCommand>();
+        source.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
+
+        // 2. The real legacy shadow handles exactly that command: it commits its release and only
+        //    then sends the typed continuation back to the source named in the command.
+        await shadow.Agent.HandleReleaseAsync(releaseCommand);
+
+        shadow.Journal.Should().Equal(
+        [
+            Commit(ProjectionScopeReleasedEvent.Descriptor),
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+            SendTo(ProjectionScopeStatusWriterReleasedEvent.Descriptor, SourceScopeActorId),
+        ]);
+        var sent = shadow.Publisher.SentTo.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should().Be(SourceScopeActorId);
+        var confirmation = sent.Event.Should().BeOfType<ProjectionScopeStatusWriterReleasedEvent>().Subject;
+        confirmation.RouteEpoch.Should().Be(
+            releaseCommand.StatusRouteEpoch,
+            "the shadow confirms the epoch the source asked it to release for");
+        confirmation.SourceScopeActorId.Should().Be(
+            source.Agent.Id,
+            "the confirmation names the source scope actor whose route is fenced, not the shadow itself or the root actor");
+        source.Journal.Clear();
+
+        // 3. The source's fence accepts that very message and completes the cutover.
+        await source.Agent.HandleStatusWriterReleasedAsync(confirmation);
+
+        source.Journal.Should().Equal(
+        [
+            RelayRemove(SourceScopeActorId, LegacyActorId),
+            Commit(ProjectionScopeStatusLegacyRouteReleasedEvent.Descriptor),
+            Commit(ProjectionScopeStatusRouteActivatedEvent.Descriptor),
+        ]);
+        source.EventSourcing.Committed.OfType<ProjectionScopeStatusLegacyRouteReleasedEvent>()
+            .Should().ContainSingle().Subject
+            .ReleasedWriterObservedVersion.Should().Be(5, "the source records the version the shadow actually drained");
+        var route = source.Agent.State.StatusRoute!;
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        route.RouteEpoch.Should().Be(1);
+        route.LegacyRouteReleased.Should().BeTrue();
+        shadow.Agent.State.Released.Should().BeTrue();
+        shadow.Agent.State.ObservationAttached.Should().BeFalse();
+    }
+
+    // ── K. a route created under the previous terminal contract ──────────────────────
+
+    /// <summary>
+    /// The current materializer serves a route of the previous contract, so there is no cutover
+    /// and no previous writer: a fresh grant of the current contract moves the route in place, at
+    /// the next epoch, which makes the writer's next write the epoch-fenced takeover of its own
+    /// document.
+    /// </summary>
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Active)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Unspecified)]
+    public async Task PreviousContractRoute_UnderAFreshCurrentContractGrant_IsUpgradedInPlaceWithoutACutover(
+        ProjectionScopeStatusRoutePhase phase)
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = BuildPreviousContractTerminalRoute(routeEpoch: 4, phase);
+        state.StatusRoute.LegacyRouteReleased = true;
+        var harness = SourceScopeHarness.Build(
+            admission: CreateAdmission(),
+            registerCallbackScheduler: true,
+            initialState: state);
+        harness.Runtime.ExistingActorIds.Add(TerminalActorId);
+        harness.Streams.Relays[(SourceScopeActorId, TerminalActorId)] = BuildTerminalStatusRelayBinding();
+
+        await harness.Agent.ActivateForTestAsync();
+
+        harness.Journal.Should().Equal(
+        [
+            RelayUpsert(SourceScopeActorId, TerminalActorId),
+            Commit(ProjectionScopeStatusRouteContractUpgradedEvent.Descriptor),
+            RelayUpsert(RootActorId, SourceScopeActorId),
+        ], "the terminal relay is only re-asserted; no warming, no block, no release, no new actor");
+        var upgraded = harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteContractUpgradedEvent>()
+            .Should().ContainSingle().Subject;
+        upgraded.OccurredAtUtc.Should().Be(Timestamp.FromDateTimeOffset(Now));
+        upgraded.Route.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        upgraded.Route.ContractVersion.Should().Be(ProjectionScopeStatusGAgent.ContractVersion);
+        upgraded.Route.RouteEpoch.Should().Be(5);
+        upgraded.Route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        upgraded.Route.LegacyRouteReleased.Should().BeTrue("the release recorded for the previous route is preserved");
+        upgraded.Route.FlipVersion.Should().Be(1, "the flip version is the version of the upgrade commit itself");
+        upgraded.Route.ActivatedAtUtc.Should().Be(Timestamp.FromDateTimeOffset(Now));
+        upgraded.Route.ActivationProof.Should().Be(BuildExpectedActivationProof());
+        harness.EventSourcing.Committed.Should().ContainSingle();
+        harness.DispatchPort.Dispatched.Should().BeEmpty();
+        harness.Streams.Removed.Should().BeEmpty();
+        harness.Runtime.CreatedByKind.Should().BeEmpty();
+        harness.Callbacks!.Timeouts.Should().BeEmpty("an upgraded route needs no continuation");
+        var route = harness.Agent.State.StatusRoute!;
+        route.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2);
+        route.ContractVersion.Should().Be(2);
+        route.RouteEpoch.Should().Be(5);
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        route.LegacyRouteReleased.Should().BeTrue();
+        ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                route, ProjectionScopeStatusGAgent.ContractId, ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().BeTrue();
+        ProjectionScopeStatusRoutePolicy.IsPreviousTerminalContractRoute(route, ProjectionScopeStatusGAgent.ContractId)
+            .Should().BeFalse();
+    }
+
+    public enum PreviousContractGate
+    {
+        NoCurrentGrantAndPreviousRevoked,
+        NoCurrentGrantAndPreviousOpen,
+        NoCurrentGrantAtAll,
+    }
+
+    /// <summary>
+    /// Without a fresh grant of the current contract the previous-contract route stays exactly as
+    /// it is — its writer is unchanged and authoritative — and the upgrade is retried on the
+    /// durable continuation. Neither state of the PREVIOUS contract's own gate is route evidence:
+    /// a revocation is not an operator decision (this binary stopped advertising that contract,
+    /// which is why the gate closed), and an OPEN previous gate — the state of a fleet that still
+    /// contains binaries of the previous contract — is not a grant either. Admitting one would be
+    /// exactly the mixed-binary failure the contract revision exists to prevent.
+    /// </summary>
+    [Theory]
+    [InlineData(PreviousContractGate.NoCurrentGrantAndPreviousRevoked)]
+    [InlineData(PreviousContractGate.NoCurrentGrantAndPreviousOpen)]
+    [InlineData(PreviousContractGate.NoCurrentGrantAtAll)]
+    public async Task PreviousContractRoute_WithoutACurrentContractGrant_KeepsTheRouteAndRetriesTheUpgrade(
+        PreviousContractGate gate)
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = BuildPreviousContractTerminalRoute(routeEpoch: 4);
+        state.StatusRoute.LegacyRouteReleased = true;
+        var harness = SourceScopeHarness.Build(
+            admission: gate switch
+            {
+                PreviousContractGate.NoCurrentGrantAndPreviousRevoked =>
+                    CreatePreviousContractAdmission(RuntimeFleetCapabilityGateStatus.Revoked),
+                PreviousContractGate.NoCurrentGrantAndPreviousOpen =>
+                    CreatePreviousContractAdmission(RuntimeFleetCapabilityGateStatus.Open),
+                _ => null,
+            },
+            registerCallbackScheduler: true,
+            initialState: state);
+        harness.Runtime.ExistingActorIds.Add(TerminalActorId);
+        harness.Streams.Relays[(SourceScopeActorId, TerminalActorId)] = BuildTerminalStatusRelayBinding();
+        if (gate == PreviousContractGate.NoCurrentGrantAndPreviousOpen)
+            await AssertOnlyThePreviousContractGateWouldGrantAsync(harness);
+
+        await harness.Agent.ActivateForTestAsync();
+
+        harness.Journal.Should().Equal(
+        [
+            RelayUpsert(SourceScopeActorId, TerminalActorId),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
+            RelayUpsert(RootActorId, SourceScopeActorId),
+        ]);
+        harness.EventSourcing.Committed.Should().BeEmpty(
+            "neither an upgrade nor a rollback is admitted: only a fresh grant of the CURRENT contract moves this route");
+        harness.EventSourcing.Committed.Should().NotContain(evt => evt is ProjectionScopeStatusRouteContractUpgradedEvent);
+        harness.DispatchPort.Dispatched.Should().BeEmpty("no writer is moved, so nothing is released");
+        harness.Streams.Removed.Should().BeEmpty();
+        harness.Runtime.CreatedByKind.Should().BeEmpty();
+        var continuation = harness.Callbacks!.Timeouts.Should().ContainSingle().Subject;
+        continuation.CallbackId.Should().Be(TestScopeAgent.RetryCallbackId);
+        continuation.DueTime.Should().Be(TimeSpan.FromSeconds(30));
+        continuation.TriggerEnvelope.Payload!.Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>().Attempt.Should().Be(1);
+        var route = harness.Agent.State.StatusRoute!;
+        route.ContractId.Should().Be(PreviousTerminalContractId);
+        route.ContractVersion.Should().Be(PreviousTerminalContractVersion);
+        route.RouteEpoch.Should().Be(4);
+        route.LegacyRouteReleased.Should().BeTrue();
+        ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                route, ProjectionScopeStatusGAgent.ContractId, ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().BeTrue("the current materializer keeps serving a route of the previous contract");
+        ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(route).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PreviousContractRoute_WhenTheGrantAppearsOnALaterContinuation_IsUpgradedThen()
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = BuildPreviousContractTerminalRoute(routeEpoch: 4);
+        state.StatusRoute.LegacyRouteReleased = true;
+        var harness = SourceScopeHarness.Build(admission: null, registerCallbackScheduler: true, initialState: state);
+        harness.Runtime.ExistingActorIds.Add(TerminalActorId);
+        await harness.Agent.ActivateForTestAsync();
+        var retry = harness.Callbacks!.Timeouts.Should().ContainSingle().Subject
+            .TriggerEnvelope.Payload!.Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>();
+        harness.Fleet!.Admission = CreateAdmission();
+        harness.Journal.Clear();
+
+        await harness.Agent.HandleRetryStatusRouteAdoptionAsync(retry);
+
+        harness.Journal.Should().Equal(
+        [
+            RelayUpsert(SourceScopeActorId, TerminalActorId),
+            Commit(ProjectionScopeStatusRouteContractUpgradedEvent.Descriptor),
+        ]);
+        harness.Callbacks.Timeouts.Should().ContainSingle("the upgrade ends the continuation chain");
+        var route = harness.Agent.State.StatusRoute!;
+        route.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        route.RouteEpoch.Should().Be(5);
+        route.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        route.LegacyRouteReleased.Should().BeTrue();
     }
 
     // ── scopes that never own a status route ──────────────────────────────────────────
@@ -2124,6 +2950,94 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         next.StatusRoute.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData(4)]
+    [InlineData(3)]
+    public void Transition_ContractUpgradedWithoutAHigherEpoch_LeavesRouteUnchanged(long eventEpoch)
+    {
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        current.StatusRoute = BuildPreviousContractTerminalRoute(routeEpoch: 4);
+
+        var next = harness.Agent.Transition(current, new ProjectionScopeStatusRouteContractUpgradedEvent
+        {
+            Route = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(eventEpoch),
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        });
+
+        next.Should().BeSameAs(current, "the epoch fence rejects a stale or replayed upgrade outright");
+        next.StatusRoute!.ContractId.Should().Be(PreviousTerminalContractId);
+        next.StatusRoute.RouteEpoch.Should().Be(4);
+    }
+
+    [Fact]
+    public void Transition_ContractUpgradedOverACutoverInFlight_LeavesRouteUnchanged()
+    {
+        // A route being moved to another writer is not upgraded in place under it.
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        current.StatusRoute = BuildPreviousContractTerminalRoute(routeEpoch: 4, ProjectionScopeStatusRoutePhase.Warming);
+
+        var next = harness.Agent.Transition(current, new ProjectionScopeStatusRouteContractUpgradedEvent
+        {
+            Route = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 5),
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        });
+
+        next.Should().BeSameAs(current);
+        next.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Warming);
+        next.StatusRoute.ContractId.Should().Be(PreviousTerminalContractId);
+    }
+
+    [Fact]
+    public void Transition_ContractUpgradedOverALegacyRoute_LeavesRouteUnchanged()
+    {
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        current.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(routeEpoch: 4);
+
+        var next = harness.Agent.Transition(current, new ProjectionScopeStatusRouteContractUpgradedEvent
+        {
+            Route = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(routeEpoch: 5),
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        });
+
+        next.Should().BeSameAs(current, "an in-place contract upgrade never changes which writer the route selects");
+        ProjectionScopeStatusRoutePolicy.IsLegacyRoute(next.StatusRoute).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Transition_ContractUpgradedAtAHigherEpochOnAWritingRoute_ReplacesTheRouteAsActive()
+    {
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        current.StatusRoute = BuildPreviousContractTerminalRoute(routeEpoch: 4);
+        current.StatusRoute.LegacyRouteReleased = true;
+        // The event may not smuggle a non-writing phase through.
+        var upgraded = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+            routeEpoch: 5,
+            ProjectionScopeStatusRoutePhase.Warming);
+        upgraded.LegacyRouteReleased = true;
+        upgraded.FlipVersion = 9;
+        var occurredAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(1));
+
+        var next = harness.Agent.Transition(current, new ProjectionScopeStatusRouteContractUpgradedEvent
+        {
+            Route = upgraded,
+            OccurredAtUtc = occurredAt,
+        });
+
+        next.Should().NotBeSameAs(current);
+        current.StatusRoute.RouteEpoch.Should().Be(4, "appliers never mutate the current state in place");
+        next.StatusRoute!.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2);
+        next.StatusRoute.ContractVersion.Should().Be(2);
+        next.StatusRoute.RouteEpoch.Should().Be(5);
+        next.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        next.StatusRoute.LegacyRouteReleased.Should().BeTrue();
+        next.StatusRoute.FlipVersion.Should().Be(9);
+        next.UpdatedAtUtc.Should().Be(occurredAt);
+    }
+
     // ── rolling / mixed status writers on one source ───────────────────────────────────
 
     [Fact]
@@ -2299,12 +3213,16 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         };
 
     /// <summary>The legacy status shadow of <see cref="SourceScopeActorId"/> as a scope actor under test.</summary>
-    private static SourceScopeHarness BuildLegacyShadowHarness() =>
-        SourceScopeHarness.Build(
+    private static SourceScopeHarness BuildLegacyShadowHarness(long highestSeenVersion = 0)
+    {
+        var state = BuildActiveLegacyShadowState();
+        state.HighestSeenVersion = highestSeenVersion;
+        return SourceScopeHarness.Build(
             registerFleetReaders: false,
             scopeActorId: LegacyActorId,
             agentKind: LegacyStatusShadowKind,
-            initialState: BuildActiveLegacyShadowState());
+            initialState: state);
+    }
 
     private static Task RunAdoptedScopePathAsync(SourceScopeHarness harness, AdoptedScopePath path) =>
         path switch
@@ -2324,6 +3242,47 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             RouteEpoch = routeEpoch,
             ObservedVersion = observedVersion,
             ObservedAtUtc = Timestamp.FromDateTimeOffset(Now),
+        };
+
+    /// <summary>The previous writer's typed continuation: its release for this epoch is committed.</summary>
+    private static ProjectionScopeStatusWriterReleasedEvent BuildReleaseConfirmation(
+        long routeEpoch,
+        long lastObservedVersion,
+        string? sourceScopeActorId = null) =>
+        new()
+        {
+            SourceScopeActorId = sourceScopeActorId ?? SourceScopeActorId,
+            RouteEpoch = routeEpoch,
+            LastObservedVersion = lastObservedVersion,
+            ReleasedAtUtc = Timestamp.FromDateTimeOffset(Now),
+        };
+
+    /// <summary>
+    /// Completes the cutover of the scope's current WARMING route the way production does: the
+    /// new writer reports caught-up (block + release request) and the previous writer confirms
+    /// its committed release at the blocked version, which flips the route.
+    /// </summary>
+    private static async Task CompleteTerminalAdoptionAsync(SourceScopeHarness harness)
+    {
+        var warming = harness.Agent.State.StatusRoute!;
+        warming.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Warming);
+        await harness.Agent.HandleStatusWriterCaughtUpAsync(
+            BuildCaughtUpReport(warming.RouteEpoch, warming.WarmStartedVersion));
+        var blocked = harness.Agent.State.StatusRoute!;
+        blocked.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked, "the flip waits for the previous writer");
+        await harness.Agent.HandleStatusWriterReleasedAsync(
+            BuildReleaseConfirmation(blocked.RouteEpoch, blocked.BlockedVersion));
+        harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+    }
+
+    /// <summary>The release the source dispatches to the legacy shadow of a cutover at this epoch.</summary>
+    private static ReleaseProjectionScopeCommand BuildLegacyShadowReleaseCommand(long statusRouteEpoch) =>
+        new()
+        {
+            RootActorId = SourceScopeActorId,
+            ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
+            Mode = ProjectionScopeMode.DurableMaterialization,
+            StatusRouteEpoch = statusRouteEpoch,
         };
 
     private static EnsureProjectionScopeCommand BuildDurableEnsureCommand() =>
@@ -2357,6 +3316,21 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             Released = false,
             ObservationAttached = true,
             ActivationGeneration = 1,
+        };
+
+    /// <summary>
+    /// A terminal route as an older binary committed it: the PREVIOUS terminal contract (v1),
+    /// which this binary's materializer still serves but never creates a new route under.
+    /// </summary>
+    private static ProjectionScopeStatusRoute BuildPreviousContractTerminalRoute(
+        long routeEpoch,
+        ProjectionScopeStatusRoutePhase phase = ProjectionScopeStatusRoutePhase.Active) =>
+        new()
+        {
+            ContractId = PreviousTerminalContractId,
+            ContractVersion = PreviousTerminalContractVersion,
+            RouteEpoch = routeEpoch,
+            Phase = phase,
         };
 
     private static StreamForwardingBinding BuildLegacyStatusRelayBinding() =>
@@ -2511,11 +3485,18 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         await dispatcher.UpsertAsync(ProjectionScopeStatusDocumentMapper.Map(routelessState, stateEvent!, updatedAt));
     }
 
+    /// <summary>
+    /// The fleet admission of the CURRENT terminal contract (V2). A source only adopts or
+    /// upgrades its status route under this capability; the V1 admission
+    /// (<see cref="CreatePreviousContractAdmission"/>) exists only for routes created by an
+    /// older binary.
+    /// </summary>
     private static RuntimeFleetCapabilityAdmission CreateAdmission(
-        RuntimeFleetCapability capability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV1,
+        RuntimeFleetCapability capability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
         RuntimeFleetCapabilityGateStatus status = RuntimeFleetCapabilityGateStatus.Open,
-        string contractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1,
-        DateTimeOffset? validUntil = null)
+        string contractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2,
+        DateTimeOffset? validUntil = null,
+        int minimumReaderContractVersion = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion)
     {
         var admission = new RuntimeFleetCapabilityAdmission
         {
@@ -2526,7 +3507,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             CapabilityEpoch = 3,
             MembershipEpoch = 7,
             DeploymentRevision = "revision-a",
-            MinimumReaderContractVersion = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion,
+            MinimumReaderContractVersion = minimumReaderContractVersion,
             MembershipObservedAt = Timestamp.FromDateTimeOffset(Now.AddSeconds(-5)),
             MembershipValidUntil = Timestamp.FromDateTimeOffset(validUntil ?? Now.AddMinutes(1)),
             ActiveMemberCount = 1,
@@ -2541,6 +3522,54 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         });
         return admission;
     }
+
+    /// <summary>
+    /// The fleet admission of the PREVIOUS terminal contract (V1). This binary neither advertises
+    /// nor re-admits that contract, so its gate — revoked or not — is never route evidence.
+    /// </summary>
+    private static RuntimeFleetCapabilityAdmission CreatePreviousContractAdmission(
+        RuntimeFleetCapabilityGateStatus status) =>
+        CreateAdmission(
+            capability: RuntimeFleetCapability.ProjectionScopeStatusTerminalV1,
+            status: status,
+            contractId: PreviousTerminalContractId,
+            minimumReaderContractVersion: (int)PreviousTerminalContractVersion);
+
+    /// <summary>
+    /// The harness publishes a gate of the PREVIOUS terminal contract that would be granted if it
+    /// were read under that contract — and no gate of the current one. Asserting this before a
+    /// fail-closed expectation keeps that expectation from passing for the wrong reason (a gate
+    /// that is stale, revoked or membership-mismatched would fail closed no matter which
+    /// capability production reads).
+    /// </summary>
+    private static async Task AssertOnlyThePreviousContractGateWouldGrantAsync(SourceScopeHarness harness)
+    {
+        (await IsFleetGateGrantedAsync(
+                harness,
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV1,
+                PreviousTerminalContractId,
+                (int)PreviousTerminalContractVersion))
+            .Should().BeTrue("the published previous-contract gate is open, fresh and matches this member");
+        (await IsFleetGateGrantedAsync(
+                harness,
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
+                ProjectionScopeStatusGAgent.ContractId,
+                (int)ProjectionScopeStatusGAgent.ContractVersion))
+            .Should().BeFalse("no gate of the current terminal contract is published at all");
+    }
+
+    private static Task<bool> IsFleetGateGrantedAsync(
+        SourceScopeHarness harness,
+        RuntimeFleetCapability capability,
+        string contractId,
+        int readerContractVersion) =>
+        Aevatar.Foundation.Core.Runtime.RuntimeFleetCapabilityAdmissionValidation.IsGrantedAsync(
+            capability,
+            contractId,
+            readerContractVersion,
+            harness.Fleet!,
+            harness.Fleet!,
+            new FixedTimeProvider(Now));
 
     private static void SetAgentId(GAgentBase agent, string id) =>
         typeof(GAgentBase)
@@ -3078,9 +4107,16 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             throw new NotSupportedException();
     }
 
+    /// <summary>
+    /// Fleet admissions per capability, exactly as the authority publishes them: a gate is only
+    /// answered for the capability it was published for, so a binary asking for the V2 terminal
+    /// capability never sees a V1 gate (and the other way round).
+    /// </summary>
     private sealed class MutableFleetAdmissionSource
         : IRuntimeFleetCapabilityAdmissionReader, IRuntimeLocalMembershipIdentityReader
     {
+        private readonly Dictionary<RuntimeFleetCapability, RuntimeFleetCapabilityAdmission> _admissions = [];
+
         public MutableFleetAdmissionSource(
             RuntimeFleetCapabilityAdmission? admission,
             RuntimeLocalMembershipIdentity? membership)
@@ -3089,8 +4125,24 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             Membership = membership ?? new RuntimeLocalMembershipIdentity(7, "digest-a", "revision-a", "member-a", "inc-a");
         }
 
-        public RuntimeFleetCapabilityAdmission? Admission { get; set; }
+        /// <summary>The single published gate; assigning replaces whatever was published before.</summary>
+        public RuntimeFleetCapabilityAdmission? Admission
+        {
+            get => _admissions.Values.FirstOrDefault();
+            set
+            {
+                _admissions.Clear();
+                Publish(value);
+            }
+        }
+
         public RuntimeLocalMembershipIdentity? Membership { get; set; }
+
+        public void Publish(RuntimeFleetCapabilityAdmission? admission)
+        {
+            if (admission != null)
+                _admissions[admission.Capability] = admission;
+        }
 
         public Task<RuntimeFleetCapabilityAdmission?> GetAsync(
             RuntimeFleetCapability capability,
@@ -3098,7 +4150,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(
-                capability == RuntimeFleetCapability.ProjectionScopeStatusTerminalV1 ? Admission?.Clone() : null);
+                _admissions.TryGetValue(capability, out var admission) ? admission.Clone() : null);
         }
 
         public ValueTask<RuntimeLocalMembershipIdentity?> GetCurrentAsync(CancellationToken ct = default)

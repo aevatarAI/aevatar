@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
@@ -23,12 +24,30 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 /// deferred-write retry through the callback scheduler, and the source-owned phased status
 /// route (warming -> blocked -> active, with a legacy rollback route) that decides who may
 /// write and whose epoch fences same-version document takeovers.
+///
+/// A rejected write (Conflict/Gap) never advances delivery: on the observed path the
+/// observation FAILS so the provider redelivers it without advancing its checkpoint (nothing
+/// is persisted); on the durable retry path — where the envelope is already this actor's own
+/// fact — the pending write stays durably retryable at the capped cadence. A previous-writer
+/// release is confirmed to the source with a typed continuation only after it is committed,
+/// and the materializer serves routes of the previous terminal contract but never of a later
+/// one, so a mixed fleet fails closed in both directions.
 /// </summary>
 public sealed class ProjectionScopeStatusTerminalRouteTests
 {
     private const string RootActorId = "root-actor";
     private const string ProjectionKind = "test-kind";
     private const string TerminalWriteAlertStage = "terminal-status-write";
+
+    /// <summary>
+    /// The terminal contract an older source binary committed its routes under. This binary
+    /// creates no new route under it but still serves the ones that exist.
+    /// </summary>
+    private const string PreviousTerminalContractId =
+        RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1;
+
+    private const long PreviousTerminalContractVersion = 1;
+
     private static readonly DateTimeOffset FixedNow = new(2026, 8, 19, 10, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan CappedRetryDelay = TimeSpan.FromMinutes(10);
 
@@ -461,6 +480,52 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Unspecified)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Active)]
+    public async Task HandleObservedEnvelopeAsync_PreviousContractTerminalRouteInWritingPhase_ShouldStillWrite(
+        ProjectionScopeStatusRoutePhase phase)
+    {
+        // A route committed under the PREVIOUS terminal contract by an older source binary: this
+        // materializer serves it, so the source keeps its status writer across the upgrade.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        var sourceState = BuildSourceState();
+        sourceState.StatusRoute = BuildPreviousContractTerminalRoute(4, phase);
+        sourceState.StatusRoute.ContractId.Should().Be(PreviousTerminalContractId);
+
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            sourceState,
+            BuildStateEvent(version: 45, eventId: "evt-45", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        var document = harness.Dispatcher.Documents.Should().ContainSingle().Subject;
+        document.StateVersion.Should().Be(45);
+        document.StatusRoute.Should().Be(sourceState.StatusRoute, "the document carries the source's committed route");
+        ((IProjectionRouteFencedReadModel)document).RouteEpoch.Should().Be(4);
+        harness.Outbox.Sent.Should().BeEmpty("a writing phase reports nothing to the source");
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.Agent.State.Released.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_PreviousContractTerminalRouteWarming_ShouldReportCaughtUpWithoutWriting()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        var sourceState = BuildSourceState();
+        sourceState.StatusRoute = BuildPreviousContractTerminalRoute(4, ProjectionScopeStatusRoutePhase.Warming);
+
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            sourceState,
+            BuildStateEvent(version: 46, eventId: "evt-46", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        harness.Dispatcher.UpsertAttempts.Should().Be(0, "a warming writer never writes, whatever the contract revision");
+        var report = harness.Outbox.CaughtUpReports.Should().ContainSingle().Subject;
+        report.TargetActorId.Should().Be(SourceScopeActorId);
+        report.CaughtUp.RouteEpoch.Should().Be(4);
+        report.CaughtUp.ObservedVersion.Should().Be(46);
+        harness.Agent.State.PendingWrite.Should().BeNull();
+    }
+
     [Fact]
     public async Task HandleObservedEnvelopeAsync_WarmingThenBlockedThenActive_ShouldReportThenWriteOncePerTerminalOutcome()
     {
@@ -552,35 +617,47 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         ProjectionScopeStatusRoutePhase phase)
     {
         // Rolled back: the legacy shadow took the route over. We release ourselves (relay
-        // removed first, then the durable released fact), write nothing and process nothing further.
+        // removed first, then the durable released fact), write nothing, and confirm the release
+        // to the source carrying the last version we observed through its relay — the source
+        // flips its route on that typed confirmation, never on inbox acceptance.
         var harness = await TerminalHarness.CreateStartedAsync();
         var sourceState = BuildSourceState();
         sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(3, phase);
 
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             sourceState,
-            BuildStateEvent(version: 33, eventId: "evt-33", new ProjectionScopeWatermarkAdvancedEvent())));
+            BuildStateEvent(version: 17, eventId: "evt-17", new ProjectionScopeWatermarkAdvancedEvent())));
 
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
         harness.EventSourcing.PersistedEvents.Should().HaveCount(2);
-        harness.EventSourcing.PersistedEvents[1].Should().BeOfType<ProjectionScopeStatusTerminalReleasedEvent>()
-            .Which.OccurredAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
+        var released = harness.EventSourcing.PersistedEvents[1]
+            .Should().BeOfType<ProjectionScopeStatusTerminalReleasedEvent>().Subject;
+        released.OccurredAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
+        released.LastObservedVersion.Should().Be(17,
+            "the publication that rolled us back is the last one drained through the source's relay");
         harness.Agent.State.Released.Should().BeTrue();
+        harness.Agent.State.ReleasedAtObservedVersion.Should().Be(17, "the drained version is a durable fact");
         harness.Agent.State.PendingWrite.Should().BeNull();
         (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().BeNull();
         harness.Streams.GetStream(SourceScopeActorId).RemovedTargets.Should().Equal(TerminalActorId);
-        harness.Outbox.Sent.Should().BeEmpty();
+        var confirmation = harness.Outbox.Sent.Should().ContainSingle().Subject;
+        confirmation.TargetActorId.Should().Be(SourceScopeActorId);
+        confirmation.ReleaseConfirmation.SourceScopeActorId.Should().Be(SourceScopeActorId);
+        confirmation.ReleaseConfirmation.RouteEpoch.Should().Be(3, "the confirmation names the legacy route's epoch");
+        confirmation.ReleaseConfirmation.LastObservedVersion.Should().Be(17);
+        confirmation.ReleaseConfirmation.ReleasedAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
         harness.Callbacks.Timeouts.Should().BeEmpty();
 
         // a straggler for the now-released source (the legacy writer owns it) is ignored
         var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             sourceState,
-            BuildStateEvent(version: 34, eventId: "evt-34", new ProjectionScopeWatermarkAdvancedEvent())));
+            BuildStateEvent(version: 18, eventId: "evt-18", new ProjectionScopeWatermarkAdvancedEvent())));
 
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
         harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
         harness.Agent.State.Released.Should().BeTrue();
+        harness.Outbox.Sent.Should().ContainSingle("a released materializer confirms once, then stays silent");
         harness.Streams.GetStream(SourceScopeActorId).RemovedTargets.Should().Equal(
             new[] { TerminalActorId },
             "a released materializer does not touch the source stream again");
@@ -605,6 +682,9 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
 
         harness.Agent.State.Released.Should().BeTrue();
         harness.Agent.State.PendingWrite.Should().BeNull("the legacy writer owns the status from here on");
+        var confirmation = harness.Outbox.ReleaseConfirmations.Should().ContainSingle().Subject;
+        confirmation.ReleaseConfirmation.RouteEpoch.Should().Be(2);
+        confirmation.ReleaseConfirmation.LastObservedVersion.Should().Be(13);
 
         await harness.Agent.HandleRetryWriteAsync(retry);
 
@@ -623,6 +703,8 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             rolledBack,
             BuildStateEvent(version: 40, eventId: "evt-40", new ProjectionScopeWatermarkAdvancedEvent())));
         harness.Agent.State.Released.Should().BeTrue();
+        harness.Outbox.ReleaseConfirmations.Should().ContainSingle()
+            .Which.ReleaseConfirmation.LastObservedVersion.Should().Be(40, "the rollback release is confirmed to the source");
         var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
 
         var reWarming = BuildSourceState();
@@ -636,12 +718,16 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore + 1);
         harness.EventSourcing.PersistedEvents[^1].Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>()
             .Which.ActivationGeneration.Should().Be(2);
-        var report = harness.Outbox.Sent.Should().ContainSingle().Subject;
+        var report = harness.Outbox.CaughtUpReports.Should().ContainSingle().Subject;
         report.TargetActorId.Should().Be(SourceScopeActorId);
         report.CaughtUp.RouteEpoch.Should().Be(3);
         report.CaughtUp.ObservedVersion.Should().Be(41);
         report.CaughtUp.SourceScopeActorId.Should().Be(SourceScopeActorId);
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
+        harness.Outbox.Sent.Should().HaveCount(2,
+            "the restart sends the caught-up report and nothing else: the release was already confirmed");
+        harness.Outbox.ReleaseConfirmations.Should().ContainSingle(
+            "a restarting materializer never re-confirms the release it already committed");
 
         var reActive = BuildSourceState();
         reActive.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(3, ProjectionScopeStatusRoutePhase.Active);
@@ -651,6 +737,8 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
 
         harness.Dispatcher.Writes.Should().ContainSingle().Which.Should().Be((42L, 3L, ProjectionWriteDisposition.Applied));
         harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore + 1, "the restart was already persisted");
+        harness.Outbox.Sent.Should().HaveCount(2, "the re-adopted writer reports nothing while it writes");
+        harness.Outbox.Published.Should().BeEmpty();
     }
 
     [Fact]
@@ -984,6 +1072,56 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     }
 
     [Fact]
+    public async Task HandleRetryWriteAsync_WithSameSourceButSupersededAttempt_ShouldDoNothingUntilTheCurrentAttemptFires()
+    {
+        // A delayed callback of an earlier attempt for the SAME source: the durable retry state
+        // has already advanced past it. It must not write, must not re-defer at a shorter backoff
+        // and must not arm a second live retry — the attempt fence is the whole guard.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.AlwaysThrow(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        await harness.FireLatestRetryAsync();
+        var pending = harness.Agent.State.PendingWrite!;
+        pending.Attempts.Should().Be(2);
+        var nextRetryBefore = pending.NextRetryAtUtc;
+        nextRetryBefore.Should().Be(Timestamp.FromDateTimeOffset(FixedNow + ProjectionScopeStatusGAgent.WriteRetryDelays[1]));
+        var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
+        var timeoutsBefore = harness.Callbacks.Timeouts.Count;
+        var upsertsBefore = harness.Dispatcher.UpsertAttempts;
+
+        await harness.Agent.HandleRetryWriteAsync(new RetryProjectionScopeStatusWriteCommand
+        {
+            ExpectedSource = pending.Source.Clone(),
+            Attempt = 1,
+        });
+
+        harness.Dispatcher.UpsertAttempts.Should().Be(upsertsBefore, "a superseded attempt never writes");
+        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore, "and persists nothing");
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(2, "the retry state stays where it advanced to");
+        harness.Agent.State.PendingWrite.NextRetryAtUtc.Should().Be(nextRetryBefore);
+        harness.Agent.State.PendingWrite.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Transient);
+        harness.Agent.State.PendingWrite.Stalled.Should().BeFalse();
+        harness.Callbacks.Timeouts.Should().HaveCount(timeoutsBefore, "one live retry, armed by the current attempt");
+
+        // the current attempt fires and does the work
+        harness.Dispatcher.Recover();
+        await harness.Agent.HandleRetryWriteAsync(new RetryProjectionScopeStatusWriteCommand
+        {
+            ExpectedSource = pending.Source.Clone(),
+            Attempt = 2,
+        });
+
+        harness.Dispatcher.UpsertAttempts.Should().Be(upsertsBefore + 1);
+        harness.Dispatcher.Documents.Should().ContainSingle().Which.StateVersion.Should().Be(12);
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteRecoveredEvent>()
+            .Should().ContainSingle().Which.Source.Should().Be(pending.Source);
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().HaveCount(timeoutsBefore, "no further retry after recovery");
+    }
+
+    [Fact]
     public async Task HandleRetryWriteAsync_WithoutPendingWrite_ShouldBeIgnored()
     {
         var harness = await TerminalHarness.CreateStartedAsync();
@@ -1226,29 +1364,6 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     }
 
     [Fact]
-    public async Task ActivateAsync_WithRejectedPendingWrite_ShouldNotScheduleRetry()
-    {
-        var harness = await TerminalHarness.CreateStartedAsync();
-        harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Conflict));
-        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
-            BuildRoutedSourceState(),
-            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
-        harness.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
-        harness.Callbacks.Timeouts.Should().BeEmpty();
-        harness.Alerts.Published.Clear();
-
-        var reactivated = harness.CreateReplacementActor();
-        await reactivated.ActivateAsync();
-
-        reactivated.State.PendingWrite.Should().NotBeNull();
-        reactivated.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
-        harness.Callbacks.Timeouts.Should().BeEmpty("retrying identical bytes cannot heal a rejected write");
-        harness.Alerts.Published.Should().BeEmpty("activation does not re-alert");
-        harness.Outbox.Published.Should().BeEmpty();
-        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().NotBeNull();
-    }
-
-    [Fact]
     public async Task ActivateAsync_WithoutPendingWrite_ShouldNotScheduleRetry()
     {
         var harness = await TerminalHarness.CreateStartedAsync();
@@ -1356,13 +1471,15 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     }
 
     [Fact]
-    public async Task ActivateAsync_WithRejectedPendingWriteFromDurableLog_ShouldStillNotScheduleRetry()
+    public async Task ActivateAsync_WithRejectedPendingWriteFromDurableLog_ShouldReArmAtTheCappedDelayAndHealOnAnAcceptedRetry()
     {
+        // A rejected pending write left in the durable log by an earlier activation is re-armed
+        // at the capped cadence: the fact stays observable and one accepted retry clears it.
         var harness = await TerminalHarness.CreateStartedAsync();
         var envelope = BuildForwardedEnvelope(
             BuildRoutedSourceState(),
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent()));
-        await harness.SeedPendingWriteFromPreviousBinaryAsync(
+        var pending = await harness.SeedPendingWriteFromPreviousBinaryAsync(
             envelope,
             attempts: 1,
             failureKind: ProjectionScopeStatusWriteFailureKind.Rejected);
@@ -1371,16 +1488,35 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         await reactivated.ActivateAsync();
 
         reactivated.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
-        harness.Callbacks.Timeouts.Should().BeEmpty("only an explicitly rejected pending write is never retried");
+        var timeout = harness.Callbacks.Timeouts.Should().ContainSingle().Subject;
+        timeout.DueTime.Should().Be(CappedRetryDelay, "a rejected pending write is re-armed at the capped cadence");
+        UnpackRetryCommand(timeout).Attempt.Should().Be(1);
+        UnpackRetryCommand(timeout).ExpectedSource.Should().Be(pending.Source);
 
-        await reactivated.HandleRetryWriteAsync(new RetryProjectionScopeStatusWriteCommand
-        {
-            ExpectedSource = reactivated.State.PendingWrite.Source.Clone(),
-            Attempt = 1,
-        });
+        // still rejected: re-deferred at the same cadence, and no second alert for this source
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Conflict));
+        await reactivated.HandleRetryWriteAsync(UnpackRetryCommand(timeout));
 
-        harness.Dispatcher.UpsertAttempts.Should().Be(0);
-        reactivated.State.PendingWrite.Should().NotBeNull();
+        harness.Dispatcher.UpsertAttempts.Should().Be(1);
+        reactivated.State.PendingWrite!.Attempts.Should().Be(2);
+        reactivated.State.PendingWrite.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        harness.Callbacks.Timeouts.Should().HaveCount(2);
+        harness.Callbacks.Timeouts[^1].DueTime.Should().Be(CappedRetryDelay);
+        harness.Alerts.Published.Should().BeEmpty(
+            "the pending write was already rejected for this source before the retry ran");
+
+        // the store now accepts the write: the pending fact is cleared
+        await reactivated.HandleRetryWriteAsync(UnpackRetryCommand(harness.Callbacks.Timeouts[^1]));
+
+        harness.Dispatcher.UpsertAttempts.Should().Be(2);
+        harness.Dispatcher.Writes.Select(static write => write.Disposition).Should().Equal(
+            ProjectionWriteDisposition.Conflict,
+            ProjectionWriteDisposition.Applied);
+        harness.Dispatcher.Documents[^1].StateVersion.Should().Be(12);
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteRecoveredEvent>()
+            .Should().ContainSingle().Which.Source.Should().Be(pending.Source);
+        reactivated.State.PendingWrite.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().HaveCount(2, "no further retry follows the accepted write");
     }
 
     // ─── 7. Dispositions ─────────────────────────────────────────────────────
@@ -1388,96 +1524,94 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     [Theory]
     [InlineData(ProjectionWriteDisposition.Conflict)]
     [InlineData(ProjectionWriteDisposition.Gap)]
-    public async Task HandleObservedEnvelopeAsync_RejectedDisposition_ShouldRecordRejectedPendingAlertAndNotRetry(
+    public async Task HandleObservedEnvelopeAsync_RejectedDisposition_ShouldFailTheObservationAlertOnceAndPersistNothing(
         ProjectionWriteDisposition disposition)
     {
+        // A rejected write on the OBSERVED path never advances delivery: the observation itself
+        // fails, so the provider redelivers it without advancing its checkpoint. Nothing about
+        // this observation becomes a durable fact of the materializer — no pending write, no
+        // deferral, no retry — because the envelope is still owned by the provider.
         var harness = await TerminalHarness.CreateStartedAsync();
         harness.Dispatcher.Enqueue(new ProjectionWriteResult(disposition));
-
-        var act = () => harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+        var envelope = BuildForwardedEnvelope(
             BuildRoutedSourceState(),
-            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent()));
 
-        await act.Should().NotThrowAsync();
-        var deferred = harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>()
-            .Should().ContainSingle().Subject;
-        deferred.Pending.LastError.Should().Be(disposition.ToString());
-        deferred.Pending.Attempts.Should().Be(1);
-        deferred.Pending.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
-        deferred.Pending.Stalled.Should().BeFalse();
-        deferred.Pending.NextRetryAtUtc.Should().BeNull("a rejected write has no retry");
-        deferred.Pending.Source.StateVersion.Should().Be(12);
-        harness.Agent.State.PendingWrite.Should().Be(deferred.Pending);
-        harness.Callbacks.Timeouts.Should().BeEmpty("retrying identical bytes cannot heal a rejected write");
+        var act = () => harness.Agent.HandleObservedEnvelopeAsync(envelope);
+
+        var rejected = (await act.Should().ThrowExactlyAsync<ProjectionScopeStatusWriteRejectedException>(
+            "the observation must fail so the provider redelivers it")).Which;
+        rejected.MaterializerActorId.Should().Be(TerminalActorId);
+        rejected.Disposition.Should().Be(disposition);
+        rejected.Source.Should().Be(new ProjectionSourceCoordinate
+        {
+            ActorId = SourceScopeActorId,
+            StateVersion = 12,
+            EventId = "evt-12",
+        });
+
+        harness.Dispatcher.UpsertAttempts.Should().Be(1);
+        harness.EventSourcing.PersistedEvents.Should().ContainSingle(
+                "a redelivered observation leaves no durable trace behind")
+            .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>();
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.Callbacks.Timeouts.Should().BeEmpty("the provider owns the redelivery, not a durable retry");
         harness.Outbox.Published.Should().BeEmpty();
-        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteStalledEvent>().Should().BeEmpty();
+        harness.Outbox.Sent.Should().BeEmpty();
         var alert = harness.Alerts.Published.Should().ContainSingle().Subject;
+        alert.Kind.Should().Be(ProjectionFailureAlertKind.FailureRecorded);
         alert.Stage.Should().Be(TerminalWriteAlertStage);
         alert.Reason.Should().Be(disposition.ToString());
+        alert.ScopeKey.Should().Be(new ProjectionRuntimeScopeKey(
+            SourceScopeActorId,
+            ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
+            ProjectionRuntimeMode.DurableMaterialization));
         alert.SourceVersion.Should().Be(12);
         alert.EventId.Should().Be("evt-12");
         alert.FailureId.Should().Be($"{SourceScopeActorId}:12:evt-12");
         alert.EventType.Should().Be(nameof(ProjectionScopeStatusDocument));
         alert.UnresolvedFailureCount.Should().Be(1);
+        alert.OccurredAt.Should().Be(FixedNow);
+
+        // the provider redelivers the very same envelope; the store now accepts it
+        await harness.Agent.HandleObservedEnvelopeAsync(envelope);
+
+        harness.Dispatcher.Writes.Select(static write => write.Disposition).Should().Equal(
+            disposition,
+            ProjectionWriteDisposition.Applied);
+        harness.Dispatcher.Documents[^1].StateVersion.Should().Be(12);
+        harness.Agent.State.PendingWrite.Should().BeNull("the redelivery succeeded, so there is nothing pending");
+        harness.EventSourcing.PersistedEvents.Should().ContainSingle(
+            "a successful write with no pending write persists nothing either");
+        harness.Callbacks.Timeouts.Should().BeEmpty();
+        harness.Alerts.Published.Should().ContainSingle("the recovered redelivery raises no new alert");
     }
 
     [Theory]
     [InlineData(ProjectionWriteDisposition.Conflict)]
     [InlineData(ProjectionWriteDisposition.Gap)]
-    public async Task HandleRetryWriteAsync_ForRejectedPending_ShouldBeNoOp_AndHigherVersionWriteShouldClearIt(
+    public async Task HandleObservedEnvelopeAsync_RejectedDisposition_WithoutAlertSink_ShouldStillFailTheObservation(
         ProjectionWriteDisposition disposition)
     {
-        var harness = await TerminalHarness.CreateStartedAsync();
-        harness.Dispatcher.Enqueue(new ProjectionWriteResult(disposition));
-        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
-            BuildRoutedSourceState(),
-            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
-        var pending = harness.Agent.State.PendingWrite!;
-        var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
-        var attemptsBefore = harness.Dispatcher.UpsertAttempts;
-
-        await harness.Agent.HandleRetryWriteAsync(new RetryProjectionScopeStatusWriteCommand
-        {
-            ExpectedSource = pending.Source.Clone(),
-            Attempt = pending.Attempts,
-        });
-
-        harness.Dispatcher.UpsertAttempts.Should().Be(attemptsBefore, "a rejected pending write is never retried");
-        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
-        harness.Agent.State.PendingWrite.Should().Be(pending);
-        harness.Callbacks.Timeouts.Should().BeEmpty();
-        harness.Alerts.Published.Should().ContainSingle();
-
-        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
-            BuildRoutedSourceState(),
-            BuildStateEvent(version: 13, eventId: "evt-13", new ProjectionScopeWatermarkAdvancedEvent())));
-
-        harness.Dispatcher.Documents.Should().HaveCount(2).And.Subject.Last().StateVersion.Should().Be(13);
-        var recovered = harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteRecoveredEvent>()
-            .Should().ContainSingle().Subject;
-        recovered.Source.StateVersion.Should().Be(13);
-        harness.Agent.State.PendingWrite.Should().BeNull("a later higher-version terminal write supersedes the rejection");
-        harness.Callbacks.Timeouts.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task HandleObservedEnvelopeAsync_RejectedDisposition_WithoutAlertSink_ShouldStillRecordRejectedPending()
-    {
         var harness = await TerminalHarness.CreateStartedAsync(withAlertSink: false);
-        harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Conflict));
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(disposition));
 
         var act = () => harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             BuildRoutedSourceState(),
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
 
-        await act.Should().NotThrowAsync();
-        harness.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        (await act.Should().ThrowExactlyAsync<ProjectionScopeStatusWriteRejectedException>())
+            .Which.Disposition.Should().Be(disposition);
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.EventSourcing.PersistedEvents.Should().ContainSingle();
         harness.Callbacks.Timeouts.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task HandleObservedEnvelopeAsync_WhenAlertSinkThrows_ShouldStillRecordRejectedPending()
+    public async Task HandleObservedEnvelopeAsync_RejectedDisposition_WhenAlertSinkThrows_ShouldStillFailTheObservation()
     {
+        // The alert is best-effort: its failure is swallowed. What the caller sees is the
+        // rejection itself, so the provider still redelivers instead of advancing.
         var harness = await TerminalHarness.CreateStartedAsync();
         harness.Alerts.ThrowOnPublish(new InvalidOperationException("alert channel down"));
         harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Gap));
@@ -1486,9 +1620,15 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             BuildRoutedSourceState(),
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
 
-        await act.Should().NotThrowAsync("the alert is best-effort; the durable fact is the deferral");
-        harness.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
-        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>().Should().ContainSingle();
+        var thrown = (await act.Should().ThrowExactlyAsync<ProjectionScopeStatusWriteRejectedException>(
+            "the sink's own failure must never mask the rejection")).Which;
+        thrown.Disposition.Should().Be(ProjectionWriteDisposition.Gap);
+        thrown.Message.Should().NotContain("alert channel down");
+        harness.Alerts.Published.Should().BeEmpty("the sink threw before recording anything");
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.EventSourcing.PersistedEvents.Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>();
+        harness.Callbacks.Timeouts.Should().BeEmpty();
     }
 
     [Theory]
@@ -1528,25 +1668,199 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Agent.State.PendingWrite.Should().BeNull();
     }
 
-    [Fact]
-    public async Task HandleRetryWriteAsync_WhenRetryIsRejected_ShouldTurnTransientPendingIntoRejected()
+    [Theory]
+    [InlineData(ProjectionWriteDisposition.Conflict)]
+    [InlineData(ProjectionWriteDisposition.Gap)]
+    public async Task HandleRetryWriteAsync_WhenRetryIsRejected_ShouldStayDurablyRetryableAtTheCappedCadence(
+        ProjectionWriteDisposition disposition)
     {
-        // The store comes back but another writer already committed different bytes at this
-        // version: the retry ends in an explicit rejected state instead of retrying forever.
+        // On the DURABLE RETRY path the envelope is already the materializer's own fact: a
+        // rejection cannot be redelivered by anyone, so the pending write stays visible and
+        // durably retryable at the capped cadence instead of being silently dropped. Re-arming
+        // the same bytes cannot heal it, but a later write at or above its version can.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.Enqueue(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        harness.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Transient);
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(disposition));
+
+        await harness.FireLatestRetryAsync();
+
+        var pending = harness.Agent.State.PendingWrite!;
+        pending.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        pending.Attempts.Should().Be(2);
+        pending.LastError.Should().Be(disposition.ToString());
+        pending.Stalled.Should().BeFalse("stalling counts transient outages, not rejections");
+        pending.NextRetryAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow + CappedRetryDelay),
+            "a rejected pending write is retried at the capped cadence, never dropped");
+        harness.Callbacks.Timeouts.Should().HaveCount(2);
+        harness.Callbacks.Timeouts[^1].DueTime.Should().Be(CappedRetryDelay);
+        var rearmed = UnpackRetryCommand(harness.Callbacks.Timeouts[^1]);
+        rearmed.Attempt.Should().Be(2, "the re-armed retry carries the pending write's own attempt");
+        rearmed.ExpectedSource.Should().Be(pending.Source);
+        harness.Alerts.Published.Should().ContainSingle().Which.Stage.Should().Be(TerminalWriteAlertStage);
+        harness.Alerts.Published[0].Reason.Should().Be(disposition.ToString());
+
+        // a further retry that still conflicts re-defers at the same cadence, without re-alerting
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(disposition));
+        await harness.FireLatestRetryAsync();
+
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(3);
+        harness.Agent.State.PendingWrite.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        harness.Agent.State.PendingWrite.NextRetryAtUtc.Should().Be(
+            Timestamp.FromDateTimeOffset(FixedNow + CappedRetryDelay));
+        harness.Callbacks.Timeouts.Should().HaveCount(3);
+        harness.Callbacks.Timeouts[^1].DueTime.Should().Be(CappedRetryDelay);
+        UnpackRetryCommand(harness.Callbacks.Timeouts[^1]).Attempt.Should().Be(3);
+        harness.Alerts.Published.Should().ContainSingle("an already-rejected source is alerted once, not once per retry");
+
+        // a later terminal outcome at a higher version writes through and clears the rejection
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 13, eventId: "evt-13", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        harness.Dispatcher.Documents[^1].StateVersion.Should().Be(13);
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteRecoveredEvent>()
+            .Should().ContainSingle().Which.Source.StateVersion.Should().Be(13);
+        harness.Agent.State.PendingWrite.Should().BeNull(
+            "a later higher-version terminal write supersedes the rejection");
+        harness.Callbacks.Timeouts.Should().HaveCount(3, "the superseded retry is not re-armed");
+        harness.Alerts.Published.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(ProjectionWriteDisposition.Conflict)]
+    [InlineData(ProjectionWriteDisposition.Gap)]
+    public async Task HandleRetryWriteAsync_WhenRejectedPastTheStalledThreshold_ShouldNeverBecomeStalled(
+        ProjectionWriteDisposition disposition)
+    {
+        // Stalling counts transient store outages, not rejections: a rejected pending write is
+        // retried at the capped cadence for as long as it takes, and crossing the attempt
+        // threshold must NOT mark it stalled, raise a stalled fact or alert a second time — the
+        // store is up and answering, so there is no outage to escalate.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.Enqueue(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(1);
+
+        // attempts 2..6: every retry is rejected, so the pending write passes the threshold
+        for (var rejection = 0; rejection < ProjectionScopeStatusGAgent.StalledAttemptThreshold; rejection++)
+        {
+            harness.Dispatcher.Enqueue(new ProjectionWriteResult(disposition));
+            await harness.FireLatestRetryAsync();
+        }
+
+        var pending = harness.Agent.State.PendingWrite!;
+        pending.Attempts.Should().Be(ProjectionScopeStatusGAgent.StalledAttemptThreshold + 1,
+            "the rejected write stayed durably retryable past the threshold");
+        pending.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        pending.Stalled.Should().BeFalse("a rejection is not an outage: it never counts toward stalling");
+        pending.NextRetryAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow + CappedRetryDelay));
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteStalledEvent>().Should().BeEmpty(
+            "no stalled fact is ever raised for a rejected write");
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>()
+            .Where(static evt => evt.Pending.Attempts >= ProjectionScopeStatusGAgent.StalledAttemptThreshold)
+            .Should().HaveCount(2, "attempts 5 and 6 are at or past the threshold")
+            .And.OnlyContain(static evt =>
+                !evt.Pending.Stalled &&
+                evt.Pending.FailureKind == ProjectionScopeStatusWriteFailureKind.Rejected);
+        harness.Alerts.Published.Should().ContainSingle(
+            "an already-rejected source is alerted once, not again at the threshold")
+            .Which.Reason.Should().Be(disposition.ToString());
+        harness.Callbacks.Timeouts.Should().HaveCount(ProjectionScopeStatusGAgent.StalledAttemptThreshold + 1);
+        harness.Callbacks.Timeouts.Skip(1).Should().OnlyContain(timeout => timeout.DueTime == CappedRetryDelay);
+        harness.Dispatcher.Writes.Should()
+            .HaveCount(ProjectionScopeStatusGAgent.StalledAttemptThreshold, "the first attempt threw, the rest were rejected")
+            .And.OnlyContain(write => write.Disposition == disposition, "not one retry was ever applied");
+    }
+
+    [Fact]
+    public async Task HandleRetryWriteAsync_WhenAStalledPendingWriteIsThenRejected_ShouldKeepItsStalledFact()
+    {
+        // The outage stalled the pending write; the store then comes back but rejects the bytes.
+        // The failure kind moves to Rejected (capped cadence, one fresh alert) while the stalled
+        // fact it already earned is carried over — an operator must not see it silently un-stall.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.AlwaysThrow(new IOException("store unavailable"));
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            BuildRoutedSourceState(),
+            BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
+        for (var attempt = 1; attempt < ProjectionScopeStatusGAgent.StalledAttemptThreshold; attempt++)
+            await harness.FireLatestRetryAsync();
+        harness.Agent.State.PendingWrite!.Attempts.Should().Be(ProjectionScopeStatusGAgent.StalledAttemptThreshold);
+        harness.Agent.State.PendingWrite.Stalled.Should().BeTrue();
+        harness.Alerts.Published.Should().ContainSingle("the outage alerted when it stalled");
+
+        harness.Dispatcher.Recover();
+        harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Conflict));
+        await harness.FireLatestRetryAsync();
+
+        var pending = harness.Agent.State.PendingWrite!;
+        pending.Attempts.Should().Be(ProjectionScopeStatusGAgent.StalledAttemptThreshold + 1);
+        pending.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        pending.Stalled.Should().BeTrue("a pending write that already stalled stays stalled once it is also rejected");
+        pending.LastError.Should().Be(nameof(ProjectionWriteDisposition.Conflict));
+        pending.NextRetryAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow + CappedRetryDelay));
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteDeferredEvent>().Last()
+            .Pending.Stalled.Should().BeTrue("the deferral that recorded the rejection carries the stalled fact forward");
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusWriteStalledEvent>().Should().ContainSingle(
+            "the stalled fact is raised once, never again by the rejection");
+        harness.Alerts.Published.Should().HaveCount(2, "the first rejection of this source alerts on its own");
+        harness.Alerts.Published[^1].Reason.Should().Be(nameof(ProjectionWriteDisposition.Conflict));
+        harness.Callbacks.Timeouts[^1].DueTime.Should().Be(CappedRetryDelay);
+        UnpackRetryCommand(harness.Callbacks.Timeouts[^1]).Attempt.Should()
+            .Be(ProjectionScopeStatusGAgent.StalledAttemptThreshold + 1);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WithRejectedPendingWrite_ShouldReArmAtTheCappedDelay()
+    {
+        // The rejected pending write survives deactivation and is re-armed on activation: it
+        // stays observable and retryable until a later write clears it.
         var harness = await TerminalHarness.CreateStartedAsync();
         harness.Dispatcher.Enqueue(new IOException("store unavailable"));
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             BuildRoutedSourceState(),
             BuildStateEvent(version: 12, eventId: "evt-12", new ProjectionScopeWatermarkAdvancedEvent())));
         harness.Dispatcher.Enqueue(new ProjectionWriteResult(ProjectionWriteDisposition.Conflict));
-
         await harness.FireLatestRetryAsync();
-
         harness.Agent.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
-        harness.Agent.State.PendingWrite.Attempts.Should().Be(2);
-        harness.Agent.State.PendingWrite.NextRetryAtUtc.Should().BeNull();
-        harness.Callbacks.Timeouts.Should().ContainSingle("no retry follows a rejection");
-        harness.Alerts.Published.Should().ContainSingle().Which.Stage.Should().Be(TerminalWriteAlertStage);
+        harness.Callbacks.Timeouts.Clear();
+        harness.Alerts.Published.Clear();
+        // The relay is dropped first so the assertion below proves activation WRITES it again,
+        // instead of merely finding the one this materializer already owned.
+        harness.Streams.GetStream(SourceScopeActorId).Relays.Clear();
+        var upsertsBefore = harness.Streams.GetStream(SourceScopeActorId).UpsertCount;
+        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().BeNull();
+
+        var reactivated = harness.CreateReplacementActor();
+        await reactivated.ActivateAsync();
+
+        reactivated.State.PendingWrite.Should().NotBeNull();
+        reactivated.State.PendingWrite!.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
+        reactivated.State.PendingWrite.Attempts.Should().Be(2);
+        var timeout = harness.Callbacks.Timeouts.Should().ContainSingle(
+            "every pending write stays durably retryable across activations").Subject;
+        timeout.ActorId.Should().Be(TerminalActorId);
+        timeout.CallbackId.Should().Be(ProjectionScopeStatusGAgent.WriteRetryCallbackId);
+        timeout.DueTime.Should().Be(CappedRetryDelay);
+        var command = UnpackRetryCommand(timeout);
+        command.Attempt.Should().Be(2);
+        command.ExpectedSource.Should().Be(reactivated.State.PendingWrite.Source);
+        harness.Alerts.Published.Should().BeEmpty("activation does not re-alert");
+        harness.Outbox.Published.Should().BeEmpty();
+        harness.Streams.GetStream(SourceScopeActorId).UpsertCount.Should().Be(upsertsBefore + 1,
+            "activation writes the relay evidence again");
+        ProjectionScopeObservationRelayBinding.IsExactActivationEvidence(
+                await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId),
+                SourceScopeActorId,
+                TerminalActorId,
+                ProjectionScopeStatusGAgent.AgentKind)
+            .Should().BeTrue("a rejected pending write keeps the materializer the owner of the source's status");
     }
 
     // ─── 7b. Document route fence, end to end through the in-memory store ─────
@@ -1617,17 +1931,22 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Alerts.Published.Should().BeEmpty();
         (await store.GetAsync(SourceScopeActorId))!.StatusRoute.RouteEpoch.Should().Be(2);
 
-        // equal epoch, same version, different committed event id: a real conflict, rejected
+        // equal epoch, same version, different committed event id: a real conflict. The
+        // observation fails so the provider redelivers it; the materializer persists nothing.
         var conflictingEvent = BuildStateEvent(version: 50, eventId: "evt-50-other", new ProjectionScopeWatermarkAdvancedEvent());
-        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(takeoverState, conflictingEvent));
+        var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
 
+        var act = () => harness.Agent.HandleObservedEnvelopeAsync(
+            BuildForwardedEnvelope(takeoverState, conflictingEvent));
+
+        var rejected = (await act.Should().ThrowExactlyAsync<ProjectionScopeStatusWriteRejectedException>()).Which;
+        rejected.Disposition.Should().Be(ProjectionWriteDisposition.Conflict);
+        rejected.Source.EventId.Should().Be("evt-50-other");
+        rejected.Source.StateVersion.Should().Be(50);
         harness.Dispatcher.Writes[^1].Should().Be((50L, 2L, ProjectionWriteDisposition.Conflict));
-        harness.Agent.State.PendingWrite.Should().NotBeNull();
-        var pending = harness.Agent.State.PendingWrite!;
-        pending.FailureKind.Should().Be(ProjectionScopeStatusWriteFailureKind.Rejected);
-        pending.LastError.Should().Be(nameof(ProjectionWriteDisposition.Conflict));
-        pending.Source.EventId.Should().Be("evt-50-other");
-        harness.Callbacks.Timeouts.Should().BeEmpty("a rejected write is never retried");
+        harness.Agent.State.PendingWrite.Should().BeNull("a redelivered observation leaves nothing pending");
+        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
+        harness.Callbacks.Timeouts.Should().BeEmpty("the provider redelivers; no durable retry is armed");
         harness.Alerts.Published.Should().ContainSingle().Which.Reason.Should().Be(nameof(ProjectionWriteDisposition.Conflict));
         (await store.GetAsync(SourceScopeActorId))!.LastEventId.Should().Be("evt-50");
     }
@@ -1672,6 +1991,79 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
 
         harness.Dispatcher.Writes.Should().Equal((71L, 1L, ProjectionWriteDisposition.Applied));
         (await store.GetAsync(SourceScopeActorId))!.StateVersion.Should().Be(71);
+    }
+
+    [Fact]
+    public async Task TerminalWrite_AfterInPlaceContractUpgrade_ShouldTakeItsOwnDocumentOverAtTheUpgradedEpoch()
+    {
+        // The in-place V1 -> V2 contract upgrade: the writer is unchanged (no cutover, nothing to
+        // release), the source just commits ProjectionScopeStatusRouteContractUpgradedEvent with
+        // this materializer's route moved to the current contract at epoch+1. That commit is
+        // itself a terminal outcome, so the materializer's first write after the upgrade is the
+        // epoch-fenced takeover of the document it wrote itself under the previous contract.
+        var store = new InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>(static document => document.Id);
+        var harness = await TerminalHarness.CreateStartedAsync();
+        harness.Dispatcher.BackBy(store);
+        var beforeUpgrade = BuildSourceState();
+        beforeUpgrade.StatusRoute = BuildPreviousContractTerminalRoute(1);
+        beforeUpgrade.StatusRoute.LegacyRouteReleased = true;
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            beforeUpgrade,
+            BuildStateEvent(version: 90, eventId: "evt-90", new ProjectionScopeWatermarkAdvancedEvent())));
+        harness.Dispatcher.Writes.Should().Equal((90L, 1L, ProjectionWriteDisposition.Applied));
+        (await store.GetAsync(SourceScopeActorId))!.StatusRoute.ContractId.Should().Be(PreviousTerminalContractId);
+
+        // the source upgrades the contract in place; the route it publishes is the one its own
+        // applier commits for that event (same writer, next epoch, phase forced Active)
+        var upgraded = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+            beforeUpgrade.StatusRoute.RouteEpoch + 1,
+            ProjectionScopeStatusRoutePhase.Active);
+        upgraded.LegacyRouteReleased = beforeUpgrade.StatusRoute.LegacyRouteReleased;
+        upgraded.FlipVersion = 91;
+        var afterUpgrade = ProjectionScopeStateApplier.ApplyStatusRouteContractUpgraded(
+            beforeUpgrade,
+            new ProjectionScopeStatusRouteContractUpgradedEvent
+            {
+                Route = upgraded,
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(FixedNow),
+            });
+        afterUpgrade.Should().NotBeSameAs(beforeUpgrade, "the upgrade applies over a terminal route in a writing phase");
+        afterUpgrade.StatusRoute.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        afterUpgrade.StatusRoute.RouteEpoch.Should().Be(2);
+        afterUpgrade.StatusRoute.LegacyRouteReleased.Should().BeTrue("no cutover: the legacy release carries over");
+
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            afterUpgrade,
+            BuildStateEvent(version: 91, eventId: "evt-91", new ProjectionScopeStatusRouteContractUpgradedEvent())));
+
+        harness.Dispatcher.Writes[^1].Should().Be((91L, 2L, ProjectionWriteDisposition.Applied),
+            "the contract-upgrade commit is a terminal outcome and its write carries the upgraded epoch");
+        var current = await store.GetAsync(SourceScopeActorId);
+        current!.StatusRoute.Should().Be(afterUpgrade.StatusRoute);
+        current.StatusRoute.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        ((IProjectionRouteFencedReadModel)current).RouteEpoch.Should().Be(2);
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.EventSourcing.PersistedEvents.Should().ContainSingle(
+                "an in-place upgrade is a fact of the SOURCE; the materializer neither restarts nor releases")
+            .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>();
+        harness.Agent.State.Released.Should().BeFalse();
+        harness.Outbox.Sent.Should().BeEmpty("the writer is unchanged: nothing is reported and nothing is confirmed");
+        harness.Alerts.Published.Should().BeEmpty();
+        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().NotBeNull();
+
+        // a delayed publication that still carries the PRE-upgrade route at the upgraded
+        // version is fenced by the epoch: it can never roll the document back to the old contract
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            beforeUpgrade,
+            BuildStateEvent(version: 91, eventId: "evt-91", new ProjectionScopeWatermarkAdvancedEvent())));
+
+        harness.Dispatcher.Writes[^1].Should().Be((91L, 1L, ProjectionWriteDisposition.Stale),
+            "the previous contract's route is still served, but its lower epoch loses the same-version fence");
+        (await store.GetAsync(SourceScopeActorId))!.StatusRoute.Should().Be(afterUpgrade.StatusRoute);
+        harness.Agent.State.PendingWrite.Should().BeNull("Stale is a non-terminal disposition: success");
+        harness.EventSourcing.PersistedEvents.Should().ContainSingle();
+        harness.Alerts.Published.Should().BeEmpty();
+        harness.Callbacks.Timeouts.Should().BeEmpty();
     }
 
     [Fact]
@@ -1756,6 +2148,87 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.EventSourcing.PersistedEvents[1].Should().BeOfType<ProjectionScopeStatusTerminalReleasedEvent>();
         harness.Agent.State.Released.Should().BeTrue();
         (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().BeNull();
+        harness.Outbox.Sent.Should().BeEmpty(
+            "a plain lifecycle release carries no route epoch, so there is no cutover to confirm");
+    }
+
+    [Fact]
+    public async Task HandleReleaseAsync_WithStatusRouteEpoch_ShouldCommitTheReleaseThenConfirmItToTheSource()
+    {
+        // The source flips its blocked route on this typed confirmation, never on inbox
+        // acceptance of the release command: the confirmation follows the committed release.
+        var harness = await TerminalHarness.CreateStartedAsync();
+
+        await harness.Agent.HandleReleaseAsync(BuildReleaseCommand(statusRouteEpoch: 4));
+
+        harness.EventSourcing.PersistedEvents.Should().HaveCount(2);
+        var released = harness.EventSourcing.PersistedEvents[1]
+            .Should().BeOfType<ProjectionScopeStatusTerminalReleasedEvent>().Subject;
+        released.LastObservedVersion.Should().Be(0, "a lifecycle release drains no publication of its own");
+        harness.Agent.State.Released.Should().BeTrue();
+        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().BeNull();
+        var confirmation = harness.Outbox.Sent.Should().ContainSingle().Subject;
+        confirmation.TargetActorId.Should().Be(SourceScopeActorId);
+        confirmation.ReleaseConfirmation.SourceScopeActorId.Should().Be(SourceScopeActorId);
+        confirmation.ReleaseConfirmation.RouteEpoch.Should().Be(4);
+        confirmation.ReleaseConfirmation.LastObservedVersion.Should().Be(0);
+        confirmation.ReleaseConfirmation.ReleasedAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
+        confirmation.Tick.Should().BeGreaterThan(
+            harness.EventSourcing.TickOfCommitted(released),
+            "the release is COMMITTED first and only then confirmed: the source flips its blocked route on the " +
+            "confirmation, so a confirmation that overtook its own commit would flip the route over an uncommitted release");
+        harness.Outbox.Published.Should().BeEmpty("the confirmation is addressed to the source, never broadcast");
+    }
+
+    [Fact]
+    public async Task HandleReleaseAsync_WithStatusRouteEpoch_AfterObservingItsRollback_ShouldReConfirmTheDrainedVersion()
+    {
+        // The materializer released itself on the rollback publication it drained at version 17,
+        // and the source re-dispatches the release command until it holds a confirmation. The
+        // re-confirmation must carry that SAME drained version (the durable
+        // ReleasedAtObservedVersion), because the source compares it against the route's blocked
+        // version to detect a writer that released before it had drained the blocked publication.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        var rolledBack = BuildSourceState();
+        rolledBack.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(3, ProjectionScopeStatusRoutePhase.Blocked);
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            rolledBack,
+            BuildStateEvent(version: 17, eventId: "evt-17", new ProjectionScopeStatusRouteBlockedEvent())));
+        harness.Agent.State.ReleasedAtObservedVersion.Should().Be(17);
+        var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
+
+        await harness.Agent.HandleReleaseAsync(BuildReleaseCommand(statusRouteEpoch: 3));
+
+        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore, "the release was already committed");
+        harness.Outbox.ReleaseConfirmations.Should().HaveCount(2)
+            .And.OnlyContain(sent =>
+                sent.TargetActorId == SourceScopeActorId &&
+                ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).RouteEpoch == 3 &&
+                ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).LastObservedVersion == 17,
+                "the command path confirms the durably released-at version, not a fresh zero");
+        harness.Dispatcher.UpsertAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleReleaseAsync_WithStatusRouteEpoch_WhenAlreadyReleased_ShouldReConfirmWithoutCommittingAgain()
+    {
+        // The source re-dispatches the release until it holds the confirmation, so an already
+        // released writer must answer again — and commit nothing the second time.
+        var harness = await TerminalHarness.CreateStartedAsync();
+        await harness.Agent.HandleReleaseAsync(BuildReleaseCommand(statusRouteEpoch: 4));
+        var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
+
+        await harness.Agent.HandleReleaseAsync(BuildReleaseCommand(statusRouteEpoch: 4));
+
+        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusTerminalReleasedEvent>()
+            .Should().ContainSingle("releasing is idempotent");
+        harness.Outbox.ReleaseConfirmations.Should().HaveCount(2);
+        harness.Outbox.ReleaseConfirmations.Should().OnlyContain(sent =>
+            sent.TargetActorId == SourceScopeActorId &&
+            ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).RouteEpoch == 4 &&
+            ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).LastObservedVersion == 0,
+            "this writer drained no publication, so every re-confirmation repeats the same released-at version");
     }
 
     [Fact]
@@ -1957,6 +2430,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     [InlineData(typeof(ProjectionScopeStatusRouteBlockedEvent), true)]
     [InlineData(typeof(ProjectionScopeStatusRouteActivatedEvent), true)]
     [InlineData(typeof(ProjectionScopeStatusLegacyRouteReleasedEvent), true)]
+    [InlineData(typeof(ProjectionScopeStatusRouteContractUpgradedEvent), true)]
     public void IsTerminalOutcome_ShouldClassifySourceEvents(System.Type sourceEventType, bool expected)
     {
         var sourceEvent = (IMessage)Activator.CreateInstance(sourceEventType)!;
@@ -1979,8 +2453,10 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     {
         var route = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(3);
 
-        route.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1);
+        route.ContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2,
+            "new routes are only ever created under the current terminal contract");
         route.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        route.ContractId.Should().NotBe(PreviousTerminalContractId);
         route.ContractVersion.Should().Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion);
         route.ContractVersion.Should().Be(ProjectionScopeStatusGAgent.ContractVersion);
         route.ContractVersion.Should().BeGreaterThanOrEqualTo(1, "version 1 is the lowest valid route version");
@@ -2187,6 +2663,80 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             .Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Unspecified, true, false)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Warming, false, true)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Blocked, true, false)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Active, true, false)]
+    public void TerminalContractRevisions_ShouldServeThePreviousContractAndFenceNewerOnes(
+        ProjectionScopeStatusRoutePhase phase,
+        bool expectedActive,
+        bool expectedWarming)
+    {
+        // The two directions of a mixed fleet: this materializer serves every route created under
+        // an earlier terminal contract, and never a route created under a later one — neither a
+        // later contract id nor a later revision of its own contract.
+        var previousContract = BuildPreviousContractTerminalRoute(1, phase);
+        var currentContract = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, phase);
+        var futureRevision = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, phase);
+        futureRevision.ContractVersion = ProjectionScopeStatusGAgent.ContractVersion + 1;
+
+        ProjectionScopeStatusRoutePolicy.IsTerminalRoute(previousContract).Should().BeTrue();
+        ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                previousContract,
+                ProjectionScopeStatusGAgent.ContractId,
+                ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().Be(expectedActive);
+        ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(
+                previousContract,
+                ProjectionScopeStatusGAgent.ContractId,
+                ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().Be(expectedWarming);
+
+        ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                futureRevision,
+                ProjectionScopeStatusGAgent.ContractId,
+                ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().BeFalse("a route of a newer revision of this contract names a reader this binary is not");
+        ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(
+                futureRevision,
+                ProjectionScopeStatusGAgent.ContractId,
+                ProjectionScopeStatusGAgent.ContractVersion)
+            .Should().BeFalse();
+
+        ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                currentContract,
+                PreviousTerminalContractId,
+                PreviousTerminalContractVersion)
+            .Should().BeFalse("a materializer of the previous contract never matches a current-contract route");
+        ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(
+                currentContract,
+                PreviousTerminalContractId,
+                PreviousTerminalContractVersion)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsPreviousTerminalContractRoute_ShouldOnlyMatchRoutesOfAnEarlierTerminalContract()
+    {
+        ProjectionScopeStatusRoutePolicy.IsPreviousTerminalContractRoute(
+                BuildPreviousContractTerminalRoute(1),
+                ProjectionScopeStatusGAgent.ContractId)
+            .Should().BeTrue("such a route is the one the source upgrades in place under a fresh admission");
+        ProjectionScopeStatusRoutePolicy.IsPreviousTerminalContractRoute(
+                ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1),
+                ProjectionScopeStatusGAgent.ContractId)
+            .Should().BeFalse("a route already on the current contract needs no upgrade");
+        ProjectionScopeStatusRoutePolicy.IsPreviousTerminalContractRoute(
+                ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(1),
+                ProjectionScopeStatusGAgent.ContractId)
+            .Should().BeFalse("the legacy shadow contract is not a terminal contract");
+        ProjectionScopeStatusRoutePolicy.IsPreviousTerminalContractRoute(
+                null,
+                ProjectionScopeStatusGAgent.ContractId)
+            .Should().BeFalse();
+    }
+
     // ─── 10. Source scope state applier ──────────────────────────────────────
 
     [Fact]
@@ -2293,6 +2843,54 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         matching.StatusRoute.RouteEpoch.Should().Be(2);
         matching.UpdatedAtUtc.Should().Be(occurredAt);
         current.StatusRoute.LegacyRouteReleased.Should().BeFalse("the applier is pure");
+    }
+
+    [Fact]
+    public void ApplyStatusRouteContractUpgraded_ShouldOnlyMoveATerminalWritingRouteForward()
+    {
+        // The in-place upgrade the terminal materializer's next write takes over on: same writer,
+        // current contract, strictly higher epoch, phase forced Active. It must never apply over a
+        // legacy route (a rollback owns the route), over a warming route (a cutover is in flight)
+        // or at an epoch at or below the current one.
+        var current = new ProjectionScopeState { StatusRoute = BuildPreviousContractTerminalRoute(1) };
+        var upgraded = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(2, ProjectionScopeStatusRoutePhase.Blocked);
+        var occurredAt = Timestamp.FromDateTimeOffset(FixedNow);
+
+        var next = ProjectionScopeStateApplier.ApplyStatusRouteContractUpgraded(
+            current,
+            new ProjectionScopeStatusRouteContractUpgradedEvent { Route = upgraded, OccurredAtUtc = occurredAt });
+
+        next.Should().NotBeSameAs(current);
+        current.StatusRoute.ContractId.Should().Be(PreviousTerminalContractId, "the applier is pure");
+        next.StatusRoute.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        next.StatusRoute.RouteEpoch.Should().Be(2);
+        next.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active,
+            "the writer is unchanged and authoritative throughout: there is no cutover to warm or block");
+        next.UpdatedAtUtc.Should().Be(occurredAt);
+
+        ProjectionScopeStateApplier.ApplyStatusRouteContractUpgraded(
+                current,
+                new ProjectionScopeStatusRouteContractUpgradedEvent
+                {
+                    Route = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1),
+                })
+            .Should().BeSameAs(current, "an epoch at or below the current one is fenced");
+        ProjectionScopeStateApplier.ApplyStatusRouteContractUpgraded(
+                new ProjectionScopeState { StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(1) },
+                new ProjectionScopeStatusRouteContractUpgradedEvent { Route = upgraded })
+            .StatusRoute.ContractId.Should().Be(ProjectionScopeStatusRoutePolicy.LegacyContractId,
+                "a rolled-back scope is owned by the legacy shadow, not upgraded in place");
+        ProjectionScopeStateApplier.ApplyStatusRouteContractUpgraded(
+                new ProjectionScopeState
+                {
+                    StatusRoute = BuildPreviousContractTerminalRoute(1, ProjectionScopeStatusRoutePhase.Warming),
+                },
+                new ProjectionScopeStatusRouteContractUpgradedEvent { Route = upgraded })
+            .StatusRoute.RouteEpoch.Should().Be(1, "a cutover in flight is never upgraded underneath");
+        ProjectionScopeStateApplier.ApplyStatusRouteContractUpgraded(
+                current,
+                new ProjectionScopeStatusRouteContractUpgradedEvent())
+            .Should().BeSameAs(current);
     }
 
     [Fact]
@@ -2509,12 +3107,17 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             Mode = ProjectionScopeMode.DurableMaterialization,
         };
 
-    private static ReleaseProjectionScopeCommand BuildReleaseCommand() =>
+    /// <summary>
+    /// A lifecycle release. <paramref name="statusRouteEpoch"/> &gt; 0 marks it the previous-writer
+    /// release of a status-route cutover at that epoch, which must be confirmed to the source.
+    /// </summary>
+    private static ReleaseProjectionScopeCommand BuildReleaseCommand(long statusRouteEpoch = 0) =>
         new()
         {
             RootActorId = SourceScopeActorId,
             ProjectionKind = ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
             Mode = ProjectionScopeMode.DurableMaterialization,
+            StatusRouteEpoch = statusRouteEpoch,
         };
 
     private static ProjectionScopeState BuildSourceState() =>
@@ -2534,6 +3137,22 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1);
         return state;
     }
+
+    /// <summary>
+    /// A route as an older source binary committed it: the previous terminal contract at its own
+    /// reader version. The current materializer serves it so a source keeps its writer across the
+    /// contract upgrade; no new route is ever created under it.
+    /// </summary>
+    private static ProjectionScopeStatusRoute BuildPreviousContractTerminalRoute(
+        long routeEpoch,
+        ProjectionScopeStatusRoutePhase phase = ProjectionScopeStatusRoutePhase.Active) =>
+        new()
+        {
+            ContractId = PreviousTerminalContractId,
+            ContractVersion = PreviousTerminalContractVersion,
+            RouteEpoch = routeEpoch,
+            Phase = phase,
+        };
 
     private static StateEvent BuildStateEvent(long version, string eventId, IMessage sourceEvent) =>
         new()
@@ -2595,6 +3214,8 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
 
         public TerminalHarness(bool withCallbackScheduler = true, bool withAlertSink = true)
         {
+            EventSourcing = new TerminalEventSourcing(Interactions);
+            Outbox = new RecordingEventPublisher(Interactions);
             var services = new ServiceCollection()
                 .AddSingleton<IStreamProvider>(Streams)
                 .AddSingleton<IAgentKindRegistry>(new AgentKindRegistry(
@@ -2614,8 +3235,15 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
 
         public RecordingStreamProvider Streams { get; } = new();
         public RecordingStatusWriteDispatcher Dispatcher { get; } = new();
-        public TerminalEventSourcing EventSourcing { get; } = new();
-        public RecordingEventPublisher Outbox { get; } = new();
+
+        /// <summary>
+        /// The one tick the durable log and the outbox share, so the ORDER of "committed" and
+        /// "sent to the source" is observable across the two recorders.
+        /// </summary>
+        public TerminalInteractionSequence Interactions { get; } = new();
+
+        public TerminalEventSourcing EventSourcing { get; }
+        public RecordingEventPublisher Outbox { get; }
         public RecordingCallbackScheduler Callbacks { get; } = new();
         public RecordingFailureAlertSink Alerts { get; } = new();
         public ProjectionScopeStatusGAgent Agent { get; }
@@ -2687,13 +3315,39 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         }
     }
 
-    private sealed class TerminalEventSourcing : IEventSourcingBehavior<ProjectionScopeStatusTerminalState>
+    /// <summary>
+    /// A monotonic interaction tick handed to the recorders that must be ordered against each
+    /// other (the durable event log and the outbox). Deterministic: it advances only when the
+    /// actor commits or sends, never with wall-clock time.
+    /// </summary>
+    private sealed class TerminalInteractionSequence
+    {
+        private int _tick;
+
+        public int Next() => ++_tick;
+    }
+
+    private sealed class TerminalEventSourcing(TerminalInteractionSequence interactions)
+        : IEventSourcingBehavior<ProjectionScopeStatusTerminalState>
     {
         private readonly List<IMessage> _pending = [];
         private ProjectionScopeStatusTerminalState _durableState = new();
 
         public List<IMessage> PersistedEvents { get; } = [];
+
+        /// <summary>The interaction tick of each committed event, by the same index.</summary>
+        public List<int> PersistedEventTicks { get; } = [];
+
         public long CurrentVersion { get; private set; }
+
+        /// <summary>The interaction tick at which <paramref name="evt"/> was committed.</summary>
+        public int TickOfCommitted(IMessage evt)
+        {
+            // By identity: two protobuf events of the same shape compare equal by value.
+            var index = PersistedEvents.FindIndex(persisted => ReferenceEquals(persisted, evt));
+            index.Should().BeGreaterThanOrEqualTo(0, "the event must have been committed by this actor");
+            return PersistedEventTicks[index];
+        }
 
         public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage => _pending.Add(evt);
 
@@ -2703,6 +3357,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             foreach (var evt in _pending)
             {
                 PersistedEvents.Add(evt);
+                PersistedEventTicks.Add(interactions.Next());
                 _durableState = TransitionState(_durableState, evt);
                 result.CommittedEvents.Add(new StateEvent
                 {
@@ -2810,13 +3465,20 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     /// self-publishes (its only continuation is the durable callback retry); the one message
     /// it addresses to another actor is the warming caught-up report sent to its source scope.
     /// </summary>
-    private sealed class RecordingEventPublisher : IEventPublisher
+    private sealed class RecordingEventPublisher(TerminalInteractionSequence interactions) : IEventPublisher
     {
         public List<PublishedMessage> Published { get; } = [];
         public List<SentMessage> Sent { get; } = [];
 
         public IReadOnlyList<SentMessage> CaughtUpReports =>
             Sent.Where(static sent => sent.Message is ProjectionScopeStatusWriterCaughtUpEvent).ToList();
+
+        /// <summary>
+        /// The typed previous-writer release confirmations: the source flips its route on these,
+        /// never on inbox acceptance of the release command.
+        /// </summary>
+        public IReadOnlyList<SentMessage> ReleaseConfirmations =>
+            Sent.Where(static sent => sent.Message is ProjectionScopeStatusWriterReleasedEvent).ToList();
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -2838,17 +3500,33 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            Sent.Add(new SentMessage(targetActorId, evt));
+            Sent.Add(new SentMessage(targetActorId, evt, interactions.Next()));
             return Task.CompletedTask;
         }
     }
 
     private sealed record PublishedMessage(IMessage Message, TopologyAudience Audience);
 
-    private sealed record SentMessage(string TargetActorId, IMessage Message)
+    /// <summary><paramref name="Tick"/> orders this send against the actor's committed events.</summary>
+    private sealed record SentMessage(string TargetActorId, IMessage Message, int Tick)
     {
         public ProjectionScopeStatusWriterCaughtUpEvent CaughtUp =>
             Message.Should().BeOfType<ProjectionScopeStatusWriterCaughtUpEvent>().Subject;
+
+        public ProjectionScopeStatusWriterReleasedEvent ReleaseConfirmation =>
+            Message.Should().BeOfType<ProjectionScopeStatusWriterReleasedEvent>().Subject;
+
+        /// <summary>
+        /// The typed views above assert on the message type, so the compiler-generated
+        /// <see cref="object.ToString"/> would THROW while rendering a mixed collection — turning
+        /// any failing outbox assertion into a misleading "expected type" error. Print the facts.
+        /// </summary>
+        private bool PrintMembers(StringBuilder builder)
+        {
+            builder.Append(
+                $"TargetActorId = {TargetActorId}, Message = {Message.Descriptor.FullName} {Message}, Tick = {Tick}");
+            return true;
+        }
     }
 
     /// <summary>

@@ -20,6 +20,9 @@ message ProjectionScopeStatusTerminalState {
   // was accepted; cleared by the next successful write at or above its version.
   ProjectionScopeStatusPendingWrite pending_write = 7;
   google.protobuf.Timestamp updated_at_utc = 8;
+  // Highest source version observed at the time of release (0 if unknown); reported in the
+  // release confirmation to the source scope.
+  int64 released_at_observed_version = 9;
 }
 
 // How a deferred terminal status write failed, and therefore how it recovers.
@@ -57,6 +60,8 @@ message ProjectionScopeStatusTerminalStartedEvent {
 
 message ProjectionScopeStatusTerminalReleasedEvent {
   google.protobuf.Timestamp occurred_at_utc = 1;
+  // Highest source version observed when the release was committed (0 if unknown).
+  int64 last_observed_version = 2;
 }
 
 message ProjectionScopeStatusWriteDeferredEvent {

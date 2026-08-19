@@ -14,6 +14,11 @@ enum RuntimeFleetCapability
   RUNTIME_FLEET_CAPABILITY_WORKFLOW_NORMALIZED_STATE_WRITES_V1 = 1;
   RUNTIME_FLEET_CAPABILITY_PROJECTION_SCOPE_STATUS_TERMINAL_V1 = 2;
   RUNTIME_FLEET_CAPABILITY_PROJECTION_INCREMENTAL_GRAPH_V1 = 3;
+  // Phased status-route cutover (warming / caught-up / blocked / released / active) with the
+  // epoch-fenced status document. Advertised only by binaries that run the phased source scope;
+  // a fleet that still contains a phase-unaware binary never opens this gate, and such binaries
+  // no longer find the V1 gate managed, so a mixed fleet fails closed in both directions.
+  RUNTIME_FLEET_CAPABILITY_PROJECTION_SCOPE_STATUS_TERMINAL_V2 = 4;
 }
 
 enum RuntimeFleetCapabilityGateStatus

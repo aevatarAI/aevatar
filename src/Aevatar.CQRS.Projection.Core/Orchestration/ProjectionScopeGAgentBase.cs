@@ -132,6 +132,22 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
     {
         ArgumentNullException.ThrowIfNull(command);
 
+        await ReleaseScopeAsync();
+
+        // A status-route cutover release is confirmed to the source only after the release is
+        // committed (also when it already was): the source flips the route on this typed
+        // continuation, never on inbox acceptance of the command.
+        if (command.StatusRouteEpoch > 0)
+        {
+            await ConfirmStatusWriterReleasedAsync(
+                command.RootActorId,
+                command.StatusRouteEpoch,
+                State.HighestSeenVersion);
+        }
+    }
+
+    private async Task ReleaseScopeAsync()
+    {
         if (!State.Active || State.Released)
             return;
 
@@ -335,6 +351,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             .On<ProjectionScopeStatusRouteBlockedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteBlocked)
             .On<ProjectionScopeStatusRouteActivatedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteActivated)
             .On<ProjectionScopeStatusLegacyRouteReleasedEvent>(ProjectionScopeStateApplier.ApplyStatusLegacyRouteReleased)
+            .On<ProjectionScopeStatusRouteContractUpgradedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteContractUpgraded)
             .OrCurrent();
 
     protected ProjectionRuntimeScopeKey BuildScopeKey() =>
