@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Observability;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Core;
@@ -21,6 +22,21 @@ public abstract class ProjectionScopeGAgentBase<TContext>
     , IEventSourcingVersionDriftRecoverableActor
     where TContext : class, IProjectionMaterializationContext
 {
+    internal const string StatusRouteAdoptionRetryCallbackId = "projection-scope-status-route-adoption";
+
+    /// <summary>
+    /// Backed-off retry schedule for adopting the terminal status route after a scope activated
+    /// while the fleet gate was still closed (~15 minutes in total, covering a rolling upgrade).
+    /// </summary>
+    internal static readonly TimeSpan[] StatusRouteAdoptionRetryDelays =
+    [
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromMinutes(1),
+        TimeSpan.FromMinutes(2),
+        TimeSpan.FromMinutes(4),
+        TimeSpan.FromMinutes(8),
+    ];
+
     private ILogger _logger = NullLogger.Instance;
     private ProjectionScopeFailureTracker? _failureTracker;
     private bool _isReplayingFailure;
@@ -64,7 +80,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
     /// releases the legacy shadow. Without a fresh grant the scope simply stays on the legacy
     /// route. Called only on the cold ensure / activation path, never per observed envelope.
     /// </summary>
-    private async Task AdoptTerminalStatusRouteAsync(CancellationToken ct)
+    private async Task AdoptTerminalStatusRouteAsync(CancellationToken ct, int attempt = 0)
     {
         if (!State.Active || State.Released || RuntimeMode != ProjectionRuntimeMode.DurableMaterialization)
             return;
@@ -98,12 +114,32 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             return;
         }
 
-        var grant = await ReadFreshStatusRouteAdmissionAsync(ct);
+        var admissionReader = Services.GetService<IRuntimeFleetCapabilityAdmissionReader>();
+        var membershipReader = Services.GetService<IRuntimeLocalMembershipIdentityReader>();
+        if (admissionReader == null || membershipReader == null)
+        {
+            _logger.LogInformation(
+                "Projection scope status route stays legacy: fleet admission readers unavailable. actorId={ActorId}",
+                Id);
+            return;
+        }
+
+        var grant = await RuntimeFleetCapabilityAdmissionValidation.GetGrantedAdmissionAsync(
+            RuntimeFleetCapability.ProjectionScopeStatusTerminalV1,
+            ProjectionScopeStatusGAgent.ContractId,
+            (int)ProjectionScopeStatusGAgent.ContractVersion,
+            admissionReader,
+            membershipReader,
+            Services.GetService<TimeProvider>(),
+            Services.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
+            ct);
         if (grant == null)
         {
             _logger.LogInformation(
-                "Projection scope status route stays legacy: no fresh terminal admission. actorId={ActorId}",
-                Id);
+                "Projection scope status route stays legacy: no fresh terminal admission. actorId={ActorId} attempt={Attempt}",
+                Id,
+                attempt);
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
             return;
         }
 
@@ -134,6 +170,36 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         await UpsertTerminalStatusRelayAsync(terminalActorId, ct);
         await EnsureTerminalStatusMaterializerAsync(runtime, dispatchPort, terminalActorId, ct);
         await ReleaseLegacyStatusRouteIfPendingAsync(ct);
+    }
+
+    /// <summary>
+    /// A durable scope that activates before the terminal fleet gate opens (a long-lived
+    /// scope right after silo boot, or during a rolling upgrade) would otherwise stay on the
+    /// legacy route until its next activation, which for an always-active scope never comes.
+    /// The retry is a bounded, backed-off self continuation through the durable callback
+    /// scheduler; the attempt count travels in the command, never in actor memory.
+    /// </summary>
+    private async Task ScheduleStatusRouteAdoptionRetryAsync(int attempt, CancellationToken ct)
+    {
+        if (attempt >= StatusRouteAdoptionRetryDelays.Length ||
+            Services.GetService<IActorRuntimeCallbackScheduler>() == null)
+        {
+            return;
+        }
+
+        var nextAttempt = attempt + 1;
+        _ = await ScheduleSelfDurableTimeoutAsync(
+            StatusRouteAdoptionRetryCallbackId,
+            StatusRouteAdoptionRetryDelays[attempt],
+            new RetryProjectionScopeStatusRouteAdoptionCommand { Attempt = nextAttempt },
+            ct: ct);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public Task HandleRetryStatusRouteAdoptionAsync(RetryProjectionScopeStatusRouteAdoptionCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return AdoptTerminalStatusRouteAsync(CancellationToken.None, command.Attempt);
     }
 
     private Task UpsertTerminalStatusRelayAsync(string terminalActorId, CancellationToken ct) =>
@@ -167,24 +233,6 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             terminalActorId);
         ensure.Route = EnvelopeRouteSemantics.CreateDirect(Id, terminalActorId);
         _ = await dispatchPort.DispatchAsync(terminalActorId, ensure, ct);
-    }
-
-    private async Task<RuntimeFleetCapabilityAdmissionGrant?> ReadFreshStatusRouteAdmissionAsync(CancellationToken ct)
-    {
-        var admissionReader = Services.GetService<IRuntimeFleetCapabilityAdmissionReader>();
-        var membershipReader = Services.GetService<IRuntimeLocalMembershipIdentityReader>();
-        if (admissionReader == null || membershipReader == null)
-            return null;
-
-        return await RuntimeFleetCapabilityAdmissionValidation.GetGrantedAdmissionAsync(
-            RuntimeFleetCapability.ProjectionScopeStatusTerminalV1,
-            ProjectionScopeStatusGAgent.ContractId,
-            (int)ProjectionScopeStatusGAgent.ContractVersion,
-            admissionReader,
-            membershipReader,
-            Services.GetService<TimeProvider>(),
-            Services.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
-            ct);
     }
 
     /// <summary>

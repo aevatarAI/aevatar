@@ -192,6 +192,13 @@ message RequestProjectionMaterializationCutoverCommand {
   ProjectionMaterializationRouteFingerprint candidate_route = 2;
 }
 
+// Self continuation of a durable scope that stayed on the legacy status route because the
+// terminal fleet gate was not yet open (typically a long-lived scope activated right after a
+// silo boot); bounded, backed-off, delivered through the durable callback scheduler.
+message RetryProjectionScopeStatusRouteAdoptionCommand {
+  int32 attempt = 1;
+}
+
 message ProjectionScopeStartedEvent {
   string root_actor_id = 1;
   string projection_kind = 2;

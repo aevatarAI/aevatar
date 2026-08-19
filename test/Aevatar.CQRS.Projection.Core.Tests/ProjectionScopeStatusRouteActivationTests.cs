@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -238,6 +239,85 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         harness.Agent.State.StatusRoute.Should().BeNull();
         harness.Agent.State.Active.Should().BeTrue();
         harness.Agent.State.ObservationAttached.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleEnsureAsync_WithoutFreshGrant_SchedulesBackedOffDurableAdoptionRetry()
+    {
+        // A long-lived scope that activates before the fleet gate opens must not stay on the
+        // legacy route until its next activation (which for an always-active scope never comes).
+        var harness = SourceScopeHarness.Build(admission: null, registerCallbackScheduler: true);
+
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+
+        var timeout = harness.Callbacks!.Timeouts.Should().ContainSingle().Subject;
+        timeout.ActorId.Should().Be(SourceScopeActorId);
+        timeout.CallbackId.Should().Be(TestScopeAgent.RetryCallbackId);
+        timeout.DueTime.Should().Be(TestScopeAgent.RetryDelays[0]);
+        timeout.TriggerEnvelope.Payload!.Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>()
+            .Attempt.Should().Be(1);
+        harness.Agent.State.StatusRoute.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleRetryStatusRouteAdoptionAsync_WhenGateOpenedMeanwhile_AdoptsWithoutFurtherRetry()
+    {
+        var harness = SourceScopeHarness.Build(admission: null, registerCallbackScheduler: true);
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+        var retry = harness.Callbacks!.Timeouts.Single().TriggerEnvelope.Payload!
+            .Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>();
+        harness.Fleet!.Admission = CreateAdmission();
+
+        await harness.Agent.HandleRetryStatusRouteAdoptionAsync(retry);
+
+        harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteActivatedEvent>().Should().ContainSingle();
+        harness.Agent.State.StatusRoute!.RouteEpoch.Should().Be(1);
+        harness.Agent.State.StatusRoute.LegacyRouteReleased.Should().BeTrue();
+        harness.Streams.Relays.Should().ContainKey((SourceScopeActorId, TerminalActorId));
+        harness.Callbacks.Timeouts.Should().ContainSingle("adoption succeeded; no further retry is scheduled");
+    }
+
+    [Fact]
+    public async Task HandleRetryStatusRouteAdoptionAsync_WhileGateStaysClosed_BacksOffThenStops()
+    {
+        var harness = SourceScopeHarness.Build(admission: null, registerCallbackScheduler: true);
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+
+        var delivered = 0;
+        while (harness.Callbacks!.Timeouts.Count > delivered)
+        {
+            var retry = harness.Callbacks.Timeouts[delivered++].TriggerEnvelope.Payload!
+                .Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>();
+            await harness.Agent.HandleRetryStatusRouteAdoptionAsync(retry);
+        }
+
+        harness.Callbacks.Timeouts.Select(static t => t.DueTime).Should().Equal(TestScopeAgent.RetryDelays);
+        harness.Callbacks.Timeouts.Select(static t =>
+                t.TriggerEnvelope.Payload!.Unpack<RetryProjectionScopeStatusRouteAdoptionCommand>().Attempt)
+            .Should().Equal(Enumerable.Range(1, TestScopeAgent.RetryDelays.Length));
+        harness.Agent.State.StatusRoute.Should().BeNull();
+        harness.EventSourcing.Committed.OfType<ProjectionScopeStatusRouteActivatedEvent>().Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(NoGrantReason.ReadersNotRegistered)]
+    [InlineData(NoGrantReason.RuntimeServicesNotRegistered)]
+    public async Task HandleEnsureAsync_WhenAdoptionCanNeverSucceedHere_DoesNotScheduleRetry(NoGrantReason reason)
+    {
+        var harness = reason switch
+        {
+            NoGrantReason.ReadersNotRegistered => SourceScopeHarness.Build(
+                registerFleetReaders: false,
+                registerCallbackScheduler: true),
+            _ => SourceScopeHarness.Build(
+                admission: null,
+                registerRuntimeServices: false,
+                registerCallbackScheduler: true),
+        };
+
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+
+        harness.Callbacks!.Timeouts.Should().BeEmpty();
     }
 
     [Fact]
@@ -752,6 +832,8 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         public required RecordingActorRuntime Runtime { get; init; }
         public required RecordingActorDispatchPort DispatchPort { get; init; }
         public required List<string> Journal { get; init; }
+        public required MutableFleetAdmissionSource? Fleet { get; init; }
+        public required RecordingCallbackScheduler? Callbacks { get; init; }
 
         public static SourceScopeHarness Build(
             RuntimeFleetCapabilityAdmission? admission = null,
@@ -760,7 +842,8 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             RuntimeLocalMembershipIdentity? membership = null,
             ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization,
             string? scopeActorId = null,
-            ProjectionScopeState? initialState = null)
+            ProjectionScopeState? initialState = null,
+            bool registerCallbackScheduler = false)
         {
             var journal = new List<string>();
             var agent = new TestScopeAgent(runtimeMode);
@@ -785,11 +868,19 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             }
 
             services.AddSingleton<TimeProvider>(new FixedTimeProvider(Now));
+            MutableFleetAdmissionSource? fleet = null;
             if (registerFleetReaders)
             {
-                var fleet = new MutableFleetAdmissionSource(admission, membership);
+                fleet = new MutableFleetAdmissionSource(admission, membership);
                 services.AddSingleton<IRuntimeFleetCapabilityAdmissionReader>(fleet);
                 services.AddSingleton<IRuntimeLocalMembershipIdentityReader>(fleet);
+            }
+
+            RecordingCallbackScheduler? callbacks = null;
+            if (registerCallbackScheduler)
+            {
+                callbacks = new RecordingCallbackScheduler(journal);
+                services.AddSingleton<IActorRuntimeCallbackScheduler>(callbacks);
             }
 
             agent.Services = services.BuildServiceProvider();
@@ -801,12 +892,17 @@ public sealed class ProjectionScopeStatusRouteActivationTests
                 Runtime = runtime,
                 DispatchPort = dispatchPort,
                 Journal = journal,
+                Fleet = fleet,
+                Callbacks = callbacks,
             };
         }
     }
 
     private sealed class TestScopeAgent : ProjectionScopeGAgentBase<TestContext>
     {
+        public static string RetryCallbackId => StatusRouteAdoptionRetryCallbackId;
+        public static TimeSpan[] RetryDelays => StatusRouteAdoptionRetryDelays;
+
         private readonly ProjectionRuntimeMode _runtimeMode;
 
         public TestScopeAgent(ProjectionRuntimeMode runtimeMode)
@@ -1104,6 +1200,42 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
 
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        private readonly List<string> _journal;
+
+        public RecordingCallbackScheduler(List<string> journal)
+        {
+            _journal = journal;
+        }
+
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            Timeouts.Add(request);
+            _journal.Add($"timeout:{request.CallbackId}:{request.DueTime}");
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                Generation: Timeouts.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class MutableFleetAdmissionSource
