@@ -2,7 +2,7 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "675ee8fdd4c925d85f9ba7877797dbaffcc046dc",
+    "revision": "f4da0d7ec2c975fd8b2fd63ee3ce5e3406fd13e3",
     "contract_files_sha256": "33e5c64ea0fc123167f4dc01449ee000d8e6a1d1e1849a90de55a11362b0ea94",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "23fd2cf48541c4b8da3fa1ef07277a7700c8478f9c638be8221465bf877fbb31",
