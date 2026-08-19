@@ -2581,6 +2581,83 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task ServiceReauthorizeAuthorizationRequired_WhenRegistryIsStillV7_ShouldFailTurnClosed()
+    {
+        // Rollout window: Aevatar pins registry v8 before NyxID publishes it, so a process
+        // that snapshotted v7 may still receive a service.reauthorize blocker. Until the
+        // process snapshots v8, the blocker must fail the turn closed with
+        // NYXID_ACTION_UNSUPPORTED instead of committing a browser action.
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(
+            eventStore,
+            actionRegistry: CreateKeyRotationActionRegistry());
+        var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
+        var agent = CreateController(services, conversationActorId, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, CreateStartTurnCommand()));
+        var llmKey = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, new NyxIdChatOperationResultSignal
+        {
+            Key = llmKey,
+            Llm = new NyxIdChatLLMOperationResult
+            {
+                ToolCalls =
+                {
+                    new NyxIdChatToolCall
+                    {
+                        CallId = "call-reauthorize-alpha",
+                        ToolName = "nyxid_request_service_reauthorize",
+                        ArgumentsJson = """{"userServiceId":"service-alpha","requestedScopes":["repo"]}""",
+                        Safety = new NyxIdChatToolCallSafety(),
+                    },
+                },
+            },
+        }));
+        var toolKey = agent.State.ActiveTask.Steps
+            .Single(step => step.Kind == NyxIdChatStepKind.Tool).Operation.Key.Clone();
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, new NyxIdChatOperationResultSignal
+        {
+            Key = toolKey,
+            Tool = new NyxIdChatToolOperationResult
+            {
+                ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                Receipt = new AgentToolReceipt
+                {
+                    CallId = "call-reauthorize-alpha",
+                    ToolName = "nyxid_request_service_reauthorize",
+                    Status = AgentToolReceiptStatus.AuthorizationRequired,
+                    ErrorCode = "NYXID_SERVICE_REAUTHORIZATION_REQUIRED",
+                    AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                    {
+                        ReasonCode = "NYXID_SERVICE_REAUTHORIZATION_REQUIRED",
+                        SafeMessage = "Re-authorize the connected service.",
+                        ServiceReauthorize = new NyxIdServiceReauthorizeActionRequirement
+                        {
+                            UserServiceId = "service-alpha",
+                            RequestedScopes = { "repo" },
+                        },
+                    },
+                },
+            },
+        }));
+
+        agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
+        agent.State.ActiveTurn.FailureCode.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
+        agent.State.PendingActions.Should().BeEmpty();
+        agent.State.PendingHistoryTerminal.ErrorCode.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed.Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(NyxIdChatActionRequestedEvent.Descriptor));
+        committed.Should().Contain(stateEvent =>
+            stateEvent.EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor) &&
+            stateEvent.EventData.Unpack<NyxIdChatOperationReconciledEvent>()
+                .State.ActiveTurn.FailureCode == "NYXID_ACTION_UNSUPPORTED");
+    }
+
+    [Fact]
     public async Task ActionContinuation_ShouldCommitPostconditionWaterlineBeforeDispatch()
     {
         const string conversationActorId = "conversation-alpha";
@@ -8452,7 +8529,33 @@ public sealed partial class NyxIdChatConversationGAgentTests
         """);
 
     private static NyxIdAssistantActionRegistry CreateLeastScopeActionRegistry() =>
-        NyxIdAssistantActionRegistry.Load("""
+        NyxIdAssistantActionRegistry.Load(LeastScopeActionRegistryJson);
+
+    private static NyxIdAssistantActionRegistry CreateKeyRotationActionRegistry()
+    {
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(LeastScopeActionRegistryJson)!.AsObject();
+        manifest["revision"] = NyxIdAssistantActionRegistry.KeyRotationRegistryRevision;
+        manifest["actions"]!.AsArray().Add(System.Text.Json.Nodes.JsonNode.Parse("""
+            {
+              "action": "key.rotate",
+              "description": "Rotate an API key.",
+              "params_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["keyId"],
+                "properties": {
+                  "keyId": {"type": "string"}
+                }
+              },
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
+            }
+            """));
+        return NyxIdAssistantActionRegistry.Load(manifest.ToJsonString());
+    }
+
+    private const string LeastScopeActionRegistryJson = """
         {
           "schema_version": 4,
           "revision": "nyxid-assistant-actions.v6",
@@ -8531,7 +8634,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             }
           ]
         }
-        """);
+        """;
 
     private static EventEnvelope CreateEnvelope(string actorId, IMessage payload) => new()
     {

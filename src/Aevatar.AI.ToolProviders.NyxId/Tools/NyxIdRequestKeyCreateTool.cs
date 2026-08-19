@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using static Aevatar.AI.ToolProviders.NyxId.Tools.NyxIdBrowserActionRequestToolHelpers;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
@@ -108,18 +109,20 @@ public sealed class NyxIdRequestKeyCreateTool : INyxIdBuiltInTool, IAgentToolCap
             return ErrorReceipt(
                 callId,
                 toolName,
+                Name,
                 ArgumentsInvalidCode,
                 "name, platform, and allowed_service_ids must be valid");
         }
 
         if (TryReadError(resultJson, out var errorCode, out var errorMessage))
-            return ErrorReceipt(callId, toolName, errorCode, errorMessage);
+            return ErrorReceipt(callId, toolName, Name, errorCode, errorMessage);
 
         if (!ResultMatches(resultJson, request))
         {
             return ErrorReceipt(
                 callId,
                 toolName,
+                Name,
                 ResultInvalidCode,
                 "NyxID key creation readiness returned an invalid result.");
         }
@@ -207,8 +210,7 @@ public sealed class NyxIdRequestKeyCreateTool : INyxIdBuiltInTool, IAgentToolCap
     {
         normalized = value?.Trim() ?? string.Empty;
         if (normalized.Length is 0 || normalized.Length > maxLength || normalized.Any(char.IsControl) ||
-            normalized.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+            HasCredentialPrefix(normalized))
         {
             return false;
         }
@@ -223,15 +225,6 @@ public sealed class NyxIdRequestKeyCreateTool : INyxIdBuiltInTool, IAgentToolCap
 
         return true;
     }
-
-    private static string? ResolveOwnerReadToken()
-        => AgentToolHumanSessionNyxIdCredential.ResolveBearerToken(
-            AgentToolRequestContext.Current);
-
-    private static bool HasVerifiedOwnerAuthority() =>
-        !string.IsNullOrWhiteSpace(AgentToolRequestContext.OwnerScopeId) &&
-        AgentToolRequestContext.NyxIdAuthority.IsComplete &&
-        !string.IsNullOrWhiteSpace(AgentToolRequestContext.NyxIdAuthority.ExternalUserId);
 
     private static bool ResultMatches(string resultJson, KeyCreateRequest request)
     {
@@ -261,58 +254,6 @@ public sealed class NyxIdRequestKeyCreateTool : INyxIdBuiltInTool, IAgentToolCap
             return false;
         }
     }
-
-    private static bool TryReadError(
-        string resultJson,
-        out string errorCode,
-        out string errorMessage)
-    {
-        errorCode = string.Empty;
-        errorMessage = string.Empty;
-        try
-        {
-            using var document = JsonDocument.Parse(resultJson);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.True ||
-                !root.TryGetProperty("error_code", out var code) || code.ValueKind != JsonValueKind.String ||
-                !root.TryGetProperty("safe_message", out var message) || message.ValueKind != JsonValueKind.String)
-            {
-                return false;
-            }
-
-            errorCode = code.GetString() ?? ResultInvalidCode;
-            errorMessage = message.GetString() ?? "NyxID key creation readiness failed.";
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static string ErrorResult(string code, string safeMessage) =>
-        JsonSerializer.Serialize(new
-        {
-            error = true,
-            error_code = code,
-            safe_message = safeMessage,
-        });
-
-    private static AgentToolReceipt ErrorReceipt(
-        string callId,
-        string toolName,
-        string code,
-        string safeMessage) =>
-        new()
-        {
-            CallId = callId ?? string.Empty,
-            ToolName = string.IsNullOrWhiteSpace(toolName) ? "nyxid_request_key_create" : toolName,
-            Status = AgentToolReceiptStatus.Error,
-            ErrorCode = code,
-            ErrorMessage = safeMessage,
-            ResultJson = ErrorResult(code, safeMessage),
-        };
 
     private sealed record KeyCreateRequest(
         string Name,

@@ -30,13 +30,16 @@ public sealed class NyxIdConformanceManifestTests
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v5.json")));
         var leastScope = NyxIdAssistantActionRegistry.Load(
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v6.json")));
-        var target = NyxIdAssistantActionRegistry.Load(
+        var keyRotation = NyxIdAssistantActionRegistry.Load(
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v7.json")));
+        var target = NyxIdAssistantActionRegistry.Load(
+            File.ReadAllText(Path.Combine(ContractRoot, "registry-v8.json")));
 
         legacy.RegistryRevision.Should().Be("nyxid-assistant-actions.v4");
         draft.RegistryRevision.Should().Be("nyxid-assistant-actions.v5");
         leastScope.RegistryRevision.Should().Be("nyxid-assistant-actions.v6");
-        target.RegistryRevision.Should().Be("nyxid-assistant-actions.v7");
+        keyRotation.RegistryRevision.Should().Be("nyxid-assistant-actions.v7");
+        target.RegistryRevision.Should().Be("nyxid-assistant-actions.v8");
         foreach (var registry in new[] { legacy, draft })
         {
             registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
@@ -49,10 +52,24 @@ public sealed class NyxIdConformanceManifestTests
         leastScope.TryGetDefinition("key.create", out _).Should().BeTrue();
         leastScope.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         leastScope.TryGetDefinition("key.rotate", out _).Should().BeFalse();
+        keyRotation.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        keyRotation.TryGetDefinition("key.create", out _).Should().BeTrue();
+        keyRotation.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        keyRotation.TryGetDefinition("key.rotate", out _).Should().BeTrue();
         target.TryGetDefinition("service.connect", out _).Should().BeTrue();
         target.TryGetDefinition("key.create", out _).Should().BeTrue();
-        target.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         target.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        target.TryGetDefinition("service.reauthorize", out var reauthorize).Should().BeTrue();
+        reauthorize!.Action.Should().Be(NyxIdAssistantActionKind.ServiceReauthorize);
+        reauthorize.RememberEligible.Should().BeFalse();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                target.RegistryRevision,
+                NyxIdAssistantActionKind.ServiceReauthorize)
+            .Should().BeTrue();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                keyRotation.RegistryRevision,
+                NyxIdAssistantActionKind.ServiceReauthorize)
+            .Should().BeFalse();
     }
 
     [Fact]

@@ -29,6 +29,7 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
     internal const string KeyRotateIntentId = "key_rotate";
     internal const string KeyRotateRoutingDescription =
         "Rotate one exact caller-visible NyxID API key through the browser-owned secure journey.";
+    internal const string ServiceReauthorizeIntentId = "service_reauthorize";
     private static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(15);
     internal static AgentProfileTurnClassificationCandidate ServiceConnectCandidate { get; } =
         new(

@@ -15,8 +15,10 @@
       "src/Aevatar.AI.Abstractions/ai_messages.proto": "099251f2623800c2b8dcf1a63958b0456d6d898ca5a7ede5f49bf392b3a8aa5b",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "9aaf3d1e8f071bdf2bc81e3a82f861440dade2a02d040c906477065cc147082e",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "1b033df9cb55c741e9b52054cbd4a91067f03c8c3797bd076a7e3d6133eb0fcb",
+      "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdBrowserActionRequestToolHelpers.cs": "",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "2c4f2cda99154f2e667c6cfd291497e697ef11df17f081f96ec70070a8af8b8c",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs": "18212bb64644cfbca401065bccce439ea5fa00316deff57d730a0d9ac2650e53",
+      "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestServiceReauthorizeTool.cs": "",
       "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "6281ec9394f937f55b1ff9dd800b92d9625f09219a33e31c87f8885430523f13"
     }
   },
@@ -41,7 +43,8 @@
       "nyxid-assistant-actions.v4",
       "nyxid-assistant-actions.v5",
       "nyxid-assistant-actions.v6",
-      "nyxid-assistant-actions.v7"
+      "nyxid-assistant-actions.v7",
+      "nyxid-assistant-actions.v8"
     ],
     "nyxid_source": "backend/src/handlers/assistant_actions.rs",
     "nyxid_source_sha256": "7350930688e5fbe08355c0bfc1b95b1c8546c4db6c999d400c2e8d88b9c70f36",
@@ -63,6 +66,10 @@
       "nyxid-assistant-actions.v7": {
         "checked_in_payload": "registry-v7.json",
         "checked_in_payload_sha256": "b029b8fb295a213f7c4f4da8bde0ec0b74a5bcdfe502818bfdd0fb16d9bdf941"
+      },
+      "nyxid-assistant-actions.v8": {
+        "checked_in_payload": "registry-v8.json",
+        "checked_in_payload_sha256": "788c6628977f29f1c357d4f7b172be904540ad0bbea84ccb2878c5cafaa1f818"
       }
     }
   },

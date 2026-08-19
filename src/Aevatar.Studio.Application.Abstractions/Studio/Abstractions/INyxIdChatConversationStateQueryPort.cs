@@ -452,6 +452,8 @@ public sealed record NyxIdChatActionParamsSnapshot(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     NyxIdChatServiceAccessReviewSnapshot? ServiceAccessReview = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    NyxIdChatServiceReauthorizeSnapshot? ServiceReauthorize = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? Name = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? Platform = null,
@@ -483,6 +485,10 @@ public sealed record NyxIdChatServiceAccessReviewSnapshot(
     string UserServiceId,
     string ServiceSlug,
     string ResourceUri);
+
+public sealed record NyxIdChatServiceReauthorizeSnapshot(
+    string UserServiceId,
+    IReadOnlyList<string> RequestedScopes);
 
 public sealed record NyxIdChatActionReportSnapshot(
     string ActionRequestId,

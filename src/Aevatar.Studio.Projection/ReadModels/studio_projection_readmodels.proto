@@ -787,6 +787,7 @@ message NyxIdChatConversationActionParamsDocument {
     NyxIdChatConversationKeyCreateDocument key_create = 3;
     NyxIdChatConversationKeyRotateDocument key_rotate = 4;
     NyxIdChatConversationServiceAccessReviewDocument service_access_review = 5;
+    NyxIdChatConversationServiceReauthorizeDocument service_reauthorize = 6;
   }
 }
 
@@ -820,6 +821,11 @@ message NyxIdChatConversationServiceAccessReviewDocument {
   string user_service_id = 1;
   string service_slug = 2;
   string resource_uri = 3;
+}
+
+message NyxIdChatConversationServiceReauthorizeDocument {
+  string user_service_id = 1;
+  repeated string requested_scopes = 2;
 }
 
 message NyxIdChatConversationCurrentStateDocument {
