@@ -223,20 +223,27 @@ public sealed class ProjectionScopeActivationEvidenceTests
     public async Task EnsureAsync_ConcurrentColdCalls_ShouldConvergeOnOneActorCreationAndExactEvidence()
     {
         var fixture = CreateFixture();
-        var twoAuthorityReads = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseReads = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bothCallersInColdPath = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseAuthorityReads = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Both cold callers are held inside their own first authority read, so neither can leave the
+        // cold path before the other has provably entered it. No wall clock decides that overlap.
         fixture.Authority.Handler = async (count, ct) =>
         {
             if (count <= 2)
             {
                 if (count == 2)
-                    twoAuthorityReads.TrySetResult();
-                await releaseReads.Task.WaitAsync(ct);
+                    bothCallersInColdPath.TrySetResult();
+                await releaseAuthorityReads.Task.WaitAsync(ct);
                 return null;
             }
 
             return fixture.Authority.Binding;
         };
+        // The runtime gate opens for the caller that reaches it first and holds the other one there
+        // until that caller's actor creation has completed. Convergence on a single creation is then
+        // a claim about the activation service, not about which thread the scheduler happened to run.
+        fixture.Runtime.ExistsGate = callOrdinal =>
+            callOrdinal == 1 ? Task.CompletedTask : fixture.Runtime.FirstCreateCompleted;
         fixture.Dispatch.Handler = (_, _) =>
         {
             fixture.Authority.Binding = ExactBinding(fixture.ScopeActorId);
@@ -245,10 +252,11 @@ public sealed class ProjectionScopeActivationEvidenceTests
 
         var first = fixture.Service.EnsureAsync(Request());
         var second = fixture.Service.EnsureAsync(Request());
-        await twoAuthorityReads.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        releaseReads.TrySetResult();
-        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+        await bothCallersInColdPath.Task;
+        releaseAuthorityReads.TrySetResult();
+        await Task.WhenAll(first, second);
 
+        fixture.Runtime.ExistsCallCount.Should().Be(2);
         fixture.Runtime.CreateCallCount.Should().Be(1);
         fixture.Dispatch.CallCount.Should().Be(2);
         ProjectionScopeObservationRelayBinding.IsExactActivationEvidence(
@@ -557,9 +565,31 @@ public sealed class ProjectionScopeActivationEvidenceTests
 
     private sealed class CountingRuntime : IActorRuntime
     {
-        public bool Exists { get; set; }
-        public int ExistsCallCount { get; private set; }
-        public int CreateCallCount { get; private set; }
+        private readonly TaskCompletionSource _firstCreateCompleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private int _existsCallCount;
+        private int _createCallCount;
+        private volatile bool _exists;
+
+        public bool Exists
+        {
+            get => _exists;
+            set => _exists = value;
+        }
+
+        public int ExistsCallCount => Volatile.Read(ref _existsCallCount);
+        public int CreateCallCount => Volatile.Read(ref _createCallCount);
+
+        /// <summary>
+        /// Awaited on entry to <see cref="ExistsAsync"/> with the one-based call ordinal. It lets a
+        /// concurrency test hold a caller at the runtime boundary until something it chose has
+        /// provably happened, instead of leaving the interleaving to the scheduler.
+        /// </summary>
+        public Func<int, Task> ExistsGate { get; set; } = static _ => Task.CompletedTask;
+
+        /// <summary>Completes once the first <see cref="CreateByKindAsync"/> call has recorded its actor.</summary>
+        public Task FirstCreateCompleted => _firstCreateCompleted.Task;
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent => throw new NotSupportedException();
@@ -569,18 +599,20 @@ public sealed class ProjectionScopeActivationEvidenceTests
 
         public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
         {
-            CreateCallCount++;
-            Exists = true;
+            Interlocked.Increment(ref _createCallCount);
+            _exists = true;
+            _firstCreateCompleted.TrySetResult();
             return Task.FromResult<IActor>(new TestActor(id!));
         }
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
 
-        public Task<bool> ExistsAsync(string id)
+        public async Task<bool> ExistsAsync(string id)
         {
-            ExistsCallCount++;
-            return Task.FromResult(Exists);
+            var callOrdinal = Interlocked.Increment(ref _existsCallCount);
+            await ExistsGate(callOrdinal).ConfigureAwait(false);
+            return _exists;
         }
 
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
