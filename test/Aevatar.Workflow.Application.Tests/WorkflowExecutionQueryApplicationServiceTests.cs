@@ -301,11 +301,16 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
 
         var catalog = await port.ListWorkflowCatalogAsync();
         var detail = await port.GetWorkflowDetailAsync(" alpha ");
+        var publicCatalog = await port.ListPublicWorkflowCatalogAsync();
+        var publicDetail = await port.GetPublicWorkflowDetailAsync(" beta ");
         var blankDetail = await port.GetWorkflowDetailAsync("   ");
+        var publicBlankDetail = await port.GetPublicWorkflowDetailAsync("   ");
         var missingDetail = await port.GetWorkflowDetailAsync("missing");
+        var publicMissingDetail = await port.GetPublicWorkflowDetailAsync("missing");
         var capabilities = await port.GetCapabilitiesAsync();
 
         catalog.Select(item => item.Name).Should().Equal("alpha", "beta");
+        publicCatalog.Select(item => item.Name).Should().Equal("alpha", "beta");
         catalog.Should().OnlyContain(item =>
             item.Source == "builtin" &&
             item.SourceLabel == "Built-in" &&
@@ -315,8 +320,13 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         detail.Should().NotBeNull();
         detail!.Catalog.Name.Should().Be("alpha");
         detail.Yaml.Should().Contain("name: alpha");
+        publicDetail.Should().NotBeNull();
+        publicDetail!.Catalog.Name.Should().Be("beta");
+        publicDetail.Yaml.Should().Contain("name: beta");
         blankDetail.Should().BeNull();
+        publicBlankDetail.Should().BeNull();
         missingDetail.Should().BeNull();
+        publicMissingDetail.Should().BeNull();
         capabilities.SchemaVersion.Should().Be("capabilities.v1");
         capabilities.Workflows.Select(workflow => workflow.Name).Should().Equal("alpha", "beta");
         capabilities.Workflows.Should().OnlyContain(workflow => workflow.Source == "builtin");

@@ -45,7 +45,7 @@ public sealed class PublicWorkflowTemplateService
         return new PublicWorkflowTemplateListResponse(
             page.Select(static item => ToSummary(item)).ToList(),
             hasMore ? (offset + take).ToString(CultureInfo.InvariantCulture) : null,
-            BuildFreshness(page));
+            BuildFreshness(sorted));
     }
 
     public async Task<PublicWorkflowTemplateDetailResponse?> GetAsync(

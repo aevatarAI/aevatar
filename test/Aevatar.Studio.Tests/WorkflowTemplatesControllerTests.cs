@@ -48,6 +48,30 @@ public sealed class WorkflowTemplatesControllerTests
     }
 
     [Fact]
+    public async Task List_ShouldExposeFreshnessAcrossFilteredResult_WhenPageIsTruncated()
+    {
+        var controller = CreateController(
+            new RecordingWorkflowCatalogPort(
+                Detail("tmpl-alpha", showInLibrary: true, stateVersion: 7),
+                Detail("tmpl-beta", showInLibrary: true, stateVersion: 9)),
+            new RecordingStudioWorkspacePorts());
+
+        var result = await controller.List(
+            query: null,
+            sort: null,
+            cursor: null,
+            take: 1,
+            CancellationToken.None);
+
+        var response = result.Result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<PublicWorkflowTemplateListResponse>().Subject;
+        response.Items.Should().ContainSingle(item => item.TemplateId == "tmpl-alpha");
+        response.NextCursor.Should().Be("1");
+        response.Freshness.VersionSemantics.Should().Contain("max=9");
+        response.Freshness.LastEventId.Should().Be("event-9");
+    }
+
+    [Fact]
     public async Task Get_WhenTemplateIsHidden_ShouldReturnNotFoundAndNotCreateDraft()
     {
         var workspacePorts = new RecordingStudioWorkspacePorts();

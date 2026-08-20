@@ -1369,6 +1369,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChatRuntimeSupport()
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1444,6 +1445,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChatRuntimeSupport()
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1493,6 +1495,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChatRuntimeSupport()
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1542,6 +1545,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChatRuntimeSupport()
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1590,6 +1594,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(new StubActorDispatchPort(runtime))
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChatRuntimeSupport()
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1619,6 +1624,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(new ThrowingActorDispatchPort(new InvalidOperationException("dispatch failed")))
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChatRuntimeSupport()
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1672,6 +1678,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddNyxIdChatRuntimeSupport()
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1745,6 +1752,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(new StubActorDispatchPort(runtime))
             .AddSingleton<INyxIdChatSessionProjectionPort>(new StubNyxIdChatSessionProjectionPort())
+            .AddNyxIdChatRuntimeSupport()
             .AddNyxIdChat()
             .BuildServiceProvider();
 
