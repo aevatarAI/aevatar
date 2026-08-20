@@ -3435,6 +3435,66 @@ describe('Workflow Activity vNext editor', () => {
     ).toHaveTextContent('Save failed');
   });
 
+  it('reports a parse validation save failure instead of failing silently', async () => {
+    mockStudioApi.parseYaml.mockResolvedValueOnce({
+      document: {
+        name: 'committed_source',
+        roles: [],
+        steps: [],
+      },
+      findings: [{ level: 'error', message: 'Workflow steps are invalid.' }],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    await screen.findByDisplayValue('Committed source');
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Updated source' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow couldn't be saved",
+      ),
+    );
+    expect(mockStudioApi.serializeYaml).not.toHaveBeenCalled();
+    expect(mockStudioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Save failed');
+  });
+
+  it('reports a serialization validation save failure instead of failing silently', async () => {
+    mockStudioApi.serializeYaml.mockResolvedValueOnce({
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      document: {
+        name: 'committed_source',
+        roles: [],
+        steps: [],
+      },
+      findings: [{ level: 'error', message: 'Workflow steps are invalid.' }],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    await screen.findByDisplayValue('Committed source');
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Updated source' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow couldn't be saved",
+      ),
+    );
+    expect(mockStudioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Save failed');
+  });
+
   it('puts editable node configuration first and keeps raw JSON advanced', async () => {
     mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
       yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Updated prompt\n',

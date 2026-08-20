@@ -493,13 +493,18 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     setSaveError('');
     try {
       const parsedDocument = await parseCurrentYaml();
-      if (!parsedDocument) return false;
+      if (!parsedDocument) {
+        setSaveError('Workflow validation failed.');
+        return false;
+      }
       const serialized = await studioApi.serializeYaml({
         document: parsedDocument,
       });
       setFindings(serialized.findings);
-      if (hasBlockingFindings(serialized.document, serialized.findings))
+      if (hasBlockingFindings(serialized.document, serialized.findings)) {
+        setSaveError('Workflow validation failed.');
         return false;
+      }
       setValidating(false);
       const directoryId =
         workflow.directoryId ||
