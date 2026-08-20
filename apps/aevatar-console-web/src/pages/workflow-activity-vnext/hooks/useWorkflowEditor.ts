@@ -778,7 +778,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
 
   const canRun = Boolean(
     document?.steps?.length &&
-      !hasBlockingFindings(document, findings) &&
       !selectedStepConfigurationError &&
       !structuralMutationPending,
   );
@@ -803,23 +802,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         );
       }
 
-      const parsed = await studioApi.parseYaml({ yaml });
-      setFindings(parsed.findings);
-      const parsedDocument = parsed.document ?? null;
-      if (
-        !parsedDocument ||
-        hasBlockingFindings(parsedDocument, parsed.findings)
-      ) {
-        throw new Error(
-          'This workflow needs valid executable steps before publishing.',
-        );
-      }
-
-      const serialized = await studioApi.serializeYaml({
-        document: parsedDocument,
-      });
-      setFindings(serialized.findings);
-      if (hasBlockingFindings(serialized.document, serialized.findings)) {
+      if (!yaml.trim() || !document?.steps?.length) {
         throw new Error(
           'This workflow needs valid executable steps before publishing.',
         );
@@ -829,9 +812,17 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         documentVersion: localEditRevisionRef.current,
         workflowId: workflow.workflowId,
         workflowName: workflowTitle.trim(),
-        workflowYaml: serialized.yaml,
+        workflowYaml: yaml,
       };
-    }, [dirty, receiptPending, routeWorkflowId, workflow, workflowTitle, yaml]);
+    }, [
+      dirty,
+      document,
+      receiptPending,
+      routeWorkflowId,
+      workflow,
+      workflowTitle,
+      yaml,
+    ]);
 
   const submitRun = React.useCallback(
     async (

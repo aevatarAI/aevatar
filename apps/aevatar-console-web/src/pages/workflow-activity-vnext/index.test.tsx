@@ -2414,6 +2414,75 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
   });
 
+  it('publishes saved runtime YAML without reprocessing it through the Studio parser', async () => {
+    arrangeObservedWorkflowPublication();
+    const savedYaml =
+      'name: studio\nroles:\n  - id: studio\n    tool_sets: [studio.local]\nsteps:\n  - id: reply\n    type: llm_call\n    role: studio\n    tool_sets: [studio.local]\n';
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-draft-alpha',
+      name: 'studio',
+      fileName: 'studio.yaml',
+      filePath: '/workflows/studio.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: savedYaml,
+      updatedAtUtc: '2026-08-20T15:25:00Z',
+      document: {
+        name: 'studio',
+        roles: [{ id: 'studio', toolSets: ['studio.local'] }],
+        steps: [
+          {
+            id: 'reply',
+            type: 'llm_call',
+            targetRole: 'studio',
+            toolSets: ['studio.local'],
+          },
+        ],
+      },
+      draftExists: true,
+      findings: [
+        {
+          code: 'unknown_field',
+          level: 2,
+          message: "Unknown field 'tool_sets'.",
+        },
+      ],
+    });
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: null,
+      findings: [
+        {
+          code: 'unknown_field',
+          level: 'error',
+          message: "Unknown field 'tool_sets'.",
+        },
+      ],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowYaml: savedYaml }),
+      ),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.publishWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowYaml: savedYaml }),
+      ),
+    );
+    expect(mockStudioApi.parseYaml).not.toHaveBeenCalled();
+    expect(mockStudioApi.serializeYaml).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole('status', {
+        name: 'Workflow publication status',
+      }),
+    ).toHaveTextContent('Published');
+    expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled();
+  });
+
   it.each([
     {
       returnedRevisionId: 'rev-returned-other',
