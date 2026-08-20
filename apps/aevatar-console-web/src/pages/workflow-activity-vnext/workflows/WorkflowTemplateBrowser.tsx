@@ -90,17 +90,27 @@ function formatUpdatedAt(template: WorkflowTemplateSummary): string {
   }).format(timestamp);
 }
 
-function TemplateFact({
-  label,
-  value,
-}: {
-  readonly label: string;
-  readonly value: string;
-}) {
+function TemplateFact({ value }: { readonly value: string }) {
   return (
     <div className="wa-vnext__template-fact">
-      <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function TemplateFactsHeader() {
+  return (
+    <div className="wa-vnext__template-facts-header">
+      <span>
+        {t('workflowActivityVNext.new.templateBrowser.reads', 'Reads')}
+      </span>
+      <span>
+        {t(
+          'workflowActivityVNext.new.templateBrowser.connection',
+          'Connection',
+        )}
+      </span>
+      <span>{t('workflowActivityVNext.new.templateBrowser.does', 'Does')}</span>
     </div>
   );
 }
@@ -139,21 +149,13 @@ function TemplateRow({
       </div>
       <div className="wa-vnext__template-facts">
         <TemplateFact
-          label={t('workflowActivityVNext.new.templateBrowser.reads', 'Reads')}
           value={t(
             'workflowActivityVNext.new.templateBrowser.workflowInputs',
             'Workflow inputs',
           )}
         />
+        <TemplateFact value={formatConnections(template)} />
         <TemplateFact
-          label={t(
-            'workflowActivityVNext.new.templateBrowser.connection',
-            'Connection',
-          )}
-          value={formatConnections(template)}
-        />
-        <TemplateFact
-          label={t('workflowActivityVNext.new.templateBrowser.does', 'Does')}
           value={t(
             'workflowActivityVNext.new.templateBrowser.runsSteps',
             'Runs {count} {unit}',
@@ -856,6 +858,9 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
           </div>
         ) : (
           <div className="wa-vnext__template-list">
+            <div className="wa-vnext__template-list-header">
+              <TemplateFactsHeader />
+            </div>
             {currentItems.map((template) => (
               <TemplateRow
                 creating={creationBusy}

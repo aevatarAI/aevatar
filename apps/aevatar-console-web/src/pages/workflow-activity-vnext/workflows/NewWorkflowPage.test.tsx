@@ -467,6 +467,29 @@ describe('New workflow save-target recovery', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('renders template fact headings once above the template rows', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
+
+    const browser = await screen.findByRole('region', {
+      name: 'Workflow templates',
+    });
+    const row = await within(browser).findByRole('article');
+
+    expect(screen.getAllByText('Reads')).toHaveLength(1);
+    expect(screen.getAllByText('Connection')).toHaveLength(1);
+    expect(screen.getAllByText('Does')).toHaveLength(1);
+    expect(row).not.toContainElement(screen.getByText('Reads'));
+    expect(row).not.toContainElement(screen.getByText('Connection'));
+    expect(row).not.toContainElement(screen.getByText('Does'));
+    expect(within(row).getByText('Workflow inputs')).toBeInTheDocument();
+    expect(
+      within(row).getByText('LLM provider, pagerduty'),
+    ).toBeInTheDocument();
+    expect(within(row).getByText('Runs 2 steps')).toBeInTheDocument();
+  });
+
   it('opens a known template page with its saved cursor', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
     mockRuntimeCatalogApi.listWorkflowTemplates

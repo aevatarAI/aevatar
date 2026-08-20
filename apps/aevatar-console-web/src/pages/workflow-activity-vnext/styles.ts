@@ -233,6 +233,9 @@ export const workflowActivityVNextCss = `
 .wa-vnext__template-sort-label { color: var(--wa-muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .wa-vnext__template-sort .ant-select { min-width: 224px; }
 .wa-vnext__template-list { border-top: 1px solid var(--wa-line); display: grid; }
+.wa-vnext__template-list-header { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(280px, 1.4fr) auto; gap: 20px; padding: 10px 0 8px; }
+.wa-vnext__template-facts-header { color: var(--wa-muted); display: grid; font-size: 10px; font-weight: 700; gap: 12px; grid-column: 2; grid-template-columns: repeat(3, minmax(0, 1fr)); letter-spacing: 1.5px; line-height: 14px; text-transform: uppercase; }
+.wa-vnext__template-facts-header span { min-width: 0; }
 .wa-vnext__template-row { align-items: stretch; border-bottom: 1px solid var(--wa-line); display: grid; gap: 20px; grid-template-columns: minmax(220px, 1.2fr) minmax(280px, 1.4fr) auto; padding: 18px 0; }
 .wa-vnext__template-identity { min-width: 0; }
 .wa-vnext__template-identity h2 { font-size: 15px; line-height: 20px; margin: 0; overflow-wrap: anywhere; }
@@ -240,7 +243,6 @@ export const workflowActivityVNextCss = `
 .wa-vnext__template-meta { color: var(--wa-faint); display: block; font-size: 11px; line-height: 16px; }
 .wa-vnext__template-facts { align-items: stretch; display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); min-width: 0; }
 .wa-vnext__template-fact { display: grid; gap: 4px; min-width: 0; }
-.wa-vnext__template-fact span { color: var(--wa-muted); font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
 .wa-vnext__template-fact strong { font-size: 12px; font-weight: 600; line-height: 17px; overflow-wrap: anywhere; }
 .wa-vnext__template-actions { align-items: center; display: flex; gap: 8px; justify-content: flex-end; min-width: 184px; }
 .wa-vnext__template-detail { display: grid; gap: 16px; padding-top: 4px; }
@@ -668,6 +670,8 @@ export const workflowActivityVNextCss = `
   .wa-vnext__settings-footer { padding-inline: 32px; }
   .wa-vnext__creation-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wa-vnext__split { grid-template-columns: 1fr; }
+  .wa-vnext__template-list-header { grid-template-columns: minmax(0, 1fr); }
+  .wa-vnext__template-facts-header { grid-column: auto; }
   .wa-vnext__template-row { grid-template-columns: minmax(0, 1fr); }
   .wa-vnext__template-actions { justify-content: flex-start; }
 }
@@ -735,6 +739,7 @@ export const workflowActivityVNextCss = `
   .wa-vnext__template-sort { align-items: stretch; display: grid; gap: 6px; width: 100%; }
   .wa-vnext__template-sort .ant-select { min-width: 0; width: 100%; }
   .wa-vnext__template-facts { grid-template-columns: 1fr; }
+  .wa-vnext__template-facts-header { gap: 4px; grid-template-columns: 1fr; }
   .wa-vnext__template-actions { width: 100%; }
   .wa-vnext__template-actions .ant-btn { flex: 1 1 0; }
   .wa-vnext__publish-review-item { gap: 6px; padding-block: 10px; }
