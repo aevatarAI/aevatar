@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Projection.Runtime;
 using Aevatar.Workflow.Projection.ReadModels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -93,6 +94,13 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             configuration,
             static document => document.Id);
+        // The fleet capability authority read model is activated by the workflow projection
+        // registration (AddRuntimeFleetCapabilityProjection) and gates every schema adoption;
+        // it must have a document store binding on the same provider or admission fails closed.
+        TryAddElasticsearchDocumentStore<RuntimeFleetCapabilityAuthorityCurrentStateDocument>(
+            services,
+            configuration,
+            static document => document.Id);
 
         AddWorkflowReadModelInventoryDescriptors(services, ElasticsearchEngineLabel);
     }
@@ -119,6 +127,10 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
             services,
             static document => document.Id,
             static document => document.UpdatedAt);
+        TryAddInMemoryDocumentStore<RuntimeFleetCapabilityAuthorityCurrentStateDocument>(
+            services,
+            static document => document.Id,
+            static document => document.UpdatedAt);
 
         AddWorkflowReadModelInventoryDescriptors(services, InMemoryEngineLabel);
     }
@@ -139,6 +151,7 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
         TryAddWorkflowReadModelDescriptor<WorkflowActorBindingDocument>(services, "workflow-actor-binding", "WorkflowDefinitionGAgent", engineLabel, shape);
         TryAddWorkflowReadModelDescriptor<WorkflowCatalogCurrentStateDocument>(services, "workflow-catalog-current-state", "WorkflowDefinitionGAgent", engineLabel, shape);
         TryAddWorkflowReadModelDescriptor<WorkflowExternalApprovalContinuationDocument>(services, "workflow-external-approval-continuation", "WorkflowRunGAgent", engineLabel, shape);
+        TryAddWorkflowReadModelDescriptor<RuntimeFleetCapabilityAuthorityCurrentStateDocument>(services, "runtime-fleet-capability-authority-current-state", "RuntimeFleetCapabilityAuthorityGAgent", engineLabel, shape);
     }
 
     // Registers a single inventory descriptor that delegates to the read-model's already-registered
@@ -176,7 +189,8 @@ public static class WorkflowProjectionProviderServiceCollectionExtensions
                && HasDocumentReaderForProvider<WorkflowRunInsightReportDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowActorBindingDocument>(services, providerKind)
                && HasDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkflowExternalApprovalContinuationDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<WorkflowExternalApprovalContinuationDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<RuntimeFleetCapabilityAuthorityCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)

@@ -168,7 +168,7 @@ public sealed class NyxIdChatBrowserActionTests
         decision.ShouldCommit.Should().BeTrue();
         decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
         decision.Request.RegistryRevision.Should().Be(
-            NyxIdAssistantActionRegistry.SupportedRegistryRevision);
+            NyxIdAssistantActionRegistry.KeyRotationRegistryRevision);
         decision.Request.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
         decision.Request.Params.ParamsCase.Should().Be(
             NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate);
@@ -371,7 +371,7 @@ public sealed class NyxIdChatBrowserActionTests
             AuthorizationRequiredSignal(state),
             Registry(),
             Now).Request;
-        request.RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision;
+        request.RegistryRevision = NyxIdAssistantActionRegistry.KeyRotationRegistryRevision;
         request.Action = NyxIdAssistantActionKind.KeyRotate;
         request.Params = new NyxIdAssistantActionParams
         {
@@ -383,6 +383,11 @@ public sealed class NyxIdChatBrowserActionTests
         accepted.ShouldCommit.Should().BeTrue();
         accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
         accepted.Request.Params.KeyRotate.KeyId.Should().Be("key-alpha");
+
+        request.RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision;
+        var acceptedV8 = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+        acceptedV8.ShouldCommit.Should().BeTrue();
+        acceptedV8.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
 
         request.RegistryRevision = NyxIdAssistantActionRegistry.LeastScopeRegistryRevision;
         var rejectedV6 = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
@@ -1648,7 +1653,7 @@ public sealed class NyxIdChatBrowserActionTests
     private static NyxIdAssistantActionRegistry RotationRegistry()
     {
         var manifest = JsonNode.Parse(LeastScopeRegistryJson)!.AsObject();
-        manifest["revision"] = NyxIdAssistantActionRegistry.SupportedRegistryRevision;
+        manifest["revision"] = NyxIdAssistantActionRegistry.KeyRotationRegistryRevision;
         manifest["actions"]!.AsArray().Add(JsonNode.Parse("""
             {
               "action": "key.rotate",

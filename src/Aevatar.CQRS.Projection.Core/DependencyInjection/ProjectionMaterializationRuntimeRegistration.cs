@@ -17,8 +17,7 @@ public static class ProjectionMaterializationRuntimeRegistration
     public static IServiceCollection AddProjectionMaterializationRuntimeCore<TContext, TRuntimeLease, TScopeAgent>(
         this IServiceCollection services,
         Func<ProjectionRuntimeScopeKey, TContext> contextFactory,
-        Func<TContext, TRuntimeLease> leaseFactory,
-        bool materializeScopeStatus = true)
+        Func<TContext, TRuntimeLease> leaseFactory)
         where TContext : class, IProjectionMaterializationContext
         where TRuntimeLease : class, IProjectionRuntimeLease, IProjectionContextRuntimeLease<TContext>
         where TScopeAgent : IAgent
@@ -47,9 +46,7 @@ public static class ProjectionMaterializationRuntimeRegistration
                     request.SessionId)),
                 (_, context) => leaseFactory(context)));
         services.TryAddSingleton<IProjectionScopeActivationService<TRuntimeLease>>(sp =>
-        {
-            IProjectionScopeActivationService<TRuntimeLease> activationService =
-                new ProjectionScopeActivationService<
+            new ProjectionScopeActivationService<
                     TRuntimeLease,
                     TContext,
                     TScopeAgent>(
@@ -66,14 +63,7 @@ public static class ProjectionMaterializationRuntimeRegistration
                 sp.GetService<IStreamPubSubMaintenance>(),
                 sp.GetService<ILoggerFactory>(),
                 sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
-                sp.GetRequiredService<IStreamForwardingRegistry>());
-
-            return materializeScopeStatus
-                ? new ProjectionScopeStatusActivationService<TRuntimeLease>(
-                    activationService,
-                    sp.GetService<IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>>())
-                : activationService;
-        });
+                sp.GetRequiredService<IStreamForwardingRegistry>()));
         services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
             new ProjectionScopeReleaseService<
                 TRuntimeLease,
@@ -92,43 +82,5 @@ public static class ProjectionMaterializationRuntimeRegistration
                 sp.GetRequiredService<IStreamForwardingBindingAuthority>(),
                 sp.GetRequiredService<IStreamForwardingRegistry>()));
         return services;
-    }
-
-    // Refactor (iter17/cluster-034):
-    //   Old pattern: Replay-based projection scope watermark query via IEventStore (EventStoreProjectionScopeWatermarkQueryPort).
-    //   New principle: Materialized ProjectionScopeStatusDocument readmodel; ProjectionScopeStatusQueryPort reads document only; never replays IEventStore.
-    //   refactor helper, no behavior change beyond ensuring the existing status materialization scope.
-    private sealed class ProjectionScopeStatusActivationService<TRuntimeLease>
-        : IProjectionScopeActivationService<TRuntimeLease>
-        where TRuntimeLease : class, IProjectionRuntimeLease
-    {
-        private readonly IProjectionScopeActivationService<TRuntimeLease> _inner;
-        private readonly IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>? _statusActivationService;
-
-        public ProjectionScopeStatusActivationService(
-            IProjectionScopeActivationService<TRuntimeLease> inner,
-            IProjectionScopeActivationService<ProjectionScopeStatusRuntimeLease>? statusActivationService)
-        {
-            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            _statusActivationService = statusActivationService;
-        }
-
-        public async Task<TRuntimeLease> EnsureAsync(
-            ProjectionScopeStartRequest request,
-            CancellationToken ct = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-
-            var lease = await _inner.EnsureAsync(request, ct);
-            if (_statusActivationService != null &&
-                !ProjectionScopeStatusRuntimeRegistration.IsProjectionScopeStatusKind(request.ProjectionKind))
-            {
-                await _statusActivationService.EnsureAsync(
-                    ProjectionScopeStatusRuntimeRegistration.BuildStatusScopeStartRequest(request),
-                    ct);
-            }
-
-            return lease;
-        }
     }
 }

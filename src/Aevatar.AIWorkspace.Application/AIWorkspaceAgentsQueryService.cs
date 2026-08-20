@@ -32,7 +32,6 @@ public sealed class AIWorkspaceAgentsQueryService(
                 query.Take,
                 publishedOnly: false,
                 "scope",
-                scopeId,
                 "OWNED_AGENT_PROFILES_UNAVAILABLE",
                 ct);
             var systemTask = ReadAsync(
@@ -41,7 +40,6 @@ public sealed class AIWorkspaceAgentsQueryService(
                 query.Take,
                 publishedOnly: true,
                 "system",
-                null,
                 "SYSTEM_AGENT_TEMPLATES_UNAVAILABLE",
                 ct);
             await Task.WhenAll(ownedTask, systemTask).ConfigureAwait(false);
@@ -65,7 +63,6 @@ public sealed class AIWorkspaceAgentsQueryService(
         int pageSize,
         bool publishedOnly,
         string ownerKind,
-        string? scopeId,
         string unavailableCode,
         CancellationToken ct)
     {
@@ -76,8 +73,6 @@ public sealed class AIWorkspaceAgentsQueryService(
                 : await catalog.ListAsync(owner, cursor, pageSize, ct).ConfigureAwait(false);
             return new AIWorkspaceAgentCollectionView(
                 "agent_profile_catalog",
-                ownerKind,
-                scopeId,
                 page.IsMaterialized
                     ? AIWorkspaceSourceAvailability.Available
                     : AIWorkspaceSourceAvailability.NotMaterialized,
@@ -100,13 +95,10 @@ public sealed class AIWorkspaceAgentsQueryService(
         {
             _logger.LogWarning(
                 ex,
-                "AI workspace Agent Profile catalog source {OwnerKind} is unavailable for scope {ScopeId}.",
-                ownerKind,
-                scopeId);
+                "AI workspace Agent Profile catalog source {OwnerKind} is unavailable.",
+                ownerKind);
             return new AIWorkspaceAgentCollectionView(
                 "agent_profile_catalog",
-                ownerKind,
-                scopeId,
                 AIWorkspaceSourceAvailability.Unavailable,
                 [],
                 null,

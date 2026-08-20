@@ -25,6 +25,18 @@ public static class ProjectionWriteResultEvaluator
 
         if (incoming.StateVersion == existing.StateVersion)
         {
+            // Route-fenced read models: a strictly higher route epoch takes over the same
+            // source version (writer cutover); a lower epoch is stale. Equal epochs fall
+            // through to the strict identity and byte rules below.
+            if (existing is IProjectionRouteFencedReadModel existingFenced &&
+                incoming is IProjectionRouteFencedReadModel incomingFenced &&
+                existingFenced.RouteEpoch != incomingFenced.RouteEpoch)
+            {
+                return incomingFenced.RouteEpoch > existingFenced.RouteEpoch
+                    ? ProjectionWriteResult.Applied()
+                    : ProjectionWriteResult.Stale();
+            }
+
             if (!string.Equals(existing.LastEventId, incoming.LastEventId, StringComparison.Ordinal))
                 return ProjectionWriteResult.Conflict();
 

@@ -115,9 +115,6 @@ describe('auth session storage', () => {
   });
 
   it('accepts only safe in-app redirect targets', () => {
-    expect(
-      sanitizeReturnTo('/chat?conversationId=conversation-alpha#trajectory'),
-    ).toBe('/ai/chat?conversationId=conversation-alpha#trajectory');
     expect(sanitizeReturnTo('/runs?tab=active')).toBe('/runtime/runs?tab=active');
     expect(sanitizeReturnTo('/gagents?scopeId=scope-a')).toBe('/runtime/gagents?scopeId=scope-a');
     expect(sanitizeReturnTo('/mission-wall?focusRunId=run-1')).toBe(

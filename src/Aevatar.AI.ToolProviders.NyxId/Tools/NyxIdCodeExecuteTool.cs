@@ -235,9 +235,11 @@ public sealed class NyxIdCodeExecuteTool(
                 TerminalFailure(callId, Name, preparation.Failure));
         }
 
+        var executionRequest = preparation.Request!;
+        CodeExecutionRouteIdentity? pendingRoute = null;
         if (pending is not null &&
-            (!TryResolvePendingRoute(pending, out var pendingRoute) ||
-             !Equals(pendingRoute, preparation.Request!.Route)))
+            (!TryResolvePendingRoute(pending, out pendingRoute) ||
+             !IsCompatiblePendingRoute(pendingRoute, executionRequest.Route)))
         {
             return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
                 callId,
@@ -259,17 +261,17 @@ public sealed class NyxIdCodeExecuteTool(
                     "Durable code execution transport is not configured.")));
         }
 
-        var route = preparation.Request!.Route;
+        var route = pendingRoute ?? executionRequest.Route;
         if (pending is null || string.IsNullOrWhiteSpace(pending.ProviderOperationId))
         {
-            return await RecoverSubmissionAsync(request, pending, preparation.Request, callId, ct)
+            return await RecoverSubmissionAsync(request, pending, executionRequest, callId, ct)
                 .ConfigureAwait(false);
         }
 
         var operationRequest = new DurableCodeExecutionOperationRequest(
             pending.ProviderOperationId,
             route,
-            preparation.Request.Caller,
+            executionRequest.Caller,
             pending.ETag);
         if (IsExpired(pending))
         {
@@ -300,7 +302,7 @@ public sealed class NyxIdCodeExecuteTool(
         if (preparation.Failure is not null)
             return CancellationPendingOrUncertain(request, pending, callId);
         if (!TryResolvePendingRoute(pending, out var route) ||
-            !Equals(route, preparation.Request!.Route))
+            !IsCompatiblePendingRoute(route, preparation.Request!.Route))
         {
             return CancellationPendingOrUncertain(request, pending, callId);
         }
@@ -384,7 +386,7 @@ public sealed class NyxIdCodeExecuteTool(
             return SubmitRecoveryExpired(callId);
 
         if (!TryResolvePendingRoute(recoveredPending, out var recoveredRoute) ||
-            !Equals(recoveredRoute, executionRequest.Route))
+            !IsCompatiblePendingRoute(recoveredRoute, executionRequest.Route))
         {
             return AgentToolOperationReconciliationResult.Completed(TerminalFailure(
                 callId,
@@ -1016,6 +1018,25 @@ public sealed class NyxIdCodeExecuteTool(
 
         return !string.IsNullOrWhiteSpace(route.UserServiceId) &&
                string.Equals(route.UserServiceId, route.UserServiceId.Trim(), StringComparison.Ordinal);
+    }
+
+    private static bool IsCompatiblePendingRoute(
+        CodeExecutionRouteIdentity pendingRoute,
+        CodeExecutionRouteIdentity preparedRoute)
+    {
+        if (Equals(pendingRoute, preparedRoute))
+            return true;
+
+        // V4 plans have no proof-bound code route. Submit resolves the contract route once and
+        // the actor must keep polling that exact catalog route from its durable receipt.
+        return preparedRoute.Source == CodeExecutionRouteIdentitySource.CodeExecutionContract &&
+               preparedRoute.UserServiceId is null &&
+               pendingRoute.Source == CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog &&
+               !string.IsNullOrWhiteSpace(pendingRoute.UserServiceId) &&
+               string.Equals(
+                   pendingRoute.ServiceSlug,
+                   preparedRoute.ServiceSlug,
+                   StringComparison.Ordinal);
     }
 
     private static long RetryAfterMilliseconds(TimeSpan? value, TimeSpan fallback)

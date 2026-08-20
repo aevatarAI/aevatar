@@ -77,7 +77,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
             .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery);
         using var provider = services
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = provider.GetRequiredService<
@@ -323,7 +323,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
             .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery);
         using var provider = services
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = provider.GetRequiredService<
@@ -972,7 +972,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort);
         using var provider = services
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = provider.GetRequiredService<
@@ -1042,84 +1042,3 @@ public partial class NyxIdChatEndpointsCoverageTests
     }
 }
 
-internal static class NyxIdChatTestServiceCollectionExtensions
-{
-    public static IServiceCollection AddNyxIdChatRuntimeSupport(this IServiceCollection services)
-    {
-        services.AddSingleton<WarmProjectionRelayTestSupport>();
-        services.AddSingleton<IStreamForwardingBindingAuthority>(sp =>
-            sp.GetRequiredService<WarmProjectionRelayTestSupport>());
-        services.AddSingleton<IStreamForwardingRegistry>(sp =>
-            sp.GetRequiredService<WarmProjectionRelayTestSupport>());
-        return services;
-    }
-
-    private sealed class WarmProjectionRelayTestSupport :
-        IStreamForwardingBindingAuthority,
-        IStreamForwardingRegistry
-    {
-        private readonly object _gate = new();
-        private readonly HashSet<string> _removedRelayKeys = new(StringComparer.Ordinal);
-
-        public Task<StreamForwardingBinding?> GetAsync(
-            string sourceStreamId,
-            string targetStreamId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            var key = BindingKey(sourceStreamId, targetStreamId);
-            lock (_gate)
-            {
-                if (_removedRelayKeys.Remove(key))
-                    return Task.FromResult<StreamForwardingBinding?>(null);
-            }
-
-            return Task.FromResult<StreamForwardingBinding?>(CreateActivationBinding(sourceStreamId, targetStreamId));
-        }
-
-        public Task UpsertAsync(StreamForwardingBinding binding, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            lock (_gate)
-                _removedRelayKeys.Remove(BindingKey(binding.SourceStreamId, binding.TargetStreamId));
-            return Task.CompletedTask;
-        }
-
-        public Task RemoveAsync(
-            string sourceStreamId,
-            string targetStreamId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            lock (_gate)
-                _removedRelayKeys.Add(BindingKey(sourceStreamId, targetStreamId));
-            return Task.CompletedTask;
-        }
-
-        public Task<IReadOnlyList<StreamForwardingBinding>> ListBySourceAsync(
-            string sourceStreamId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
-        }
-
-        private static string BindingKey(string sourceStreamId, string targetStreamId) =>
-            string.Concat(sourceStreamId, "\u001f", targetStreamId);
-
-        private static StreamForwardingBinding CreateActivationBinding(string sourceStreamId, string targetStreamId) =>
-            new()
-            {
-                SourceStreamId = sourceStreamId,
-                TargetStreamId = targetStreamId,
-                ForwardingMode = StreamForwardingMode.HandleThenForward,
-                DirectionFilter = [],
-                EventTypeFilter =
-                [
-                    $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}",
-                ],
-                TargetActorKind = "projection.session-scope.nyx-id-chat-session-projection-context",
-                ActivationGeneration = 1,
-            };
-    }
-}

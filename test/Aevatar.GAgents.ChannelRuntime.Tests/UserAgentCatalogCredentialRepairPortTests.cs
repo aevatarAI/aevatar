@@ -2,7 +2,6 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Google.Protobuf;
@@ -244,9 +243,8 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
         services.AddSingleton(Substitute.For<IActorRuntime>());
         services.AddSingleton(Substitute.For<IActorDispatchPort>());
         services.AddSingleton(Substitute.For<IStreamProvider>());
-        services.AddSingleton<IStreamForwardingRegistry, InMemoryStreamForwardingRegistry>();
-        services.AddSingleton<IStreamForwardingBindingAuthority>(sp =>
-            (InMemoryStreamForwardingRegistry)sp.GetRequiredService<IStreamForwardingRegistry>());
+        services.AddSingleton(Substitute.For<IStreamForwardingRegistry>());
+        services.AddSingleton(Substitute.For<IStreamForwardingBindingAuthority>());
         services.AddScheduledAgents();
 
         using var provider = services.BuildServiceProvider();

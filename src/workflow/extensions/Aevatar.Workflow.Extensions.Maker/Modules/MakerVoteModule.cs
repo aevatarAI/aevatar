@@ -94,8 +94,10 @@ public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = runId,
+            ExecutionId = request.ExecutionId,
             Success = true,
             Output = winner,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         completed.Annotations["maker_vote.total_candidates"] = rawCandidates.Length.ToString();
         completed.Annotations["maker_vote.red_flagged"] = flagged.ToString();
@@ -121,8 +123,10 @@ public sealed class MakerVoteModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = runId,
+            ExecutionId = request.ExecutionId,
             Success = false,
             Error = error,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         if (annotations != null)
         {

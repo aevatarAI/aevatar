@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Abstractions.Credentials;
@@ -210,6 +211,7 @@ public sealed partial class ToolCallModule :
             return;
         }
 
+        var preparationStartedAtTimestamp = ctx.GetTimestamp();
         var request = payload.Unpack<StepRequestEvent>();
         if (request.StepType != "tool_call") return;
 
@@ -237,6 +239,7 @@ public sealed partial class ToolCallModule :
                     ExecutionId = request.ExecutionId,
                     Success = false,
                     Error = "tool_call 缺少 tool 参数",
+                    OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 },
             }, ctx, ct);
             return;
@@ -356,6 +359,7 @@ public sealed partial class ToolCallModule :
             tool,
             executionRequest,
             request.ExternalInvocation?.ResponseProjection,
+            preparationStartedAtTimestamp,
             ctx,
             ct);
     }
@@ -1428,6 +1432,7 @@ public sealed partial class ToolCallModule :
         if (resumed.ToolApproval == null)
             return;
 
+        var preparationStartedAtTimestamp = ctx.GetTimestamp();
         var state = WorkflowExecutionStateAccess.Load<ToolCallModuleState>(ctx, ModuleStateKey);
         if (await TryHandleResumeRedeliveryAsync(state, resumed, ctx, ct))
         {
@@ -1630,6 +1635,7 @@ public sealed partial class ToolCallModule :
             tool,
             executionRequest,
             resumedRequest.ExternalInvocation?.ResponseProjection,
+            preparationStartedAtTimestamp,
             ctx,
             ct);
     }
@@ -1938,12 +1944,7 @@ public sealed partial class ToolCallModule :
 
     private static bool HasValidProviderReceiptShape(WorkflowToolPendingOperation operation)
     {
-        var hasProviderReceipt =
-            !string.IsNullOrWhiteSpace(operation.ProviderOperationId) &&
-            !string.IsNullOrWhiteSpace(operation.StatusPath) &&
-            !string.IsNullOrWhiteSpace(operation.ResultPath) &&
-            !string.IsNullOrWhiteSpace(operation.CancelPath);
-        if (hasProviderReceipt)
+        if (HasProviderReceipt(operation))
             return true;
 
         var hasNoProviderReceipt =
@@ -1954,6 +1955,12 @@ public sealed partial class ToolCallModule :
         return hasNoProviderReceipt &&
                operation.Status == WorkflowToolPendingOperationStatus.SubmissionUncertain;
     }
+
+    private static bool HasProviderReceipt(WorkflowToolPendingOperation operation) =>
+        !string.IsNullOrWhiteSpace(operation.ProviderOperationId) &&
+        !string.IsNullOrWhiteSpace(operation.StatusPath) &&
+        !string.IsNullOrWhiteSpace(operation.ResultPath) &&
+        !string.IsNullOrWhiteSpace(operation.CancelPath);
 
     private static async Task ReschedulePendingOperationAsync(
         ToolCallModuleState state,
@@ -2404,9 +2411,6 @@ public sealed partial class ToolCallModule :
         WorkflowToolPendingOperation operation)
     {
         if (!string.Equals(pending.OperationId, NormalizeRequired(operation.OperationId), StringComparison.Ordinal) ||
-            !string.Equals(pending.ServiceSlug, NormalizeRequired(operation.ServiceSlug), StringComparison.Ordinal) ||
-            !string.Equals(pending.UserServiceId, NormalizeRequired(operation.UserServiceId), StringComparison.Ordinal) ||
-            pending.RouteIdentitySource != operation.RouteIdentitySource ||
             !HasValidProviderReceiptShape(operation))
         {
             return false;
@@ -2424,6 +2428,14 @@ public sealed partial class ToolCallModule :
             string.IsNullOrEmpty(pending.CancelPath);
         if (!pendingHasProviderReceipt && !pendingHasNoProviderReceipt)
             return false;
+
+        var routeMatches =
+            string.Equals(pending.ServiceSlug, NormalizeRequired(operation.ServiceSlug), StringComparison.Ordinal) &&
+            string.Equals(pending.UserServiceId, NormalizeRequired(operation.UserServiceId), StringComparison.Ordinal) &&
+            pending.RouteIdentitySource == operation.RouteIdentitySource;
+        if (!routeMatches && !IsAllowedCodeExecutionRouteRefinement(pending, operation, pendingHasNoProviderReceipt))
+            return false;
+
         if (pendingHasNoProviderReceipt)
             return true;
 
@@ -2432,6 +2444,24 @@ public sealed partial class ToolCallModule :
                string.Equals(pending.ResultPath, NormalizeRequired(operation.ResultPath), StringComparison.Ordinal) &&
                string.Equals(pending.CancelPath, NormalizeRequired(operation.CancelPath), StringComparison.Ordinal);
     }
+
+    private static bool IsAllowedCodeExecutionRouteRefinement(
+        PendingToolCallOperationState pending,
+        WorkflowToolPendingOperation operation,
+        bool pendingHasNoProviderReceipt) =>
+        pendingHasNoProviderReceipt &&
+        pending.Status == WorkflowToolPendingOperationStatus.SubmissionUncertain &&
+        string.Equals(
+            pending.ToolName,
+            WorkflowAuthorizationDependencyEvaluator.CodeExecuteToolName,
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(pending.ServiceSlug, CodeExecutionContract.ServiceSlug, StringComparison.Ordinal) &&
+        string.IsNullOrWhiteSpace(pending.UserServiceId) &&
+        pending.RouteIdentitySource == WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract &&
+        HasProviderReceipt(operation) &&
+        string.Equals(operation.ServiceSlug, CodeExecutionContract.ServiceSlug, StringComparison.Ordinal) &&
+        operation.RouteIdentitySource == WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog &&
+        !string.IsNullOrWhiteSpace(operation.UserServiceId);
 
     private static void UpdatePendingOperationReceipt(
         PendingToolCallOperationState pending,
@@ -2737,6 +2767,7 @@ public sealed partial class ToolCallModule :
                 ExecutionId = request.ExecutionId,
                 Success = true,
                 Output = result.ResultJson,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             };
         }
 
@@ -3408,6 +3439,7 @@ public sealed partial class ToolCallModule :
                 RetryDisposition = !terminalInvoked && retryable
                     ? WorkflowStepRetryDisposition.Allowed
                     : WorkflowStepRetryDisposition.Forbidden,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             },
         }, ctx, ct);
     }

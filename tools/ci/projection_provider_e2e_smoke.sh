@@ -109,6 +109,7 @@ mkdir -p "${REPO_ROOT}/artifacts/ci"
 RESULTS_DIR="$(mktemp -d "${REPO_ROOT}/artifacts/ci/projection-provider-e2e.XXXXXX")"
 RESULTS_FILE_CORE="${RESULTS_DIR}/projection-provider-core-e2e.trx"
 RESULTS_FILE_SCRIPTING="${RESULTS_DIR}/projection-provider-scripting-e2e.trx"
+RESULTS_FILE_WORKFLOW="${RESULTS_DIR}/projection-provider-workflow-e2e.trx"
 
 if ! host_can_reach_providers; then
   echo "Projection providers are ready in Docker, but host cannot reach ${ELASTICSEARCH_ENDPOINT} / ${NEO4J_URI}."
@@ -127,6 +128,11 @@ run_provider_integration_tests_on_host \
 run_provider_integration_tests_on_host \
   "test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj" \
   "projection-provider-scripting-e2e.trx"
+# Workflow read-model write-cost benchmark: the only lane that measures a real Elasticsearch
+# write for the 263-event large-parameter run (#3477).
+run_provider_integration_tests_on_host \
+  "test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj" \
+  "projection-provider-workflow-e2e.trx"
 
 validate_trx() {
   local file="$1"
@@ -159,5 +165,6 @@ validate_trx() {
 
 validate_trx "${RESULTS_FILE_CORE}" "Projection provider core e2e"
 validate_trx "${RESULTS_FILE_SCRIPTING}" "Projection provider scripting e2e"
+validate_trx "${RESULTS_FILE_WORKFLOW}" "Projection provider workflow read-model e2e"
 
 echo "Projection provider e2e smoke test passed."

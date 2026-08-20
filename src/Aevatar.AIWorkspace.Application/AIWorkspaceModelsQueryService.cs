@@ -38,7 +38,6 @@ public sealed class AIWorkspaceModelsQueryService(
             var settings = await personalPreferences.GetSettingsAsync(bearerToken, ct).ConfigureAwait(false);
             return new AIWorkspacePersonalModelsView(
                 "user_llm_preferences",
-                "authenticated_user",
                 AIWorkspaceSourceAvailability.Available,
                 null,
                 null,
@@ -56,7 +55,6 @@ public sealed class AIWorkspaceModelsQueryService(
                 "AI workspace personal model settings source is unavailable.");
             return new AIWorkspacePersonalModelsView(
                 "user_llm_preferences",
-                "authenticated_user",
                 AIWorkspaceSourceAvailability.Unavailable,
                 null,
                 null,
@@ -67,17 +65,15 @@ public sealed class AIWorkspaceModelsQueryService(
         }
     }
 
-    private async Task<AIWorkspaceScopeModelsView> ReadScopeAsync(
+    private async Task<AIWorkspaceCatalogModelsView> ReadScopeAsync(
         string scopeId,
         CancellationToken ct)
     {
         try
         {
             var catalog = await scopeCatalog.GetScopeAsync(scopeId, ct).ConfigureAwait(false);
-            return new AIWorkspaceScopeModelsView(
+            return new AIWorkspaceCatalogModelsView(
                 "llm_model_catalog_policy",
-                "scope",
-                scopeId,
                 AIWorkspaceSourceAvailability.Available,
                 catalog.StateVersion,
                 catalog.UpdatedAtUtc,
@@ -96,9 +92,8 @@ public sealed class AIWorkspaceModelsQueryService(
                 scopeId,
                 ex.Code);
             return ScopeUnavailable(
-                scopeId,
-                ex.Code,
-                "Scope model catalog is temporarily unavailable.");
+                "MODEL_CATALOG_UNAVAILABLE",
+                "Model catalog is temporarily unavailable.");
         }
         catch (Exception ex)
         {
@@ -107,32 +102,28 @@ public sealed class AIWorkspaceModelsQueryService(
                 "AI workspace scope model catalog is unavailable for scope {ScopeId}.",
                 scopeId);
             return ScopeUnavailable(
-                scopeId,
-                "SCOPE_MODEL_CATALOG_UNAVAILABLE",
-                "Scope model catalog is temporarily unavailable.");
+                "MODEL_CATALOG_UNAVAILABLE",
+                "Model catalog is temporarily unavailable.");
         }
     }
 
-    private static AIWorkspaceScopeModelsView ScopeUnavailable(
-        string scopeId,
+    private static AIWorkspaceCatalogModelsView ScopeUnavailable(
         string code,
         string message) =>
         new(
             "llm_model_catalog_policy",
-            "scope",
-            scopeId,
             AIWorkspaceSourceAvailability.Unavailable,
             null,
             null,
             null,
             new AIWorkspaceSourceErrorView(code, message));
 
-    private static AIWorkspaceScopeModelPolicyView ToScopePolicy(LLMModelCatalogView view) =>
+    private static AIWorkspaceModelCatalogPolicyView ToScopePolicy(LLMModelCatalogView view) =>
         new(
             view.Mode == LLMModelCatalogPolicyMode.Custom ? "custom_replace" : "inherit_platform",
             view.Configured,
             view.Sources.Select(ToModelSource).ToArray(),
-            view.EffectiveSource == LLMModelCatalogEffectiveSourceKind.Scope ? "scope" : "platform",
+            view.EffectiveSource == LLMModelCatalogEffectiveSourceKind.Scope ? "custom" : "platform",
             view.EffectiveSources.Select(ToModelSource).ToArray(),
             view.LastMutationId);
 

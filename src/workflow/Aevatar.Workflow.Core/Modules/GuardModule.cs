@@ -35,7 +35,9 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
             ctx.Logger.LogInformation("Guard {StepId}: check={Check} passed", request.StepId, check);
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = request.StepId, RunId = request.RunId, Success = true, Output = input,
+                StepId = request.StepId, RunId = request.RunId, ExecutionId = request.ExecutionId,
+                Success = true, Output = input,
+                OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput,
             }, TopologyAudience.Self, ct);
             return;
         }
@@ -48,8 +50,10 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Success = true,
                 Output = input,
+                OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput,
                 Outcome = WorkflowStepCompletionOutcome.Skipped,
             };
             completed.Annotations["guard.skipped"] = "true";
@@ -62,8 +66,10 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Success = true,
                 Output = input,
+                OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput,
                 NextStepId = target,
             };
             completed.Annotations["guard.reason"] = reason;
@@ -73,7 +79,9 @@ public sealed class GuardModule : IEventModule<IWorkflowExecutionContext>
         {
             await ctx.PublishAsync(new StepCompletedEvent
             {
-                StepId = request.StepId, RunId = request.RunId, Success = false, Error = $"guard check '{check}' failed: {reason}",
+                StepId = request.StepId, RunId = request.RunId, ExecutionId = request.ExecutionId,
+                Success = false, Error = $"guard check '{check}' failed: {reason}",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
         }
     }

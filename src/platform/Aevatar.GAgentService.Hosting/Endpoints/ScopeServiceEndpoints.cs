@@ -2069,32 +2069,17 @@ public static class ScopeServiceEndpoints
         // Refactor (iter39/cluster-039-scope-service-host-orchestration):
         //   Old pattern: Host built the static GAgent draft-run command, registered service-run state from the endpoint callback, and owned timeout/SSE lifecycle around that orchestration.
         //   New principle: Host only adapts HTTP/SSE callbacks; Application-owned IStaticGAgentStreamInvocationPort<AGUIEvent> owns static invocation and service-run registration semantics.
-        var writer = new AGUISseWriter(http.Response);
-        var responseStarted = false;
-
-        async Task EnsureSseStartedAsync(CancellationToken token)
-        {
-            if (responseStarted)
-                return;
-
-            http.Response.StatusCode = StatusCodes.Status200OK;
-            http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-            http.Response.Headers.CacheControl = "no-store";
-            http.Response.Headers["X-Accel-Buffering"] = "no";
-            await http.Response.StartAsync(token);
-            responseStarted = true;
-        }
+        await using var writer = new AGUISseWriter(http.Response);
 
         async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken token)
         {
-            await EnsureSseStartedAsync(token);
             await writer.WriteAsync(aguiEvent, token);
         }
 
         async ValueTask OnAcceptedAsync(StaticGAgentStreamAcceptedReceipt receipt, CancellationToken token)
         {
             http.Response.Headers["X-Correlation-Id"] = receipt.GAgentReceipt.CorrelationId;
-            await EnsureSseStartedAsync(token);
+            await writer.StartAsync(token);
             await writer.WriteAsync(
                 new AGUIEvent
                 {
@@ -2141,7 +2126,7 @@ public static class ScopeServiceEndpoints
 
             if (!result.Succeeded && result.StartError == GAgentDraftRunStartError.ProjectionUnavailable)
             {
-                if (!responseStarted)
+                if (!writer.ResponseStarted)
                 {
                     await WriteJsonErrorResponseAsync(
                         http,
@@ -2166,7 +2151,7 @@ public static class ScopeServiceEndpoints
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            await EnsureSseStartedAsync(CancellationToken.None);
+            await writer.StartAsync(CancellationToken.None);
             await writer.WriteAsync(
                 new AGUIEvent
                 {
@@ -2180,7 +2165,7 @@ public static class ScopeServiceEndpoints
         catch (Exception ex)
         {
             var isAuthRequired = ex is NyxIdAuthenticationRequiredException;
-            if (!responseStarted)
+            if (!writer.ResponseStarted)
                 throw;
 
             await writer.WriteAsync(
@@ -2223,32 +2208,17 @@ public static class ScopeServiceEndpoints
         var runId = Guid.NewGuid().ToString("N");
         var commandId = Guid.NewGuid().ToString("N");
         var correlationId = Guid.NewGuid().ToString("N");
-        var writer = new AGUISseWriter(http.Response);
-        var responseStarted = false;
-
-        async Task EnsureSseStartedAsync(CancellationToken token)
-        {
-            if (responseStarted)
-                return;
-
-            http.Response.StatusCode = StatusCodes.Status200OK;
-            http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-            http.Response.Headers.CacheControl = "no-store";
-            http.Response.Headers["X-Accel-Buffering"] = "no";
-            await http.Response.StartAsync(token);
-            responseStarted = true;
-        }
+        await using var writer = new AGUISseWriter(http.Response);
 
         async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken token)
         {
-            await EnsureSseStartedAsync(token);
             await writer.WriteAsync(aguiEvent, token);
         }
 
         async ValueTask OnAcceptedAsync(ScriptServiceRunAcceptedReceipt receipt, CancellationToken token)
         {
             http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
-            await EnsureSseStartedAsync(token);
+            await writer.StartAsync(token);
             await writer.WriteAsync(new AGUIEvent
             {
                 RunStarted = new RunStartedEvent { ThreadId = receipt.ActorId, RunId = receipt.RunId },
@@ -2288,7 +2258,7 @@ public static class ScopeServiceEndpoints
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            await EnsureSseStartedAsync(CancellationToken.None);
+            await writer.StartAsync(CancellationToken.None);
             await writer.WriteAsync(new AGUIEvent
             {
                 RunError = new RunErrorEvent { Message = "Script service chat stream timed out." },
@@ -2296,7 +2266,7 @@ public static class ScopeServiceEndpoints
         }
         catch (Exception ex)
         {
-            if (!responseStarted)
+            if (!writer.ResponseStarted)
                 throw;
 
             await writer.WriteAsync(new AGUIEvent

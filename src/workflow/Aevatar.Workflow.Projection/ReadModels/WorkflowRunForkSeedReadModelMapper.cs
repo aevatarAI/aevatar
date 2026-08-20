@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Core.Execution;
 using Google.Protobuf.WellKnownTypes;
 using WorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
 
@@ -17,14 +18,23 @@ public sealed class WorkflowRunForkSeedReadModelMapper
     {
         ArgumentNullException.ThrowIfNull(source);
 
+        var normalizedValues = source.NormalizedForkSeed;
+        var variables = normalizedValues == null
+            ? CopyMap(source.ForkSeedVariables)
+            : WorkflowNormalizedExecutionSeedCodec.Expand(normalizedValues);
+        var completedStepIds = normalizedValues == null
+            ? source.ForkSeedCompletedStepIds.ToList()
+            : normalizedValues.CompletedSteps.Keys
+                .OrderBy(static stepId => stepId, StringComparer.Ordinal)
+                .ToList();
         return new WorkflowRunForkSeedView(
             source.RunId ?? string.Empty,
             source.Status ?? string.Empty,
             source.WorkflowYaml ?? string.Empty,
             CopyMap(source.InlineWorkflowYamls),
             source.ExpectedExecutionMode,
-            CopyMap(source.ForkSeedVariables),
-            source.ForkSeedCompletedStepIds.ToList(),
+            variables,
+            completedStepIds,
             source.ForkSeedLastFailedStepId ?? string.Empty,
             source.FinalError ?? string.Empty,
             source.ScopeId ?? string.Empty,
@@ -36,7 +46,8 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             source.WorkflowId ?? string.Empty,
             source.RevisionId ?? string.Empty,
             source.DefinitionVersion,
-            ResolveOriginalRunId(source.Lineage, source.RunId));
+            ResolveOriginalRunId(source.Lineage, source.RunId),
+            normalizedValues?.Clone());
     }
 
     public WorkflowRunForkSeedProjectionSnapshot ToProjectionSnapshot(WorkflowRunState state)
@@ -44,11 +55,17 @@ public sealed class WorkflowRunForkSeedReadModelMapper
         ArgumentNullException.ThrowIfNull(state);
 
         var kernelState = TryReadKernelState(state);
-        var variables = kernelState == null
+        var normalizedValues = kernelState == null
+            ? null
+            : WorkflowNormalizedExecutionSeedCodec.Capture(kernelState);
+        var variables = kernelState == null || normalizedValues != null
             ? new Dictionary<string, string>(StringComparer.Ordinal)
             : CopyMap(kernelState.Variables);
-        MergeForEachChildOutputs(variables, TryReadForEachState(state), state.RunId);
-        var completedStepIds = ResolveCompletedStepIds(variables);
+        if (normalizedValues == null)
+            MergeLegacyForEachChildOutputs(variables, TryReadForEachState(state), state.RunId);
+        var completedStepIds = normalizedValues == null
+            ? ResolveCompletedStepIds(variables)
+            : [];
         var lastFailedStepId = string.Equals(state.Status, FailedStatus, StringComparison.OrdinalIgnoreCase)
             ? kernelState?.CurrentStepId?.Trim() ?? string.Empty
             : string.Empty;
@@ -67,7 +84,8 @@ public sealed class WorkflowRunForkSeedReadModelMapper
             kernelState?.IdempotencyByStepId.ToDictionary(
                 x => x.Key,
                 x => x.Value.Clone(),
-                StringComparer.Ordinal) ?? new Dictionary<string, WorkflowStepIdempotencyState>(StringComparer.Ordinal));
+                StringComparer.Ordinal) ?? new Dictionary<string, WorkflowStepIdempotencyState>(StringComparer.Ordinal),
+            normalizedValues);
     }
 
     private static WorkflowExecutionKernelState? TryReadKernelState(WorkflowRunState state)
@@ -92,7 +110,7 @@ public sealed class WorkflowRunForkSeedReadModelMapper
         return null;
     }
 
-    private static void MergeForEachChildOutputs(
+    private static void MergeLegacyForEachChildOutputs(
         IDictionary<string, string> variables,
         ForEachModuleState? forEachState,
         string? runId)
@@ -181,4 +199,5 @@ public sealed record WorkflowRunForkSeedProjectionSnapshot(
     string RevisionId,
     long DefinitionVersion,
     IReadOnlyList<WorkflowFileRef> InputFileRefs,
-    IReadOnlyDictionary<string, WorkflowStepIdempotencyState> IdempotencyByStepId);
+    IReadOnlyDictionary<string, WorkflowStepIdempotencyState> IdempotencyByStepId,
+    Aevatar.Workflow.Abstractions.WorkflowNormalizedExecutionSeed? NormalizedValues);

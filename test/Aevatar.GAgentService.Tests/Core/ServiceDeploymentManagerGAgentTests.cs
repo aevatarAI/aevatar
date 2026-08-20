@@ -2635,7 +2635,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             RevisionId = "r1",
             ActivationAttemptId = activationAttemptId,
         });
-        var deadline = Timestamp.FromDateTime(DateTime.UtcNow.AddMilliseconds(150));
+        var deadline = Timestamp.FromDateTime(DateTime.UtcNow.AddSeconds(1));
         agent.State.PendingActivations["r1"].DeadlineAt = deadline.Clone();
         var continuation = new ActivateServiceRevisionCommand
         {

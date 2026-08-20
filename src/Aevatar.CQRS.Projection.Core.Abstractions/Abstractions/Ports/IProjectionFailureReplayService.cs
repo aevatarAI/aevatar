@@ -6,4 +6,10 @@ public interface IProjectionFailureReplayService
         ProjectionRuntimeScopeKey scopeKey,
         int maxItems = 100,
         CancellationToken ct = default);
+
+    Task<bool> ReplayAutomaticallyAsync(
+        ProjectionRuntimeScopeKey scopeKey,
+        long observedScopeStateVersion,
+        int maxItems = 100,
+        CancellationToken ct = default);
 }

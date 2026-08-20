@@ -1369,7 +1369,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1445,7 +1445,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1495,7 +1495,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1545,7 +1545,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1594,7 +1594,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(new StubActorDispatchPort(runtime))
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1622,9 +1622,9 @@ public partial class NyxIdChatEndpointsCoverageTests
         var services = new ServiceCollection()
             .AddLogging()
             .AddSingleton<IActorRuntime>(runtime)
-            .AddSingleton<IActorDispatchPort>(new ThrowingActorDispatchPort(new InvalidOperationException("dispatch failed")))
+            .AddSingleton<IActorDispatchPort>(new ThrowingActorDispatchPort(runtime, new InvalidOperationException("dispatch failed")))
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1678,7 +1678,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
         var interaction = services.GetRequiredService<
@@ -1752,7 +1752,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(new StubActorDispatchPort(runtime))
             .AddSingleton<INyxIdChatSessionProjectionPort>(new StubNyxIdChatSessionProjectionPort())
-            .AddNyxIdChatRuntimeSupport()
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
 
@@ -3382,6 +3382,12 @@ public partial class NyxIdChatEndpointsCoverageTests
         public List<EventEnvelope> DeleteDispatches { get; } = [];
         public IEventStore? EventStore => _nyxIdChatServices?.GetService<IEventStore>();
 
+        /// <summary>
+        /// Stream forwarding topology owned by this runtime; projection scope actors publish their
+        /// observation relay (activation evidence) here, exactly as the local runtime's stream provider does.
+        /// </summary>
+        public InMemoryStreamForwardingRegistry StreamForwardingRegistry { get; } = new();
+
         public void ConfigureNyxIdChatServices(
             IGAgentActorRegistryCommandPort registryCommandPort,
             IChatHistoryCommandPort? historyCommandPort = null)
@@ -3434,7 +3440,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             ct.ThrowIfCancellationRequested();
             var actorId = id ?? Guid.NewGuid().ToString("N");
             IActor actor = agentKind.StartsWith("projection.session-scope.", StringComparison.Ordinal)
-                ? new StubProjectionScopeActor(actorId)
+                ? new StubProjectionScopeActor(actorId, agentKind, StreamForwardingRegistry)
                 : new StubActor(actorId);
             Actors[actorId] = actor;
             return Task.FromResult(actor);
@@ -3512,26 +3518,6 @@ public partial class NyxIdChatEndpointsCoverageTests
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
-    private sealed class StubProjectionScopeActor(string id) : IActor
-    {
-        public string Id { get; } = id;
-        public IAgent Agent { get; } = new StubAgent();
-        public List<EventEnvelope> HandledEnvelopes { get; } = [];
-        public bool Released { get; private set; }
-        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            HandledEnvelopes.Add(envelope);
-            if (envelope.Payload?.Is(ReleaseProjectionScopeCommand.Descriptor) == true)
-                Released = true;
-            return Task.CompletedTask;
-        }
-        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
-        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
-    }
-
     private sealed class StubActorDispatchPort(IActorRuntime runtime) : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
@@ -3546,21 +3532,28 @@ public partial class NyxIdChatEndpointsCoverageTests
         }
     }
 
-    private sealed class ThrowingActorDispatchPort(Exception exception) : IActorDispatchPort
+    /// <summary>
+    /// Fails the chat turn / approval dispatch while still delivering every other envelope
+    /// (e.g. projection scope ensure/release) to the runtime's actors like <see cref="StubActorDispatchPort"/>.
+    /// </summary>
+    private sealed class ThrowingActorDispatchPort(IActorRuntime runtime, Exception exception) : IActorDispatchPort
     {
         public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
 
-        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Dispatches.Add((actorId, envelope));
             if (envelope.Payload?.Is(NyxIdChatStartTurnCommand.Descriptor) == true ||
                 envelope.Payload?.Is(ToolApprovalDecisionEvent.Descriptor) == true)
             {
-                return Task.FromException<DispatchAdmission>(exception);
+                throw exception;
             }
 
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+            var actor = await runtime.GetAsync(actorId);
+            if (actor is not null)
+                await actor.HandleEventAsync(envelope, ct);
+            return DispatchAdmissionFactory.Create(actorId, envelope);
         }
     }
 

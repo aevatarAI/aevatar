@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
@@ -70,6 +71,61 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             .Should().BeAssignableTo<IMessage<RuntimeCallbackSchedulerState>>();
         typeof(RuntimeScheduledCallback)
             .Should().BeAssignableTo<IMessage<RuntimeScheduledCallback>>();
+    }
+
+    [Fact]
+    public void RuntimeCallbackSchedulerGrain_ShouldVerifyOnlyExactPersistedFleetReconcileEnvelope()
+    {
+        const long generation = 7;
+        const long fireIndex = 3;
+        var trigger = new EventEnvelope
+        {
+            Id = "fleet-reconcile-trigger",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                TopologyAudience.Self),
+            Payload = Any.Pack(new RuntimeFleetReconcileRequested()),
+        };
+        var delivered = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            generation,
+            fireIndex,
+            trigger,
+            RuntimeCallbackDeliveryMode.FiredSelfEvent,
+            RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
+        var scheduled = new RuntimeScheduledCallback
+        {
+            ActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            CallbackId = RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            Generation = generation,
+            SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+            PendingDeliveryEnvelope = delivered.Clone(),
+        };
+        var state = new RuntimeCallbackSchedulerState
+        {
+            ReminderCallbacks =
+            {
+                [RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId] = scheduled,
+            },
+        };
+
+        RuntimeCallbackSchedulerGrain
+            .IsExactRuntimeFleetReconcileDelivery(state, delivered.Clone())
+            .Should().BeTrue();
+
+        var forgedWithPersistedIdentity = delivered.Clone();
+        forgedWithPersistedIdentity.Route.PublisherActorId = "forged-publisher";
+        RuntimeCallbackSchedulerGrain
+            .IsExactRuntimeFleetReconcileDelivery(state, forgedWithPersistedIdentity)
+            .Should().BeFalse();
+
+        scheduled.LastDeliveryEnvelope = delivered.Clone();
+        scheduled.PendingDeliveryEnvelope = null;
+        RuntimeCallbackSchedulerGrain
+            .IsExactRuntimeFleetReconcileDelivery(state, delivered.Clone())
+            .Should().BeTrue();
     }
 
     [Fact]

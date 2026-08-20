@@ -109,6 +109,86 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         }
     }
 
+    public async Task<ProjectionDocumentMutationResult<TReadModel>> MutateAsync(
+        string indexName,
+        string keyValue,
+        Func<TReadModel?, TReadModel> reducer,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(reducer);
+        var startedAtTimestamp = Stopwatch.GetTimestamp();
+
+        try
+        {
+            for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+            {
+                var existing = await TryGetExistingStateAsync(indexName, keyValue, ct);
+                var incoming = reducer(existing.ReadModel?.Clone())
+                               ?? throw new InvalidOperationException(
+                                   $"Projection mutation reducer returned null for read-model '{typeof(TReadModel).FullName}'.");
+                var result = existing.DeleteMarker is null
+                    ? ProjectionWriteResultEvaluator.Evaluate(existing.ReadModel, incoming)
+                    : ElasticsearchProjectionDeleteMarkerPayload.EvaluateUpsertAgainstDeleteMarker(
+                        existing.DeleteMarker,
+                        incoming);
+                if (!result.IsApplied)
+                {
+                    LogWriteSkipped(keyValue, startedAtTimestamp, result);
+                    return new ProjectionDocumentMutationResult<TReadModel>(
+                        result,
+                        existing.ReadModel?.Clone());
+                }
+
+                var payload = SerializePayload(incoming, keyValue);
+                using var request = BuildConditionalUpsertRequest(indexName, keyValue, payload, existing);
+                using var response = await _httpClient.SendAsync(request, ct);
+                if (response.IsSuccessStatusCode)
+                {
+                    LogWriteCompleted(keyValue, startedAtTimestamp);
+                    return new ProjectionDocumentMutationResult<TReadModel>(
+                        ProjectionWriteResult.Applied(),
+                        incoming.Clone());
+                }
+
+                if (response.StatusCode != HttpStatusCode.Conflict)
+                    await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(response, "mutation", ct);
+
+                _logger.LogInformation(
+                    "Projection read-model mutation hit optimistic concurrency conflict and will re-evaluate. provider={Provider} readModelType={ReadModelType} key={Key} attempt={Attempt}/{MaxAttempts}",
+                    ProviderName,
+                    typeof(TReadModel).FullName,
+                    keyValue,
+                    attempt,
+                    MaxAttempts);
+            }
+
+            var reconciled = await TryGetExistingStateAsync(indexName, keyValue, ct);
+            var reconciledIncoming = reducer(reconciled.ReadModel?.Clone())
+                                     ?? throw new InvalidOperationException(
+                                         $"Projection mutation reducer returned null for read-model '{typeof(TReadModel).FullName}'.");
+            var reconciledResult = reconciled.DeleteMarker is null
+                ? ProjectionWriteResultEvaluator.Evaluate(reconciled.ReadModel, reconciledIncoming)
+                : ElasticsearchProjectionDeleteMarkerPayload.EvaluateUpsertAgainstDeleteMarker(
+                    reconciled.DeleteMarker,
+                    reconciledIncoming);
+            if (!reconciledResult.IsApplied)
+            {
+                LogWriteSkipped(keyValue, startedAtTimestamp, reconciledResult);
+                return new ProjectionDocumentMutationResult<TReadModel>(
+                    reconciledResult,
+                    reconciled.ReadModel?.Clone());
+            }
+
+            throw new InvalidOperationException(
+                $"Elasticsearch optimistic concurrency mutation could not be reconciled for read-model '{typeof(TReadModel).FullName}' key '{keyValue}'.");
+        }
+        catch (Exception ex)
+        {
+            LogWriteFailure(keyValue, startedAtTimestamp, ex);
+            throw;
+        }
+    }
+
     private async Task<ExistingReadModelState> TryGetExistingStateAsync(
         string indexName,
         string keyValue,
@@ -151,7 +231,7 @@ internal sealed class ElasticsearchOptimisticWriter<TReadModel>
         string payload,
         ExistingReadModelState existing)
     {
-        var requestPath = existing.ReadModel == null && existing.DeleteMarker == null
+        var requestPath = existing.SeqNo < 0 && existing.PrimaryTerm < 0
             ? $"{indexName}/_create/{Uri.EscapeDataString(keyValue)}"
             : $"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}?if_seq_no={existing.SeqNo}&if_primary_term={existing.PrimaryTerm}";
         return new HttpRequestMessage(HttpMethod.Put, requestPath)

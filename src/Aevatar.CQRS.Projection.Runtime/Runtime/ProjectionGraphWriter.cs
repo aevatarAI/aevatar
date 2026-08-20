@@ -15,6 +15,7 @@ public sealed class ProjectionGraphWriter<TReadModel>
 
     private readonly IProjectionGraphStore _graphStore;
     private readonly IProjectionGraphMaterializer<TReadModel> _materializer;
+    private readonly IProjectionGraphOwnerIdentityResolver _ownerIdentityResolver;
     private readonly ILogger<ProjectionGraphWriter<TReadModel>> _logger;
     private readonly Func<long> _getTimestamp;
     private readonly Func<long, TimeSpan> _getElapsedTime;
@@ -22,13 +23,15 @@ public sealed class ProjectionGraphWriter<TReadModel>
     public ProjectionGraphWriter(
         IProjectionGraphStore graphStore,
         IProjectionGraphMaterializer<TReadModel> materializer,
-        ILogger<ProjectionGraphWriter<TReadModel>>? logger = null)
+        ILogger<ProjectionGraphWriter<TReadModel>>? logger = null,
+        IProjectionGraphOwnerIdentityResolver? ownerIdentityResolver = null)
         : this(
             graphStore,
             materializer,
             logger,
             Stopwatch.GetTimestamp,
-            Stopwatch.GetElapsedTime)
+            Stopwatch.GetElapsedTime,
+            ownerIdentityResolver)
     {
     }
 
@@ -38,9 +41,27 @@ public sealed class ProjectionGraphWriter<TReadModel>
         ILogger<ProjectionGraphWriter<TReadModel>>? logger,
         Func<long> getTimestamp,
         Func<long, TimeSpan> getElapsedTime)
+        : this(
+            graphStore,
+            materializer,
+            logger,
+            getTimestamp,
+            getElapsedTime,
+            ownerIdentityResolver: null)
+    {
+    }
+
+    private ProjectionGraphWriter(
+        IProjectionGraphStore graphStore,
+        IProjectionGraphMaterializer<TReadModel> materializer,
+        ILogger<ProjectionGraphWriter<TReadModel>>? logger,
+        Func<long> getTimestamp,
+        Func<long, TimeSpan> getElapsedTime,
+        IProjectionGraphOwnerIdentityResolver? ownerIdentityResolver)
     {
         _graphStore = graphStore ?? throw new ArgumentNullException(nameof(graphStore));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
+        _ownerIdentityResolver = ownerIdentityResolver ?? ProjectionGraphOwnerIdentityResolver.Instance;
         _logger = logger ?? NullLogger<ProjectionGraphWriter<TReadModel>>.Instance;
         _getTimestamp = getTimestamp ?? throw new ArgumentNullException(nameof(getTimestamp));
         _getElapsedTime = getElapsedTime ?? throw new ArgumentNullException(nameof(getElapsedTime));
@@ -91,7 +112,7 @@ public sealed class ProjectionGraphWriter<TReadModel>
                     $"Graph scope is required for read model '{typeof(TReadModel).FullName}'.");
             }
 
-            ownerId = BuildOwnerId(readModel);
+            ownerId = _ownerIdentityResolver.Resolve(readModel.GetType(), readModel.Id).Value;
             nodes = NormalizeNodes(materialized.Nodes, scope, ownerId);
             edges = NormalizeEdges(materialized.Edges, scope, ownerId);
             nodeCount = nodes.Count;
@@ -199,21 +220,6 @@ public sealed class ProjectionGraphWriter<TReadModel>
         {
             return;
         }
-    }
-
-    private static string BuildOwnerId(TReadModel readModel)
-    {
-        var readModelId = NormalizeToken(readModel.Id);
-        if (readModelId.Length == 0)
-        {
-            throw new InvalidOperationException(
-                $"Graph read model '{readModel.GetType().FullName}' requires a non-empty Id for owner lifecycle management.");
-        }
-
-        var readModelType = NormalizeToken(readModel.GetType().FullName);
-        return readModelType.Length == 0
-            ? readModelId
-            : $"{readModelType}:{readModelId}";
     }
 
     private static IReadOnlyList<ProjectionGraphNode> NormalizeNodes(

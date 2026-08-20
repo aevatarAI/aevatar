@@ -8,6 +8,7 @@ namespace Aevatar.CQRS.Projection.Providers.Neo4j.Stores;
 
 public sealed partial class Neo4jProjectionGraphStore
     : IProjectionGraphStore,
+      IVersionedProjectionGraphStore,
       IAsyncDisposable
 {
     private const string ProviderName = "Neo4j";
@@ -15,6 +16,9 @@ public sealed partial class Neo4jProjectionGraphStore
     private readonly string _database;
     private readonly string _nodeLabel;
     private readonly string _edgeType;
+    private readonly string _versionedOwnerStateLabel;
+    private readonly string _versionedEventLabel;
+    private readonly string _versionedEdgeIdentityLabel;
     private readonly bool _autoCreateSchema;
     private readonly int _maxTraversalDepth;
     private readonly ILogger<Neo4jProjectionGraphStore> _logger;
@@ -24,6 +28,7 @@ public sealed partial class Neo4jProjectionGraphStore
         PropertyNameCaseInsensitive = true,
     };
     private bool _schemaInitialized;
+    private int _disposeState;
 
     public Neo4jProjectionGraphStore(
         Neo4jProjectionGraphStoreOptions options,
@@ -37,6 +42,15 @@ public sealed partial class Neo4jProjectionGraphStore
         _edgeType = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
             options.EdgeType,
             "PROJECTION_REL");
+        _versionedOwnerStateLabel = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
+            $"{_nodeLabel}OwnerState",
+            "ProjectionGraphOwnerState");
+        _versionedEventLabel = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
+            $"{_nodeLabel}OwnerEvent",
+            "ProjectionGraphOwnerEvent");
+        _versionedEdgeIdentityLabel = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
+            $"{_nodeLabel}EdgeIdentity",
+            "ProjectionGraphEdgeIdentity");
         _autoCreateSchema = options.AutoCreateSchema;
         _maxTraversalDepth = Math.Clamp(options.MaxTraversalDepth, 1, 8);
         _logger = logger ?? NullLogger<Neo4jProjectionGraphStore>.Instance;
@@ -424,6 +438,9 @@ public sealed partial class Neo4jProjectionGraphStore
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
+            return;
+
         _schemaLock.Dispose();
         await _driver.DisposeAsync();
     }

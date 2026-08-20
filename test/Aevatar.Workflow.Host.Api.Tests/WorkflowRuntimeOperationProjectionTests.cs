@@ -26,7 +26,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
             store,
-            store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
         {
@@ -155,7 +154,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
             store,
-            store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
         {
@@ -210,7 +208,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
             store,
-            store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
         {
@@ -246,7 +243,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
     {
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
-            store,
             store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
@@ -289,7 +285,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
     {
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
-            store,
             store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
@@ -359,7 +354,6 @@ public sealed class WorkflowRuntimeOperationProjectionTests
     {
         var store = new RecordingReportStore();
         var projector = new WorkflowRunInsightReportArtifactProjector(
-            store,
             store,
             new RecordingGraphWriter());
         var context = new WorkflowExecutionMaterializationContext
@@ -515,7 +509,8 @@ public sealed class WorkflowRuntimeOperationProjectionTests
 
     private sealed class RecordingReportStore
         : IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>,
-          IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>
+          IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>,
+          IProjectionDocumentMutator<WorkflowRunInsightReportDocument, string>
     {
         public WorkflowRunInsightReportDocument? Stored { get; private set; }
 
@@ -539,6 +534,23 @@ public sealed class WorkflowRuntimeOperationProjectionTests
 
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             Task.FromResult(ProjectionWriteResult.Duplicate());
+
+        public Task<ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>> MutateAsync(
+            string key,
+            Func<WorkflowRunInsightReportDocument?, WorkflowRunInsightReportDocument> reducer,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var existing = Stored?.Clone();
+            var incoming = reducer(existing);
+            var result = ProjectionWriteResultEvaluator.Evaluate(Stored, incoming);
+            if (result.IsApplied)
+                Stored = incoming.Clone();
+
+            return Task.FromResult(new ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>(
+                result,
+                Stored?.Clone()));
+        }
     }
 
     private sealed class RecordingGraphWriter : IProjectionGraphWriter<WorkflowRunInsightReportDocument>

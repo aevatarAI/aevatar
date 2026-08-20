@@ -53,8 +53,12 @@ internal static class AIWorkspaceActivityEndpoints
             scopeId,
             new AIWorkspacePageQuery(take ?? DefaultPageSize, cursor),
             ct).ConfigureAwait(false);
-        if (result.Value is { Availability: AIWorkspaceSourceAvailability.Unavailable } unavailable)
-            return Results.Json(unavailable, statusCode: StatusCodes.Status503ServiceUnavailable);
+        if (result.Value is { Availability: AIWorkspaceSourceAvailability.Unavailable })
+        {
+            return SourceUnavailable(
+                "CONVERSATIONS_UNAVAILABLE",
+                "Conversation activity is temporarily unavailable.");
+        }
         return AIWorkspaceEndpoints.ToResult(result);
     }
 
@@ -75,11 +79,19 @@ internal static class AIWorkspaceActivityEndpoints
         if (!AIWorkspaceEndpoints.TryGetScopeId(http, out var scopeId, out var error))
             return error;
 
+        if (!TryParseOrigins(origins, out var parsedOrigins))
+        {
+            return AIWorkspaceEndpoints.Error(
+                StatusCodes.Status400BadRequest,
+                "INVALID_ACTIVITY_ORIGIN",
+                "Activity origins must be interactive, integration, automation, or development.");
+        }
+
         var result = await service.QueryRunsAsync(
             scopeId,
             new AIWorkspaceRunsQuery(
                 status,
-                SplitCsv(origins),
+                parsedOrigins,
                 workflowId,
                 q,
                 from,
@@ -88,8 +100,12 @@ internal static class AIWorkspaceActivityEndpoints
                 cursor,
                 includeTotalCount),
             ct).ConfigureAwait(false);
-        if (result.Value is { Availability: AIWorkspaceSourceAvailability.Unavailable } unavailable)
-            return Results.Json(unavailable, statusCode: StatusCodes.Status503ServiceUnavailable);
+        if (result.Value is { Availability: AIWorkspaceSourceAvailability.Unavailable })
+        {
+            return SourceUnavailable(
+                "WORKFLOW_RUNS_UNAVAILABLE",
+                "Workflow run activity is temporarily unavailable.");
+        }
         return AIWorkspaceEndpoints.ToResult(result);
     }
 
@@ -106,10 +122,48 @@ internal static class AIWorkspaceActivityEndpoints
             await service.GetRunAsync(scopeId, runId, ct).ConfigureAwait(false));
     }
 
-    private static IReadOnlyList<string> SplitCsv(string? value) =>
-        string.IsNullOrWhiteSpace(value)
-            ? []
-            : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
+    private static bool TryParseOrigins(
+        string? value,
+        out IReadOnlyList<AIWorkspaceRunOriginFilter> origins)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            origins = [];
+            return true;
+        }
+
+        var parsed = new List<AIWorkspaceRunOriginFilter>();
+        foreach (var item in value.Split(
+                     ',',
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var origin = item.ToLowerInvariant() switch
+            {
+                "interactive" => AIWorkspaceRunOriginFilter.Interactive,
+                "integration" => AIWorkspaceRunOriginFilter.Integration,
+                "automation" => AIWorkspaceRunOriginFilter.Automation,
+                "development" => AIWorkspaceRunOriginFilter.Development,
+                _ => (AIWorkspaceRunOriginFilter?)null,
+            };
+            if (origin is null)
+            {
+                origins = [];
+                return false;
+            }
+
+            if (!parsed.Contains(origin.Value))
+                parsed.Add(origin.Value);
+        }
+
+        origins = parsed;
+        return true;
+    }
+
+    private static IResult SourceUnavailable(
+        string code,
+        string message) =>
+        AIWorkspaceEndpoints.Error(
+            StatusCodes.Status503ServiceUnavailable,
+            code,
+            message);
 }

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
@@ -20,6 +21,33 @@ namespace Aevatar.Workflow.Core.Tests.Modules;
 
 public sealed class WorkflowRuntimeModuleBranchTests
 {
+    [Theory]
+    [InlineData("assign")]
+    [InlineData("checkpoint")]
+    [InlineData("conditional")]
+    [InlineData("connector-skip")]
+    [InlineData("delay")]
+    [InlineData("emit")]
+    [InlineData("guard-pass")]
+    [InlineData("guard-skip")]
+    [InlineData("guard-branch")]
+    [InlineData("switch")]
+    public async Task PassThroughModules_ShouldDeclareForwardedInputProvenance(string scenario)
+    {
+        var (module, request) = CreatePassThroughScenario(scenario);
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(Wrap(request), ctx, CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(static publication => publication.Event)
+            .OfType<StepCompletedEvent>()
+            .Single();
+        completion.Success.Should().BeTrue();
+        completion.Output.Should().Be(request.Input);
+        completion.OutputProvenance.Should().Be(WorkflowStepOutputProvenance.ForwardedInput);
+    }
+
     [Fact]
     public void LlmRuntimeModules_CanHandle_ShouldReturnFalseForEmptyPayload()
     {
@@ -1357,6 +1385,62 @@ public sealed class WorkflowRuntimeModuleBranchTests
             FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
 
+    private static (IEventModule<IWorkflowExecutionContext> Module, StepRequestEvent Request)
+        CreatePassThroughScenario(string scenario)
+    {
+        var request = new StepRequestEvent
+        {
+            StepId = $"{scenario}-step",
+            RunId = "run-pass-through",
+            Input = scenario.Contains("guard-skip", StringComparison.Ordinal)
+                || scenario.Contains("guard-branch", StringComparison.Ordinal)
+                    ? string.Empty
+                    : "canonical-payload",
+        };
+
+        IEventModule<IWorkflowExecutionContext> module = scenario switch
+        {
+            "assign" => new AssignModule(),
+            "checkpoint" => new CheckpointModule(),
+            "conditional" => new ConditionalModule(),
+            "connector-skip" => new ConnectorCallModule(new MissingConnectorResolver()),
+            "delay" => new DelayModule(),
+            "emit" => new EmitModule(),
+            "guard-pass" or "guard-skip" or "guard-branch" => new GuardModule(),
+            "switch" => new SwitchModule(),
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
+        };
+
+        request.StepType = scenario switch
+        {
+            "connector-skip" => "connector_call",
+            "guard-pass" or "guard-skip" or "guard-branch" => "guard",
+            _ => scenario,
+        };
+        switch (scenario)
+        {
+            case "assign":
+                request.Parameters["value"] = "$input";
+                break;
+            case "connector-skip":
+                request.Parameters["connector"] = "missing";
+                request.Parameters["on_missing"] = "skip";
+                break;
+            case "delay":
+                request.Parameters["duration_ms"] = "0";
+                break;
+            case "guard-skip":
+                request.Parameters["on_fail"] = "skip";
+                break;
+            case "guard-branch":
+                request.Parameters["on_fail"] = "branch";
+                request.Parameters["branch_target"] = "fallback";
+                break;
+        }
+
+        return (module, request);
+    }
+
     private sealed class RecordingWorkflowContext
         : IWorkflowExecutionContext, IWorkflowExecutionRuntimeContextAccessor, IWorkflowExecutionStateHost
     {
@@ -1620,6 +1704,20 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 return _moduleFactory;
 
             return null;
+        }
+    }
+
+    private sealed class MissingConnectorResolver : IWorkflowConnectorResolver
+    {
+        public ValueTask<IConnector?> ResolveAsync(
+            IWorkflowExecutionContext context,
+            string connectorName,
+            CancellationToken ct = default)
+        {
+            _ = context;
+            _ = connectorName;
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<IConnector?>(null);
         }
     }
 

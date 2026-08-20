@@ -22,6 +22,102 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IProjectionIndexReconcileTarget) &&
             descriptor.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType ==
+            typeof(IProjectionDocumentMutator<TestStoreReadModel, string>) &&
+            descriptor.Lifetime == ServiceLifetime.Singleton);
+    }
+
+    [Fact]
+    public async Task MutateAsync_WhenUncontended_ShouldUseOneReadAndOneConditionalCommit()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-03-16T00:00:00Z","value":"v1"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"updated"}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+        var reducerCalls = 0;
+
+        var result = await store.MutateAsync("actor-1", current =>
+        {
+            reducerCalls++;
+            current.Should().NotBeNull();
+            current!.StateVersion = 2;
+            current.LastEventId = "evt-2";
+            current.UpdatedAt = DateTimeOffset.Parse("2026-03-16T00:00:01Z");
+            current.Value = "v2";
+            return current;
+        });
+
+        reducerCalls.Should().Be(1);
+        result.WriteResult.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        result.Document!.Value.Should().Be("v2");
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "PUT");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_primary_term=3");
+    }
+
+    [Fact]
+    public async Task MutateAsync_WhenExactReplay_ShouldReadOnceAndNotWrite()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-03-16T00:00:00Z","value":"v1"}}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+
+        var result = await store.MutateAsync("actor-1", current => current!);
+
+        result.WriteResult.Disposition.Should().Be(ProjectionWriteDisposition.Duplicate);
+        result.Document!.Value.Should().Be("v1");
+        handler.CapturedRequests.Should().ContainSingle()
+            .Which.Method.Should().Be("GET");
+    }
+
+    [Fact]
+    public async Task MutateAsync_WhenOccConflicts_ShouldReapplyReducerToLatestDocument()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-03-16T00:00:00Z","value":"v1"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.Conflict,
+            """{"error":{"type":"version_conflict_engine_exception"},"status":409}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":8,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"2","last_event_id":"evt-other","updated_at_utc_value":"2026-03-16T00:00:01Z","value":"v2-other"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"updated"}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+        var reducerCalls = 0;
+
+        var result = await store.MutateAsync("actor-1", current =>
+        {
+            reducerCalls++;
+            current.Should().NotBeNull();
+            current!.StateVersion++;
+            current.LastEventId = $"evt-local-{current.StateVersion}";
+            current.Value += "|local";
+            return current;
+        });
+
+        reducerCalls.Should().Be(2);
+        result.WriteResult.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        result.Document!.StateVersion.Should().Be(3);
+        result.Document.Value.Should().Be("v2-other|local");
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "PUT", "GET", "PUT");
+        handler.CapturedRequests[3].PathAndQuery.Should().Contain("if_seq_no=8");
+        handler.CapturedRequests[3].Body.Should().Contain("\"value\":\"v2-other|local\"");
+        handler.CapturedRequests[3].Body.Should().NotContain("v1|local|local");
     }
 
     [Fact]
@@ -1939,7 +2035,35 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task ReconcileIndexAsync_WhenDriftAndExpectedExists_ShouldSwapAliasWithoutReindex()
+    public async Task ReconcileIndexAsync_WhenDriftAndExpectedExists_ShouldTopUpFromSourceThenSwapAlias()
+    {
+        // An interrupted earlier heal can leave the expected physical partially filled, so the
+        // reconcile must copy source -> destination (overwrite) before it moves the alias.
+        const string oldPhysical = "aevatar-projection-core-tests-vstale01";
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            $"{{\"{oldPhysical}\":{{\"aliases\":{{\"aevatar-projection-core-tests\":{{}}}}}}}}"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, "")); // HEAD expected -> exists
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"took":3,"timed_out":false,"total":2,"updated":1,"created":1,"version_conflicts":0,"failures":[]}""")); // POST _reindex top-up
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}""")); // POST _aliases
+
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
+
+        await store.ReconcileIndexAsync();
+
+        var reindex = handler.CapturedRequests
+            .Should().ContainSingle(r => r.Method == "POST" && r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal)).Subject;
+        reindex.Body.Should().Contain(oldPhysical).And.NotContain("op_type").And.NotContain("conflicts");
+        handler.CapturedRequests
+            .Should().ContainSingle(r => r.Method == "POST" && r.PathAndQuery.EndsWith("/_aliases")).Subject
+            .Body.Should().Contain("\"add\"").And.Contain("\"remove\"").And.Contain(oldPhysical).And.NotContain("remove_index");
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenDriftAndExpectedExists_AndTopUpMissesDocuments_ShouldNotSwapAlias()
     {
         const string oldPhysical = "aevatar-projection-core-tests-vstale01";
         var handler = new ScriptedHttpMessageHandler();
@@ -1947,16 +2071,22 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             HttpStatusCode.OK,
             $"{{\"{oldPhysical}\":{{\"aliases\":{{\"aevatar-projection-core-tests\":{{}}}}}}}}"));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, "")); // HEAD expected -> exists
-        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}""")); // POST _aliases
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"took":3,"timed_out":false,"total":3,"updated":1,"created":1,"version_conflicts":0,"failures":[]}""")); // POST _reindex top-up short by one
 
         using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
 
-        await store.ReconcileIndexAsync();
+        var act = () => store.ReconcileIndexAsync();
 
-        handler.CapturedRequests.Should().NotContain(r => r.PathAndQuery.Contains("/_reindex"));
-        handler.CapturedRequests
-            .Should().ContainSingle(r => r.Method == "POST" && r.PathAndQuery.EndsWith("/_aliases")).Subject
-            .Body.Should().Contain("\"add\"").And.Contain("\"remove\"").And.Contain(oldPhysical).And.NotContain("remove_index");
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*did not account for every source document*");
+        handler.CapturedRequests.Should().NotContain(r => r.PathAndQuery.EndsWith("/_aliases"));
+    }
+
+    [Fact]
+    public void ReindexRequestTimeout_ShouldOutliveReindexCompletionBudget()
+    {
+        ElasticsearchIndexLifecycleManager.ReindexRequestTimeout.Should().BeGreaterThan(TimeSpan.FromMinutes(2));
     }
 
     [Fact]

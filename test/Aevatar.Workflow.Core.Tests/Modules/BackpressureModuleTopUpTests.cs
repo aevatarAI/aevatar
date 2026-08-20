@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -117,6 +118,114 @@ public sealed class BackpressureModuleTopUpTests
     }
 
     [Fact]
+    public async Task ForEachModule_NormalizedState_ShouldPersistEmptyCollectedOutputsAndMergeCanonicalValues()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-normalized");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-normalized",
+                StepType = "foreach",
+                RunId = "run-foreach-normalized",
+                Input = "alpha\n---\nbeta",
+                Parameters = { ["sub_step_type"] = "transform" },
+            }),
+            context,
+            CancellationToken.None);
+
+        var children = context.Published.Select(x => x.Event).OfType<StepRequestEvent>().ToArray();
+        children.Should().HaveCount(2);
+        context.Published.Clear();
+
+        var kernelState = new WorkflowExecutionKernelState();
+        WorkflowExecutionValueStore.Initialize(kernelState);
+        await RecordNormalizedChildAsync(context, kernelState, children[0], "first-output");
+        await module.HandleAsync(
+            Envelope(Completion(children[0], "first-output")),
+            context,
+            CancellationToken.None);
+
+        var afterFirst = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey)
+            .Parents["run-foreach-normalized:foreach-normalized"];
+        afterFirst.Collected.Should().ContainSingle();
+        afterFirst.Collected[0].Output.Should().BeEmpty(
+            "normalized foreach state persists only child identity and settlement facts");
+
+        await RecordNormalizedChildAsync(context, kernelState, children[1], "second-output");
+        context.FailPublishOnce = evt => evt is StepCompletedEvent { StepId: "foreach-normalized" };
+        await module.HandleAsync(
+            Envelope(Completion(children[1], "second-output")),
+            context,
+            CancellationToken.None);
+
+        var pending = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey)
+            .Parents["run-foreach-normalized:foreach-normalized"];
+        pending.Collected.Should().HaveCount(2);
+        pending.Collected.Should().OnlyContain(static result => result.Output.Length == 0);
+        pending.PendingCompletion.Should().NotBeNull();
+        pending.PendingCompletion!.Output.Should().Be("first-output\n---\nsecond-output");
+
+        var retry = context.Scheduled.Last().Event.Should()
+            .BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
+        await module.HandleAsync(Envelope(retry), context, CancellationToken.None);
+
+        context.Published.Select(x => x.Event).OfType<StepCompletedEvent>()
+            .Should().ContainSingle()
+            .Which.Output.Should().Be("first-output\n---\nsecond-output");
+    }
+
+    [Fact]
+    public async Task ForEachModule_NormalizedSingleItem_ShouldRehydrateReferencedOutputAfterPublicationRecovery()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-single");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-single",
+                StepType = "foreach",
+                RunId = "run-foreach-single",
+                ExecutionId = "parent-execution",
+                Input = "alpha",
+                Parameters = { ["sub_step_type"] = "transform" },
+            }),
+            context,
+            CancellationToken.None);
+        var child = context.Published.Select(x => x.Event).OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        context.Published.Clear();
+
+        var kernelState = new WorkflowExecutionKernelState { RunId = "run-foreach-single" };
+        WorkflowExecutionValueStore.Initialize(kernelState);
+        await RecordNormalizedChildAsync(context, kernelState, child, "single-output");
+        context.FailPublishOnce = evt => evt is StepCompletedEvent { StepId: "foreach-single" };
+        await module.HandleAsync(
+            Envelope(Completion(child, "single-output")),
+            context,
+            CancellationToken.None);
+
+        var durableParent = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey)
+            .Parents.Values.Should().ContainSingle().Subject;
+        durableParent.PendingCompletion.Should().NotBeNull();
+        durableParent.PendingCompletion!.Output.Should().BeEmpty(
+            "normalized outboxes persist the canonical reference instead of a duplicate payload");
+        durableParent.PendingCompletion.OutputSourceValueId.Should().NotBeNullOrWhiteSpace();
+        var retry = context.Scheduled.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
+
+        module = new ForEachModule();
+        await module.HandleAsync(Envelope(retry), context, CancellationToken.None);
+
+        var completion = context.Published.Select(x => x.Event).OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        completion.StepId.Should().Be("foreach-single");
+        completion.ExecutionId.Should().Be("parent-execution");
+        completion.Output.Should().Be("single-output");
+        completion.OutputProvenance.Should().Be(WorkflowStepOutputProvenance.ReferencedStepOutput);
+    }
+
+    [Fact]
     public async Task ForEachModule_ShouldDispatchOneChildPerInputFileRefInOrder()
     {
         var module = new ForEachModule();
@@ -198,6 +307,634 @@ public sealed class BackpressureModuleTopUpTests
     }
 
     [Fact]
+    public async Task ForEachModule_FailedChild_ShouldPersistParentFailureAndStopQueuedDispatches()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-fail-fast");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-fail-fast",
+                StepType = "foreach",
+                RunId = "run-foreach-fail-fast",
+                Input = "alpha\n---\nbeta",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["max_concurrent_workers"] = "1",
+                },
+            }),
+            context,
+            CancellationToken.None);
+
+        var firstChild = context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        context.Published.Clear();
+        context.FailPublishOnce = evt => evt is StepCompletedEvent { StepId: "foreach-fail-fast" };
+        var completionOperationIds = new List<string>();
+        context.BeforePublish = (evt, options) =>
+        {
+            if (evt is StepCompletedEvent { StepId: "foreach-fail-fast" })
+                completionOperationIds.Add(options?.Delivery?.OperationId ?? string.Empty);
+        };
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = firstChild.StepId,
+                RunId = firstChild.RunId,
+                ExecutionId = firstChild.ExecutionId,
+                Success = false,
+                Error = "tool failed",
+                Outcome = WorkflowStepCompletionOutcome.Failed,
+                FailureOutcome = WorkflowStepFailureOutcome.CalleeConfirmed,
+                RecoveryFailureKind = WorkflowRecoveryFailureKind.ConfigurationFailure,
+                RetryDisposition = WorkflowStepRetryDisposition.Allowed,
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Select(static item => item.Event).OfType<StepRequestEvent>().Should().BeEmpty();
+        var pendingState = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey);
+        var parentKey = "run-foreach-fail-fast:foreach-fail-fast";
+        var pendingParent = pendingState.Parents[parentKey];
+        pendingParent.PendingDispatches.Should().BeEmpty();
+        pendingState.Backpressure.Queue.Should().BeEmpty();
+        pendingParent.PendingCompletion.Should().NotBeNull();
+        pendingParent.PendingCompletion.Success.Should().BeFalse();
+        pendingParent.PendingCompletion.Outcome.Should().Be(WorkflowStepCompletionOutcome.Failed);
+        pendingParent.PendingCompletion.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        pendingParent.PendingCompletion.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+        pendingParent.PendingCompletion.RecoveryFailureKind.Should()
+            .Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+        pendingParent.Collected.Should().ContainSingle().Which.FailureOutcome.Should()
+            .Be(WorkflowStepFailureOutcome.CalleeConfirmed);
+
+        var retry = context.Scheduled.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
+        await module.HandleAsync(Envelope(retry), context, CancellationToken.None);
+
+        var parentCompletion = context.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        parentCompletion.StepId.Should().Be("foreach-fail-fast");
+        completionOperationIds.Should().HaveCount(2);
+        completionOperationIds[0].Should().Be(completionOperationIds[1]);
+        completionOperationIds[0].Should().NotBeEmpty();
+        var completedState = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey);
+        completedState.Parents.Should().BeEmpty();
+        completedState.CompletedParentAttempts[parentKey].ChildExecutionIds[firstChild.StepId]
+            .Should().Be(firstChild.ExecutionId);
+        ForEachModule.IsCompletedChildAttempt(
+                completedState,
+                firstChild.RunId,
+                firstChild.StepId,
+                firstChild.ExecutionId)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ForEachModule_CompleteConfirmedFailure_ShouldPreserveRetryAndOnErrorSemantics()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-confirmed-failure");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-confirmed-failure",
+                StepType = "foreach",
+                RunId = "run-foreach-confirmed-failure",
+                Input = "alpha",
+                Parameters = { ["sub_step_type"] = "transform" },
+            }),
+            context,
+            CancellationToken.None);
+
+        var child = context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        context.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = child.StepId,
+                RunId = child.RunId,
+                Success = false,
+                Error = "transform failed",
+            }),
+            context,
+            CancellationToken.None);
+
+        var parentCompletion = context.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        parentCompletion.Success.Should().BeFalse();
+        parentCompletion.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.CalleeConfirmed);
+        parentCompletion.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Unspecified);
+    }
+
+    [Fact]
+    public async Task ForEachModule_CompleteForbiddenFailure_ShouldForbidParentRetry()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-forbidden-failure");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-forbidden-failure",
+                StepType = "foreach",
+                RunId = "run-foreach-forbidden-failure",
+                Input = "alpha",
+                Parameters = { ["sub_step_type"] = "tool_call" },
+            }),
+            context,
+            CancellationToken.None);
+
+        var child = context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        context.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = child.StepId,
+                RunId = child.RunId,
+                ExecutionId = child.ExecutionId,
+                Success = false,
+                Error = "external outcome cannot be retried",
+                FailureOutcome = WorkflowStepFailureOutcome.CalleeConfirmed,
+                RetryDisposition = WorkflowStepRetryDisposition.Forbidden,
+            }),
+            context,
+            CancellationToken.None);
+
+        var parentCompletion = context.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        parentCompletion.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.CalleeConfirmed);
+        parentCompletion.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+    }
+
+    [Fact]
+    public async Task ForEachModule_FailedParent_ShouldPreserveOutstandingSlotsAndTopUpOtherParent()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-shared-backpressure");
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-parent-a",
+                StepType = "foreach",
+                RunId = "run-foreach-shared-backpressure",
+                ExecutionId = "parent-a-execution",
+                Input = "a0\n---\na1\n---\na2",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["max_concurrent_workers"] = "2",
+                },
+            }),
+            context,
+            CancellationToken.None);
+        var parentAChildren = context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .OrderBy(static request => request.StepId, StringComparer.Ordinal)
+            .ToArray();
+        parentAChildren.Should().HaveCount(2);
+
+        context.Published.Clear();
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-parent-b",
+                StepType = "foreach",
+                RunId = "run-foreach-shared-backpressure",
+                ExecutionId = "parent-b-execution",
+                Input = "b0",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["max_concurrent_workers"] = "2",
+                },
+            }),
+            context,
+            CancellationToken.None);
+        context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>().Should().BeEmpty();
+
+        context.Published.Clear();
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = parentAChildren[0].StepId,
+                RunId = parentAChildren[0].RunId,
+                ExecutionId = parentAChildren[0].ExecutionId,
+                Success = false,
+                Error = "parent a failed",
+                Outcome = WorkflowStepCompletionOutcome.Failed,
+                FailureOutcome = WorkflowStepFailureOutcome.CalleeConfirmed,
+            }),
+            context,
+            CancellationToken.None);
+
+        var parentBChild = context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>().Should().ContainSingle().Subject;
+        parentBChild.StepId.Should().StartWith("foreach-parent-b_execution_");
+        context.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle(completion => completion.StepId == "foreach-parent-a");
+        var failedParentState = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey);
+        failedParentState.Parents.Values.Should().ContainSingle(parent =>
+            parent.ParentStepId == "foreach-parent-b");
+        failedParentState.Backpressure.ActiveWorkers.Should().Be(2);
+        var completedParentA = failedParentState.CompletedParentAttempts.Values
+            .Should().ContainSingle(attempt => attempt.ParentStepId == "foreach-parent-a").Subject;
+        completedParentA.OutstandingWorkersAccounted.Should().BeTrue();
+        completedParentA.OutstandingChildExecutionIds[parentAChildren[1].StepId]
+            .Should().Be(parentAChildren[1].ExecutionId);
+
+        context.Published.Clear();
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = parentAChildren[1].StepId,
+                RunId = parentAChildren[1].RunId,
+                Success = true,
+                Output = "late a1",
+            }),
+            context,
+            CancellationToken.None);
+
+        var settledState = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey);
+        settledState.Backpressure.ActiveWorkers.Should().Be(1);
+        var settledParentA = settledState.CompletedParentAttempts.Values
+            .Should().ContainSingle(attempt => attempt.ParentStepId == "foreach-parent-a").Subject;
+        settledParentA.OutstandingWorkersAccounted.Should().BeFalse();
+        settledParentA.OutstandingChildExecutionIds.Should().BeEmpty();
+        context.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>().Should().BeEmpty();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = parentBChild.StepId,
+                RunId = parentBChild.RunId,
+                ExecutionId = parentBChild.ExecutionId,
+                Success = true,
+                Output = "b0 complete",
+            }),
+            context,
+            CancellationToken.None);
+        context.Published.Select(static item => item.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle(completion => completion.StepId == "foreach-parent-b");
+    }
+
+    [Fact]
+    public async Task ForEachModule_AmbiguousEscapedSiblingAfterActivationRollover_ShouldRetainSlot()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-ambiguous-failure")
+        {
+            ThrowAfterPublishOnce = evt => evt is StepRequestEvent { Input: "a1" },
+        };
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-ambiguous-a",
+                StepType = "foreach",
+                RunId = "run-foreach-ambiguous-failure",
+                ExecutionId = "parent-a-execution",
+                Input = "a0\n---\na1\n---\na2",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["max_concurrent_workers"] = "2",
+                },
+            }),
+            context,
+            CancellationToken.None);
+        var parentAChildren = context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .OrderBy(static request => request.Input, StringComparer.Ordinal)
+            .ToArray();
+        parentAChildren.Should().HaveCount(2);
+
+        context.Published.Clear();
+        context.ThrowAfterPublishOnce = evt => evt is StepRequestEvent { Input: "a1" };
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-ambiguous-b",
+                StepType = "foreach",
+                RunId = "run-foreach-ambiguous-failure",
+                ExecutionId = "parent-b-execution",
+                Input = "b0\n---\nb1\n---\nb2",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["max_concurrent_workers"] = "2",
+                },
+            }),
+            context,
+            CancellationToken.None);
+        context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle(request => request.Input == "a1");
+
+        module = new ForEachModule();
+        context.Published.Clear();
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = parentAChildren[0].StepId,
+                RunId = parentAChildren[0].RunId,
+                ExecutionId = parentAChildren[0].ExecutionId,
+                Success = false,
+                Error = "parent a failed",
+                FailureOutcome = WorkflowStepFailureOutcome.CalleeConfirmed,
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle(request => request.Input == "b0");
+        var failedState = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey);
+        failedState.Backpressure.ActiveWorkers.Should().Be(2);
+        var completedParentA = failedState.CompletedParentAttempts.Values
+            .Should().ContainSingle(attempt => attempt.ParentStepId == "foreach-ambiguous-a").Subject;
+        completedParentA.OutstandingChildExecutionIds[parentAChildren[1].StepId]
+            .Should().Be(parentAChildren[1].ExecutionId);
+
+        context.Published.Clear();
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = parentAChildren[1].StepId,
+                RunId = parentAChildren[1].RunId,
+                Success = true,
+                Output = "late ambiguous sibling",
+            }),
+            context,
+            CancellationToken.None);
+
+        context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle(request => request.Input == "b1");
+        context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey)
+            .Backpressure.ActiveWorkers.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ForEachModule_DuplicateLateChild_ShouldRecoverPendingDispatchPublication()
+    {
+        const string runId = "run-foreach-late-recovery";
+        const string lateStepId = "foreach-completed_item_0";
+        const string lateExecutionId = "late-child-execution";
+        const string survivingStepId = "foreach-surviving_item_0";
+        const string survivingExecutionId = "surviving-child-execution";
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext(runId);
+        var state = new ForEachModuleState
+        {
+            Backpressure = BackpressureHelper.Initialize(1),
+            Parents =
+            {
+                [$"{runId}:foreach-surviving"] = new ForEachParentState
+                {
+                    Expected = 1,
+                    ParentRunId = runId,
+                    ParentStepId = "foreach-surviving",
+                    ChildExecutionIds = { [survivingStepId] = survivingExecutionId },
+                },
+            },
+            CompletedParentAttempts =
+            {
+                [$"{runId}:foreach-completed"] = new ForEachCompletedParentAttemptState
+                {
+                    ParentRunId = runId,
+                    ParentStepId = "foreach-completed",
+                    ChildExecutionIds = { [lateStepId] = lateExecutionId },
+                    OutstandingChildExecutionIds = { [lateStepId] = lateExecutionId },
+                    OutstandingWorkersAccounted = true,
+                },
+            },
+        };
+        state.Backpressure.ActiveWorkers = 1;
+        state.Backpressure.Queue.Add(BackpressureHelper.ToQueueEntry(
+            survivingStepId,
+            "tool_call",
+            runId,
+            "surviving item",
+            string.Empty,
+            null,
+            executionId: survivingExecutionId,
+            idempotencyKey: "surviving-child-operation"));
+        await context.SaveStateAsync(ForEachModule.ModuleStateKey, state);
+        context.FailPublish = _ => true;
+        context.FailSchedule = _ => true;
+        var lateCompletion = new StepCompletedEvent
+        {
+            StepId = lateStepId,
+            RunId = runId,
+            Success = true,
+        };
+
+        var firstAttempt = () => module.HandleAsync(
+            Envelope(lateCompletion),
+            context,
+            CancellationToken.None);
+        await firstAttempt.Should().ThrowAsync<WorkflowRuntimeEnvelopeRetryablePublicationPendingException>();
+        var pending = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey);
+        pending.CompletedParentAttempts.Values.Single().OutstandingChildExecutionIds.Should().BeEmpty();
+        pending.Parents.Values.Single().PendingDispatches.Should().ContainSingle();
+
+        context.FailPublish = null;
+        context.FailSchedule = null;
+        context.Published.Clear();
+        await module.HandleAsync(Envelope(lateCompletion), context, CancellationToken.None);
+
+        context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle(request => request.StepId == survivingStepId);
+    }
+
+    [Fact]
+    public void TryPrepareFailedParentCompletion_ShouldAdoptLegacyParentAndNormalizePendingFailure()
+    {
+        const string runId = "run-foreach-legacy-reconcile";
+        const string parentStepId = "foreach-legacy";
+        const string parentExecutionId = "parent-execution-current";
+        var legacyParentKey = $"{runId}:{parentStepId}";
+        var state = new ForEachModuleState
+        {
+            Backpressure = BackpressureHelper.Initialize(2),
+            Parents =
+            {
+                [legacyParentKey] = new ForEachParentState
+                {
+                    Expected = 2,
+                    Collected =
+                    {
+                        new ForEachItemResult
+                        {
+                            StepId = $"{parentStepId}_item_0",
+                            Success = false,
+                            Error = "legacy child failure",
+                        },
+                    },
+                    CollectedStepIds = { $"{parentStepId}_item_0" },
+                    PendingDispatches =
+                    {
+                        BackpressureHelper.ToQueueEntry(
+                            $"{parentStepId}_item_1",
+                            "tool_call",
+                            runId,
+                            "item-1",
+                            string.Empty,
+                            null),
+                    },
+                    PendingCompletion = new StepCompletedEvent
+                    {
+                        StepId = parentStepId,
+                        RunId = runId,
+                        Success = false,
+                        Error = ForEachModule.FailedItemsError,
+                    },
+                },
+            },
+        };
+        state.Backpressure.ActiveWorkers = 1;
+
+        ForEachModule.TryPrepareFailedParentCompletion(
+                state,
+                new WorkflowExecutionKernelState(),
+                runId,
+                parentStepId,
+                parentExecutionId,
+                0,
+                out var parentKey,
+                out var stateChanged,
+                out var collectedCount,
+                out var expectedCount)
+            .Should().BeTrue();
+
+        stateChanged.Should().BeTrue();
+        parentKey.Should().NotBe(legacyParentKey);
+        state.Parents.Should().ContainKey(parentKey);
+        var adopted = state.Parents[parentKey];
+        adopted.ParentRunId.Should().Be(runId);
+        adopted.ParentStepId.Should().Be(parentStepId);
+        adopted.ParentExecutionId.Should().Be(parentExecutionId);
+        adopted.PendingDispatches.Should().BeEmpty();
+        adopted.PendingCompletion.ExecutionId.Should().Be(parentExecutionId);
+        adopted.PendingCompletion.Outcome.Should().Be(WorkflowStepCompletionOutcome.Failed);
+        adopted.PendingCompletion.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        adopted.PendingCompletion.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+        adopted.OutstandingWorkerStepIds.Should().Equal($"{parentStepId}_item_1");
+        state.Backpressure.ActiveWorkers.Should().Be(1);
+        collectedCount.Should().Be(1);
+        expectedCount.Should().Be(2);
+    }
+
+    [Fact]
+    public void TryPrepareFailedParentCompletion_ShouldRejectStaleLegacyAttemptEvidence()
+    {
+        const string runId = "run-foreach-stale-legacy";
+        const string parentStepId = "foreach-stale-legacy";
+        var legacyParentKey = $"{runId}:{parentStepId}";
+        var state = new ForEachModuleState
+        {
+            Parents =
+            {
+                [legacyParentKey] = new ForEachParentState
+                {
+                    Expected = 1,
+                    Collected =
+                    {
+                        new ForEachItemResult
+                        {
+                            StepId = $"{parentStepId}_item_0",
+                            Success = false,
+                        },
+                    },
+                    CollectedStepIds = { $"{parentStepId}_item_0" },
+                    ChildExecutionIds = { [$"{parentStepId}_item_0"] = "old-child-execution" },
+                    PendingCompletion = new StepCompletedEvent
+                    {
+                        StepId = parentStepId,
+                        RunId = runId,
+                        ExecutionId = "old-parent-execution",
+                        Success = false,
+                    },
+                },
+            },
+        };
+
+        ForEachModule.TryPrepareFailedParentCompletion(
+                state,
+                new WorkflowExecutionKernelState(),
+                runId,
+                parentStepId,
+                "new-parent-execution",
+                0,
+                out _,
+                out _,
+                out _,
+                out _)
+            .Should().BeFalse();
+
+        state.Parents.Should().ContainKey(legacyParentKey);
+        state.Parents[legacyParentKey].PendingCompletion.ExecutionId.Should().Be("old-parent-execution");
+    }
+
+    [Fact]
+    public void TryPrepareFailedParentCompletion_ShouldRejectIdentitylessLegacyParentOnRetry()
+    {
+        const string runId = "run-foreach-legacy-retry";
+        const string parentStepId = "foreach-legacy-retry";
+        var legacyParentKey = $"{runId}:{parentStepId}";
+        var state = new ForEachModuleState
+        {
+            Parents =
+            {
+                [legacyParentKey] = new ForEachParentState
+                {
+                    Expected = 1,
+                    Collected =
+                    {
+                        new ForEachItemResult
+                        {
+                            StepId = $"{parentStepId}_item_0",
+                            Success = false,
+                        },
+                    },
+                    CollectedStepIds = { $"{parentStepId}_item_0" },
+                },
+            },
+        };
+
+        ForEachModule.TryPrepareFailedParentCompletion(
+                state,
+                new WorkflowExecutionKernelState(),
+                runId,
+                parentStepId,
+                "retry-parent-execution",
+                1,
+                out _,
+                out _,
+                out _,
+                out _)
+            .Should().BeFalse();
+
+        state.Parents.Should().ContainKey(legacyParentKey);
+    }
+
+    [Fact]
     public async Task ForEachModule_ShouldPublishTypedFileResultsWithPerFileErrors()
     {
         var module = new ForEachModule();
@@ -226,10 +963,10 @@ public sealed class BackpressureModuleTopUpTests
         await module.HandleAsync(
             Envelope(new StepCompletedEvent
             {
-                StepId = "foreach-files-result_item_1",
+                StepId = "foreach-files-result_item_0",
                 RunId = "run-foreach-files-result",
-                Success = false,
-                Error = "extract failed",
+                Success = true,
+                Output = "descriptor output",
             }),
             context,
             CancellationToken.None);
@@ -237,10 +974,10 @@ public sealed class BackpressureModuleTopUpTests
         await module.HandleAsync(
             Envelope(new StepCompletedEvent
             {
-                StepId = "foreach-files-result_item_0",
+                StepId = "foreach-files-result_item_1",
                 RunId = "run-foreach-files-result",
-                Success = true,
-                Output = "descriptor output",
+                Success = false,
+                Error = "extract failed",
             }),
             context,
             CancellationToken.None);
@@ -1444,6 +2181,29 @@ public sealed class BackpressureModuleTopUpTests
             OwnerScopeId = "scope-owner",
         };
 
+    private static StepCompletedEvent Completion(StepRequestEvent child, string output) =>
+        new()
+        {
+            StepId = child.StepId,
+            RunId = child.RunId,
+            ExecutionId = child.ExecutionId,
+            Success = true,
+            Output = output,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
+        };
+
+    private static async Task RecordNormalizedChildAsync(
+        RecordingWorkflowContext context,
+        WorkflowExecutionKernelState kernelState,
+        StepRequestEvent child,
+        string output)
+    {
+        WorkflowExecutionValueStore.RecordInternalOutput(
+            kernelState,
+            Completion(child, output));
+        await context.SaveStateAsync(WorkflowExecutionKernel.ModuleStateKey, kernelState);
+    }
+
     private sealed class RecordingWorkflowContext(string runId) : IWorkflowExecutionContext
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
@@ -1470,7 +2230,11 @@ public sealed class BackpressureModuleTopUpTests
 
         public Func<IMessage, bool>? FailPublishOnce { get; set; }
 
+        public Func<IMessage, bool>? FailPublish { get; set; }
+
         public Func<IMessage, bool>? ThrowAfterPublishOnce { get; set; }
+
+        public Func<IMessage, bool>? FailSchedule { get; set; }
 
         public int? FailSaveAttempt { get; set; }
 
@@ -1540,6 +2304,9 @@ public sealed class BackpressureModuleTopUpTests
 
             lock (_publicationGate)
             {
+                if (FailPublish?.Invoke(evt) == true)
+                    throw new InvalidOperationException("simulated persistent publish failure");
+
                 if (FailPublishOnce?.Invoke(evt) == true)
                 {
                     FailPublishOnce = null;
@@ -1564,6 +2331,9 @@ public sealed class BackpressureModuleTopUpTests
         {
             ct.ThrowIfCancellationRequested();
             _ = options;
+            if (FailSchedule?.Invoke(evt) == true)
+                throw new InvalidOperationException("simulated durable schedule failure");
+
             var generation = _callbackGenerations.GetValueOrDefault(callbackId, 0) + 1;
             _callbackGenerations[callbackId] = generation;
             Scheduled.Add(new ScheduledCallback(callbackId, generation, dueTime, evt));

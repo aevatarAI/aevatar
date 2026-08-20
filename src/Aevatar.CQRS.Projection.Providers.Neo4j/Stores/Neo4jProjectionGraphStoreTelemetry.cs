@@ -31,6 +31,23 @@ internal sealed record Neo4jProjectionGraphWriteTelemetryContext(
             graph?.Nodes?.Count,
             graph?.Edges?.Count);
 
+    internal static Neo4jProjectionGraphWriteTelemetryContext ForApplyDelta(ProjectionGraphDelta? delta) =>
+        new(
+            Neo4jProjectionGraphStoreTelemetry.ApplyDeltaOperation,
+            NormalizeOptional(delta?.Route?.ProjectionKind),
+            delta?.Source?.StateVersion,
+            NormalizeOptional(delta?.Route?.PhysicalNamespace),
+            NormalizeOptional(delta?.Route?.OwnerId),
+            null,
+            null,
+            null,
+            null,
+            delta == null ? null : delta.UpsertNodes.Count + delta.DeleteNodeIds.Count,
+            delta == null
+                ? null
+                : delta.UpsertEdges.Count + delta.UpsertPendingEdges.Count +
+                  delta.DeleteEdgeIds.Count + delta.DeletePendingEdgeIds.Count);
+
     internal static Neo4jProjectionGraphWriteTelemetryContext ForUpsertNode(ProjectionGraphNode? node) =>
         new(
             Neo4jProjectionGraphStoreTelemetry.UpsertNodeOperation,
@@ -124,6 +141,7 @@ internal static class Neo4jProjectionGraphStoreTelemetry
     internal const string UpsertEdgeOperation = "upsert_edge";
     internal const string DeleteNodeOperation = "delete_node";
     internal const string DeleteEdgeOperation = "delete_edge";
+    internal const string ApplyDeltaOperation = "apply_delta";
 
     internal const string CompletedResult = "completed";
     internal const string FailedResult = "failed";
@@ -138,6 +156,37 @@ internal static class Neo4jProjectionGraphStoreTelemetry
     private static readonly Counter<long> WriteTotal = Meter.CreateCounter<long>(
         TotalInstrumentName,
         description: "Neo4j projection graph-store write operation terminal results.");
+
+    internal static async Task<TResult> ObserveWriteAsync<TResult>(
+        ILogger logger,
+        Neo4jProjectionGraphWriteTelemetryContext context,
+        CancellationToken callerCancellationToken,
+        Func<Task<TResult>> write,
+        Func<TResult, string> resolveResult)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(write);
+        ArgumentNullException.ThrowIfNull(resolveResult);
+
+        var startedAtTimestamp = Stopwatch.GetTimestamp();
+        try
+        {
+            var result = await write();
+            RecordTerminal(logger, context, startedAtTimestamp, resolveResult(result), null);
+            return result;
+        }
+        catch (OperationCanceledException ex) when (callerCancellationToken.IsCancellationRequested)
+        {
+            RecordTerminal(logger, context, startedAtTimestamp, CancelledResult, ex);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            RecordTerminal(logger, context, startedAtTimestamp, FailedResult, ex);
+            throw;
+        }
+    }
 
     internal static async Task ObserveWriteAsync(
         ILogger logger,

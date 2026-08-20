@@ -167,7 +167,8 @@ public sealed record WorkflowRunForkSeedView(
     string WorkflowId = "",
     string RevisionId = "",
     long DefinitionVersion = 0,
-    string OriginalRunId = "")
+    string OriginalRunId = "",
+    WorkflowNormalizedExecutionSeed? NormalizedValues = null)
 {
     public WorkflowRunForkSeedView()
         : this(
@@ -186,7 +187,8 @@ public sealed record WorkflowRunForkSeedView(
             string.Empty,
             string.Empty,
             0,
-            string.Empty)
+            string.Empty,
+            null)
     {
     }
 }

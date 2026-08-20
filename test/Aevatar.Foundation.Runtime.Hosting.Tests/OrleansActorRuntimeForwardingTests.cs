@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -19,6 +20,28 @@ namespace Aevatar.Foundation.Runtime.Hosting.Tests;
 
 public sealed class OrleansActorRuntimeForwardingTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LinkAsync_WhenFleetAuthorityIsEitherEndpoint_ShouldReject(bool authorityIsParent)
+    {
+        var runtime = CreateRuntime(out var registry, out var grains, out _);
+        var parentId = authorityIsParent
+            ? RuntimeFleetCapabilityAuthorityIdentity.ActorId
+            : "ordinary-parent";
+        var childId = authorityIsParent
+            ? "ordinary-child"
+            : RuntimeFleetCapabilityAuthorityIdentity.ActorId;
+
+        var act = () => runtime.LinkAsync(parentId, childId);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot participate in actor hierarchy links*");
+        grains.Should().BeEmpty();
+        (await registry.ListBySourceAsync(parentId, CancellationToken.None)).Should().BeEmpty();
+        (await registry.ListBySourceAsync(childId, CancellationToken.None)).Should().BeEmpty();
+    }
+
     [Fact]
     public async Task CreateByKindAsync_WithExplicitId_ShouldInitializeTrimmedKindAndReturnOrleansActor()
     {
