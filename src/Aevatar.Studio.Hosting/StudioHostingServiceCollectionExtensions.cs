@@ -18,6 +18,7 @@ using Aevatar.Studio.Hosting.WorkflowBoards;
 using Aevatar.Studio.Hosting.WorkOrders;
 using Aevatar.Studio.Hosting.WorkflowDeliveries;
 using Aevatar.Studio.Hosting.NyxId;
+using Aevatar.Studio.Application.WorkflowTemplates;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
 using Aevatar.Studio.Projection.DependencyInjection;
@@ -113,6 +114,7 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<IStudioWorkspaceCommandPort>(),
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<AppScopedWorkflowService>>()));
         services.AddSingleton<IAppScopedWorkflowCatalogueService, AppScopedWorkflowCatalogueService>();
+        services.AddSingleton<PublicWorkflowTemplateService>();
         services.TryAddSingleton<
             IStudioMemberWorkflowDraftProvisioningPort,
             StudioMemberWorkflowDraftProvisioningService>();
