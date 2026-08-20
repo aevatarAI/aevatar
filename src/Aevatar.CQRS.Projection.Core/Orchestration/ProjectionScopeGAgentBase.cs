@@ -172,8 +172,8 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         var runtimeSourceActorId = inbound.Runtime?.SourceActorId;
         return inbound.Route.IsDirect() &&
                string.Equals(inbound.Route?.PublisherActorId, expectedActorId, StringComparison.Ordinal) &&
-               (string.IsNullOrWhiteSpace(runtimeSourceActorId) ||
-                string.Equals(runtimeSourceActorId, expectedActorId, StringComparison.Ordinal));
+               !string.IsNullOrWhiteSpace(runtimeSourceActorId) &&
+               string.Equals(runtimeSourceActorId, expectedActorId, StringComparison.Ordinal);
     }
 
     private bool HasSameScope(ReleaseProjectionScopeCommand command) =>
@@ -380,6 +380,12 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverGoldenVerified)
             .On<ProjectionMaterializationCutoverActivatedEvent>(
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverActivated)
+            .On<ProjectionScopeStatusRoutePreparationStartedEvent>(
+                ProjectionScopeStateApplier.ApplyStatusRoutePreparationStarted)
+            .On<ProjectionScopeStatusActorSealRecordedEvent>(
+                ProjectionScopeStateApplier.ApplyStatusActorSealRecorded)
+            .On<ProjectionScopeStatusRouteActivationSealsBoundEvent>(
+                ProjectionScopeStateApplier.ApplyStatusRouteActivationSealsBound)
             .On<ProjectionScopeStatusRouteWarmingStartedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteWarmingStarted)
             .On<ProjectionScopeStatusRouteWarmingProbedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteWarmingProbed)
             .On<ProjectionScopeStatusRouteCaughtUpEvent>(ProjectionScopeStateApplier.ApplyStatusRouteCaughtUp)

@@ -35,6 +35,13 @@ public sealed class ActorStateMigrationAttribute : Attribute
     /// migration step.
     /// </summary>
     public int RequiredContractVersion { get; set; }
+
+    /// <summary>
+    /// Exact gate status accepted as migration evidence. OPEN is the default; QUIESCED is valid
+    /// only for one-way bridge migrations whose historical evidence is intentionally terminal.
+    /// </summary>
+    public RuntimeFleetCapabilityGateStatus RequiredGateStatus { get; set; } =
+        RuntimeFleetCapabilityGateStatus.Open;
 }
 
 /// <summary>
@@ -62,4 +69,5 @@ public sealed record ActorStateMigrationStep(
     Func<byte[], byte[]> Apply,
     RuntimeFleetCapability RequiredCapability = RuntimeFleetCapability.Unspecified,
     string RequiredContractId = "",
-    int RequiredContractVersion = 0);
+    int RequiredContractVersion = 0,
+    RuntimeFleetCapabilityGateStatus RequiredGateStatus = RuntimeFleetCapabilityGateStatus.Open);

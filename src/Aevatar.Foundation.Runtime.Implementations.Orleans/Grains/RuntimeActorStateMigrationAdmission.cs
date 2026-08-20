@@ -14,7 +14,8 @@ internal static class RuntimeActorStateMigrationPersistence
         IRuntimeLocalMembershipIdentityReader membershipReader,
         TimeProvider? timeProvider = null,
         RuntimeActorStateMigrationAdmissionOptions? options = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IRuntimeFleetCapabilityQuiescenceReader? quiescenceReader = null)
     {
         ArgumentNullException.ThrowIfNull(persistentState);
         ArgumentNullException.ThrowIfNull(implementation);
@@ -36,7 +37,8 @@ internal static class RuntimeActorStateMigrationPersistence
             membershipReader,
             timeProvider,
             options,
-            ct);
+            ct,
+            quiescenceReader);
         if (!decision.IsAdmitted)
             return false;
 
@@ -49,7 +51,8 @@ internal static class RuntimeActorStateMigrationPersistence
             membershipReader,
             timeProvider,
             options,
-            ct);
+            ct,
+            quiescenceReader);
         if (!RuntimeActorStateMigrationAdmission.HasSameAdmissionProof(
                 decision,
                 revalidated))

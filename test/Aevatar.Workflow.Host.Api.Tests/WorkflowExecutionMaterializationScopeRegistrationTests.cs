@@ -39,15 +39,32 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
         implementation.Metadata.StateSchemaVersion.Should().Be(
             WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion);
         implementation.StateContractType.Should().Be(typeof(ProjectionScopeState));
-        var migration = implementation.StateMigrations.Should().ContainSingle().Subject;
-        migration.MigrationType.Should()
+        var migrations = implementation.StateMigrations.Should().HaveCount(2).And.Subject;
+        var graphMigration = migrations.Single(static migration => migration.FromStateVersion == 0);
+        graphMigration.MigrationType.Should()
             .Be(typeof(WorkflowExecutionMaterializationScopeStateV0ToV1Migration));
-        migration.FromStateVersion.Should().Be(0);
-        migration.ToStateVersion.Should().Be(1);
-        migration.RequiredCapability.Should().Be(RuntimeFleetCapability.ProjectionIncrementalGraphV1);
-        migration.RequiredContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphV1);
-        migration.RequiredContractVersion.Should()
+        graphMigration.ToStateVersion.Should()
+            .Be(WorkflowExecutionMaterializationScopeGAgent.IncrementalGraphStateSchemaVersion);
+        graphMigration.RequiredCapability.Should()
+            .Be(RuntimeFleetCapability.ProjectionIncrementalGraphV1);
+        graphMigration.RequiredContractId.Should()
+            .Be(RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphV1);
+        graphMigration.RequiredContractVersion.Should()
             .Be(RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphReaderVersion);
+        graphMigration.RequiredGateStatus.Should().Be(RuntimeFleetCapabilityGateStatus.Open);
+
+        var activationSealMigration = migrations.Single(static migration => migration.FromStateVersion == 1);
+        activationSealMigration.MigrationType.Should()
+            .Be(typeof(WorkflowExecutionMaterializationScopeStateV1ToV2Migration));
+        activationSealMigration.ToStateVersion.Should()
+            .Be(WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion);
+        activationSealMigration.RequiredCapability.Should()
+            .Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV3);
+        activationSealMigration.RequiredContractId.Should()
+            .Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1);
+        activationSealMigration.RequiredContractVersion.Should()
+            .Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion);
+        activationSealMigration.RequiredGateStatus.Should().Be(RuntimeFleetCapabilityGateStatus.Open);
 
         var advertisement = provider
             .GetServices<IRuntimeFleetCapabilityAdvertisement>()
@@ -65,7 +82,8 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
     [Fact]
     public void WorkflowScopeDurableRecovery_ShouldRequireExactSchemaAdoptionReceipt()
     {
-        var exactReceipt = CreateAdoptionReceipt();
+        var exactReceipt = CreateGraphAdoptionReceipt();
+        var activationSealReceipt = CreateActivationSealAdoptionReceipt();
 
         IsDurableRecoveryEnabled(null).Should().BeFalse();
         IsDurableRecoveryEnabled(new RuntimeActorStateSchemaContext(
@@ -93,6 +111,12 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
         IsDurableRecoveryEnabled(new RuntimeActorStateSchemaContext(
                 WorkflowExecutionMaterializationScopeGAgent.AgentKind,
                 WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion,
+                [exactReceipt, activationSealReceipt]))
+            .Should()
+            .BeTrue();
+        IsDurableRecoveryEnabled(new RuntimeActorStateSchemaContext(
+                WorkflowExecutionMaterializationScopeGAgent.AgentKind,
+                WorkflowExecutionMaterializationScopeGAgent.IncrementalGraphStateSchemaVersion,
                 [exactReceipt]))
             .Should()
             .BeTrue();
@@ -121,40 +145,111 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
             typeof(ProjectionScopeState).FullName,
             snapshot,
             implementation,
-            new StubAdmissionReader(CreateAdmission()),
+            new StubAdmissionReader(CreateGraphAdmission(), CreateActivationSealAdmission()),
             new StubMembershipReader(membership),
             new FixedTimeProvider(Now));
 
         decision.IsMigrationRequired.Should().BeTrue();
         decision.IsAdmitted.Should().BeTrue();
-        decision.StateSchemaVersion.Should().Be(1);
+        decision.StateSchemaVersion.Should().Be(
+            WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion);
         decision.StateTypeName.Should().Be(typeof(ProjectionScopeState).FullName);
         decision.Snapshot.Should().Equal(snapshot);
         decision.AdmissionMembership.Should().Be(membership);
 
-        var receipt = decision.AdoptionReceipts.Should().ContainSingle().Subject;
-        receipt.StateSchemaVersion.Should().Be(1);
-        receipt.RequiredCapability.Should().Be(RuntimeFleetCapability.ProjectionIncrementalGraphV1);
-        receipt.RequiredContractId.Should().Be(RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphV1);
-        receipt.RequiredContractVersion.Should()
+        var receipts = decision.AdoptionReceipts.Should().HaveCount(2).And.Subject;
+        var graphReceipt = receipts.Single(static receipt => receipt.StateSchemaVersion == 1);
+        graphReceipt.RequiredCapability.Should().Be(RuntimeFleetCapability.ProjectionIncrementalGraphV1);
+        graphReceipt.RequiredContractId.Should()
+            .Be(RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphV1);
+        graphReceipt.RequiredContractVersion.Should()
             .Be(RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphReaderVersion);
-        receipt.CapabilityEpoch.Should().Be(3);
-        receipt.AuthorityStateVersion.Should().Be(9);
-        receipt.MembershipEpoch.Should().Be(7);
-        receipt.DeploymentRevision.Should().Be("revision-a");
-        receipt.AuthorityActorId.Should().Be(RuntimeFleetCapabilityAuthorityIdentity.ActorId);
-        receipt.MembershipDigest.Should().Be("digest-a");
-        receipt.AdoptedAt.ToDateTimeOffset().Should().Be(Now);
+        graphReceipt.CapabilityEpoch.Should().Be(3);
+        graphReceipt.AuthorityStateVersion.Should().Be(9);
+        graphReceipt.MembershipEpoch.Should().Be(7);
+        graphReceipt.DeploymentRevision.Should().Be("revision-a");
+        graphReceipt.AuthorityActorId.Should().Be(RuntimeFleetCapabilityAuthorityIdentity.ActorId);
+        graphReceipt.MembershipDigest.Should().Be("digest-a");
+        graphReceipt.EvidenceStatus.Should().Be(RuntimeFleetCapabilityGateStatus.Open);
+        graphReceipt.AdoptedAt.ToDateTimeOffset().Should().Be(Now);
+
+        var activationSealReceipt = receipts.Single(static receipt => receipt.StateSchemaVersion == 2);
+        activationSealReceipt.RequiredCapability.Should()
+            .Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV3);
+        activationSealReceipt.RequiredContractId.Should()
+            .Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1);
+        activationSealReceipt.RequiredContractVersion.Should()
+            .Be(RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion);
+        activationSealReceipt.CapabilityEpoch.Should().Be(4);
+        activationSealReceipt.AuthorityStateVersion.Should().Be(10);
+        activationSealReceipt.EvidenceStatus.Should().Be(RuntimeFleetCapabilityGateStatus.Open);
+        activationSealReceipt.AdoptedAt.ToDateTimeOffset().Should().Be(Now);
     }
 
     [Fact]
-    public async Task WorkflowScopeOldSchemaReader_WhenPersistedSchemaIsV1_ShouldReject()
+    public async Task WorkflowScopeActivationSealMigration_ShouldFailClosedWithoutFreshV3Admission()
+    {
+        var implementation = ResolveImplementation();
+        var snapshot = new ProjectionScopeState
+        {
+            RootActorId = "workflow-run-alpha",
+            ProjectionKind = "workflow-execution",
+            Active = true,
+        }.ToByteArray();
+        var identity = new RuntimeActorIdentity
+        {
+            Kind = WorkflowExecutionMaterializationScopeGAgent.AgentKind,
+            StateSchemaVersion =
+                WorkflowExecutionMaterializationScopeGAgent.IncrementalGraphStateSchemaVersion,
+        };
+        identity.StateSchemaAdoptions.Add(CreateGraphAdoptionReceipt());
+
+        var blocked = await RuntimeActorStateMigrationAdmission.EvaluateAsync(
+            identity,
+            typeof(ProjectionScopeState).FullName,
+            snapshot,
+            implementation,
+            new StubAdmissionReader(CreateGraphAdmission()),
+            new StubMembershipReader(CurrentMembership()),
+            new FixedTimeProvider(Now));
+
+        blocked.IsMigrationRequired.Should().BeTrue();
+        blocked.IsAdmitted.Should().BeFalse();
+        blocked.AdoptionReceipts.Should().BeEmpty();
+
+        var admitted = await RuntimeActorStateMigrationAdmission.EvaluateAsync(
+            identity,
+            typeof(ProjectionScopeState).FullName,
+            snapshot,
+            implementation,
+            new StubAdmissionReader(CreateActivationSealAdmission()),
+            new StubMembershipReader(CurrentMembership()),
+            new FixedTimeProvider(Now));
+
+        admitted.IsAdmitted.Should().BeTrue();
+        admitted.StateSchemaVersion.Should().Be(
+            WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion);
+        var receipt = admitted.AdoptionReceipts.Should().ContainSingle().Subject;
+        receipt.StateSchemaVersion.Should().Be(2);
+        receipt.RequiredCapability.Should()
+            .Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV3);
+        receipt.EvidenceStatus.Should().Be(RuntimeFleetCapabilityGateStatus.Open);
+    }
+
+    [Fact]
+    public async Task WorkflowScopePhaseAReader_WhenPersistedSchemaIsV2_ShouldReject()
     {
         var current = ResolveImplementation();
         var oldReader = current with
         {
-            Metadata = current.Metadata with { StateSchemaVersion = 0 },
-            StateMigrations = [],
+            Metadata = current.Metadata with
+            {
+                StateSchemaVersion =
+                    WorkflowExecutionMaterializationScopeGAgent.IncrementalGraphStateSchemaVersion,
+            },
+            StateMigrations = current.StateMigrations!
+                .Where(static migration => migration.ToStateVersion == 1)
+                .ToArray(),
         };
         var snapshot = new ProjectionScopeState
         {
@@ -166,7 +261,7 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
             new RuntimeActorIdentity
             {
                 Kind = WorkflowExecutionMaterializationScopeGAgent.AgentKind,
-                StateSchemaVersion = 1,
+                StateSchemaVersion = WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion,
             },
             typeof(ProjectionScopeState).FullName,
             snapshot,
@@ -175,7 +270,7 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
             new UnavailableRuntimeLocalMembershipIdentityReader());
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*persisted state schema version 1 is newer than supported version 0*");
+            .WithMessage("*persisted state schema version 2 is newer than supported version 1*");
     }
 
     private static AgentImplementation ResolveImplementation()
@@ -187,7 +282,7 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
             .Resolve(WorkflowExecutionMaterializationScopeGAgent.AgentKind);
     }
 
-    private static RuntimeFleetCapabilityAdmission CreateAdmission()
+    private static RuntimeFleetCapabilityAdmission CreateGraphAdmission()
     {
         var admission = new RuntimeFleetCapabilityAdmission
         {
@@ -216,11 +311,24 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
         return admission;
     }
 
-    private static RuntimeActorStateSchemaAdoptionReceipt CreateAdoptionReceipt() =>
+    private static RuntimeFleetCapabilityAdmission CreateActivationSealAdmission()
+    {
+        var admission = CreateGraphAdmission();
+        admission.Capability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV3;
+        admission.ContractId =
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1;
+        admission.MinimumReaderContractVersion =
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion;
+        admission.CapabilityEpoch = 4;
+        admission.AuthorityStateVersion = 10;
+        return admission;
+    }
+
+    private static RuntimeActorStateSchemaAdoptionReceipt CreateGraphAdoptionReceipt() =>
         new()
         {
             StateSchemaVersion =
-                WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion,
+                WorkflowExecutionMaterializationScopeGAgent.IncrementalGraphStateSchemaVersion,
             RequiredCapability = RuntimeFleetCapability.ProjectionIncrementalGraphV1,
             RequiredContractId = RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphV1,
             RequiredContractVersion =
@@ -232,6 +340,26 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
             AdoptedAt = Timestamp.FromDateTimeOffset(Now),
             AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
             MembershipDigest = "digest-a",
+            EvidenceStatus = RuntimeFleetCapabilityGateStatus.Open,
+        };
+
+    private static RuntimeActorStateSchemaAdoptionReceipt CreateActivationSealAdoptionReceipt() =>
+        new()
+        {
+            StateSchemaVersion = WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion,
+            RequiredCapability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+            RequiredContractId =
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1,
+            RequiredContractVersion =
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion,
+            CapabilityEpoch = 4,
+            AuthorityStateVersion = 10,
+            MembershipEpoch = 7,
+            DeploymentRevision = "revision-a",
+            AdoptedAt = Timestamp.FromDateTimeOffset(Now),
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            MembershipDigest = "digest-a",
+            EvidenceStatus = RuntimeFleetCapabilityGateStatus.Open,
         };
 
     private static bool IsDurableRecoveryEnabled(RuntimeActorStateSchemaContext? context)
@@ -258,7 +386,7 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
     private static RuntimeLocalMembershipIdentity CurrentMembership() =>
         new(7, "digest-a", "revision-a", "member-a", "inc-a");
 
-    private sealed class StubAdmissionReader(RuntimeFleetCapabilityAdmission admission)
+    private sealed class StubAdmissionReader(params RuntimeFleetCapabilityAdmission[] admissions)
         : IRuntimeFleetCapabilityAdmissionReader
     {
         public Task<RuntimeFleetCapabilityAdmission?> GetAsync(
@@ -266,7 +394,8 @@ public sealed class WorkflowExecutionMaterializationScopeRegistrationTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<RuntimeFleetCapabilityAdmission?>(admission.Clone());
+            return Task.FromResult(
+                admissions.SingleOrDefault(candidate => candidate.Capability == capability)?.Clone());
         }
     }
 

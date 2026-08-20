@@ -106,6 +106,21 @@ public sealed class OrleansRuntimeServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddAevatarFoundationRuntimeOrleans_ShouldRegisterActivationSealTurnoverSupport()
+    {
+        var services = new ServiceCollection();
+
+        services.AddAevatarFoundationRuntimeOrleans();
+
+        var descriptor = services.LastOrDefault(service =>
+            service.ServiceType ==
+            typeof(IRuntimeActorStateSchemaActivationSealSupport));
+        descriptor.Should().NotBeNull();
+        descriptor!.ImplementationType.Should().Be(
+            typeof(OrleansRuntimeActorStateSchemaActivationSealSupport));
+    }
+
+    [Fact]
     public void AddAevatarFoundationRuntimeOrleans_SiloBuilder_WhenPersistenceBackendIsUnsupported_ShouldThrow()
     {
         var act = () =>

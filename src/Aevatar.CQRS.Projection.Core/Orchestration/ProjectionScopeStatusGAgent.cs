@@ -24,11 +24,12 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// source scope's committed status route names this contract. It keeps no per-envelope
 /// bookkeeping stream: its own durable facts are lifecycle and deferred-write retries.
 /// </summary>
-[GAgent(AgentKind)]
+[GAgent(AgentKind, StateSchemaVersion = SupportedStateSchemaVersion)]
 public sealed class ProjectionScopeStatusGAgent
     : GAgentBase<ProjectionScopeStatusTerminalState>
 {
     public const string AgentKind = "projection.scope-status-terminal";
+    public const int SupportedStateSchemaVersion = 1;
     /// <summary>
     /// The contract every new route names. Routes created under an earlier terminal contract are
     /// still served by this materializer (a source keeps its status writer across the upgrade),
@@ -157,8 +158,39 @@ public sealed class ProjectionScopeStatusGAgent
         var runtimeSourceActorId = inbound.Runtime?.SourceActorId;
         return inbound.Route.IsDirect() &&
                string.Equals(inbound.Route?.PublisherActorId, expectedActorId, StringComparison.Ordinal) &&
-               (string.IsNullOrWhiteSpace(runtimeSourceActorId) ||
-                string.Equals(runtimeSourceActorId, expectedActorId, StringComparison.Ordinal));
+               !string.IsNullOrWhiteSpace(runtimeSourceActorId) &&
+               string.Equals(runtimeSourceActorId, expectedActorId, StringComparison.Ordinal);
+    }
+
+    [EventHandler]
+    public async Task HandleStatusActorSealRequestAsync(RequestProjectionScopeStatusActorSealCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Role != ProjectionScopeStatusActorRole.TerminalWriter ||
+            command.RouteEpoch <= 0 ||
+            string.IsNullOrWhiteSpace(command.SourceScopeActorId) ||
+            !string.Equals(command.ExpectedActorId, Id, StringComparison.Ordinal) ||
+            !string.Equals(command.ExpectedAgentKind, AgentKind, StringComparison.Ordinal) ||
+            !IsExpectedDirectPublisher(command.SourceScopeActorId) ||
+            (!string.IsNullOrWhiteSpace(State.SourceScopeActorId) &&
+             !string.Equals(State.SourceScopeActorId, command.SourceScopeActorId, StringComparison.Ordinal)) ||
+            !ProjectionScopeStatusActivationSealPolicy.TryCreate(
+                Services.GetService<IRuntimeActorStateSchemaContextReader>(),
+                ProjectionScopeStatusActorRole.TerminalWriter,
+                Id,
+                command.ExpectedAgentKind,
+                out var seal))
+        {
+            return;
+        }
+
+        await SendToAsync(command.SourceScopeActorId, new ProjectionScopeStatusActorSealReadyEvent
+        {
+            SourceScopeActorId = command.SourceScopeActorId,
+            RouteEpoch = command.RouteEpoch,
+            Seal = seal,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
+        });
     }
 
     private Task ConfirmReleasedAsync(string sourceScopeActorId, long routeEpoch) =>
@@ -204,10 +236,10 @@ public sealed class ProjectionScopeStatusGAgent
             ContractId,
             ContractVersion);
         if ((warmingTerminalRoute || route?.Phase == ProjectionScopeStatusRoutePhase.Blocked) &&
-            !await HasTerminalQuiescenceReceiptAsync())
+            !await HasTerminalWriterPhaseBProofsAsync(route!, sourceScopeActorId))
         {
-            // The existing continuation event types are understood by old sources, so writers
-            // must remain silent until the distinct bridge contract is unanimously quiesced.
+            // Phase-B writers remain silent unless the historical drain proof, fresh V3
+            // admission and all three actor-owned seals agree with this exact writer instance.
             return;
         }
 
@@ -292,6 +324,33 @@ public sealed class ProjectionScopeStatusGAgent
                    RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceReaderVersion,
                    reader,
                    CancellationToken.None) != null;
+    }
+
+    private async Task<bool> HasTerminalWriterPhaseBProofsAsync(
+        ProjectionScopeStatusRoute route,
+        string sourceScopeActorId)
+    {
+        if (!await HasTerminalQuiescenceReceiptAsync() ||
+            await ProjectionScopeStatusActivationSealPolicy.ReadFreshAdmissionAsync(
+                Services,
+                CancellationToken.None) == null)
+        {
+            return false;
+        }
+
+        var reader = Services.GetService<IRuntimeActorStateSchemaContextReader>();
+        return ProjectionScopeStatusActivationSealPolicy.TryCreate(
+                   reader,
+                   ProjectionScopeStatusActorRole.TerminalWriter,
+                   Id,
+                   AgentKind,
+                   out var currentWriterSeal) &&
+               ProjectionScopeStatusActivationSealPolicy.RouteHasAllRequiredWriterSeals(
+                   route,
+                   sourceScopeActorId,
+                   ProjectionScopeStatusRoutes.BuildLegacyActorId(sourceScopeActorId),
+                   ProjectionScopeStatusRoutes.BuildTerminalActorId(sourceScopeActorId),
+                   currentWriterSeal);
     }
 
     /// <summary>

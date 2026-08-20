@@ -109,6 +109,10 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
     private static readonly string TerminalActorId = ProjectionScopeStatusRoutes.BuildTerminalActorId(SourceScopeActorId);
     private static readonly string LegacyActorId = ProjectionScopeStatusRoutes.BuildLegacyActorId(SourceScopeActorId);
 
+    private const string SourceAgentKind = "projection.materialization-scope.mixed-binary-context";
+    private const string LegacyWriterAgentKind =
+        "projection.materialization-scope.projection-scope-status-materialization-context";
+
     // ── 0. document contract ───────────────────────────────────────────────────────────
 
     [Fact]
@@ -430,6 +434,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         var warming = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, ProjectionScopeStatusRoutePhase.Warming);
         warming.WarmStartedVersion = 4;
         warming.ActivatedAtUtc = Timestamp.FromDateTimeOffset(Now);
+        AddPhaseBSeals(warming);
         var warmingStarted = new ProjectionScopeStatusRouteWarmingStartedEvent { Route = warming, OccurredAtUtc = Timestamp.FromDateTimeOffset(Now) };
         routeCarrier = ProjectionScopeStateApplier.ApplyStatusRouteWarmingStarted(routeCarrier, warmingStarted);
         PreviousBinaryProjectionScopeStatusTerminalWriter.IsActiveTerminalRoute(routeCarrier.StatusRoute)
@@ -494,6 +499,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         var warming = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1, ProjectionScopeStatusRoutePhase.Warming);
         warming.WarmStartedVersion = 4;
         warming.ActivatedAtUtc = Timestamp.FromDateTimeOffset(Now);
+        AddPhaseBSeals(warming);
         var warmingStarted = new ProjectionScopeStatusRouteWarmingStartedEvent { Route = warming, OccurredAtUtc = Timestamp.FromDateTimeOffset(Now) };
         routeCarrier = ProjectionScopeStateApplier.ApplyStatusRouteWarmingStarted(routeCarrier, warmingStarted);
         routeCarrier.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Warming);
@@ -673,6 +679,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         var legacyWarming = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(2, ProjectionScopeStatusRoutePhase.Warming);
         legacyWarming.WarmStartedVersion = 9;
         legacyWarming.ActivatedAtUtc = Timestamp.FromDateTimeOffset(Now);
+        AddPhaseBSeals(legacyWarming);
         var warmingStarted = new ProjectionScopeStatusRouteWarmingStartedEvent { Route = legacyWarming, OccurredAtUtc = Timestamp.FromDateTimeOffset(Now) };
         routeCarrier = ProjectionScopeStateApplier.ApplyStatusRouteWarmingStarted(routeCarrier, warmingStarted);
         ProjectionScopeStatusRoutePolicy.IsLegacyRoute(routeCarrier.StatusRoute).Should().BeTrue();
@@ -1141,6 +1148,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         // candidate and commits one durable WARMING probe fence. The restored shadow writes that
         // current state and the terminal may finally report it.
         world.QuiesceTerminalBridge();
+        AddPhaseBSeals(routeCarrier.StatusRoute!);
         var warmingProbe = new ProjectionScopeStatusRouteWarmingProbedEvent
         {
             RouteEpoch = 1,
@@ -1339,6 +1347,82 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
             QuiescedDeploymentRevision = "revision-a",
             QuiescedAt = Timestamp.FromDateTimeOffset(Now),
             QuiescenceTransitionId = "transition:quiesce",
+        };
+
+    private static RuntimeFleetCapabilityAdmission CreateActivationSealAdmission()
+    {
+        var admission = new RuntimeFleetCapabilityAdmission
+        {
+            Capability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+            Status = RuntimeFleetCapabilityGateStatus.Open,
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            AuthorityStateVersion = 16,
+            CapabilityEpoch = 1,
+            MembershipEpoch = 8,
+            DeploymentRevision = "revision-b",
+            MinimumReaderContractVersion =
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion,
+            MembershipObservedAt = Timestamp.FromDateTimeOffset(Now.AddSeconds(-5)),
+            MembershipValidUntil = Timestamp.FromDateTimeOffset(Now.AddMinutes(1)),
+            ActiveMemberCount = 1,
+            ConfirmedMemberCount = 1,
+            MembershipDigest = "digest-b",
+            ContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1,
+        };
+        admission.AdmittedMembers.Add(new RuntimeFleetAdmittedMember
+        {
+            MemberId = "member-b",
+            Incarnation = "inc-b",
+        });
+        return admission;
+    }
+
+    private static RuntimeActorStateSchemaAdoptionReceipt CreateActivationSealReceipt() =>
+        new()
+        {
+            StateSchemaVersion = ProjectionScopeStatusGAgent.SupportedStateSchemaVersion,
+            RequiredCapability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+            RequiredContractId =
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1,
+            RequiredContractVersion =
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion,
+            CapabilityEpoch = 1,
+            AuthorityStateVersion = 16,
+            MembershipEpoch = 8,
+            DeploymentRevision = "revision-b",
+            AdoptedAt = Timestamp.FromDateTimeOffset(Now),
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            MembershipDigest = "digest-b",
+            EvidenceStatus = RuntimeFleetCapabilityGateStatus.Open,
+        };
+
+    private static void AddPhaseBSeals(ProjectionScopeStatusRoute route)
+    {
+        route.ActivationSeals.Clear();
+        route.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.Source,
+            SourceScopeActorId,
+            SourceAgentKind));
+        route.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.LegacyWriter,
+            LegacyActorId,
+            LegacyWriterAgentKind));
+        route.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.TerminalWriter,
+            TerminalActorId,
+            ProjectionScopeStatusGAgent.AgentKind));
+    }
+
+    private static ProjectionScopeStatusActorSeal CreateActivationSeal(
+        ProjectionScopeStatusActorRole role,
+        string actorId,
+        string agentKind) =>
+        new()
+        {
+            Role = role,
+            ActorId = actorId,
+            AgentKind = agentKind,
+            AdoptionReceipt = CreateActivationSealReceipt(),
         };
 
     /// <summary>
@@ -1908,8 +1992,7 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         public StatusStoreJournal Journal { get; } = new();
         public TerminalAgentHarness Terminal { get; }
 
-        public void QuiesceTerminalBridge() =>
-            Terminal.QuiescenceReader.Evidence = CreateQuiescenceEvidence();
+        public void QuiesceTerminalBridge() => Terminal.EnablePhaseB();
 
         /// <summary>B0 legacy shadow (and B2 byte shape): writes every delivered version without a route.</summary>
         public async Task<ProjectionWriteDisposition> OldBinaryWriteAsync(
@@ -2044,6 +2127,8 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
         public required TrackingEventSourcing<ProjectionScopeStatusTerminalState> EventSourcing { get; init; }
         public required RecordingEventPublisher Outbox { get; init; }
         public required MutableQuiescenceReader QuiescenceReader { get; init; }
+        public required MutableAdmissionReader AdmissionReader { get; init; }
+        public required MutableSchemaContextReader SchemaContextReader { get; init; }
 
         /// <summary>Caught-up reports the warming terminal sent to its source scope.</summary>
         public IReadOnlyList<ProjectionScopeStatusWriterCaughtUpEvent> CaughtUpReports =>
@@ -2068,10 +2153,17 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
 
             var services = new ServiceCollection();
             var quiescenceReader = new MutableQuiescenceReader(quiescence);
+            var admissionReader = new MutableAdmissionReader(
+                quiescence == null ? null : CreateActivationSealAdmission());
+            var schemaContextReader = new MutableSchemaContextReader(
+                quiescence == null ? null : CreateTerminalSchemaContext());
             services.AddSingleton(dispatcher);
             services.AddSingleton(clock);
             services.AddSingleton<IStreamProvider>(new NoRelayStreamProvider());
             services.AddSingleton<IRuntimeFleetCapabilityQuiescenceReader>(quiescenceReader);
+            services.AddSingleton<IRuntimeFleetCapabilityAdmissionReader>(admissionReader);
+            services.AddSingleton<IRuntimeLocalMembershipIdentityReader>(admissionReader);
+            services.AddSingleton<IRuntimeActorStateSchemaContextReader>(schemaContextReader);
             services.AddSingleton<TimeProvider>(new FixedTimeProvider(Now));
             agent.Services = services.BuildServiceProvider();
             return new TerminalAgentHarness
@@ -2080,8 +2172,23 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
                 EventSourcing = eventSourcing,
                 Outbox = outbox,
                 QuiescenceReader = quiescenceReader,
+                AdmissionReader = admissionReader,
+                SchemaContextReader = schemaContextReader,
             };
         }
+
+        public void EnablePhaseB()
+        {
+            QuiescenceReader.Evidence = CreateQuiescenceEvidence();
+            AdmissionReader.Admission = CreateActivationSealAdmission();
+            SchemaContextReader.Current = CreateTerminalSchemaContext();
+        }
+
+        private static RuntimeActorStateSchemaContext CreateTerminalSchemaContext() =>
+            new(
+                ProjectionScopeStatusGAgent.AgentKind,
+                ProjectionScopeStatusGAgent.SupportedStateSchemaVersion,
+                [CreateActivationSealReceipt()]);
 
         private static ProjectionScopeStatusTerminalState TransitionTerminal(
             ProjectionScopeStatusTerminalState current,
@@ -2115,6 +2222,40 @@ public sealed class ProjectionScopeStatusMixedBinaryTests
             return Task.FromResult(
                 Evidence?.Capability == capability ? Evidence.Clone() : null);
         }
+    }
+
+    private sealed class MutableAdmissionReader(RuntimeFleetCapabilityAdmission? admission)
+        : IRuntimeFleetCapabilityAdmissionReader,
+            IRuntimeLocalMembershipIdentityReader
+    {
+        public RuntimeFleetCapabilityAdmission? Admission { get; set; } = admission?.Clone();
+
+        public Task<RuntimeFleetCapabilityAdmission?> GetAsync(
+            RuntimeFleetCapability capability,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                Admission?.Capability == capability ? Admission.Clone() : null);
+        }
+
+        public ValueTask<RuntimeLocalMembershipIdentity?> GetCurrentAsync(
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<RuntimeLocalMembershipIdentity?>(new RuntimeLocalMembershipIdentity(
+                8,
+                "digest-b",
+                "revision-b",
+                "member-b",
+                "inc-b"));
+        }
+    }
+
+    private sealed class MutableSchemaContextReader(RuntimeActorStateSchemaContext? current)
+        : IRuntimeActorStateSchemaContextReader
+    {
+        public RuntimeActorStateSchemaContext? Current { get; set; } = current;
     }
 
     private sealed record SentMessage(string TargetActorId, IMessage Message);

@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Context;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Streaming;
@@ -60,6 +61,14 @@ public class LocalActorRuntimeTests : IAsyncLifetime
             await _runtime.DestroyAsync(id);
 
         _serviceProvider.Dispose();
+    }
+
+    [Fact]
+    public void RuntimeComposition_ShouldNotClaimActivationSealTurnoverSupport()
+    {
+        _serviceProvider
+            .GetService<IRuntimeActorStateSchemaActivationSealSupport>()
+            .Should().BeNull();
     }
 
     [Fact]

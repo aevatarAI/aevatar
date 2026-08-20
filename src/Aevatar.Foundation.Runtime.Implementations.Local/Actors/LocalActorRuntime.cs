@@ -250,7 +250,8 @@ public sealed class LocalActorRuntime : IActorRuntime
                     new UnavailableRuntimeLocalMembershipIdentityReader(),
                 _services.GetService<TimeProvider>(),
                 _services.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
-                ct);
+                ct,
+                _services.GetService<IRuntimeFleetCapabilityQuiescenceReader>());
 
             if (decision.IsAdmitted)
             {
@@ -265,7 +266,8 @@ public sealed class LocalActorRuntime : IActorRuntime
                         new UnavailableRuntimeLocalMembershipIdentityReader(),
                     _services.GetService<TimeProvider>(),
                     _services.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
-                    ct);
+                    ct,
+                    _services.GetService<IRuntimeFleetCapabilityQuiescenceReader>());
                 if (!RuntimeActorStateMigrationAdmission.HasSameAdmissionProof(
                         decision,
                         revalidated))

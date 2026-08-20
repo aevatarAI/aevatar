@@ -15,7 +15,7 @@ internal sealed class WorkflowExecutionMaterializationScopeStateV0ToV1Migration
     public int FromStateVersion => 0;
 
     public int ToStateVersion =>
-        WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion;
+        WorkflowExecutionMaterializationScopeGAgent.IncrementalGraphStateSchemaVersion;
 
     public ProjectionScopeState Apply(ProjectionScopeState state)
     {

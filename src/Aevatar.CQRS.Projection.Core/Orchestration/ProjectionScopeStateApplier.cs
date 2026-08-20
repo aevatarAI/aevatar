@@ -371,9 +371,151 @@ internal static class ProjectionScopeStateApplier
         next.StatusRoute.WarmingProbeVersion = 0;
         next.StatusRoute.DrainProbeVersion = 0;
         next.StatusRoute.FlipVersion = 0;
+        next.StatusRoutePreparation = null;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }
+
+    public static ProjectionScopeState ApplyStatusRoutePreparationStarted(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRoutePreparationStartedEvent evt)
+    {
+        var preparation = evt.Preparation;
+        var candidate = preparation?.CandidateRoute;
+        if (preparation == null ||
+            candidate == null ||
+            candidate.RouteEpoch <= 0 ||
+            string.IsNullOrWhiteSpace(preparation.SourceScopeActorId) ||
+            string.IsNullOrWhiteSpace(preparation.SourceAgentKind) ||
+            string.IsNullOrWhiteSpace(preparation.LegacyWriterActorId) ||
+            string.IsNullOrWhiteSpace(preparation.LegacyWriterAgentKind) ||
+            string.IsNullOrWhiteSpace(preparation.TerminalWriterActorId) ||
+            string.IsNullOrWhiteSpace(preparation.TerminalWriterAgentKind) ||
+            !HasExactStatusRoutePreparationIdentity(current, preparation) ||
+            !ProjectionScopeStatusActivationSealPolicy.HasExactSourceSeal(preparation))
+        {
+            return current;
+        }
+
+        var currentRoute = current.StatusRoute;
+        var currentEpoch = currentRoute?.RouteEpoch ?? 0;
+        if (preparation.ResumesPersistedRoute
+                ? !CanResumeStatusRoutePreparation(currentRoute, candidate)
+                : candidate.RouteEpoch <= currentEpoch)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.StatusRoutePreparation = preparation.Clone();
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    private static bool HasExactStatusRoutePreparationIdentity(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRoutePreparation preparation)
+    {
+        var candidate = preparation.CandidateRoute;
+        if (candidate == null ||
+            string.IsNullOrWhiteSpace(current.RootActorId) ||
+            string.IsNullOrWhiteSpace(current.ProjectionKind))
+        {
+            return false;
+        }
+
+        var expectedSourceActorId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            current.RootActorId,
+            current.ProjectionKind,
+            ProjectionScopeModeMapper.ToRuntime(current.Mode),
+            current.SessionId));
+        if (!string.Equals(
+                preparation.SourceScopeActorId,
+                expectedSourceActorId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                preparation.LegacyWriterActorId,
+                ProjectionScopeStatusRoutes.BuildLegacyActorId(expectedSourceActorId),
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                preparation.TerminalWriterActorId,
+                ProjectionScopeStatusRoutes.BuildTerminalActorId(expectedSourceActorId),
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                preparation.TerminalWriterAgentKind,
+                ProjectionScopeStatusGAgent.AgentKind,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return preparation.ResumesPersistedRoute ||
+               ProjectionScopeStatusRoutePolicy.IsTerminalRoute(candidate) &&
+               candidate.Phase == ProjectionScopeStatusRoutePhase.Warming;
+    }
+
+    public static ProjectionScopeState ApplyStatusActorSealRecorded(
+        ProjectionScopeState current,
+        ProjectionScopeStatusActorSealRecordedEvent evt)
+    {
+        var preparation = current.StatusRoutePreparation;
+        if (preparation?.CandidateRoute == null ||
+            preparation.CandidateRoute.RouteEpoch != evt.RouteEpoch ||
+            !ProjectionScopeStatusActivationSealPolicy.IsExpectedWriterSeal(preparation, evt.Seal))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        var existing = next.StatusRoutePreparation.ActivationSeals
+            .Where(seal => seal.Role == evt.Seal.Role)
+            .ToArray();
+        foreach (var seal in existing)
+            next.StatusRoutePreparation.ActivationSeals.Remove(seal);
+        next.StatusRoutePreparation.ActivationSeals.Add(evt.Seal.Clone());
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyStatusRouteActivationSealsBound(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRouteActivationSealsBoundEvent evt)
+    {
+        var route = current.StatusRoute;
+        var preparation = current.StatusRoutePreparation;
+        if (route == null ||
+            preparation?.CandidateRoute == null ||
+            !preparation.ResumesPersistedRoute ||
+            route.RouteEpoch != evt.RouteEpoch ||
+            !CanResumeStatusRoutePreparation(route, preparation.CandidateRoute) ||
+            !ProjectionScopeStatusActivationSealPolicy.HasAllRequiredSeals(
+                evt.ActivationSeals,
+                preparation))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.StatusRoute.ActivationSeals.Clear();
+        next.StatusRoute.ActivationSeals.Add(evt.ActivationSeals.Select(static seal => seal.Clone()));
+        next.StatusRoutePreparation = null;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    private static bool CanResumeStatusRoutePreparation(
+        ProjectionScopeStatusRoute? currentRoute,
+        ProjectionScopeStatusRoute candidateRoute) =>
+        currentRoute != null &&
+        currentRoute.RouteEpoch == candidateRoute.RouteEpoch &&
+        string.Equals(currentRoute.ContractId, candidateRoute.ContractId, StringComparison.Ordinal) &&
+        currentRoute.ContractVersion == candidateRoute.ContractVersion &&
+        currentRoute.Phase == candidateRoute.Phase &&
+        (currentRoute.Phase is ProjectionScopeStatusRoutePhase.Warming or
+             ProjectionScopeStatusRoutePhase.Blocked ||
+         ProjectionScopeStatusRoutePolicy.IsTerminalRoute(currentRoute) &&
+         currentRoute.Phase is ProjectionScopeStatusRoutePhase.Active or
+             ProjectionScopeStatusRoutePhase.Unspecified);
 
     public static ProjectionScopeState ApplyStatusRouteCaughtUp(
         ProjectionScopeState current,
@@ -486,6 +628,7 @@ internal static class ProjectionScopeStateApplier
 
         var next = current.Clone();
         next.StatusRoute = route.Clone();
+        next.StatusRoutePreparation = null;
         if (next.StatusRoute.Phase == ProjectionScopeStatusRoutePhase.Unspecified ||
             next.StatusRoute.Phase == ProjectionScopeStatusRoutePhase.Warming ||
             next.StatusRoute.Phase == ProjectionScopeStatusRoutePhase.Blocked)
@@ -535,6 +678,7 @@ internal static class ProjectionScopeStateApplier
         var next = current.Clone();
         next.StatusRoute = route.Clone();
         next.StatusRoute.Phase = ProjectionScopeStatusRoutePhase.Active;
+        next.StatusRoutePreparation = null;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }

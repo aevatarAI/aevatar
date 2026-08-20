@@ -12,7 +12,7 @@ namespace Aevatar.Foundation.Core.Runtime;
 /// </summary>
 public static class RuntimeActorStateMigrationAdmission
 {
-    public static async Task<RuntimeActorStateMigrationDecision> EvaluateAsync(
+    public static Task<RuntimeActorStateMigrationDecision> EvaluateAsync(
         RuntimeActorIdentity identity,
         string? stateTypeName,
         byte[]? snapshot,
@@ -21,7 +21,30 @@ public static class RuntimeActorStateMigrationAdmission
         IRuntimeLocalMembershipIdentityReader membershipReader,
         TimeProvider? timeProvider = null,
         RuntimeActorStateMigrationAdmissionOptions? options = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        EvaluateAsync(
+            identity,
+            stateTypeName,
+            snapshot,
+            implementation,
+            admissionReader,
+            membershipReader,
+            timeProvider,
+            options,
+            ct,
+            quiescenceReader: null);
+
+    public static async Task<RuntimeActorStateMigrationDecision> EvaluateAsync(
+        RuntimeActorIdentity identity,
+        string? stateTypeName,
+        byte[]? snapshot,
+        AgentImplementation implementation,
+        IRuntimeFleetCapabilityAdmissionReader admissionReader,
+        IRuntimeLocalMembershipIdentityReader membershipReader,
+        TimeProvider? timeProvider,
+        RuntimeActorStateMigrationAdmissionOptions? options,
+        CancellationToken ct,
+        IRuntimeFleetCapabilityQuiescenceReader? quiescenceReader)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(implementation);
@@ -37,23 +60,53 @@ public static class RuntimeActorStateMigrationAdmission
         }
 
         ValidatePersistedAdoptions(identity, implementation);
-        RuntimeLocalMembershipIdentity? localMembership;
-        try
-        {
-            localMembership = await membershipReader.GetCurrentAsync(ct);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            return RuntimeActorStateMigrationDecision.Blocked;
-        }
-        if (!RuntimeFleetCapabilityAdmissionValidation.IsValidLocalMembership(localMembership))
-            return RuntimeActorStateMigrationDecision.Blocked;
-
         var clock = timeProvider ?? TimeProvider.System;
         var policy = options ?? new RuntimeActorStateMigrationAdmissionOptions();
         var receipts = new List<RuntimeActorStateSchemaAdoptionReceipt>(migration.Steps.Count);
+        RuntimeLocalMembershipIdentity? localMembership = null;
         foreach (var step in migration.Steps)
         {
+            if (step.RequiredGateStatus == RuntimeFleetCapabilityGateStatus.Quiesced)
+            {
+                if (quiescenceReader == null)
+                    return RuntimeActorStateMigrationDecision.Blocked;
+
+                RuntimeFleetCapabilityQuiescenceReceipt? quiescence;
+                try
+                {
+                    quiescence = await RuntimeFleetCapabilityAdmissionValidation
+                        .GetQuiescenceReceiptAsync(
+                            step.RequiredCapability,
+                            step.RequiredContractId,
+                            step.RequiredContractVersion,
+                            quiescenceReader,
+                            ct);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    return RuntimeActorStateMigrationDecision.Blocked;
+                }
+                if (quiescence == null)
+                    return RuntimeActorStateMigrationDecision.Blocked;
+
+                receipts.Add(CreateQuiescenceReceipt(step, quiescence.Evidence, clock.GetUtcNow()));
+                continue;
+            }
+
+            if (localMembership == null)
+            {
+                try
+                {
+                    localMembership = await membershipReader.GetCurrentAsync(ct);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    return RuntimeActorStateMigrationDecision.Blocked;
+                }
+                if (!RuntimeFleetCapabilityAdmissionValidation.IsValidLocalMembership(localMembership))
+                    return RuntimeActorStateMigrationDecision.Blocked;
+            }
+
             RuntimeFleetCapabilityAdmission? admission;
             try
             {
@@ -73,7 +126,7 @@ public static class RuntimeActorStateMigrationAdmission
                     policy))
                 return RuntimeActorStateMigrationDecision.Blocked;
 
-            receipts.Add(CreateReceipt(step, admission!, clock.GetUtcNow()));
+            receipts.Add(CreateOpenReceipt(step, admission!, clock.GetUtcNow()));
         }
 
         var migrated = migration.InitialSnapshot;
@@ -126,7 +179,12 @@ public static class RuntimeActorStateMigrationAdmission
         left.MembershipEpoch == right.MembershipEpoch &&
         string.Equals(left.DeploymentRevision, right.DeploymentRevision, StringComparison.Ordinal) &&
         string.Equals(left.AuthorityActorId, right.AuthorityActorId, StringComparison.Ordinal) &&
-        string.Equals(left.MembershipDigest, right.MembershipDigest, StringComparison.Ordinal);
+        string.Equals(left.MembershipDigest, right.MembershipDigest, StringComparison.Ordinal) &&
+        left.EvidenceStatus == right.EvidenceStatus &&
+        string.Equals(
+            left.QuiescenceTransitionId,
+            right.QuiescenceTransitionId,
+            StringComparison.Ordinal);
 
     private static PreparedMigration? Prepare(
         RuntimeActorIdentity identity,
@@ -242,7 +300,7 @@ public static class RuntimeActorStateMigrationAdmission
         }
     }
 
-    private static RuntimeActorStateSchemaAdoptionReceipt CreateReceipt(
+    private static RuntimeActorStateSchemaAdoptionReceipt CreateOpenReceipt(
         ActorStateMigrationStep step,
         RuntimeFleetCapabilityAdmission admission,
         DateTimeOffset adoptedAt) =>
@@ -259,6 +317,28 @@ public static class RuntimeActorStateMigrationAdmission
             AdoptedAt = Timestamp.FromDateTimeOffset(adoptedAt),
             AuthorityActorId = admission.AuthorityActorId,
             MembershipDigest = admission.MembershipDigest,
+            EvidenceStatus = RuntimeFleetCapabilityGateStatus.Open,
+        };
+
+    private static RuntimeActorStateSchemaAdoptionReceipt CreateQuiescenceReceipt(
+        ActorStateMigrationStep step,
+        RuntimeFleetCapabilityQuiescenceEvidence evidence,
+        DateTimeOffset adoptedAt) =>
+        new()
+        {
+            StateSchemaVersion = step.ToStateVersion,
+            RequiredCapability = step.RequiredCapability,
+            RequiredContractId = step.RequiredContractId,
+            RequiredContractVersion = step.RequiredContractVersion,
+            CapabilityEpoch = evidence.CapabilityEpoch,
+            AuthorityStateVersion = evidence.AuthorityStateVersion,
+            MembershipEpoch = evidence.QuiescedMembershipEpoch,
+            DeploymentRevision = evidence.QuiescedDeploymentRevision,
+            AdoptedAt = Timestamp.FromDateTimeOffset(adoptedAt),
+            AuthorityActorId = evidence.AuthorityActorId,
+            MembershipDigest = evidence.QuiescedMembershipDigest,
+            EvidenceStatus = RuntimeFleetCapabilityGateStatus.Quiesced,
+            QuiescenceTransitionId = evidence.QuiescenceTransitionId,
         };
 
     private static bool ReceiptMatchesStep(
@@ -276,7 +356,24 @@ public static class RuntimeActorStateMigrationAdmission
             receipt.AuthorityActorId,
             RuntimeFleetCapabilityAuthorityIdentity.ActorId,
             StringComparison.Ordinal) &&
-        !string.IsNullOrWhiteSpace(receipt.MembershipDigest);
+        !string.IsNullOrWhiteSpace(receipt.MembershipDigest) &&
+        ReceiptHasRequiredEvidenceStatus(receipt, step);
+
+    private static bool ReceiptHasRequiredEvidenceStatus(
+        RuntimeActorStateSchemaAdoptionReceipt receipt,
+        ActorStateMigrationStep step) =>
+        step.RequiredGateStatus switch
+        {
+            RuntimeFleetCapabilityGateStatus.Open =>
+                receipt.EvidenceStatus is RuntimeFleetCapabilityGateStatus.Unspecified or
+                    RuntimeFleetCapabilityGateStatus.Open &&
+                string.IsNullOrWhiteSpace(receipt.QuiescenceTransitionId),
+            RuntimeFleetCapabilityGateStatus.Quiesced =>
+                receipt.EvidenceStatus == RuntimeFleetCapabilityGateStatus.Quiesced &&
+                receipt.CapabilityEpoch == long.MaxValue &&
+                !string.IsNullOrWhiteSpace(receipt.QuiescenceTransitionId),
+            _ => false,
+        };
 
     private static void ValidateStepAdmissionContract(
         string kind,
@@ -285,7 +382,9 @@ public static class RuntimeActorStateMigrationAdmission
         if (step.RequiredCapability == RuntimeFleetCapability.Unspecified ||
             !System.Enum.IsDefined(step.RequiredCapability) ||
             string.IsNullOrWhiteSpace(step.RequiredContractId) ||
-            step.RequiredContractVersion <= 0)
+            step.RequiredContractVersion <= 0 ||
+            step.RequiredGateStatus is not RuntimeFleetCapabilityGateStatus.Open and
+                not RuntimeFleetCapabilityGateStatus.Quiesced)
         {
             throw new InvalidOperationException(
                 $"Actor kind '{kind}' migration {step.FromStateVersion}->{step.ToStateVersion} " +

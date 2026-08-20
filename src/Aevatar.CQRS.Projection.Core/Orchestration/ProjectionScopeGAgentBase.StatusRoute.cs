@@ -31,12 +31,11 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <item>ACTIVE — the route is flipped only after the exact previous writer confirms its durable
 /// drain; the selected writer then handles every later terminal outcome.</item>
 /// </list>
-/// This forward-only Phase-A bridge never starts, upgrades, or rolls back a route. Before its
-/// distinct fleet contract is durably quiesced, persisted WARMING/BLOCKED routes remain frozen.
-/// After quiescence, activation or the durable retry repairs only those persisted cutovers with
-/// fresh committed probe watermarks. ACTIVE and phase-less routes keep their existing writer;
-/// no-route and legacy steady states keep the legacy writer. A later Phase-B rollout requires a
-/// separate fresh fleet admission before it may initiate route changes.
+/// Phase A contributes only the historical typed quiescence receipt. Phase B may start or resume
+/// a route only while its separate fleet admission is fresh and after the source, legacy writer,
+/// and terminal writer have each returned a runtime-owned schema-adoption seal. Persisted
+/// WARMING/BLOCKED routes stay frozen until those proofs are bound. ACTIVE and phase-less routes
+/// keep their existing writer while the same three seals are attached in the background.
 /// </summary>
 public abstract partial class ProjectionScopeGAgentBase<TContext>
 {
@@ -44,8 +43,8 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
     /// <summary>
     /// Backed-off retry schedule for observing bridge quiescence and repairing a persisted
-    /// WARMING/BLOCKED route. The last delay repeats while the receipt is unavailable or repair
-    /// dependencies are not ready.
+    /// WARMING/BLOCKED route, or binding seals to an existing ACTIVE route. The last delay repeats
+    /// while the receipt is unavailable or repair dependencies are not ready.
     /// </summary>
     internal static readonly TimeSpan[] StatusRouteAdoptionRetryDelays =
     [
@@ -82,6 +81,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             var quiescence = await ReadTerminalQuiescenceAsync(ct);
             if (quiescence.Receipt != null)
             {
+                if (!await EnsurePhaseBRouteSealsAsync(route, attempt, ct))
+                    return;
+
+                route = State.StatusRoute!;
                 if (route.Phase == ProjectionScopeStatusRoutePhase.Warming)
                     await ContinueWarmingAsync(route, attempt, ct);
                 else
@@ -148,19 +151,37 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return;
         }
 
-        if (quiescence.Receipt != null)
+        if (quiescence.Receipt == null)
         {
             _logger.LogInformation(
-                "Projection scope status route stays legacy after the V2 gate is quiesced. actorId={ActorId}",
-                Id);
+                "Projection scope status route stays legacy until the Phase-A drain bridge is quiesced. actorId={ActorId} attempt={Attempt}",
+                Id,
+                attempt);
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
             return;
         }
 
-        _logger.LogInformation(
-            "Projection scope status route stays legacy until the Phase-A drain bridge is quiesced. actorId={ActorId} attempt={Attempt}",
-            Id,
-            attempt);
-        await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+        var admission = await ReadActivationSealAdmissionAsync(ct);
+        if (admission == null)
+        {
+            _logger.LogInformation(
+                "Projection scope status route stays legacy until the fresh Phase-B activation seal is open. actorId={ActorId} attempt={Attempt}",
+                Id,
+                attempt);
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+            return;
+        }
+
+        await EnsureStatusRoutePreparationAsync(
+            ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+                (route?.RouteEpoch ?? 0) + 1,
+                ProjectionScopeStatusRoutePhase.Warming),
+            resumesPersistedRoute: false,
+            admission,
+            runtime,
+            dispatchPort,
+            attempt,
+            ct);
     }
 
     // ── active terminal writer ───────────────────────────────────────────────────────────────
@@ -173,6 +194,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
     /// </summary>
     private async Task MaintainActiveTerminalRouteAsync(ProjectionScopeStatusRoute route, int attempt, CancellationToken ct)
     {
+        if (!StatusRouteHasAllRequiredSeals(route))
+            _ = await EnsurePhaseBRouteSealsAsync(route, attempt, ct);
+
+        route = State.StatusRoute ?? route;
         var runtime = Services.GetService<IActorRuntime>();
         var terminalActorId = ProjectionScopeStatusRoutes.BuildTerminalActorId(Id);
         await UpsertTerminalStatusRelayAsync(terminalActorId, ct);
@@ -183,6 +208,384 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         // infer or reconstruct release proof for an ACTIVE route whose flag is still false.
         route = State.StatusRoute ?? route;
         await ReconcileReleasedPreviousWriterRelayAsync(route, ct);
+    }
+
+    // ── Phase-B activation seals ─────────────────────────────────────────────────────────────
+
+    private async Task<bool> EnsurePhaseBRouteSealsAsync(
+        ProjectionScopeStatusRoute route,
+        int attempt,
+        CancellationToken ct)
+    {
+        var runtime = Services.GetService<IActorRuntime>();
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        var admission = await ReadActivationSealAdmissionAsync(ct);
+        if (admission == null)
+        {
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+            return false;
+        }
+
+        if (StatusRouteHasAllRequiredSeals(route))
+            return true;
+
+        if (runtime == null || dispatchPort == null)
+        {
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+            return false;
+        }
+
+        return await EnsureStatusRoutePreparationAsync(
+            route.Clone(),
+            resumesPersistedRoute: true,
+            admission,
+            runtime,
+            dispatchPort,
+            attempt,
+            ct);
+    }
+
+    private async Task<bool> EnsureStatusRoutePreparationAsync(
+        ProjectionScopeStatusRoute candidateRoute,
+        bool resumesPersistedRoute,
+        RuntimeFleetCapabilityAdmissionGrant admission,
+        IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
+        int attempt,
+        CancellationToken ct)
+    {
+        var registry = Services.GetService<IAgentKindRegistry>();
+        if (registry == null ||
+            !registry.TryGetKindForAgentType(
+                typeof(ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>),
+                out var legacyKind) ||
+            !TryCreateSourceActivationSeal(out var sourceSeal))
+        {
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+            return false;
+        }
+
+        var preparation = State.StatusRoutePreparation;
+        if (!MatchesPreparation(preparation, candidateRoute, resumesPersistedRoute))
+        {
+            preparation = new ProjectionScopeStatusRoutePreparation
+            {
+                CandidateRoute = candidateRoute.Clone(),
+                SourceScopeActorId = Id,
+                SourceAgentKind = sourceSeal.AgentKind,
+                LegacyWriterActorId = ProjectionScopeStatusRoutes.BuildLegacyActorId(Id),
+                LegacyWriterAgentKind = legacyKind,
+                TerminalWriterActorId = ProjectionScopeStatusRoutes.BuildTerminalActorId(Id),
+                TerminalWriterAgentKind = ProjectionScopeStatusGAgent.AgentKind,
+                ResumesPersistedRoute = resumesPersistedRoute,
+                PreparedAtUtc = Timestamp.FromDateTimeOffset(admission.ValidatedAt),
+            };
+            preparation.ActivationSeals.Add(sourceSeal);
+            await PersistDomainEventAsync(new ProjectionScopeStatusRoutePreparationStartedEvent
+            {
+                Preparation = preparation,
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(admission.ValidatedAt),
+            });
+            preparation = State.StatusRoutePreparation!;
+        }
+
+        return await ContinueStatusRoutePreparationAsync(
+            preparation,
+            runtime,
+            dispatchPort,
+            attempt,
+            ct);
+    }
+
+    private async Task<bool> ContinueStatusRoutePreparationAsync(
+        ProjectionScopeStatusRoutePreparation preparation,
+        IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
+        int attempt,
+        CancellationToken ct)
+    {
+        if (!ProjectionScopeStatusActivationSealPolicy.HasAllRequiredSeals(
+                preparation.ActivationSeals,
+                preparation) ||
+            !TryCreateSourceActivationSeal(out var currentSourceSeal) ||
+            !Equals(
+                ProjectionScopeStatusActivationSealPolicy.Find(
+                    preparation.ActivationSeals,
+                    ProjectionScopeStatusActorRole.Source),
+                currentSourceSeal))
+        {
+            await RequestMissingStatusActorSealsAsync(preparation, runtime, dispatchPort, ct);
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+            return false;
+        }
+
+        var admission = await ReadActivationSealAdmissionAsync(ct);
+        var quiescence = await ReadTerminalQuiescenceAsync(ct);
+        if (admission == null || quiescence.Receipt == null)
+        {
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+            return false;
+        }
+
+        if (preparation.ResumesPersistedRoute)
+        {
+            await PersistDomainEventAsync(new ProjectionScopeStatusRouteActivationSealsBoundEvent
+            {
+                RouteEpoch = preparation.CandidateRoute.RouteEpoch,
+                ActivationSeals = { preparation.ActivationSeals.Select(static seal => seal.Clone()) },
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(admission.ValidatedAt),
+            });
+            return true;
+        }
+
+        var route = preparation.CandidateRoute.Clone();
+        route.ActivationSeals.Clear();
+        route.ActivationSeals.Add(preparation.ActivationSeals.Select(static seal => seal.Clone()));
+        await StartWarmingAsync(route, admission, runtime, dispatchPort, ct);
+        return true;
+    }
+
+    private async Task RequestMissingStatusActorSealsAsync(
+        ProjectionScopeStatusRoutePreparation preparation,
+        IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
+        CancellationToken ct)
+    {
+        var requests = new[]
+        {
+            new
+            {
+                Role = ProjectionScopeStatusActorRole.LegacyWriter,
+                ActorId = preparation.LegacyWriterActorId,
+                AgentKind = preparation.LegacyWriterAgentKind,
+            },
+            new
+            {
+                Role = ProjectionScopeStatusActorRole.TerminalWriter,
+                ActorId = preparation.TerminalWriterActorId,
+                AgentKind = preparation.TerminalWriterAgentKind,
+            },
+        };
+        foreach (var request in requests)
+        {
+            if (ProjectionScopeStatusActivationSealPolicy.Find(
+                    preparation.ActivationSeals,
+                    request.Role) != null)
+            {
+                continue;
+            }
+
+            if (!await runtime.ExistsAsync(request.ActorId))
+                _ = await runtime.CreateByKindAsync(request.AgentKind, request.ActorId, ct);
+
+            await SendToAsync(
+                request.ActorId,
+                new RequestProjectionScopeStatusActorSealCommand
+                {
+                    SourceScopeActorId = Id,
+                    RouteEpoch = preparation.CandidateRoute.RouteEpoch,
+                    Role = request.Role,
+                    ExpectedActorId = request.ActorId,
+                    ExpectedAgentKind = request.AgentKind,
+                },
+                ct);
+        }
+    }
+
+    [EventHandler]
+    public async Task HandleStatusActorSealReadyAsync(ProjectionScopeStatusActorSealReadyEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        var preparation = State.StatusRoutePreparation;
+        var seal = evt.Seal;
+        if (!OwnsStatusRoute ||
+            preparation?.CandidateRoute == null ||
+            seal == null ||
+            preparation.CandidateRoute.RouteEpoch != evt.RouteEpoch ||
+            !string.Equals(evt.SourceScopeActorId, Id, StringComparison.Ordinal) ||
+            !ProjectionScopeStatusActivationSealPolicy.IsExpectedWriterSeal(preparation, seal) ||
+            !IsExpectedDirectPublisher(seal.ActorId))
+        {
+            return;
+        }
+
+        var existing = ProjectionScopeStatusActivationSealPolicy.Find(
+            preparation.ActivationSeals,
+            seal.Role);
+        if (existing == null || !existing.Equals(seal))
+        {
+            await PersistDomainEventAsync(new ProjectionScopeStatusActorSealRecordedEvent
+            {
+                RouteEpoch = evt.RouteEpoch,
+                Seal = seal.Clone(),
+                OccurredAtUtc = evt.OccurredAtUtc?.Clone() ?? Timestamp.FromDateTimeOffset(Now()),
+            });
+        }
+
+        var runtime = Services.GetService<IActorRuntime>();
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        if (runtime == null || dispatchPort == null)
+            return;
+
+        if (await ContinueStatusRoutePreparationAsync(
+                State.StatusRoutePreparation!,
+                runtime,
+                dispatchPort,
+                attempt: 0,
+                CancellationToken.None) &&
+            State.StatusRoute?.Phase is ProjectionScopeStatusRoutePhase.Warming or
+                ProjectionScopeStatusRoutePhase.Blocked)
+        {
+            await AdvanceStatusRouteAsync(CancellationToken.None);
+        }
+    }
+
+    [EventHandler]
+    public async Task HandleStatusActorSealRequestAsync(RequestProjectionScopeStatusActorSealCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Role != ProjectionScopeStatusActorRole.LegacyWriter ||
+            command.RouteEpoch <= 0 ||
+            string.IsNullOrWhiteSpace(command.SourceScopeActorId) ||
+            !string.Equals(command.ExpectedActorId, Id, StringComparison.Ordinal) ||
+            !IsExpectedDirectPublisher(command.SourceScopeActorId) ||
+            (!string.IsNullOrWhiteSpace(State.RootActorId) &&
+             !string.Equals(State.RootActorId, command.SourceScopeActorId, StringComparison.Ordinal)) ||
+            !ProjectionScopeStatusActivationSealPolicy.TryCreate(
+                Services.GetService<IRuntimeActorStateSchemaContextReader>(),
+                ProjectionScopeStatusActorRole.LegacyWriter,
+                Id,
+                command.ExpectedAgentKind,
+                out var seal))
+        {
+            return;
+        }
+
+        await SendToAsync(command.SourceScopeActorId, new ProjectionScopeStatusActorSealReadyEvent
+        {
+            SourceScopeActorId = command.SourceScopeActorId,
+            RouteEpoch = command.RouteEpoch,
+            Seal = seal,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
+        });
+    }
+
+    private bool TryCreateSourceActivationSeal(out ProjectionScopeStatusActorSeal seal)
+    {
+        var reader = Services.GetService<IRuntimeActorStateSchemaContextReader>();
+        var agentKind = reader?.Current?.AgentKind ?? string.Empty;
+        return ProjectionScopeStatusActivationSealPolicy.TryCreate(
+            reader,
+            ProjectionScopeStatusActorRole.Source,
+            Id,
+            agentKind,
+            out seal);
+    }
+
+    private async Task<bool> HasLegacyWriterPhaseBProofsAsync(
+        ProjectionScopeStatusRoute route,
+        string sourceScopeActorId)
+    {
+        if ((await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null ||
+            await ReadActivationSealAdmissionAsync(CancellationToken.None) == null)
+        {
+            return false;
+        }
+
+        var reader = Services.GetService<IRuntimeActorStateSchemaContextReader>();
+        var agentKind = reader?.Current?.AgentKind ?? string.Empty;
+        return ProjectionScopeStatusActivationSealPolicy.TryCreate(
+                   reader,
+                   ProjectionScopeStatusActorRole.LegacyWriter,
+                   Id,
+                   agentKind,
+                   out var currentWriterSeal) &&
+               ProjectionScopeStatusActivationSealPolicy.RouteHasAllRequiredWriterSeals(
+                   route,
+                   sourceScopeActorId,
+                   ProjectionScopeStatusRoutes.BuildLegacyActorId(sourceScopeActorId),
+                   ProjectionScopeStatusRoutes.BuildTerminalActorId(sourceScopeActorId),
+                   currentWriterSeal);
+    }
+
+    private static bool MatchesPreparation(
+        ProjectionScopeStatusRoutePreparation? preparation,
+        ProjectionScopeStatusRoute candidateRoute,
+        bool resumesPersistedRoute) =>
+        preparation?.CandidateRoute != null &&
+        preparation.CandidateRoute.RouteEpoch == candidateRoute.RouteEpoch &&
+        string.Equals(
+            preparation.CandidateRoute.ContractId,
+            candidateRoute.ContractId,
+            StringComparison.Ordinal) &&
+        preparation.CandidateRoute.ContractVersion == candidateRoute.ContractVersion &&
+        preparation.CandidateRoute.Phase == candidateRoute.Phase &&
+        preparation.ResumesPersistedRoute == resumesPersistedRoute;
+
+    private bool StatusRouteHasAllRequiredSeals(ProjectionScopeStatusRoute route)
+    {
+        if (!TryCreateSourceActivationSeal(out var currentSourceSeal))
+            return false;
+
+        var registry = Services.GetService<IAgentKindRegistry>();
+        if (registry == null ||
+            !registry.TryGetKindForAgentType(
+                typeof(ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>),
+                out var legacyKind) ||
+            !ProjectionScopeStatusActivationSealPolicy.RouteHasAllRequiredSeals(
+                route,
+                Id,
+                currentSourceSeal.AgentKind,
+                ProjectionScopeStatusRoutes.BuildLegacyActorId(Id),
+                legacyKind,
+                ProjectionScopeStatusRoutes.BuildTerminalActorId(Id),
+                ProjectionScopeStatusGAgent.AgentKind))
+        {
+            return false;
+        }
+
+        return Equals(
+            ProjectionScopeStatusActivationSealPolicy.Find(
+                route.ActivationSeals,
+                ProjectionScopeStatusActorRole.Source),
+            currentSourceSeal);
+    }
+
+    private async Task StartWarmingAsync(
+        ProjectionScopeStatusRoute route,
+        RuntimeFleetCapabilityAdmissionGrant admission,
+        IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
+        CancellationToken ct)
+    {
+        route.WarmStartedVersion = CurrentScopeVersion + 1;
+        route.ActivatedAtUtc = Timestamp.FromDateTimeOffset(admission.ValidatedAt);
+        route.ActivationProof = BuildActivationProof(admission);
+        if (!await InstallWarmingWriterAsync(route, runtime, dispatchPort, ct))
+            return;
+
+        await PersistDomainEventAsync(new ProjectionScopeStatusRouteWarmingStartedEvent
+        {
+            Route = route,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(admission.ValidatedAt),
+        });
+        await ScheduleStatusRouteAdoptionRetryAsync(attempt: 0, ct);
+    }
+
+    private static ProjectionMaterializationActivationProof BuildActivationProof(
+        RuntimeFleetCapabilityAdmissionGrant grant)
+    {
+        var admission = grant.Admission;
+        return new ProjectionMaterializationActivationProof
+        {
+            AuthorityStateVersion = admission.AuthorityStateVersion,
+            CapabilityEpoch = admission.CapabilityEpoch,
+            MembershipEpoch = admission.MembershipEpoch,
+            MembershipDigest = admission.MembershipDigest,
+            DeploymentRevision = admission.DeploymentRevision,
+            ValidatedAtUtc = Timestamp.FromDateTimeOffset(grant.ValidatedAt),
+            ValidUntilUtc = admission.MembershipValidUntil?.Clone(),
+        };
     }
 
     // ── receipt-gated repair of persisted cutovers ────────────────────────────────────────────
@@ -277,6 +680,8 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (!string.Equals(evt.WriterActorId, expectedWriterActorId, StringComparison.Ordinal) ||
             !IsExpectedDirectPublisher(expectedWriterActorId) ||
             evt.ObservedVersion < requiredObservedVersion ||
+            !StatusRouteHasAllRequiredSeals(route) ||
+            await ReadActivationSealAdmissionAsync(CancellationToken.None) == null ||
             (await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null)
         {
             return;
@@ -409,7 +814,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             if (!await runtime.ExistsAsync(previousWriterActorId))
                 _ = await runtime.CreateByKindAsync(legacyKind, previousWriterActorId, ct);
 
-            await DispatchLifecycleAsync(
+            await DispatchEnsureLifecycleAsync(
                 dispatchPort,
                 previousWriterActorId,
                 new EnsureProjectionScopeCommand
@@ -429,7 +834,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (!await runtime.ExistsAsync(previousWriterActorId))
             _ = await runtime.CreateByKindAsync(ProjectionScopeStatusGAgent.AgentKind, previousWriterActorId, ct);
 
-        await DispatchLifecycleAsync(
+        await DispatchEnsureLifecycleAsync(
             dispatchPort,
             previousWriterActorId,
             new EnsureProjectionScopeCommand
@@ -471,12 +876,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
         var previousWriterActorId = ResolvePreviousWriterActorId(route);
         var runtime = Services.GetService<IActorRuntime>();
-        var dispatchPort = Services.GetService<IActorDispatchPort>();
-        if (runtime == null || dispatchPort == null || !await runtime.ExistsAsync(previousWriterActorId))
+        if (runtime == null || !await runtime.ExistsAsync(previousWriterActorId))
             return false;
 
-        await DispatchLifecycleAsync(
-            dispatchPort,
+        await SendToAsync(
             previousWriterActorId,
             BuildPreviousWriterReleaseCommand(route, previousWriterActorId),
             ct);
@@ -504,6 +907,8 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (!string.Equals(evt.WriterActorId, expectedWriterActorId, StringComparison.Ordinal) ||
             !IsExpectedDirectPublisher(expectedWriterActorId) ||
             evt.LastObservedVersion < ResolveRequiredDrainVersion(route) ||
+            !StatusRouteHasAllRequiredSeals(route) ||
+            await ReadActivationSealAdmissionAsync(CancellationToken.None) == null ||
             (await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null)
         {
             return;
@@ -601,13 +1006,17 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         }
 
         var route = sourceState.StatusRoute;
+        if (route?.Phase is ProjectionScopeStatusRoutePhase.Warming or
+                ProjectionScopeStatusRoutePhase.Blocked &&
+            !await HasLegacyWriterPhaseBProofsAsync(route, sourceScopeActorId))
+        {
+            return true;
+        }
+
         if (ProjectionScopeStatusRoutePolicy.LegacyShadowIsSuperseded(route))
         {
             if (route!.Phase == ProjectionScopeStatusRoutePhase.Blocked)
             {
-                if ((await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null)
-                    return true;
-
                 // The forwarded BLOCKED publication is the only drain proof. Commit its exact
                 // source version before confirming; a racing release command cannot fabricate it.
                 var blockedDrainVersion = Math.Max(
@@ -635,8 +1044,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
         if (ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route) &&
             route!.Phase == ProjectionScopeStatusRoutePhase.Warming &&
-            stateEvent != null &&
-            (await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt != null)
+            stateEvent != null)
         {
             await SendToAsync(sourceScopeActorId, new ProjectionScopeStatusWriterCaughtUpEvent
             {
@@ -646,15 +1054,6 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                 ObservedAtUtc = Timestamp.FromDateTimeOffset(Now()),
                 WriterActorId = Id,
             });
-        }
-
-        // A persisted rollback may already be BLOCKED when the bridge binary first sees it. The
-        // legacy candidate must not write at its new epoch before the fleet receipt exists.
-        if (ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route) &&
-            route!.Phase == ProjectionScopeStatusRoutePhase.Blocked &&
-            (await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null)
-        {
-            return true;
         }
 
         return false;
@@ -692,8 +1091,8 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
     /// <summary>
     /// The retry is a backed-off self continuation through the durable callback scheduler. It
-    /// observes the historical bridge receipt and resumes only a persisted WARMING/BLOCKED
-    /// repair; the attempt count travels in the command, never in actor memory.
+    /// observes the historical bridge receipt and resumes route preparation or repair; the attempt
+    /// count travels in the command, never in actor memory.
     /// </summary>
     private async Task ScheduleStatusRouteAdoptionRetryAsync(int attempt, CancellationToken ct)
     {
@@ -738,7 +1137,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (!await runtime.ExistsAsync(terminalActorId))
             _ = await runtime.CreateByKindAsync(ProjectionScopeStatusGAgent.AgentKind, terminalActorId, ct);
 
-        await DispatchLifecycleAsync(
+        await DispatchEnsureLifecycleAsync(
             dispatchPort,
             terminalActorId,
             new EnsureProjectionScopeCommand
@@ -777,7 +1176,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (!await runtime.ExistsAsync(legacyActorId))
             _ = await runtime.CreateByKindAsync(legacyKind, legacyActorId, ct);
 
-        await DispatchLifecycleAsync(
+        await DispatchEnsureLifecycleAsync(
             dispatchPort,
             legacyActorId,
             new EnsureProjectionScopeCommand
@@ -830,12 +1229,11 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             ProjectionScopeModeMapper.ToRuntime(sourceState.Mode),
             sourceState.SessionId));
 
-    private async Task DispatchLifecycleAsync<TCommand>(
+    private async Task DispatchEnsureLifecycleAsync(
         IActorDispatchPort dispatchPort,
         string targetActorId,
-        TCommand command,
+        EnsureProjectionScopeCommand command,
         CancellationToken ct)
-        where TCommand : Google.Protobuf.IMessage
     {
         var envelope = ProjectionScopeCommandEnvelopeFactory.Create(command, targetActorId);
         envelope.Route = EnvelopeRouteSemantics.CreateDirect(Id, targetActorId);
@@ -843,6 +1241,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
     }
 
     // ── fleet admission ──────────────────────────────────────────────────────────────────────
+
+    private Task<RuntimeFleetCapabilityAdmissionGrant?> ReadActivationSealAdmissionAsync(
+        CancellationToken ct) =>
+        ProjectionScopeStatusActivationSealPolicy.ReadFreshAdmissionAsync(Services, ct);
 
     private readonly record struct TerminalQuiescenceRead(
         bool ReaderAvailable,

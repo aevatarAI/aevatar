@@ -10,10 +10,14 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Core.Runtime;
 
-[GAgent(RuntimeFleetCapabilityAuthorityIdentity.AgentKind)]
+[GAgent(
+    RuntimeFleetCapabilityAuthorityIdentity.AgentKind,
+    StateSchemaVersion = SupportedStateSchemaVersion)]
 public sealed class RuntimeFleetCapabilityAuthorityGAgent
     : GAgentBase<RuntimeFleetCapabilityAuthorityState>
 {
+    public const int SupportedStateSchemaVersion = 1;
+
     private readonly IRuntimeFleetMembershipSnapshotSource _membershipSource;
     private readonly IRuntimeFleetReconcileScheduleOwner _scheduleOwner;
     private readonly IRuntimeFleetReconcileDeliveryAttestationReader _attestationReader;
@@ -216,6 +220,7 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
         DateTimeOffset now)
     {
         var requirements = _options.ManagedCapabilities
+            .Where(CanManageAtCurrentStateSchema)
             .OrderBy(static requirement => requirement.Capability)
             .ToArray();
         var managed = requirements
@@ -257,11 +262,12 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
                 continue;
             }
 
-            var supported = IsUnanimouslySupported(
-                membership,
-                requirement.Capability,
-                requirement.ContractId,
-                requirement.MinimumReaderContractVersion);
+            var supported = HasCommittedPrerequisites(requirement) &&
+                IsUnanimouslySupported(
+                    membership,
+                    requirement.Capability,
+                    requirement.ContractId,
+                    requirement.MinimumReaderContractVersion);
 
             if (!supported)
             {
@@ -311,6 +317,80 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
         }
 
         return closingEvents.Concat(openingEvents);
+    }
+
+    private bool CanManageAtCurrentStateSchema(
+        RuntimeFleetCapabilityRequirement requirement)
+    {
+        if (requirement.Capability !=
+            RuntimeFleetCapability.ProjectionScopeStatusTerminalV3)
+        {
+            return true;
+        }
+
+        var context = Services
+            .GetService(typeof(IRuntimeActorStateSchemaContextReader)) as
+            IRuntimeActorStateSchemaContextReader;
+        var current = context?.Current;
+        if (current == null ||
+            !string.Equals(
+                current.AgentKind,
+                RuntimeFleetCapabilityAuthorityIdentity.AgentKind,
+                StringComparison.Ordinal) ||
+            current.StateSchemaVersion < SupportedStateSchemaVersion)
+        {
+            return false;
+        }
+
+        var receipts = current.AdoptionReceipts.Where(receipt =>
+            receipt.StateSchemaVersion == SupportedStateSchemaVersion &&
+            receipt.RequiredCapability ==
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV2 &&
+            string.Equals(
+                receipt.RequiredContractId,
+                RuntimeFleetCapabilityContracts
+                    .ProjectionScopeStatusTerminalQuiescenceV1,
+                StringComparison.Ordinal) &&
+            receipt.RequiredContractVersion ==
+                RuntimeFleetCapabilityContracts
+                    .ProjectionScopeStatusTerminalQuiescenceReaderVersion &&
+            receipt.EvidenceStatus == RuntimeFleetCapabilityGateStatus.Quiesced &&
+            receipt.CapabilityEpoch == long.MaxValue &&
+            !string.IsNullOrWhiteSpace(receipt.QuiescenceTransitionId));
+        return receipts.Count() == 1;
+    }
+
+    private bool HasCommittedPrerequisites(
+        RuntimeFleetCapabilityRequirement requirement)
+    {
+        if (requirement.Capability !=
+            RuntimeFleetCapability.ProjectionScopeStatusTerminalV3)
+        {
+            return true;
+        }
+
+        var bridge = FindGate(
+            RuntimeFleetCapability.ProjectionScopeStatusTerminalV2);
+        return bridge is
+        {
+            Status: RuntimeFleetCapabilityGateStatus.Quiesced,
+            CapabilityEpoch: long.MaxValue,
+            MembershipEpoch: > 0,
+        } &&
+            string.Equals(
+                bridge.RequiredContractId,
+                RuntimeFleetCapabilityContracts
+                    .ProjectionScopeStatusTerminalQuiescenceV1,
+                StringComparison.Ordinal) &&
+            bridge.MinimumReaderContractVersion ==
+                RuntimeFleetCapabilityContracts
+                    .ProjectionScopeStatusTerminalQuiescenceReaderVersion &&
+            bridge.QuiescenceReaderContractVersion ==
+                RuntimeFleetCapabilityContracts
+                    .ProjectionScopeStatusTerminalQuiescenceReaderVersion &&
+            !string.IsNullOrWhiteSpace(bridge.MembershipDigest) &&
+            !string.IsNullOrWhiteSpace(bridge.DeploymentRevision) &&
+            !string.IsNullOrWhiteSpace(bridge.LastTransitionId);
     }
 
     private static bool IsUnanimouslySupported(
@@ -699,6 +779,10 @@ public sealed record RuntimeFleetCapabilityAuthorityOptions
             RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
             RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2,
             RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersionV2),
+        new(
+            RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1,
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion),
         new(
             RuntimeFleetCapability.ProjectionIncrementalGraphV1,
             RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphV1,

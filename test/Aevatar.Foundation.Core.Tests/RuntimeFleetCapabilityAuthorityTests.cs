@@ -284,7 +284,7 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
     }
 
     [Fact]
-    public async Task Reconcile_WithPredeclaredPhaseBCapability_ShouldAcceptItAsKnownButUnmanaged()
+    public async Task Reconcile_WithLegacyPhaseBPredeclaration_ShouldFailClosedForV3Contract()
     {
         var fixture = new AuthorityFixture();
         var membership = fixture.CreateFleet(
@@ -310,10 +310,146 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
             RuntimeFleetMembershipObservationOutcome.Observed);
         (await fixture.ReadGateTransitionsAsync(
                 RuntimeFleetCapability.ProjectionScopeStatusTerminalV3))
-            .Should().BeEmpty("Phase A predeclares but does not manage or open the Phase-B gate");
+            .Should().BeEmpty("the predeclared contract is not the activation-seal contract");
         (await fixture.ReadGateTransitionsAsync(
                 RuntimeFleetCapability.ProjectionScopeStatusTerminalV2))
             .Last().Status.Should().Be(RuntimeFleetCapabilityGateStatus.Quiesced);
+    }
+
+    [Fact]
+    public async Task Reconcile_SchemaZeroAuthority_ShouldQuiesceV2ButNeverManageV3UntilTurnover()
+    {
+        var fixture = new AuthorityFixture();
+        fixture.SchemaContext.Current = fixture.CreateAuthoritySchemaContext(schemaVersion: 0);
+        fixture.Membership.Current = fixture.CreateFleet(
+            epoch: 1,
+            FleetStatusAdvertisement.PhaseB("silo-a"),
+            FleetStatusAdvertisement.PhaseB("silo-b"));
+        var authority = await fixture.CreateAuthorityAsync();
+
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 1, token: "schedule-1"));
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 2, token: "schedule-2"));
+
+        (await fixture.ReadGateTransitionsAsync(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV2))
+            .Last().Status.Should().Be(RuntimeFleetCapabilityGateStatus.Quiesced);
+        (await fixture.ReadGateTransitionsAsync(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV3))
+            .Should().BeEmpty("schema zero is the bridge-only bootstrap authority");
+
+        // Production reaches this state by runtime turnover and a migration-backed reactivation.
+        fixture.SchemaContext.Current = fixture.CreateAuthoritySchemaContext(schemaVersion: 1);
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 3, token: "schedule-3"));
+
+        var v3 = (await fixture.ReadGateTransitionsAsync(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV3))
+            .Should().ContainSingle().Subject;
+        v3.Status.Should().Be(RuntimeFleetCapabilityGateStatus.Open);
+        v3.RequiredContractId.Should().Be(
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1);
+        v3.MinimumReaderContractVersion.Should().Be(
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion);
+    }
+
+    [Fact]
+    public async Task Reconcile_UnanimousV3_ShouldOpenOnlyAfterPriorCommittedV2Quiescence()
+    {
+        var fixture = new AuthorityFixture();
+        fixture.Membership.Current = fixture.CreateFleet(
+            epoch: 1,
+            FleetStatusAdvertisement.PhaseB("silo-a"),
+            FleetStatusAdvertisement.PhaseB("silo-b"));
+        var authority = await fixture.CreateAuthorityAsync();
+
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 1, token: "schedule-1"));
+
+        (await fixture.ReadGateTransitionsAsync(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV2))
+            .Last().Status.Should().Be(RuntimeFleetCapabilityGateStatus.Quiesced);
+        (await fixture.ReadGateTransitionsAsync(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV3))
+            .Should().BeEmpty("the current reconcile cannot authorize from an uncommitted candidate gate");
+
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 2, token: "schedule-2"));
+
+        var v3 = (await fixture.ReadGateTransitionsAsync(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV3))
+            .Should().ContainSingle().Subject;
+        v3.Status.Should().Be(RuntimeFleetCapabilityGateStatus.Open);
+        v3.CapabilityEpoch.Should().Be(1);
+        v3.MembershipEpoch.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Reconcile_MixedBridgeAndV3Fleet_ShouldNotOpenV3()
+    {
+        var fixture = new AuthorityFixture();
+        fixture.Membership.Current = fixture.CreateFleet(
+            epoch: 1,
+            FleetStatusAdvertisement.PhaseB("silo-a"),
+            FleetStatusAdvertisement.Bridge("silo-b"));
+        var authority = await fixture.CreateAuthorityAsync();
+
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 1, token: "schedule-1"));
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 2, token: "schedule-2"));
+
+        (await fixture.ReadGateTransitionsAsync(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV3))
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Reconcile_WhenV3MemberCapabilityChanges_ShouldRevokeOpenV3()
+    {
+        var fixture = new AuthorityFixture();
+        fixture.Membership.Current = fixture.CreateFleet(
+            epoch: 1,
+            FleetStatusAdvertisement.PhaseB("silo-a"),
+            FleetStatusAdvertisement.PhaseB("silo-b"));
+        var authority = await fixture.CreateAuthorityAsync();
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 1, token: "schedule-1"));
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 2, token: "schedule-2"));
+
+        fixture.Membership.Current = fixture.CreateFleet(
+            epoch: 2,
+            FleetStatusAdvertisement.PhaseB("silo-a"),
+            FleetStatusAdvertisement.Bridge("silo-b"));
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 3, token: "schedule-3"));
+
+        var transitions = await fixture.ReadGateTransitionsAsync(
+            RuntimeFleetCapability.ProjectionScopeStatusTerminalV3);
+        transitions.Select(static gate => gate.Status).Should().Equal(
+            RuntimeFleetCapabilityGateStatus.Open,
+            RuntimeFleetCapabilityGateStatus.Revoked);
+        transitions[^1].RevocationReason.Should().Be("fleet-capability-not-unanimous");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Reconcile_WhenV3ContractOrVersionMismatches_ShouldFailClosed(bool wrongContract)
+    {
+        var fixture = new AuthorityFixture();
+        var membership = fixture.CreateFleet(
+            epoch: 1,
+            FleetStatusAdvertisement.PhaseB("silo-a"),
+            FleetStatusAdvertisement.PhaseB("silo-b"));
+        var capability = membership.ActiveMembers[1].Capabilities.Single(candidate =>
+            candidate.Capability == RuntimeFleetCapability.ProjectionScopeStatusTerminalV3);
+        if (wrongContract)
+            capability.ContractId = "wrong.activation-seal.contract";
+        else
+            capability.ReaderContractVersion--;
+        membership.MembershipDigest = RuntimeFleetMembershipDigest.Compute(membership);
+        fixture.Membership.Current = membership;
+        var authority = await fixture.CreateAuthorityAsync();
+
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 1, token: "schedule-1"));
+        await authority.HandleEventAsync(fixture.ReconcileEnvelope(sequence: 2, token: "schedule-2"));
+
+        (await fixture.ReadGateTransitionsAsync(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV3))
+            .Should().BeEmpty();
     }
 
     [Fact]
@@ -1066,8 +1202,14 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
         internal readonly MutableMembershipSource Membership = new();
         internal readonly RecordingFleetReconcileScheduleOwner Scheduler = new();
         internal readonly MutableFleetReconcileAttestationReader Attestation = new();
+        internal readonly MutableAuthoritySchemaContextReader SchemaContext = new();
         internal readonly ManualTimeProvider Time = new(
             new DateTimeOffset(2026, 8, 18, 0, 0, 0, TimeSpan.Zero));
+
+        internal AuthorityFixture()
+        {
+            SchemaContext.Current = CreateAuthoritySchemaContext(schemaVersion: 1);
+        }
 
         internal async Task<RuntimeFleetCapabilityAuthorityGAgent> CreateAuthorityAsync(
             RuntimeFleetCapabilityAuthorityOptions? options = null)
@@ -1082,6 +1224,7 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
                 Services = new ServiceCollection()
                     .AddSingleton<IActorRuntimeCallbackScheduler>(
                         new RecordingCallbackScheduler())
+                    .AddSingleton<IRuntimeActorStateSchemaContextReader>(SchemaContext)
                     .BuildServiceProvider(),
                 EventSourcingBehaviorFactory =
                     new DefaultEventSourcingBehaviorFactory<RuntimeFleetCapabilityAuthorityState>(Store),
@@ -1090,6 +1233,33 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
             agent.SetId(RuntimeFleetCapabilityAuthorityIdentity.ActorId);
             await agent.ActivateAsync();
             return agent;
+        }
+
+        internal RuntimeActorStateSchemaContext CreateAuthoritySchemaContext(
+            int schemaVersion)
+        {
+            IReadOnlyList<RuntimeActorStateSchemaAdoptionReceipt> receipts = schemaVersion == 0
+                ? []
+                :
+                [
+                    new RuntimeActorStateSchemaAdoptionReceipt
+                    {
+                        StateSchemaVersion = 1,
+                        RequiredCapability =
+                            RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
+                        RequiredContractId = RuntimeFleetCapabilityContracts
+                            .ProjectionScopeStatusTerminalQuiescenceV1,
+                        RequiredContractVersion = RuntimeFleetCapabilityContracts
+                            .ProjectionScopeStatusTerminalQuiescenceReaderVersion,
+                        CapabilityEpoch = long.MaxValue,
+                        EvidenceStatus = RuntimeFleetCapabilityGateStatus.Quiesced,
+                        QuiescenceTransitionId = "v2-quiesced-transition",
+                    },
+                ];
+            return new RuntimeActorStateSchemaContext(
+                RuntimeFleetCapabilityAuthorityIdentity.AgentKind,
+                schemaVersion,
+                receipts);
         }
 
         internal async Task<PreBridgeRuntimeFleetCapabilityAuthorityGAgent>
@@ -1196,6 +1366,17 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
                     ReaderContractVersion = advertisement.StatusReaderContractVersion,
                     ContractId = advertisement.StatusContractId,
                 });
+                if (advertisement.SupportsActivationSeal)
+                {
+                    member.Capabilities.Add(new RuntimeFleetMemberCapability
+                    {
+                        Capability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+                        ReaderContractVersion = RuntimeFleetCapabilityContracts
+                            .ProjectionScopeStatusTerminalActivationSealReaderVersion,
+                        ContractId = RuntimeFleetCapabilityContracts
+                            .ProjectionScopeStatusTerminalActivationSealV1,
+                    });
+                }
                 member.Capabilities.Add(new RuntimeFleetMemberCapability
                 {
                     Capability = RuntimeFleetCapability.ProjectionIncrementalGraphV1,
@@ -1495,7 +1676,8 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
         string MemberId,
         RuntimeFleetCapability StatusCapability,
         string StatusContractId,
-        int StatusReaderContractVersion)
+        int StatusReaderContractVersion,
+        bool SupportsActivationSeal = false)
     {
         /// <summary>
         /// Reader contract version the phase-unaware binaries (b64c96a45 / 8d47b5e5c / 416e80f4a /
@@ -1528,6 +1710,15 @@ public sealed class RuntimeFleetCapabilityAuthorityTests
                 RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
                 RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceV1,
                 RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceReaderVersion);
+
+        internal static FleetStatusAdvertisement PhaseB(string memberId) =>
+            Bridge(memberId) with { SupportsActivationSeal = true };
+    }
+
+    private sealed class MutableAuthoritySchemaContextReader
+        : IRuntimeActorStateSchemaContextReader
+    {
+        public RuntimeActorStateSchemaContext? Current { get; set; }
     }
 
     private sealed class MutableMembershipSource : IRuntimeFleetMembershipSnapshotSource

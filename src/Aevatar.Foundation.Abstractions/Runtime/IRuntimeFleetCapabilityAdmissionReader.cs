@@ -48,6 +48,14 @@ public static class RuntimeFleetCapabilityContracts
     // drained-version release support. Status routes themselves remain V2/2.
     public const int ProjectionScopeStatusTerminalQuiescenceReaderVersion = 3;
 
+    // Fresh Phase-B activation seal. This does not replace the persisted V2 status route
+    // contract: it proves that every active runtime can reject sealed actor rows on an older
+    // binary before a source is allowed to start or resume a cutover.
+    public const string ProjectionScopeStatusTerminalActivationSealV1 =
+        "aevatar.projection.scope-status-terminal.activation-seal.v1";
+
+    public const int ProjectionScopeStatusTerminalActivationSealReaderVersion = 4;
+
     public const string ProjectionIncrementalGraphV1 =
         "aevatar.projection.incremental-graph.v1";
 
@@ -153,6 +161,13 @@ public interface IRuntimeFleetMembershipSnapshotSource
 /// </summary>
 public interface IRuntimeFleetCapabilityAdvertisement
 {
+    /// <summary>
+    /// Whether this host composition can actually provide the advertised reader contract. Optional
+    /// modules can stay registered for DI enumeration while suppressing a capability whose runtime
+    /// support is absent.
+    /// </summary>
+    bool IsAvailable => true;
+
     RuntimeFleetMemberCapability GetCapability();
 
     /// <summary>

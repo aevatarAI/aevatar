@@ -119,7 +119,8 @@ public sealed record AgentRegistration(
     Type ImplementationType,
     Type StateContractType,
     int StateSchemaVersion = 0,
-    IReadOnlyList<Type>? StateMigrationTypes = null)
+    IReadOnlyList<Type>? StateMigrationTypes = null,
+    IReadOnlyList<ActorStateMigrationStep>? PrebuiltStateMigrationSteps = null)
 {
     /// <summary>
     /// Builds the <see cref="AgentImplementation"/> handle once at registry
@@ -152,9 +153,10 @@ public sealed record AgentRegistration(
     private IReadOnlyList<ActorStateMigrationStep> BuildMigrationChain()
     {
         var migrationTypes = StateMigrationTypes ?? [];
+        var prebuiltSteps = PrebuiltStateMigrationSteps ?? [];
         if (StateSchemaVersion == 0)
         {
-            if (migrationTypes.Count > 0)
+            if (migrationTypes.Count > 0 || prebuiltSteps.Count > 0)
             {
                 throw new InvalidOperationException(
                     $"Agent kind '{Kind}' declares migrations but supports only state schema version zero.");
@@ -171,6 +173,7 @@ public sealed record AgentRegistration(
 
         var steps = migrationTypes
             .Select(BuildMigrationStep)
+            .Concat(prebuiltSteps.Select(ValidatePrebuiltMigrationStep))
             .OrderBy(static step => step.FromStateVersion)
             .ToArray();
         var byFromVersion = new Dictionary<int, ActorStateMigrationStep>();
@@ -200,6 +203,24 @@ public sealed record AgentRegistration(
         }
 
         return steps;
+    }
+
+    private ActorStateMigrationStep ValidatePrebuiltMigrationStep(ActorStateMigrationStep step)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        if (step.StateContractType != StateContractType)
+        {
+            throw new InvalidOperationException(
+                $"State migration '{step.MigrationType.FullName}' targets '{step.StateContractType.FullName}', " +
+                $"but agent kind '{Kind}' owns '{StateContractType.FullName}'.");
+        }
+        if (step.FromStateVersion < 0 || step.ToStateVersion != step.FromStateVersion + 1)
+        {
+            throw new InvalidOperationException(
+                $"State migration '{step.MigrationType.FullName}' must declare one consecutive non-negative version step.");
+        }
+        ValidateMigrationAdmissionContract(step);
+        return step;
     }
 
     private ActorStateMigrationStep BuildMigrationStep(Type migrationType)
@@ -255,21 +276,8 @@ public sealed record AgentRegistration(
                 $"'{declaration.AgentKind}', but is registered for agent kind '{Kind}'.");
         }
 
-        if (declaration.RequiredCapability == RuntimeFleetCapability.Unspecified ||
-            !System.Enum.IsDefined(declaration.RequiredCapability))
-        {
-            throw new InvalidOperationException(
-                $"State migration '{migrationType.FullName}' must declare an exact fleet capability.");
-        }
-        if (string.IsNullOrWhiteSpace(declaration.RequiredContractId) ||
-            declaration.RequiredContractVersion <= 0)
-        {
-            throw new InvalidOperationException(
-                $"State migration '{migrationType.FullName}' must declare an exact versioned reader contract.");
-        }
-
         var applyMethod = contract.GetMethod("Apply")!;
-        return new ActorStateMigrationStep(
+        var step = new ActorStateMigrationStep(
             fromVersion,
             toVersion,
             StateContractType,
@@ -297,7 +305,32 @@ public sealed record AgentRegistration(
             },
             declaration.RequiredCapability,
             declaration.RequiredContractId.Trim(),
-            declaration.RequiredContractVersion);
+            declaration.RequiredContractVersion,
+            declaration.RequiredGateStatus);
+        ValidateMigrationAdmissionContract(step);
+        return step;
+    }
+
+    private void ValidateMigrationAdmissionContract(ActorStateMigrationStep step)
+    {
+        if (step.RequiredCapability == RuntimeFleetCapability.Unspecified ||
+            !System.Enum.IsDefined(step.RequiredCapability))
+        {
+            throw new InvalidOperationException(
+                $"State migration '{step.MigrationType.FullName}' must declare an exact fleet capability.");
+        }
+        if (string.IsNullOrWhiteSpace(step.RequiredContractId) ||
+            step.RequiredContractVersion <= 0)
+        {
+            throw new InvalidOperationException(
+                $"State migration '{step.MigrationType.FullName}' must declare an exact versioned reader contract.");
+        }
+        if (step.RequiredGateStatus is not RuntimeFleetCapabilityGateStatus.Open and
+            not RuntimeFleetCapabilityGateStatus.Quiesced)
+        {
+            throw new InvalidOperationException(
+                $"State migration '{step.MigrationType.FullName}' must require OPEN or QUIESCED fleet evidence.");
+        }
     }
 
     private static IAgent CreateInstance(IServiceProvider services, Type implementationType, string kind)

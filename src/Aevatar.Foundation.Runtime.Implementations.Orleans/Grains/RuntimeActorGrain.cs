@@ -77,9 +77,9 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                 Environment.GetEnvironmentVariable("AEVATAR_TEST_NODE_VERSION_TAG") ?? "(none)");
         }
 
-        await SubscribeSelfStreamAsync();
-
         await ResumeFromPersistedIdentityAsync(cancellationToken);
+        if (_agent != null)
+            await SubscribeSelfStreamAsync();
     }
 
     /// <summary>
@@ -198,6 +198,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         var implementation = await BindAgentByKindAsync(kind, establishIdentity: true);
         if (implementation == null)
             return false;
+        await SubscribeSelfStreamAsync();
         _identityResolutionAttempted = true;
         return true;
     }
@@ -223,6 +224,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         if (!await EnsureAgentAvailableForEnvelopeAsync(envelope, propagateFailure))
             return;
+
+        await ThrowIfStateSchemaTurnoverAdmittedAsync();
 
         if (await TryHandleCompatibilityRetryAsync(envelope, propagateFailure))
             return;
@@ -332,6 +335,50 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         }
 
         return false;
+    }
+
+    private async Task ThrowIfStateSchemaTurnoverAdmittedAsync()
+    {
+        var identity = _state.State.Identity;
+        if (identity == null || string.IsNullOrWhiteSpace(identity.Kind))
+            return;
+
+        var registry = ServiceProvider?.GetService<IAgentKindRegistry>();
+        if (registry == null)
+            return;
+
+        var implementation = registry.Resolve(identity.Kind);
+        if (identity.StateSchemaVersion >= implementation.Metadata.StateSchemaVersion)
+            return;
+
+        var decision = await RuntimeActorStateMigrationAdmission.EvaluateAsync(
+            identity,
+            _state.State.AgentStateTypeName,
+            _state.State.AgentStateSnapshot,
+            implementation,
+            ServiceProvider?.GetService<IRuntimeFleetCapabilityAdmissionReader>() ??
+                new DenyAllRuntimeFleetCapabilityAdmissionReader(),
+            ServiceProvider?.GetService<IRuntimeLocalMembershipIdentityReader>() ??
+                new UnavailableRuntimeLocalMembershipIdentityReader(),
+            ServiceProvider?.GetService<TimeProvider>(),
+            ServiceProvider?.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
+            CancellationToken.None,
+            ServiceProvider?.GetService<IRuntimeFleetCapabilityQuiescenceReader>());
+        if (!decision.IsAdmitted)
+            return;
+
+        _logger.LogInformation(
+            "Runtime actor is turning over an older active state schema before handling the envelope. actorId={ActorId} kind={Kind} persistedVersion={PersistedVersion} targetVersion={TargetVersion}",
+            SafeGetActorIdForLog(),
+            implementation.Metadata.Kind,
+            identity.StateSchemaVersion,
+            decision.StateSchemaVersion);
+        DeactivateOnIdle();
+        throw new RuntimeActorStateSchemaTurnoverRequiredException(
+            SafeGetActorIdForLog(),
+            implementation.Metadata.Kind,
+            identity.StateSchemaVersion,
+            decision.StateSchemaVersion);
     }
 
     private async Task HandleAgentEnvelopeAsync(EventEnvelope envelope, bool propagateFailure)
@@ -593,6 +640,7 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             var migrated = await ApplyAdmittedMigrationAsync(implementation, createdIdentity, ct);
             if (createdIdentity && !migrated)
                 await _state.WriteStateAsync(ct);
+
         }
         catch
         {
@@ -639,7 +687,8 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
                     new UnavailableRuntimeLocalMembershipIdentityReader(),
                 ServiceProvider?.GetService<TimeProvider>(),
                 ServiceProvider?.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
-                ct);
+                ct,
+                ServiceProvider?.GetService<IRuntimeFleetCapabilityQuiescenceReader>());
         }
         catch (RuntimeActorStateMigrationPersistenceException exception)
         {
@@ -967,4 +1016,23 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         propagateFailure
             ? AgentMetrics.FailureDispositionPropagated
             : AgentMetrics.FailureDispositionReturned;
+}
+
+public sealed class RuntimeActorStateSchemaTurnoverRequiredException(
+    string actorId,
+    string agentKind,
+    int persistedStateSchemaVersion,
+    int targetStateSchemaVersion)
+    : InvalidOperationException(
+        $"Actor '{actorId}' of kind '{agentKind}' must turn over from state schema " +
+        $"{persistedStateSchemaVersion} to {targetStateSchemaVersion} before handling the envelope."),
+        IRuntimeEnvelopeRetryableException
+{
+    public string ActorId { get; } = actorId;
+
+    public string AgentKind { get; } = agentKind;
+
+    public int PersistedStateSchemaVersion { get; } = persistedStateSchemaVersion;
+
+    public int TargetStateSchemaVersion { get; } = targetStateSchemaVersion;
 }

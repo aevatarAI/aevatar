@@ -3,6 +3,7 @@ syntax = "proto3";
 option csharp_namespace = "Aevatar.CQRS.Projection.Core.Orchestration";
 
 import "agent_messages.proto";
+import "runtime_actor_identity.proto";
 import "google/protobuf/timestamp.proto";
 
 enum ProjectionScopeMode {
@@ -62,6 +63,9 @@ message ProjectionScopeState {
   // Highest source version observed when this scope committed its release. A re-dispatched
   // status-writer release confirms this durable watermark rather than a later transient value.
   int64 released_at_observed_version = 30;
+  // Durable Phase-B preparation. A source records its own activation seal before requesting
+  // handled readiness from both status writers; dispatch acceptance is never readiness proof.
+  ProjectionScopeStatusRoutePreparation status_route_preparation = 31;
 }
 
 // Cutover phases of a status route. A route is created WARMING (the new writer observes and
@@ -109,6 +113,39 @@ message ProjectionScopeStatusRoute {
   // Source scope version of the first receipt-gated BLOCKED drain probe. Retries reuse this
   // durable fence so an authenticated delayed release confirmation can still complete cutover.
   int64 drain_probe_version = 13;
+  // Immutable schema-adoption seals for the source and both possible status writers. A Phase-B
+  // route may start or resume only after all three exact roles are durably bound.
+  repeated ProjectionScopeStatusActorSeal activation_seals = 14;
+}
+
+enum ProjectionScopeStatusActorRole {
+  PROJECTION_SCOPE_STATUS_ACTOR_ROLE_UNSPECIFIED = 0;
+  PROJECTION_SCOPE_STATUS_ACTOR_ROLE_SOURCE = 1;
+  PROJECTION_SCOPE_STATUS_ACTOR_ROLE_LEGACY_WRITER = 2;
+  PROJECTION_SCOPE_STATUS_ACTOR_ROLE_TERMINAL_WRITER = 3;
+}
+
+message ProjectionScopeStatusActorSeal {
+  ProjectionScopeStatusActorRole role = 1;
+  string actor_id = 2;
+  string agent_kind = 3;
+  aevatar.runtime.RuntimeActorStateSchemaAdoptionReceipt adoption_receipt = 4;
+}
+
+message ProjectionScopeStatusRoutePreparation {
+  ProjectionScopeStatusRoute candidate_route = 1;
+  string source_scope_actor_id = 2;
+  string source_agent_kind = 3;
+  string legacy_writer_actor_id = 4;
+  string legacy_writer_agent_kind = 5;
+  string terminal_writer_actor_id = 6;
+  string terminal_writer_agent_kind = 7;
+  repeated ProjectionScopeStatusActorSeal activation_seals = 8;
+  // True when the preparation seals an existing route written before Phase B instead of creating
+  // a new route epoch. ACTIVE/phase-less routes keep serving while seals bind in the background;
+  // WARMING/BLOCKED routes remain frozen until binding completes.
+  bool resumes_persisted_route = 9;
+  google.protobuf.Timestamp prepared_at_utc = 10;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -246,6 +283,24 @@ message RetryProjectionScopeStatusRouteAdoptionCommand {
   int32 attempt = 1;
 }
 
+// Direct request from the source route owner to one exact writer. The writer responds only after
+// its runtime schema context contains the exact V3 OPEN adoption receipt.
+message RequestProjectionScopeStatusActorSealCommand {
+  string source_scope_actor_id = 1;
+  int64 route_epoch = 2;
+  ProjectionScopeStatusActorRole role = 3;
+  string expected_actor_id = 4;
+  string expected_agent_kind = 5;
+}
+
+// Direct handled response from an exact writer to the source route owner.
+message ProjectionScopeStatusActorSealReadyEvent {
+  string source_scope_actor_id = 1;
+  int64 route_epoch = 2;
+  ProjectionScopeStatusActorSeal seal = 3;
+  google.protobuf.Timestamp occurred_at_utc = 4;
+}
+
 message ProjectionScopeStartedEvent {
   string root_actor_id = 1;
   string projection_kind = 2;
@@ -356,6 +411,25 @@ message ProjectionMaterializationCutoverActivatedEvent {
 message ProjectionScopeStatusRouteWarmingStartedEvent {
   ProjectionScopeStatusRoute route = 1;
   google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionScopeStatusRoutePreparationStartedEvent {
+  ProjectionScopeStatusRoutePreparation preparation = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionScopeStatusActorSealRecordedEvent {
+  int64 route_epoch = 1;
+  ProjectionScopeStatusActorSeal seal = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Binds Phase-B activation seals to an existing route that predates the preparation protocol. It
+// never changes the route contract, epoch, phase or cutover watermarks.
+message ProjectionScopeStatusRouteActivationSealsBoundEvent {
+  int64 route_epoch = 1;
+  repeated ProjectionScopeStatusActorSeal activation_seals = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
 }
 
 // Phase 2: the new writer reported an observed version at or above warm_started_version.

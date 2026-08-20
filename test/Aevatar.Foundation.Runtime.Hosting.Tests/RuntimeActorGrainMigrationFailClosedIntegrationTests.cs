@@ -51,6 +51,7 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
             // Every activation attempt (Orleans may retry a failed activation) re-read the durable
             // v0 row and tried the write once; none of them constructed or bound the agent.
             recorder.Activations.Should().Be(0, "the agent must not be constructed or bound");
+            recorder.ConstructedSchemaVersions.Should().BeEmpty();
             var failedAttempts = storage.WriteCount(actorId);
             failedAttempts.Should().BeGreaterThanOrEqualTo(1);
             storage.Read(actorId).Identity!.StateSchemaVersion.Should().Be(0, "nothing was committed");
@@ -58,6 +59,7 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
             // Storage recovers: the next activation re-reads the durable v0 row and migrates it.
             storage.Mode = StorageFaultMode.None;
             (await grain.GetAgentKindAsync()).Should().Be(MigratedKind);
+            recorder.ConstructedSchemaVersions.Should().Equal(1);
             recorder.ActivatedSchemaVersions.Should().Equal(1);
             storage.WriteCount(actorId).Should().Be(failedAttempts + 1);
             storage.Read(actorId).Identity!.StateSchemaVersion.Should().Be(1);
@@ -92,6 +94,8 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
             await TryCallAsync(() => grain.GetAgentKindAsync());
             storage.WriteCount(actorId).Should().Be(1, "the only write is the one that committed v1");
             storage.Read(actorId).Identity!.StateSchemaVersion.Should().Be(1, "the store did commit v1");
+            recorder.ConstructedSchemaVersions.Should().NotContain(0,
+                "construction must happen only after the durable schema is current");
             recorder.ActivatedSchemaVersions.Should().NotContain(0, "no activation may serve the pre-migration schema");
 
             storage.Mode = StorageFaultMode.None;
@@ -129,12 +133,65 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
             await delivery.Should().ThrowAsync<Exception>();
             recorder.HandledEnvelopes.Should().BeEmpty("no envelope may reach an unmigrated actor");
             recorder.Activations.Should().Be(0);
+            recorder.ConstructedSchemaVersions.Should().BeEmpty();
             storage.Read(actorId).Identity!.StateSchemaVersion.Should().Be(0);
 
             storage.Mode = StorageFaultMode.None;
             await grain.HandleEnvelopeAsync(envelope.ToByteArray());
             recorder.HandledEnvelopes.Should().Equal("inbox-1");
+            recorder.ConstructedSchemaVersions.Should().Equal(1);
             recorder.ActivatedSchemaVersions.Should().Equal(1);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ActiveLegacySchema_WhenAdmissionAppears_ShouldTurnOverBeforeHandlingAndAcceptRedeliveryOnce()
+    {
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var storage = new FaultInjectingAgentStateStorage();
+        var recorder = new MigrationFixtureRecorder();
+        var admission = new MutableAdmissionReader();
+        storage.Seed(actorId, LegacyRow(actorId));
+        var host = await StartSiloHostAsync(storage, recorder, admission);
+
+        try
+        {
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+            (await grain.GetAgentKindAsync()).Should().Be(MigratedKind);
+            recorder.ConstructedSchemaVersions.Should().Equal(0);
+            recorder.ActivatedSchemaVersions.Should().Equal(0);
+            storage.WriteCount(actorId).Should().Be(0);
+
+            admission.Current = OpenAdmissionReader.CreateAdmission();
+            var envelope = new EventEnvelope
+            {
+                Id = "turnover-envelope",
+                Route = EnvelopeRouteSemantics.CreateDirect("test-publisher", actorId),
+            };
+
+            var firstDelivery = () => grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            var turnover = await firstDelivery.Should().ThrowAsync<Exception>();
+            ContainsTurnoverRequired(turnover.Which).Should().BeTrue(
+                "the transport must observe a retryable turnover failure");
+            recorder.HandledEnvelopes.Should().BeEmpty(
+                "the schema-zero activation must not consume the envelope");
+
+            await recorder.FirstDeactivation.WaitAsync(TimeSpan.FromSeconds(10));
+            await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+
+            recorder.ConstructedSchemaVersions.Should().Equal(0, 1);
+            recorder.ActivatedSchemaVersions.Should().Equal(0, 1);
+            recorder.HandledEnvelopes.Should().Equal("turnover-envelope");
+            storage.WriteCount(actorId).Should().Be(1);
+            var durable = storage.Read(actorId);
+            durable.Identity!.StateSchemaVersion.Should().Be(1);
+            durable.Identity.StateSchemaAdoptions.Should().ContainSingle();
         }
         finally
         {
@@ -156,6 +213,13 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
         }
     }
 
+    private static bool ContainsTurnoverRequired(Exception exception) =>
+        exception is RuntimeActorStateSchemaTurnoverRequiredException ||
+        (exception is AggregateException aggregate &&
+         aggregate.InnerExceptions.Any(ContainsTurnoverRequired)) ||
+        (exception.InnerException != null &&
+         ContainsTurnoverRequired(exception.InnerException));
+
     private static RuntimeActorGrainState LegacyRow(string actorId) =>
         new()
         {
@@ -167,7 +231,8 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
 
     private static async Task<IHost> StartSiloHostAsync(
         FaultInjectingAgentStateStorage storage,
-        MigrationFixtureRecorder recorder)
+        MigrationFixtureRecorder recorder,
+        IRuntimeFleetCapabilityAdmissionReader? admissionReader = null)
     {
         var serviceId = $"aevatar-migration-fail-closed-service-{Guid.NewGuid():N}";
         var clusterId = $"aevatar-migration-fail-closed-cluster-{Guid.NewGuid():N}";
@@ -192,7 +257,7 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
                             StateSchemaVersion: 1,
                             StateMigrationTypes: [typeof(MigrationFixtureV0ToV1Migration)])));
                     services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetCapabilityAdmissionReader>(
-                        new OpenAdmissionReader()));
+                        admissionReader ?? new OpenAdmissionReader()));
                     services.Replace(ServiceDescriptor.Singleton<IRuntimeLocalMembershipIdentityReader>(
                         new FixedMembershipReader()));
                     services.RemoveAllKeyed<IGrainStorage>(OrleansRuntimeConstants.GrainStateStorageName);
@@ -290,32 +355,60 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
     public sealed class MigrationFixtureRecorder
     {
         private readonly ConcurrentQueue<int> _activations = new();
+        private readonly ConcurrentQueue<int> _constructions = new();
         private readonly ConcurrentQueue<string> _envelopes = new();
+        private readonly TaskCompletionSource<bool> _firstDeactivation =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void RecordConstruction(int schemaVersion) =>
+            _constructions.Enqueue(schemaVersion);
 
         public void RecordActivation(int schemaVersion) => _activations.Enqueue(schemaVersion);
+
+        public void RecordDeactivation() => _firstDeactivation.TrySetResult(true);
 
         public void RecordEnvelope(string envelopeId) => _envelopes.Enqueue(envelopeId);
 
         public int Activations => _activations.Count;
 
+        public IReadOnlyList<int> ConstructedSchemaVersions => [.. _constructions];
+
         public IReadOnlyList<int> ActivatedSchemaVersions => [.. _activations];
 
         public IReadOnlyList<string> HandledEnvelopes => [.. _envelopes];
+
+        public Task FirstDeactivation => _firstDeactivation.Task;
     }
 
-    public sealed class MigrationFixtureAgent(
-        MigrationFixtureRecorder recorder,
-        IRuntimeActorStateSchemaContextReader schemaContext) : IAgent
+    public sealed class MigrationFixtureAgent : IAgent
     {
+        private readonly MigrationFixtureRecorder _recorder;
+        private readonly IRuntimeActorStateSchemaContextReader _schemaContext;
+
+        public MigrationFixtureAgent(
+            MigrationFixtureRecorder recorder,
+            IRuntimeActorStateSchemaContextReader schemaContext)
+        {
+            _recorder = recorder;
+            _schemaContext = schemaContext;
+            _recorder.RecordConstruction(
+                _schemaContext.Current?.StateSchemaVersion ?? -1);
+        }
+
         public string Id => "migration-fixture";
 
         public Task ActivateAsync(CancellationToken ct = default)
         {
-            recorder.RecordActivation(schemaContext.Current?.StateSchemaVersion ?? -1);
+            _recorder.RecordActivation(
+                _schemaContext.Current?.StateSchemaVersion ?? -1);
             return Task.CompletedTask;
         }
 
-        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default)
+        {
+            _recorder.RecordDeactivation();
+            return Task.CompletedTask;
+        }
 
         public Task<string> GetDescriptionAsync() => Task.FromResult(nameof(MigrationFixtureAgent));
 
@@ -324,7 +417,7 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
         {
-            recorder.RecordEnvelope(envelope.Id);
+            _recorder.RecordEnvelope(envelope.Id);
             return Task.CompletedTask;
         }
     }
@@ -358,10 +451,15 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
             if (capability != RuntimeFleetCapability.WorkflowNormalizedStateWritesV1)
                 return Task.FromResult<RuntimeFleetCapabilityAdmission?>(null);
 
+            return Task.FromResult<RuntimeFleetCapabilityAdmission?>(CreateAdmission());
+        }
+
+        internal static RuntimeFleetCapabilityAdmission CreateAdmission()
+        {
             var now = DateTimeOffset.UtcNow;
             var admission = new RuntimeFleetCapabilityAdmission
             {
-                Capability = capability,
+                Capability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
                 Status = RuntimeFleetCapabilityGateStatus.Open,
                 AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
                 AuthorityStateVersion = 9,
@@ -377,7 +475,21 @@ public sealed class RuntimeActorGrainMigrationFailClosedIntegrationTests
                 ContractId = ContractId,
             };
             admission.AdmittedMembers.Add(new RuntimeFleetAdmittedMember { MemberId = "member-a", Incarnation = "inc-a" });
-            return Task.FromResult<RuntimeFleetCapabilityAdmission?>(admission);
+            return admission;
+        }
+    }
+
+    private sealed class MutableAdmissionReader : IRuntimeFleetCapabilityAdmissionReader
+    {
+        public RuntimeFleetCapabilityAdmission? Current { get; set; }
+
+        public Task<RuntimeFleetCapabilityAdmission?> GetAsync(
+            RuntimeFleetCapability capability,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                Current?.Capability == capability ? Current.Clone() : null);
         }
     }
 

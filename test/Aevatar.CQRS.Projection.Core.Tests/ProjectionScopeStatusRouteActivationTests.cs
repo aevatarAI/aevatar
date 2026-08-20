@@ -92,6 +92,9 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     public enum InvalidReleaseConfirmation
     {
         WrongPublisher,
+        MissingRuntimeSource,
+        WrongRuntimeSource,
+        NonDirect,
         WrongWriter,
         WrongSource,
         WrongEpoch,
@@ -101,9 +104,72 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     public enum InvalidCaughtUpContinuation
     {
         WrongPublisher,
+        MissingRuntimeSource,
+        WrongRuntimeSource,
+        NonDirect,
         WrongWriter,
         WrongSource,
         WrongEpoch,
+    }
+
+    public enum InvalidSealReceipt
+    {
+        WrongRole,
+        WrongActorId,
+        WrongAgentKind,
+        WrongAdoptionReceipt,
+        WrongRouteEpoch,
+        WrongPublisher,
+        MissingRuntimeSource,
+        WrongRuntimeSource,
+        NonDirect,
+    }
+
+    public enum InvalidPhaseBAdmission
+    {
+        Revoked,
+        Expired,
+    }
+
+    public enum InvalidSealRequest
+    {
+        WrongRole,
+        WrongActorId,
+        WrongAgentKind,
+        WrongRouteEpoch,
+        WrongPublisher,
+        MissingRuntimeSource,
+        WrongRuntimeSource,
+        NonDirect,
+        MissingAdoptionReceipt,
+    }
+
+    public enum InvalidPreparationTransition
+    {
+        StaleEpoch,
+        WrongSourceActorId,
+        WrongCandidateContract,
+        WrongCandidatePhase,
+        WrongWriterActorId,
+        WrongSourceSeal,
+    }
+
+    public enum InvalidRecordedSealTransition
+    {
+        StaleEpoch,
+        SourceRole,
+        WrongActorId,
+        WrongAgentKind,
+        WrongReceipt,
+    }
+
+    public enum InvalidBoundSealsTransition
+    {
+        StaleEpoch,
+        NotAResume,
+        CandidateMismatch,
+        IncompleteSet,
+        WrongIdentity,
     }
 
     [Fact]
@@ -142,7 +208,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     }
 
     [Fact]
-    public async Task NoRoute_WithHistoricalQuiescence_StopsBridgeRetryButNeverCreatesARoute()
+    public async Task NoRoute_WithHistoricalQuiescence_WaitsForFreshPhaseBAdmission()
     {
         var evidence = CreateQuiescenceEvidence();
         var harness = SourceScopeHarness.Build(
@@ -157,11 +223,12 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             Commit(ProjectionScopeStartedEvent.Descriptor),
             ActorCreate(LegacyStatusShadowKind, LegacyActorId),
             Dispatch(EnsureProjectionScopeCommand.Descriptor, LegacyActorId),
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
             RelayUpsert(RootActorId, SourceScopeActorId),
             Commit(ProjectionObservationAttachmentUpdatedEvent.Descriptor),
         ]);
         harness.Agent.State.StatusRoute.Should().BeNull();
-        harness.Callbacks!.Timeouts.Should().BeEmpty();
+        harness.Callbacks!.Timeouts.Should().ContainSingle();
         harness.Fleet!.Quiescence.Should().BeEquivalentTo(evidence);
     }
 
@@ -182,6 +249,386 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         receipt.Should().NotBeNull("historical completion evidence survives membership evolution");
         grant.Should().BeNull("a quiescence receipt is not live admission for the retired V2 gate");
         receipt!.Evidence.Should().BeEquivalentTo(evidence);
+    }
+
+    [Theory]
+    [InlineData(ProjectionScopeStatusActorRole.LegacyWriter)]
+    [InlineData(ProjectionScopeStatusActorRole.TerminalWriter)]
+    public async Task FreshPhaseBAdmission_WithOnlyOneWriterSeal_DoesNotEnterWarming(
+        ProjectionScopeStatusActorRole presentWriterRole)
+    {
+        var harness = SourceScopeHarness.Build(
+            quiescence: CreateQuiescenceEvidence(),
+            registerCallbackScheduler: true,
+            phaseBReady: true);
+
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+
+        harness.Agent.State.StatusRoute.Should().BeNull(
+            "dispatch acceptance is not a writer schema-adoption seal");
+        harness.Agent.State.StatusRoutePreparation!.ActivationSeals.Should().ContainSingle(seal =>
+            seal.Role == ProjectionScopeStatusActorRole.Source);
+
+        await DispatchSealReadyAsync(
+            harness.Agent,
+            presentWriterRole,
+            routeEpoch: 1);
+
+        harness.Agent.State.StatusRoute.Should().BeNull();
+        harness.Agent.State.StatusRoutePreparation!.ActivationSeals
+            .Select(static seal => seal.Role)
+            .Should().BeEquivalentTo(new[]
+            {
+                ProjectionScopeStatusActorRole.Source,
+                presentWriterRole,
+            });
+        harness.EventSourcing.Committed.Should().NotContain(static evt =>
+            evt is ProjectionScopeStatusRouteWarmingStartedEvent);
+    }
+
+    [Theory]
+    [InlineData(ProjectionScopeStatusActorRole.Unspecified)]
+    [InlineData(ProjectionScopeStatusActorRole.LegacyWriter)]
+    public async Task RehydratedPartialPreparation_RequestsOnlyMissingWriterSeals(
+        ProjectionScopeStatusActorRole persistedWriterRole)
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoutePreparation = BuildRoutePreparation(
+            ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+                1,
+                ProjectionScopeStatusRoutePhase.Warming),
+            resumesPersistedRoute: false);
+        state.StatusRoutePreparation.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.Source,
+            SourceScopeActorId,
+            TestScopeAgentKind));
+        if (persistedWriterRole == ProjectionScopeStatusActorRole.LegacyWriter)
+        {
+            state.StatusRoutePreparation.ActivationSeals.Add(CreateActivationSeal(
+                ProjectionScopeStatusActorRole.LegacyWriter,
+                LegacyActorId,
+                LegacyStatusShadowKind));
+        }
+
+        var persistedPreparation = state.StatusRoutePreparation.Clone();
+        var harness = SourceScopeHarness.Build(
+            quiescence: CreateQuiescenceEvidence(),
+            initialState: state,
+            registerCallbackScheduler: true,
+            phaseBReady: true);
+
+        await harness.Agent.ActivateForTestAsync();
+
+        harness.Agent.State.StatusRoute.Should().BeNull();
+        harness.Agent.State.StatusRoutePreparation.Should().BeEquivalentTo(persistedPreparation);
+        harness.EventSourcing.Committed.Any(static evt =>
+                evt is ProjectionScopeStatusRoutePreparationStartedEvent ||
+                evt is ProjectionScopeStatusRouteWarmingStartedEvent)
+            .Should().BeFalse();
+        var requests = harness.Publisher.SentTo
+            .Select(static item => item.Event)
+            .OfType<RequestProjectionScopeStatusActorSealCommand>()
+            .ToArray();
+        var expectedRoles = persistedWriterRole == ProjectionScopeStatusActorRole.LegacyWriter
+            ? new[] { ProjectionScopeStatusActorRole.TerminalWriter }
+            : new[]
+            {
+                ProjectionScopeStatusActorRole.LegacyWriter,
+                ProjectionScopeStatusActorRole.TerminalWriter,
+            };
+        requests.Select(static request => request.Role).Should().BeEquivalentTo(expectedRoles);
+        requests.Should().OnlyContain(request =>
+            request.SourceScopeActorId == SourceScopeActorId && request.RouteEpoch == 1);
+    }
+
+    [Fact]
+    public async Task RehydratedPreparation_WithAllThreeSeals_StartsWarmingWithoutRequestingThemAgain()
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoutePreparation = BuildRoutePreparation(
+            ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+                1,
+                ProjectionScopeStatusRoutePhase.Warming),
+            resumesPersistedRoute: false);
+        AddPhaseBSeals(state.StatusRoutePreparation);
+        var harness = SourceScopeHarness.Build(
+            quiescence: CreateQuiescenceEvidence(),
+            initialState: state,
+            registerCallbackScheduler: true,
+            phaseBReady: true);
+
+        await harness.Agent.ActivateForTestAsync();
+
+        harness.Agent.State.StatusRoutePreparation.Should().BeNull();
+        harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Warming);
+        harness.Agent.State.StatusRoute.RouteEpoch.Should().Be(1);
+        harness.Agent.State.StatusRoute.ActivationSeals.Should().BeEquivalentTo(
+            state.StatusRoutePreparation.ActivationSeals);
+        harness.EventSourcing.Committed.Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionScopeStatusRouteWarmingStartedEvent>();
+        harness.Publisher.SentTo
+            .Select(static item => item.Event)
+            .Any(static evt => evt is RequestProjectionScopeStatusActorSealCommand)
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task FreshPhaseBAdmission_WithoutSourceSchemaContext_DoesNotCreatePreparation()
+    {
+        var harness = SourceScopeHarness.Build(
+            quiescence: CreateQuiescenceEvidence(),
+            registerCallbackScheduler: true,
+            phaseBReady: true,
+            registerStateSchemaContext: false);
+
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+
+        harness.Agent.State.StatusRoute.Should().BeNull();
+        harness.Agent.State.StatusRoutePreparation.Should().BeNull();
+        harness.Publisher.SentTo
+            .Select(static item => item.Event)
+            .Any(static evt => evt is RequestProjectionScopeStatusActorSealCommand)
+            .Should().BeFalse();
+        harness.Callbacks!.Timeouts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task FreshPhaseBAdmission_WithAllThreeActorSeals_EntersWarming()
+    {
+        var harness = SourceScopeHarness.Build(
+            quiescence: CreateQuiescenceEvidence(),
+            registerCallbackScheduler: true,
+            phaseBReady: true);
+        await harness.Agent.HandleEnsureAsync(BuildDurableEnsureCommand());
+
+        await DispatchSealReadyAsync(
+            harness.Agent,
+            ProjectionScopeStatusActorRole.LegacyWriter,
+            routeEpoch: 1);
+        await DispatchSealReadyAsync(
+            harness.Agent,
+            ProjectionScopeStatusActorRole.TerminalWriter,
+            routeEpoch: 1);
+
+        harness.Agent.State.StatusRoute.Should().NotBeNull();
+        harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Warming);
+        harness.Agent.State.StatusRoute.ActivationSeals.Should().HaveCount(3);
+        ProjectionScopeStatusActivationSealPolicy.HasRequiredReceiptSet(
+            harness.Agent.State.StatusRoute.ActivationSeals).Should().BeTrue();
+        harness.EventSourcing.Committed.Should().ContainSingle(static evt =>
+            evt is ProjectionScopeStatusRouteWarmingStartedEvent);
+    }
+
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Active)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Unspecified)]
+    public async Task ExistingTerminalRoute_BackgroundBindsThreeSealsWithoutChangingWriter(
+        ProjectionScopeStatusRoutePhase phase)
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(5, phase);
+        var harness = SourceScopeHarness.Build(
+            quiescence: CreateQuiescenceEvidence(),
+            initialState: state,
+            registerCallbackScheduler: true,
+            phaseBReady: true);
+
+        await harness.Agent.ActivateForTestAsync();
+        harness.Agent.State.StatusRoutePreparation.Should().NotBeNull();
+        harness.Agent.State.StatusRoute!.ActivationSeals.Should().BeEmpty();
+
+        await DispatchSealReadyAsync(
+            harness.Agent,
+            ProjectionScopeStatusActorRole.LegacyWriter,
+            routeEpoch: 5);
+        await DispatchSealReadyAsync(
+            harness.Agent,
+            ProjectionScopeStatusActorRole.TerminalWriter,
+            routeEpoch: 5);
+
+        harness.Agent.State.StatusRoute!.RouteEpoch.Should().Be(5);
+        harness.Agent.State.StatusRoute.Phase.Should().Be(phase);
+        harness.Agent.State.StatusRoute.ActivationSeals.Should().HaveCount(3);
+        harness.Agent.State.StatusRoutePreparation.Should().BeNull();
+        harness.Streams.Relays.Should().ContainKey((SourceScopeActorId, TerminalActorId));
+        harness.Publisher.SentTo
+            .Select(static item => item.Event)
+            .Any(static evt => evt is ReleaseProjectionScopeCommand)
+            .Should().BeFalse();
+        harness.EventSourcing.Committed.Any(static evt =>
+                evt is ProjectionScopeStatusRouteWarmingStartedEvent ||
+                evt is ProjectionScopeStatusRouteBlockedEvent ||
+                evt is ProjectionScopeStatusRouteActivatedEvent)
+            .Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(InvalidSealReceipt.WrongRole)]
+    [InlineData(InvalidSealReceipt.WrongActorId)]
+    [InlineData(InvalidSealReceipt.WrongAgentKind)]
+    [InlineData(InvalidSealReceipt.WrongAdoptionReceipt)]
+    [InlineData(InvalidSealReceipt.WrongRouteEpoch)]
+    [InlineData(InvalidSealReceipt.WrongPublisher)]
+    [InlineData(InvalidSealReceipt.MissingRuntimeSource)]
+    [InlineData(InvalidSealReceipt.WrongRuntimeSource)]
+    [InlineData(InvalidSealReceipt.NonDirect)]
+    public async Task StatusActorSealReady_InvalidIdentityOrRoute_IsRejected(
+        InvalidSealReceipt invalidReceipt)
+    {
+        var state = BuildActiveSourceState();
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+            5,
+            ProjectionScopeStatusRoutePhase.Active);
+        var harness = SourceScopeHarness.Build(
+            quiescence: CreateQuiescenceEvidence(),
+            initialState: state,
+            registerCallbackScheduler: true,
+            phaseBReady: true);
+        await harness.Agent.ActivateForTestAsync();
+        var seal = CreateActivationSeal(
+            invalidReceipt == InvalidSealReceipt.WrongRole
+                ? ProjectionScopeStatusActorRole.Source
+                : ProjectionScopeStatusActorRole.LegacyWriter,
+            invalidReceipt == InvalidSealReceipt.WrongActorId ? "other-writer" : LegacyActorId,
+            invalidReceipt == InvalidSealReceipt.WrongAgentKind ? "other.kind" : LegacyStatusShadowKind);
+        if (invalidReceipt == InvalidSealReceipt.WrongAdoptionReceipt)
+            seal.AdoptionReceipt.RequiredContractId = "wrong-contract";
+        var committedBefore = harness.EventSourcing.Committed.Count;
+
+        await DispatchSealReadyAsync(
+            harness.Agent,
+            seal,
+            invalidReceipt == InvalidSealReceipt.WrongRouteEpoch ? 4 : 5,
+            invalidReceipt == InvalidSealReceipt.WrongPublisher ? "other-writer" : LegacyActorId,
+            includeRuntimeSource: invalidReceipt != InvalidSealReceipt.MissingRuntimeSource,
+            runtimeSourceActorId: invalidReceipt == InvalidSealReceipt.WrongRuntimeSource
+                ? "other-runtime-source"
+                : null,
+            direct: invalidReceipt != InvalidSealReceipt.NonDirect);
+
+        harness.EventSourcing.Committed.Should().HaveCount(committedBefore);
+        harness.Agent.State.StatusRoutePreparation!.ActivationSeals.Should().ContainSingle(seal =>
+            seal.Role == ProjectionScopeStatusActorRole.Source);
+        harness.Agent.State.StatusRoute!.ActivationSeals.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(FrozenContinuation.CaughtUp, InvalidPhaseBAdmission.Revoked)]
+    [InlineData(FrozenContinuation.CaughtUp, InvalidPhaseBAdmission.Expired)]
+    [InlineData(FrozenContinuation.Released, InvalidPhaseBAdmission.Revoked)]
+    [InlineData(FrozenContinuation.Released, InvalidPhaseBAdmission.Expired)]
+    public async Task PhaseBContinuation_WhenV3IsNoLongerFresh_Freezes(
+        FrozenContinuation continuation,
+        InvalidPhaseBAdmission invalidAdmission)
+    {
+        var phase = continuation == FrozenContinuation.CaughtUp
+            ? ProjectionScopeStatusRoutePhase.Warming
+            : ProjectionScopeStatusRoutePhase.Blocked;
+        var state = BuildActiveSourceState();
+        state.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(7, phase);
+        state.StatusRoute.WarmStartedVersion = 11;
+        state.StatusRoute.WarmingProbeVersion = 12;
+        state.StatusRoute.BlockedVersion = phase == ProjectionScopeStatusRoutePhase.Blocked ? 13 : 0;
+        state.StatusRoute.DrainProbeVersion = phase == ProjectionScopeStatusRoutePhase.Blocked ? 14 : 0;
+        AddPhaseBSeals(state.StatusRoute);
+        var originalRoute = state.StatusRoute.Clone();
+        var harness = SourceScopeHarness.Build(
+            quiescence: CreateQuiescenceEvidence(),
+            initialState: state,
+            registerCallbackScheduler: true,
+            phaseBReady: true);
+        harness.Fleet!.Admission = invalidAdmission == InvalidPhaseBAdmission.Revoked
+            ? CreateActivationSealAdmission(RuntimeFleetCapabilityGateStatus.Revoked)
+            : CreateActivationSealAdmission(
+                RuntimeFleetCapabilityGateStatus.Open,
+                Now.AddSeconds(-1));
+
+        if (continuation == FrozenContinuation.CaughtUp)
+        {
+            await DispatchContinuationAsync(harness.Agent, TerminalActorId,
+                new ProjectionScopeStatusWriterCaughtUpEvent
+                {
+                    SourceScopeActorId = SourceScopeActorId,
+                    WriterActorId = TerminalActorId,
+                    RouteEpoch = 7,
+                    ObservedVersion = 12,
+                });
+        }
+        else
+        {
+            await DispatchContinuationAsync(harness.Agent, LegacyActorId,
+                new ProjectionScopeStatusWriterReleasedEvent
+                {
+                    SourceScopeActorId = SourceScopeActorId,
+                    WriterActorId = LegacyActorId,
+                    RouteEpoch = 7,
+                    LastObservedVersion = 14,
+                });
+        }
+
+        harness.EventSourcing.Committed.Should().BeEmpty();
+        harness.Agent.State.StatusRoute.Should().BeEquivalentTo(originalRoute);
+    }
+
+    [Fact]
+    public async Task LegacyWriter_ExactSealRequest_RepliesWithRuntimeOwnedSeal()
+    {
+        var harness = BuildLegacyShadowHarness(phaseBReady: true);
+        await DispatchSealRequestAsync(
+            harness.Agent,
+            BuildSealRequest(
+                ProjectionScopeStatusActorRole.LegacyWriter,
+                LegacyActorId,
+                LegacyStatusShadowKind,
+                routeEpoch: 5),
+            SourceScopeActorId,
+            LegacyActorId);
+
+        var sent = harness.Publisher.SentTo.Should().ContainSingle().Which;
+        sent.TargetActorId.Should().Be(SourceScopeActorId);
+        var ready = sent.Event.Should().BeOfType<ProjectionScopeStatusActorSealReadyEvent>().Subject;
+        ready.SourceScopeActorId.Should().Be(SourceScopeActorId);
+        ready.RouteEpoch.Should().Be(5);
+        ready.Seal.Should().BeEquivalentTo(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.LegacyWriter,
+            LegacyActorId,
+            LegacyStatusShadowKind));
+    }
+
+    [Theory]
+    [InlineData(InvalidSealRequest.WrongRole)]
+    [InlineData(InvalidSealRequest.WrongActorId)]
+    [InlineData(InvalidSealRequest.WrongAgentKind)]
+    [InlineData(InvalidSealRequest.WrongRouteEpoch)]
+    [InlineData(InvalidSealRequest.WrongPublisher)]
+    [InlineData(InvalidSealRequest.MissingRuntimeSource)]
+    [InlineData(InvalidSealRequest.WrongRuntimeSource)]
+    [InlineData(InvalidSealRequest.NonDirect)]
+    [InlineData(InvalidSealRequest.MissingAdoptionReceipt)]
+    public async Task LegacyWriter_InvalidSealRequest_DoesNotReply(InvalidSealRequest invalidRequest)
+    {
+        var harness = BuildLegacyShadowHarness(
+            phaseBReady: invalidRequest != InvalidSealRequest.MissingAdoptionReceipt);
+        var command = BuildSealRequest(
+            invalidRequest == InvalidSealRequest.WrongRole
+                ? ProjectionScopeStatusActorRole.TerminalWriter
+                : ProjectionScopeStatusActorRole.LegacyWriter,
+            invalidRequest == InvalidSealRequest.WrongActorId ? "other-writer" : LegacyActorId,
+            invalidRequest == InvalidSealRequest.WrongAgentKind ? "other.kind" : LegacyStatusShadowKind,
+            invalidRequest == InvalidSealRequest.WrongRouteEpoch ? 0 : 5);
+
+        await DispatchSealRequestAsync(
+            harness.Agent,
+            command,
+            invalidRequest == InvalidSealRequest.WrongPublisher ? "other-source" : SourceScopeActorId,
+            LegacyActorId,
+            includeRuntimeSource: invalidRequest != InvalidSealRequest.MissingRuntimeSource,
+            runtimeSourceActorId: invalidRequest == InvalidSealRequest.WrongRuntimeSource
+                ? "other-runtime-source"
+                : null,
+            direct: invalidRequest != InvalidSealRequest.NonDirect);
+
+        harness.Publisher.SentTo.Should().BeEmpty();
     }
 
     [Fact]
@@ -324,10 +771,12 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             ProjectionScopeStatusRoutePhase.Warming);
         state.StatusRoute.WarmStartedVersion = 11;
         state.StatusRoute.CaughtUpVersion = 99;
+        AddPhaseBSeals(state.StatusRoute);
         var harness = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: state,
-            registerCallbackScheduler: true);
+            registerCallbackScheduler: true,
+            phaseBReady: true);
 
         await harness.Agent.ActivateForTestAsync();
 
@@ -340,6 +789,12 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             "the original cutover start retains its single meaning");
         harness.Agent.State.StatusRoute.WarmingProbeVersion.Should().Be(100);
         harness.Agent.State.StatusRoute.CaughtUpVersion.Should().Be(0);
+        harness.Agent.State.StatusRoutePreparation.Should().BeNull(
+            "a rehydrated route with seals already bound continues without reopening preparation");
+        harness.Publisher.SentTo
+            .Select(static item => item.Event)
+            .Any(static evt => evt is RequestProjectionScopeStatusActorSealCommand)
+            .Should().BeFalse();
         harness.Streams.Relays.Should().ContainKey((SourceScopeActorId, TerminalActorId));
 
         await DispatchContinuationAsync(harness.Agent, TerminalActorId,
@@ -367,10 +822,9 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             });
 
         harness.Agent.State.StatusRoute!.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
-        var release = harness.DispatchPort.Dispatched
-            .Select(static item => item.command.Payload)
-            .Where(static payload => payload?.Is(ReleaseProjectionScopeCommand.Descriptor) == true)
-            .Select(static payload => payload!.Unpack<ReleaseProjectionScopeCommand>())
+        var release = harness.Publisher.SentTo
+            .Select(static item => item.Event)
+            .OfType<ReleaseProjectionScopeCommand>()
             .Should().ContainSingle().Subject;
         release.ExpectedWriterActorId.Should().Be(LegacyActorId);
         release.RequiredObservedVersion.Should().Be(harness.Agent.State.StatusRoute.DrainProbeVersion);
@@ -384,10 +838,12 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             7,
             ProjectionScopeStatusRoutePhase.Warming);
         state.StatusRoute.WarmStartedVersion = 11;
+        AddPhaseBSeals(state.StatusRoute);
         var harness = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: state,
-            registerCallbackScheduler: true);
+            registerCallbackScheduler: true,
+            phaseBReady: true);
 
         await harness.Agent.ActivateForTestAsync();
         var firstFence = harness.Agent.State.StatusRoute!.WarmingProbeVersion;
@@ -419,6 +875,9 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     [InlineData(FrozenRouteKind.Terminal, InvalidCaughtUpContinuation.WrongWriter)]
     [InlineData(FrozenRouteKind.Terminal, InvalidCaughtUpContinuation.WrongSource)]
     [InlineData(FrozenRouteKind.Terminal, InvalidCaughtUpContinuation.WrongEpoch)]
+    [InlineData(FrozenRouteKind.Terminal, InvalidCaughtUpContinuation.MissingRuntimeSource)]
+    [InlineData(FrozenRouteKind.Terminal, InvalidCaughtUpContinuation.WrongRuntimeSource)]
+    [InlineData(FrozenRouteKind.Terminal, InvalidCaughtUpContinuation.NonDirect)]
     [InlineData(FrozenRouteKind.Legacy, InvalidCaughtUpContinuation.WrongPublisher)]
     [InlineData(FrozenRouteKind.Legacy, InvalidCaughtUpContinuation.WrongWriter)]
     [InlineData(FrozenRouteKind.Legacy, InvalidCaughtUpContinuation.WrongSource)]
@@ -433,6 +892,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             : ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(7, ProjectionScopeStatusRoutePhase.Warming);
         state.StatusRoute.WarmStartedVersion = 11;
         state.StatusRoute.WarmingProbeVersion = 12;
+        AddPhaseBSeals(state.StatusRoute);
         var originalRoute = state.StatusRoute.Clone();
         var expectedWriterActorId = routeKind == FrozenRouteKind.Terminal ? TerminalActorId : LegacyActorId;
         var continuation = new ProjectionScopeStatusWriterCaughtUpEvent
@@ -453,9 +913,18 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         var harness = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: state,
-            registerCallbackScheduler: true);
+            registerCallbackScheduler: true,
+            phaseBReady: true);
 
-        await DispatchContinuationAsync(harness.Agent, publisherActorId, continuation);
+        await DispatchContinuationAsync(
+            harness.Agent,
+            publisherActorId,
+            continuation,
+            includeRuntimeSource: invalidContinuation != InvalidCaughtUpContinuation.MissingRuntimeSource,
+            runtimeSourceActorId: invalidContinuation == InvalidCaughtUpContinuation.WrongRuntimeSource
+                ? "other-runtime-source"
+                : null,
+            direct: invalidContinuation != InvalidCaughtUpContinuation.NonDirect);
 
         harness.EventSourcing.Committed.Should().BeEmpty();
         harness.Agent.State.StatusRoute.Should().BeEquivalentTo(originalRoute);
@@ -478,6 +947,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             : ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(7, ProjectionScopeStatusRoutePhase.Warming);
         state.StatusRoute.WarmStartedVersion = 11;
         state.StatusRoute.WarmingProbeVersion = 12;
+        AddPhaseBSeals(state.StatusRoute);
         var originalRoute = state.StatusRoute.Clone();
         var expectedWriterActorId = routeKind == FrozenRouteKind.Terminal ? TerminalActorId : LegacyActorId;
         var harness = SourceScopeHarness.Build(
@@ -485,7 +955,8 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             initialState: state,
             registerCallbackScheduler: true,
             registerActorRuntime: missingPort != MissingLifecyclePort.Runtime,
-            registerDispatchPort: missingPort != MissingLifecyclePort.Dispatch);
+            registerDispatchPort: missingPort != MissingLifecyclePort.Dispatch,
+            phaseBReady: true);
 
         await DispatchContinuationAsync(harness.Agent, expectedWriterActorId,
             new ProjectionScopeStatusWriterCaughtUpEvent
@@ -519,12 +990,14 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         state.StatusRoute.WarmStartedVersion = 11;
         state.StatusRoute.BlockedVersion = 13;
         state.StatusRoute.LegacyRouteReleased = true;
+        AddPhaseBSeals(state.StatusRoute);
         var candidateWriterActorId = routeKind == FrozenRouteKind.Terminal ? TerminalActorId : LegacyActorId;
         var previousWriterActorId = routeKind == FrozenRouteKind.Terminal ? LegacyActorId : TerminalActorId;
         var harness = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: state,
-            registerCallbackScheduler: true);
+            registerCallbackScheduler: true,
+            phaseBReady: true);
 
         await harness.Agent.ActivateForTestAsync();
 
@@ -538,10 +1011,9 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         harness.EventSourcing.Committed.Should().ContainSingle(static evt =>
             evt is ProjectionScopeStatusRouteDrainProbedEvent);
 
-        var release = harness.DispatchPort.Dispatched
-            .Select(static item => item.command.Payload)
-            .Where(static payload => payload?.Is(ReleaseProjectionScopeCommand.Descriptor) == true)
-            .Select(static payload => payload!.Unpack<ReleaseProjectionScopeCommand>())
+        var release = harness.Publisher.SentTo
+            .Select(static item => item.Event)
+            .OfType<ReleaseProjectionScopeCommand>()
             .Should().ContainSingle().Subject;
         release.ExpectedWriterActorId.Should().Be(previousWriterActorId);
         release.RequiredObservedVersion.Should().Be(14);
@@ -580,10 +1052,12 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             7,
             ProjectionScopeStatusRoutePhase.Blocked);
         state.StatusRoute.BlockedVersion = 13;
+        AddPhaseBSeals(state.StatusRoute);
         var harness = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: state,
-            registerCallbackScheduler: true);
+            registerCallbackScheduler: true,
+            phaseBReady: true);
 
         await harness.Agent.ActivateForTestAsync();
         var firstDrainFence = harness.Agent.State.StatusRoute!.DrainProbeVersion;
@@ -596,10 +1070,9 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             .Should().HaveCount(2).And.OnlyContain(evt => evt.RequiredObservedVersion == firstDrainFence);
         harness.Agent.State.StatusRoute.BlockedVersion.Should().Be(13);
         harness.Agent.State.StatusRoute.DrainProbeVersion.Should().Be(firstDrainFence);
-        harness.DispatchPort.Dispatched
-            .Select(static item => item.command.Payload)
-            .Where(static payload => payload?.Is(ReleaseProjectionScopeCommand.Descriptor) == true)
-            .Select(static payload => payload!.Unpack<ReleaseProjectionScopeCommand>())
+        harness.Publisher.SentTo
+            .Select(static item => item.Event)
+            .OfType<ReleaseProjectionScopeCommand>()
             .Should().HaveCount(2).And.OnlyContain(command =>
                 command.RequiredObservedVersion == firstDrainFence);
 
@@ -628,13 +1101,15 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             7,
             ProjectionScopeStatusRoutePhase.Blocked);
         state.StatusRoute.BlockedVersion = 13;
+        AddPhaseBSeals(state.StatusRoute);
         var originalRoute = state.StatusRoute.Clone();
         var harness = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: state,
             registerCallbackScheduler: true,
             registerActorRuntime: missingPort != MissingLifecyclePort.Runtime,
-            registerDispatchPort: missingPort != MissingLifecyclePort.Dispatch);
+            registerDispatchPort: missingPort != MissingLifecyclePort.Dispatch,
+            phaseBReady: true);
 
         await harness.Agent.ActivateForTestAsync();
 
@@ -653,6 +1128,9 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     [InlineData(InvalidReleaseConfirmation.WrongSource)]
     [InlineData(InvalidReleaseConfirmation.WrongEpoch)]
     [InlineData(InvalidReleaseConfirmation.BelowDrain)]
+    [InlineData(InvalidReleaseConfirmation.MissingRuntimeSource)]
+    [InlineData(InvalidReleaseConfirmation.WrongRuntimeSource)]
+    [InlineData(InvalidReleaseConfirmation.NonDirect)]
     public async Task QuiescedBlockedRoute_InvalidReleaseConfirmation_LeavesRouteAndRelayBlocked(
         InvalidReleaseConfirmation invalidConfirmation)
     {
@@ -661,10 +1139,12 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             7,
             ProjectionScopeStatusRoutePhase.Blocked);
         state.StatusRoute.BlockedVersion = 13;
+        AddPhaseBSeals(state.StatusRoute);
         var harness = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: state,
-            registerCallbackScheduler: true);
+            registerCallbackScheduler: true,
+            phaseBReady: true);
         await harness.Agent.ActivateForTestAsync();
         var requiredObservedVersion = harness.Agent.State.StatusRoute!.DrainProbeVersion;
         var confirmation = new ProjectionScopeStatusWriterReleasedEvent
@@ -685,7 +1165,15 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             ? "other-writer"
             : LegacyActorId;
 
-        await DispatchContinuationAsync(harness.Agent, publisherActorId, confirmation);
+        await DispatchContinuationAsync(
+            harness.Agent,
+            publisherActorId,
+            confirmation,
+            includeRuntimeSource: invalidConfirmation != InvalidReleaseConfirmation.MissingRuntimeSource,
+            runtimeSourceActorId: invalidConfirmation == InvalidReleaseConfirmation.WrongRuntimeSource
+                ? "other-runtime-source"
+                : null,
+            direct: invalidConfirmation != InvalidReleaseConfirmation.NonDirect);
 
         harness.EventSourcing.Committed.Should().ContainSingle()
             .Which.Should().BeOfType<ProjectionScopeStatusRouteDrainProbedEvent>();
@@ -706,11 +1194,13 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             ? ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(7, ProjectionScopeStatusRoutePhase.Blocked)
             : ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(7, ProjectionScopeStatusRoutePhase.Blocked);
         state.StatusRoute.BlockedVersion = 13;
+        AddPhaseBSeals(state.StatusRoute);
         var previousWriterActorId = routeKind == FrozenRouteKind.Terminal ? LegacyActorId : TerminalActorId;
         var harness = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: state,
-            registerCallbackScheduler: true);
+            registerCallbackScheduler: true,
+            phaseBReady: true);
         await harness.Agent.ActivateForTestAsync();
         var requiredObservedVersion = harness.Agent.State.StatusRoute!.DrainProbeVersion;
         var confirmation = new ProjectionScopeStatusWriterReleasedEvent
@@ -759,6 +1249,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
 
         harness.Journal.Should().Equal(
         [
+            RetryTimeout(TestScopeAgent.RetryDelays[0]),
             RelayUpsert(SourceScopeActorId, TerminalActorId),
             ActorCreate(ProjectionScopeStatusGAgent.AgentKind, TerminalActorId),
             RelayUpsert(RootActorId, SourceScopeActorId),
@@ -766,7 +1257,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         harness.Agent.State.StatusRoute.Should().BeEquivalentTo(state.StatusRoute);
         harness.DispatchPort.Dispatched.Should().BeEmpty();
         harness.EventSourcing.Committed.Should().BeEmpty();
-        harness.Callbacks!.Timeouts.Should().BeEmpty();
+        harness.Callbacks!.Timeouts.Should().ContainSingle();
     }
 
     [Fact]
@@ -949,10 +1440,12 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             routeEpoch: 7,
             ProjectionScopeStatusRoutePhase.Warming);
         sourceState.StatusRoute.WarmStartedVersion = 11;
+        AddPhaseBSeals(sourceState.StatusRoute);
         var source = SourceScopeHarness.Build(
             quiescence: CreateQuiescenceEvidence(),
             initialState: sourceState,
-            registerCallbackScheduler: true);
+            registerCallbackScheduler: true,
+            phaseBReady: true);
 
         await source.Agent.ActivateForTestAsync();
         var warmingProbe = source.EventSourcing.Committed
@@ -973,15 +1466,16 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         var drainProbe = source.EventSourcing.Committed
             .OfType<ProjectionScopeStatusRouteDrainProbedEvent>()
             .Should().ContainSingle().Subject;
-        var release = source.DispatchPort.Dispatched
-            .Select(static item => item.command.Payload)
-            .Where(static payload => payload?.Is(ReleaseProjectionScopeCommand.Descriptor) == true)
-            .Select(static payload => payload!.Unpack<ReleaseProjectionScopeCommand>())
+        var release = source.Publisher.SentTo
+            .Select(static item => item.Event)
+            .OfType<ReleaseProjectionScopeCommand>()
             .Should().ContainSingle().Subject;
         release.RequiredObservedVersion.Should().Be(drainProbe.RequiredObservedVersion);
         release.ExpectedWriterActorId.Should().Be(LegacyActorId);
 
-        var legacy = BuildLegacyShadowHarness(quiescence: CreateQuiescenceEvidence());
+        var legacy = BuildLegacyShadowHarness(
+            quiescence: CreateQuiescenceEvidence(),
+            phaseBReady: true);
         await legacy.Agent.ActivateForTestAsync();
         await DispatchReleaseAsync(legacy.Agent, release);
         legacy.Agent.State.Released.Should().BeFalse(
@@ -1014,16 +1508,17 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     }
 
     [Theory]
-    [InlineData(FrozenRouteKind.Terminal, ProjectionScopeStatusRoutePhase.Warming, false)]
-    [InlineData(FrozenRouteKind.Terminal, ProjectionScopeStatusRoutePhase.Blocked, true)]
-    [InlineData(FrozenRouteKind.Legacy, ProjectionScopeStatusRoutePhase.Warming, false)]
-    [InlineData(FrozenRouteKind.Legacy, ProjectionScopeStatusRoutePhase.Blocked, true)]
+    [InlineData(FrozenRouteKind.Terminal, ProjectionScopeStatusRoutePhase.Warming)]
+    [InlineData(FrozenRouteKind.Terminal, ProjectionScopeStatusRoutePhase.Blocked)]
+    [InlineData(FrozenRouteKind.Legacy, ProjectionScopeStatusRoutePhase.Warming)]
+    [InlineData(FrozenRouteKind.Legacy, ProjectionScopeStatusRoutePhase.Blocked)]
     public async Task LegacyWriter_ObservingFrozenRoute_NeverEmitsAContinuationOrReleases(
         FrozenRouteKind routeKind,
-        ProjectionScopeStatusRoutePhase phase,
-        bool skipsObservation)
+        ProjectionScopeStatusRoutePhase phase)
     {
-        var harness = BuildLegacyShadowHarness();
+        var harness = BuildLegacyShadowHarness(
+            quiescence: CreateQuiescenceEvidence(),
+            phaseBReady: true);
         await harness.Agent.ActivateForTestAsync();
         harness.Journal.Clear();
         var sourceState = BuildSourceStateAtVersion(3, 10);
@@ -1036,24 +1531,23 @@ public sealed class ProjectionScopeStatusRouteActivationTests
 
         harness.Publisher.SentTo.Should().BeEmpty();
         harness.Agent.State.Released.Should().BeFalse();
-        if (skipsObservation)
-            harness.Journal.Should().BeEmpty();
-        else
-            harness.Journal.Should().Equal(
-                Commit(ProjectionScopeEnvelopeReceivedEvent.Descriptor),
-                Commit(ProjectionScopeEnvelopeAttemptedEvent.Descriptor));
+        harness.Journal.Should().BeEmpty(
+            "a WARMING/BLOCKED writer without Phase-B proofs consumes the publication without advancing");
     }
 
     [Fact]
     public async Task LegacyCandidate_AfterQuiescence_ReportsFreshRollbackWarmingObservation()
     {
-        var harness = BuildLegacyShadowHarness(quiescence: CreateQuiescenceEvidence());
+        var harness = BuildLegacyShadowHarness(
+            quiescence: CreateQuiescenceEvidence(),
+            phaseBReady: true);
         await harness.Agent.ActivateForTestAsync();
         harness.Journal.Clear();
         var sourceState = BuildSourceStateAtVersion(3, 10);
         sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(
             8,
             ProjectionScopeStatusRoutePhase.Warming);
+        AddPhaseBSeals(sourceState.StatusRoute);
 
         await harness.Agent.HandleObservedEnvelopeAsync(
             BuildCommittedSourceEnvelope(LegacyActorId, sourceState, 3));
@@ -1073,7 +1567,9 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     [Fact]
     public async Task LegacyPreviousWriter_AfterQuiescence_DurablyReleasesOnForwardedBlockedProbe()
     {
-        var harness = BuildLegacyShadowHarness(quiescence: CreateQuiescenceEvidence());
+        var harness = BuildLegacyShadowHarness(
+            quiescence: CreateQuiescenceEvidence(),
+            phaseBReady: true);
         await harness.Agent.ActivateForTestAsync();
         harness.Journal.Clear();
         var sourceState = BuildSourceStateAtVersion(14, 20);
@@ -1082,6 +1578,7 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             ProjectionScopeStatusRoutePhase.Blocked);
         sourceState.StatusRoute.BlockedVersion = 13;
         sourceState.StatusRoute.DrainProbeVersion = 14;
+        AddPhaseBSeals(sourceState.StatusRoute);
 
         await harness.Agent.HandleObservedEnvelopeAsync(
             BuildCommittedSourceEnvelope(LegacyActorId, sourceState, 14));
@@ -1154,6 +1651,275 @@ public sealed class ProjectionScopeStatusRouteActivationTests
                 LastObservedVersion = 12,
                 ReleasedAtUtc = Timestamp.FromDateTimeOffset(Now),
             });
+    }
+
+    [Fact]
+    public void Transition_PreparationStartedWithExactCandidateAndSourceSeal_PersistsPreparation()
+    {
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        var preparation = BuildRoutePreparation(
+            ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+                1,
+                ProjectionScopeStatusRoutePhase.Warming),
+            resumesPersistedRoute: false);
+        preparation.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.Source,
+            SourceScopeActorId,
+            TestScopeAgentKind));
+        var occurredAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(1));
+
+        var next = harness.Agent.Transition(current, new ProjectionScopeStatusRoutePreparationStartedEvent
+        {
+            Preparation = preparation,
+            OccurredAtUtc = occurredAt,
+        });
+
+        next.Should().NotBeSameAs(current);
+        current.StatusRoutePreparation.Should().BeNull();
+        next.StatusRoutePreparation.Should().BeEquivalentTo(preparation);
+        next.UpdatedAtUtc.Should().Be(occurredAt);
+    }
+
+    [Theory]
+    [InlineData(InvalidPreparationTransition.StaleEpoch)]
+    [InlineData(InvalidPreparationTransition.WrongSourceActorId)]
+    [InlineData(InvalidPreparationTransition.WrongCandidateContract)]
+    [InlineData(InvalidPreparationTransition.WrongCandidatePhase)]
+    [InlineData(InvalidPreparationTransition.WrongWriterActorId)]
+    [InlineData(InvalidPreparationTransition.WrongSourceSeal)]
+    public void Transition_PreparationStartedWithStaleOrMismatchedIdentity_LeavesStateUnchanged(
+        InvalidPreparationTransition invalidTransition)
+    {
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        var preparation = BuildRoutePreparation(
+            ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+                1,
+                ProjectionScopeStatusRoutePhase.Warming),
+            resumesPersistedRoute: false);
+        preparation.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.Source,
+            SourceScopeActorId,
+            TestScopeAgentKind));
+        switch (invalidTransition)
+        {
+            case InvalidPreparationTransition.StaleEpoch:
+                current.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(1);
+                break;
+            case InvalidPreparationTransition.WrongSourceActorId:
+                preparation.SourceScopeActorId = "other-source";
+                preparation.ActivationSeals[0].ActorId = "other-source";
+                break;
+            case InvalidPreparationTransition.WrongCandidateContract:
+                preparation.CandidateRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(
+                    1,
+                    ProjectionScopeStatusRoutePhase.Warming);
+                break;
+            case InvalidPreparationTransition.WrongCandidatePhase:
+                preparation.CandidateRoute.Phase = ProjectionScopeStatusRoutePhase.Active;
+                break;
+            case InvalidPreparationTransition.WrongWriterActorId:
+                preparation.LegacyWriterActorId = "other-writer";
+                break;
+            case InvalidPreparationTransition.WrongSourceSeal:
+                preparation.ActivationSeals[0].AdoptionReceipt.RequiredContractId = "wrong-contract";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(invalidTransition), invalidTransition, null);
+        }
+
+        var next = harness.Agent.Transition(current, new ProjectionScopeStatusRoutePreparationStartedEvent
+        {
+            Preparation = preparation,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        });
+
+        next.Should().BeSameAs(current);
+        next.StatusRoutePreparation.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(ProjectionScopeStatusActorRole.LegacyWriter)]
+    [InlineData(ProjectionScopeStatusActorRole.TerminalWriter)]
+    public void Transition_SealRecordedWithExactPreparedWriterIdentity_AddsSeal(
+        ProjectionScopeStatusActorRole writerRole)
+    {
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        current.StatusRoutePreparation = BuildRoutePreparation(
+            ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+                1,
+                ProjectionScopeStatusRoutePhase.Warming),
+            resumesPersistedRoute: false);
+        current.StatusRoutePreparation.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.Source,
+            SourceScopeActorId,
+            TestScopeAgentKind));
+        var seal = writerRole == ProjectionScopeStatusActorRole.LegacyWriter
+            ? CreateActivationSeal(writerRole, LegacyActorId, LegacyStatusShadowKind)
+            : CreateActivationSeal(writerRole, TerminalActorId, ProjectionScopeStatusGAgent.AgentKind);
+
+        var next = harness.Agent.Transition(current, new ProjectionScopeStatusActorSealRecordedEvent
+        {
+            RouteEpoch = 1,
+            Seal = seal,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        });
+
+        next.Should().NotBeSameAs(current);
+        current.StatusRoutePreparation.ActivationSeals.Should().ContainSingle();
+        next.StatusRoutePreparation!.ActivationSeals.Should().HaveCount(2).And.ContainEquivalentOf(seal);
+    }
+
+    [Theory]
+    [InlineData(InvalidRecordedSealTransition.StaleEpoch)]
+    [InlineData(InvalidRecordedSealTransition.SourceRole)]
+    [InlineData(InvalidRecordedSealTransition.WrongActorId)]
+    [InlineData(InvalidRecordedSealTransition.WrongAgentKind)]
+    [InlineData(InvalidRecordedSealTransition.WrongReceipt)]
+    public void Transition_SealRecordedWithStaleOrMismatchedIdentity_LeavesStateUnchanged(
+        InvalidRecordedSealTransition invalidTransition)
+    {
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        current.StatusRoutePreparation = BuildRoutePreparation(
+            ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+                1,
+                ProjectionScopeStatusRoutePhase.Warming),
+            resumesPersistedRoute: false);
+        current.StatusRoutePreparation.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.Source,
+            SourceScopeActorId,
+            TestScopeAgentKind));
+        var seal = CreateActivationSeal(
+            ProjectionScopeStatusActorRole.LegacyWriter,
+            LegacyActorId,
+            LegacyStatusShadowKind);
+        var routeEpoch = 1L;
+        switch (invalidTransition)
+        {
+            case InvalidRecordedSealTransition.StaleEpoch:
+                routeEpoch = 2;
+                break;
+            case InvalidRecordedSealTransition.SourceRole:
+                seal = CreateActivationSeal(
+                    ProjectionScopeStatusActorRole.Source,
+                    SourceScopeActorId,
+                    TestScopeAgentKind);
+                break;
+            case InvalidRecordedSealTransition.WrongActorId:
+                seal.ActorId = "other-writer";
+                break;
+            case InvalidRecordedSealTransition.WrongAgentKind:
+                seal.AgentKind = "other.kind";
+                break;
+            case InvalidRecordedSealTransition.WrongReceipt:
+                seal.AdoptionReceipt.RequiredContractId = "wrong-contract";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(invalidTransition), invalidTransition, null);
+        }
+
+        var next = harness.Agent.Transition(current, new ProjectionScopeStatusActorSealRecordedEvent
+        {
+            RouteEpoch = routeEpoch,
+            Seal = seal,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        });
+
+        next.Should().BeSameAs(current);
+        next.StatusRoutePreparation!.ActivationSeals.Should().ContainSingle()
+            .Which.Role.Should().Be(ProjectionScopeStatusActorRole.Source);
+    }
+
+    [Fact]
+    public void Transition_ActivationSealsBoundWithExactPersistedRoute_PreservesRouteAndClearsPreparation()
+    {
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        current.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+            5,
+            ProjectionScopeStatusRoutePhase.Active);
+        current.StatusRoute.FlipVersion = 4;
+        current.StatusRoutePreparation = BuildRoutePreparation(
+            current.StatusRoute,
+            resumesPersistedRoute: true);
+        AddPhaseBSeals(current.StatusRoutePreparation);
+        var seals = current.StatusRoutePreparation.ActivationSeals
+            .Select(static seal => seal.Clone())
+            .ToArray();
+
+        var evt = new ProjectionScopeStatusRouteActivationSealsBoundEvent
+        {
+            RouteEpoch = 5,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        };
+        evt.ActivationSeals.Add(seals);
+        var next = harness.Agent.Transition(current, evt);
+
+        next.Should().NotBeSameAs(current);
+        current.StatusRoute.ActivationSeals.Should().BeEmpty();
+        next.StatusRoute!.ContractId.Should().Be(current.StatusRoute.ContractId);
+        next.StatusRoute.RouteEpoch.Should().Be(5);
+        next.StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
+        next.StatusRoute.FlipVersion.Should().Be(4);
+        next.StatusRoute.ActivationSeals.Should().BeEquivalentTo(seals);
+        next.StatusRoutePreparation.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(InvalidBoundSealsTransition.StaleEpoch)]
+    [InlineData(InvalidBoundSealsTransition.NotAResume)]
+    [InlineData(InvalidBoundSealsTransition.CandidateMismatch)]
+    [InlineData(InvalidBoundSealsTransition.IncompleteSet)]
+    [InlineData(InvalidBoundSealsTransition.WrongIdentity)]
+    public void Transition_ActivationSealsBoundWithStaleOrMismatchedPreparation_LeavesStateUnchanged(
+        InvalidBoundSealsTransition invalidTransition)
+    {
+        var harness = SourceScopeHarness.Build();
+        var current = BuildActiveSourceState();
+        current.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+            5,
+            ProjectionScopeStatusRoutePhase.Active);
+        current.StatusRoutePreparation = BuildRoutePreparation(
+            current.StatusRoute,
+            resumesPersistedRoute: true);
+        AddPhaseBSeals(current.StatusRoutePreparation);
+        var evt = new ProjectionScopeStatusRouteActivationSealsBoundEvent
+        {
+            RouteEpoch = 5,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+        };
+        evt.ActivationSeals.Add(current.StatusRoutePreparation.ActivationSeals
+            .Select(static seal => seal.Clone()));
+        switch (invalidTransition)
+        {
+            case InvalidBoundSealsTransition.StaleEpoch:
+                evt.RouteEpoch = 4;
+                break;
+            case InvalidBoundSealsTransition.NotAResume:
+                current.StatusRoutePreparation.ResumesPersistedRoute = false;
+                break;
+            case InvalidBoundSealsTransition.CandidateMismatch:
+                current.StatusRoutePreparation.CandidateRoute.Phase = ProjectionScopeStatusRoutePhase.Blocked;
+                break;
+            case InvalidBoundSealsTransition.IncompleteSet:
+                evt.ActivationSeals.RemoveAt(evt.ActivationSeals.Count - 1);
+                break;
+            case InvalidBoundSealsTransition.WrongIdentity:
+                evt.ActivationSeals.Single(seal =>
+                    seal.Role == ProjectionScopeStatusActorRole.LegacyWriter).ActorId = "other-writer";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(invalidTransition), invalidTransition, null);
+        }
+
+        var next = harness.Agent.Transition(current, evt);
+
+        next.Should().BeSameAs(current);
+        next.StatusRoute!.ActivationSeals.Should().BeEmpty();
+        next.StatusRoutePreparation.Should().NotBeNull();
     }
 
 
@@ -1847,7 +2613,8 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     /// <summary>The legacy status shadow of <see cref="SourceScopeActorId"/> as a scope actor under test.</summary>
     private static SourceScopeHarness BuildLegacyShadowHarness(
         long highestSeenVersion = 0,
-        RuntimeFleetCapabilityQuiescenceEvidence? quiescence = null)
+        RuntimeFleetCapabilityQuiescenceEvidence? quiescence = null,
+        bool phaseBReady = false)
     {
         var state = BuildActiveLegacyShadowState();
         state.HighestSeenVersion = highestSeenVersion;
@@ -1857,7 +2624,8 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             registerCallbackScheduler: true,
             scopeActorId: LegacyActorId,
             agentKind: LegacyStatusShadowKind,
-            initialState: state);
+            initialState: state,
+            phaseBReady: phaseBReady);
     }
 
     /// <summary>The release the source dispatches to the legacy shadow of a cutover at this epoch.</summary>
@@ -2092,6 +2860,102 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         return admission;
     }
 
+    private static RuntimeFleetCapabilityAdmission CreateActivationSealAdmission(
+        RuntimeFleetCapabilityGateStatus status = RuntimeFleetCapabilityGateStatus.Open,
+        DateTimeOffset? validUntil = null) =>
+        CreateAdmission(
+            RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+            status,
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1,
+            validUntil,
+            minimumReaderContractVersion:
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion);
+
+    private static RuntimeActorStateSchemaAdoptionReceipt CreateActivationSealReceipt() =>
+        new()
+        {
+            StateSchemaVersion = 1,
+            RequiredCapability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+            RequiredContractId =
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1,
+            RequiredContractVersion =
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion,
+            CapabilityEpoch = 3,
+            AuthorityStateVersion = 9,
+            MembershipEpoch = 7,
+            MembershipDigest = "digest-a",
+            DeploymentRevision = "revision-a",
+            AdoptedAt = Timestamp.FromDateTimeOffset(Now.AddSeconds(-1)),
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            EvidenceStatus = RuntimeFleetCapabilityGateStatus.Open,
+        };
+
+    private static ProjectionScopeStatusActorSeal CreateActivationSeal(
+        ProjectionScopeStatusActorRole role,
+        string actorId,
+        string agentKind) =>
+        new()
+        {
+            Role = role,
+            ActorId = actorId,
+            AgentKind = agentKind,
+            AdoptionReceipt = CreateActivationSealReceipt(),
+        };
+
+    private static ProjectionScopeStatusRoutePreparation BuildRoutePreparation(
+        ProjectionScopeStatusRoute candidateRoute,
+        bool resumesPersistedRoute) =>
+        new()
+        {
+            CandidateRoute = candidateRoute.Clone(),
+            SourceScopeActorId = SourceScopeActorId,
+            SourceAgentKind = TestScopeAgentKind,
+            LegacyWriterActorId = LegacyActorId,
+            LegacyWriterAgentKind = LegacyStatusShadowKind,
+            TerminalWriterActorId = TerminalActorId,
+            TerminalWriterAgentKind = ProjectionScopeStatusGAgent.AgentKind,
+            ResumesPersistedRoute = resumesPersistedRoute,
+            PreparedAtUtc = Timestamp.FromDateTimeOffset(Now),
+        };
+
+    private static void AddPhaseBSeals(
+        ProjectionScopeStatusRoutePreparation preparation,
+        string sourceAgentKind = TestScopeAgentKind)
+    {
+        preparation.ActivationSeals.Clear();
+        preparation.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.Source,
+            SourceScopeActorId,
+            sourceAgentKind));
+        preparation.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.LegacyWriter,
+            LegacyActorId,
+            LegacyStatusShadowKind));
+        preparation.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.TerminalWriter,
+            TerminalActorId,
+            ProjectionScopeStatusGAgent.AgentKind));
+    }
+
+    private static void AddPhaseBSeals(
+        ProjectionScopeStatusRoute route,
+        string sourceAgentKind = TestScopeAgentKind)
+    {
+        route.ActivationSeals.Clear();
+        route.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.Source,
+            SourceScopeActorId,
+            sourceAgentKind));
+        route.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.LegacyWriter,
+            LegacyActorId,
+            LegacyStatusShadowKind));
+        route.ActivationSeals.Add(CreateActivationSeal(
+            ProjectionScopeStatusActorRole.TerminalWriter,
+            TerminalActorId,
+            ProjectionScopeStatusGAgent.AgentKind));
+    }
+
     private static RuntimeFleetCapabilityQuiescenceEvidence CreateQuiescenceEvidence() =>
         new()
         {
@@ -2122,24 +2986,120 @@ public sealed class ProjectionScopeStatusRouteActivationTests
     private static Task DispatchReleaseAsync(
         TestScopeAgent agent,
         ReleaseProjectionScopeCommand command,
-        string? publisherActorId = null) =>
-        agent.HandleEventAsync(new EventEnvelope
+        string? publisherActorId = null)
+    {
+        var publisher = publisherActorId ?? SourceScopeActorId;
+        return agent.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId ?? SourceScopeActorId, LegacyActorId),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisher, LegacyActorId),
+            Runtime = new EnvelopeRuntime { SourceActorId = publisher },
             Payload = Any.Pack(command),
         });
+    }
 
     private static Task DispatchContinuationAsync<TEvent>(
         TestScopeAgent agent,
         string publisherActorId,
-        TEvent evt)
+        TEvent evt,
+        bool includeRuntimeSource = true,
+        string? runtimeSourceActorId = null,
+        bool direct = true)
         where TEvent : IMessage =>
         agent.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, SourceScopeActorId),
+            Route = direct
+                ? EnvelopeRouteSemantics.CreateDirect(publisherActorId, SourceScopeActorId)
+                : EnvelopeRouteSemantics.CreateTopologyPublication(
+                    publisherActorId,
+                    TopologyAudience.Children),
+            Runtime = includeRuntimeSource
+                ? new EnvelopeRuntime { SourceActorId = runtimeSourceActorId ?? publisherActorId }
+                : null,
             Payload = Any.Pack(evt),
+        });
+
+    private static Task DispatchSealReadyAsync(
+        TestScopeAgent agent,
+        ProjectionScopeStatusActorRole role,
+        long routeEpoch)
+    {
+        var actorId = role == ProjectionScopeStatusActorRole.LegacyWriter
+            ? LegacyActorId
+            : TerminalActorId;
+        var agentKind = role == ProjectionScopeStatusActorRole.LegacyWriter
+            ? LegacyStatusShadowKind
+            : ProjectionScopeStatusGAgent.AgentKind;
+        return DispatchSealReadyAsync(
+            agent,
+            CreateActivationSeal(role, actorId, agentKind),
+            routeEpoch,
+            actorId);
+    }
+
+    private static Task DispatchSealReadyAsync(
+        TestScopeAgent agent,
+        ProjectionScopeStatusActorSeal seal,
+        long routeEpoch,
+        string publisherActorId,
+        bool includeRuntimeSource = true,
+        string? runtimeSourceActorId = null,
+        bool direct = true) =>
+        agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Route = direct
+                ? EnvelopeRouteSemantics.CreateDirect(publisherActorId, SourceScopeActorId)
+                : EnvelopeRouteSemantics.CreateTopologyPublication(
+                    publisherActorId,
+                    TopologyAudience.Children),
+            Runtime = includeRuntimeSource
+                ? new EnvelopeRuntime { SourceActorId = runtimeSourceActorId ?? publisherActorId }
+                : null,
+            Payload = Any.Pack(new ProjectionScopeStatusActorSealReadyEvent
+            {
+                SourceScopeActorId = SourceScopeActorId,
+                RouteEpoch = routeEpoch,
+                Seal = seal,
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(Now),
+            }),
+        });
+
+    private static RequestProjectionScopeStatusActorSealCommand BuildSealRequest(
+        ProjectionScopeStatusActorRole role,
+        string expectedActorId,
+        string expectedAgentKind,
+        long routeEpoch) =>
+        new()
+        {
+            SourceScopeActorId = SourceScopeActorId,
+            RouteEpoch = routeEpoch,
+            Role = role,
+            ExpectedActorId = expectedActorId,
+            ExpectedAgentKind = expectedAgentKind,
+        };
+
+    private static Task DispatchSealRequestAsync(
+        TestScopeAgent agent,
+        RequestProjectionScopeStatusActorSealCommand command,
+        string publisherActorId,
+        string targetActorId,
+        bool includeRuntimeSource = true,
+        string? runtimeSourceActorId = null,
+        bool direct = true) =>
+        agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Route = direct
+                ? EnvelopeRouteSemantics.CreateDirect(publisherActorId, targetActorId)
+                : EnvelopeRouteSemantics.CreateTopologyPublication(
+                    publisherActorId,
+                    TopologyAudience.Children),
+            Runtime = includeRuntimeSource
+                ? new EnvelopeRuntime { SourceActorId = runtimeSourceActorId ?? publisherActorId }
+                : null,
+            Payload = Any.Pack(command),
         });
 
     private static void SetAgentId(GAgentBase agent, string id) =>
@@ -2176,7 +3136,9 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             bool registerCallbackScheduler = false,
             bool registerBindingAuthority = true,
             bool registerLegacyStatusShadowKind = true,
-            bool enablesDurableObservationRecovery = false)
+            bool enablesDurableObservationRecovery = false,
+            bool phaseBReady = false,
+            bool registerStateSchemaContext = true)
         {
             var journal = new List<string>();
             var agent = new TestScopeAgent(runtimeMode, enablesDurableObservationRecovery);
@@ -2231,9 +3193,20 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             if (registerFleetReaders)
             {
                 fleet = new MutableFleetAdmissionSource(admission, quiescence, membership);
+                if (phaseBReady)
+                    fleet.Publish(CreateActivationSealAdmission());
                 services.AddSingleton<IRuntimeFleetCapabilityAdmissionReader>(fleet);
                 services.AddSingleton<IRuntimeFleetCapabilityQuiescenceReader>(fleet);
                 services.AddSingleton<IRuntimeLocalMembershipIdentityReader>(fleet);
+            }
+
+            if (phaseBReady && registerStateSchemaContext)
+            {
+                services.AddSingleton<IRuntimeActorStateSchemaContextReader>(
+                    new StaticRuntimeActorStateSchemaContextReader(new RuntimeActorStateSchemaContext(
+                        agentKind ?? TestScopeAgentKind,
+                        StateSchemaVersion: 1,
+                        [CreateActivationSealReceipt()])));
             }
 
             RecordingCallbackScheduler? callbacks = null;
@@ -2772,6 +3745,13 @@ public sealed class ProjectionScopeStatusRouteActivationTests
         }
 
         public override DateTimeOffset GetUtcNow() => _now;
+    }
+
+    private sealed class StaticRuntimeActorStateSchemaContextReader(
+        RuntimeActorStateSchemaContext context)
+        : IRuntimeActorStateSchemaContextReader
+    {
+        public RuntimeActorStateSchemaContext? Current { get; } = context;
     }
 
     private sealed class FixedProjectionClock : IProjectionClock
