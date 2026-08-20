@@ -245,6 +245,19 @@ enum NyxIdChatRecoveryKind {
   NYX_ID_CHAT_RECOVERY_KIND_OPERATION_RESULT_DELIVERY_WATCHDOG = 4;
 }
 
+enum NyxIdChatPostconditionContractUpgradeOutcome {
+  NYX_ID_CHAT_POSTCONDITION_CONTRACT_UPGRADE_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_POSTCONDITION_CONTRACT_UPGRADE_OUTCOME_MIGRATED = 1;
+  NYX_ID_CHAT_POSTCONDITION_CONTRACT_UPGRADE_OUTCOME_REDISPATCHED = 2;
+  NYX_ID_CHAT_POSTCONDITION_CONTRACT_UPGRADE_OUTCOME_FAILED = 3;
+  NYX_ID_CHAT_POSTCONDITION_CONTRACT_UPGRADE_OUTCOME_LATE_RESULT_FENCED = 4;
+}
+
+enum NyxIdChatVerificationInputBinding {
+  NYX_ID_CHAT_VERIFICATION_INPUT_BINDING_UNSPECIFIED = 0;
+  NYX_ID_CHAT_VERIFICATION_INPUT_BINDING_SHA256_V1 = 1;
+}
+
 enum NyxIdChatCanaryEffectFaultStatus {
   NYX_ID_CHAT_CANARY_EFFECT_FAULT_STATUS_UNSPECIFIED = 0;
   NYX_ID_CHAT_CANARY_EFFECT_FAULT_STATUS_ARMED = 1;
@@ -402,6 +415,9 @@ message NyxIdChatPostconditionStepSource {
   // Typed action identity for postcondition routing. Consumers must not infer
   // the action from the presentation/check label.
   NyxIdAssistantActionKind action = 6;
+  // Persisted executor contract. UNSPECIFIED identifies pre-binding state;
+  // SHA256_V1 requires a digest over the exact dispatched typed input.
+  NyxIdChatVerificationInputBinding verification_input_binding = 7;
 }
 
 message NyxIdChatRetryToolInputState {
@@ -2041,6 +2057,24 @@ message NyxIdChatOperationReconciledEvent {
   // True when this event only refines evidence for an operation whose control
   // fence already published the task/turn terminal.
   bool refines_existing_terminal = 6;
+}
+
+// Actor-owned rolling-upgrade decision for action postconditions introduced
+// before typed input/digest binding. A successful event freezes the exact
+// typed action and binding marker before any new executor is dispatched. A
+// consumed legacy result is identified only by its delivery digest; it is
+// never promoted to postcondition evidence.
+message NyxIdChatPostconditionContractUpgradeCommittedEvent {
+  NyxIdChatOperationKey key = 1;
+  NyxIdChatOperationKey redispatch_key = 2;
+  NyxIdAssistantActionKind action = 3;
+  NyxIdChatPostconditionContractUpgradeOutcome outcome = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+  google.protobuf.Timestamp committed_at = 7;
+  int64 progress_sequence = 8;
+  NyxIdChatConversationGAgentState state = 9;
+  bytes consumed_legacy_result_sha256 = 10;
 }
 
 // A fenced exact tool operation may still report typed terminal evidence. The

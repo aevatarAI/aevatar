@@ -566,6 +566,8 @@ public static class NyxIdChatBrowserActions
             step?.Operation?.Key is null ||
             !KeysEqual(step.Operation.Key, signal.Key) ||
             step.Kind != NyxIdChatStepKind.Postcondition ||
+            step.Source?.Postcondition?.VerificationInputBinding !=
+            NyxIdChatVerificationInputBinding.Sha256V1 ||
             request is null ||
             !IsRequestExecutable(request) ||
             !PostconditionResourceMatchesAction(request.Action, result) ||
@@ -716,6 +718,8 @@ public static class NyxIdChatBrowserActions
                     ActionRequestId = request.ActionRequestId,
                     Check = request.Action.ToString(),
                     Action = request.Action,
+                    VerificationInputBinding =
+                        NyxIdChatVerificationInputBinding.Sha256V1,
                 },
             },
             ActionRequestId = request.ActionRequestId,
@@ -986,7 +990,7 @@ public static class NyxIdChatBrowserActions
         AddTerminalSummary(state, turn);
     }
 
-    private static NyxIdChatOperationDispatchCommand BuildPostconditionCommand(
+    internal static NyxIdChatOperationDispatchCommand BuildPostconditionCommand(
         string scopeId,
         string ownerSubject,
         NyxIdChatActionRequestState request,
@@ -1004,7 +1008,7 @@ public static class NyxIdChatBrowserActions
                 toolContext),
         };
 
-    private static NyxIdChatActionPostconditionInput BuildPostconditionInput(
+    internal static NyxIdChatActionPostconditionInput BuildPostconditionInput(
         string scopeId,
         string ownerSubject,
         NyxIdChatActionRequestState request,
@@ -1232,7 +1236,7 @@ public static class NyxIdChatBrowserActions
         string.Equals(state.ActiveTask.TaskId, request.TaskId, StringComparison.Ordinal) &&
         SourceToolMatchesState(state, request);
 
-    private static bool IsRequestExecutable(NyxIdChatActionRequestState request) =>
+    internal static bool IsRequestExecutable(NyxIdChatActionRequestState request) =>
         request.SchemaVersion == NyxIdAssistantActionRegistry.SupportedSchemaVersion &&
         NyxIdAssistantActionRegistry.IsActionExecutable(
             request.RegistryRevision,
@@ -1260,7 +1264,7 @@ public static class NyxIdChatBrowserActions
                string.Equals(source.Operation.Key.TaskId, request.TaskId, StringComparison.Ordinal);
     }
 
-    private static bool RequestParamsMatchAction(NyxIdChatActionRequestState request) =>
+    internal static bool RequestParamsMatchAction(NyxIdChatActionRequestState request) =>
         request.Action switch
         {
             NyxIdAssistantActionKind.ServiceConnect => request.Params?.ParamsCase is
@@ -1420,7 +1424,7 @@ public static class NyxIdChatBrowserActions
         };
     }
 
-    private static bool PostconditionResourceMatchesAction(
+    internal static bool PostconditionResourceMatchesAction(
         NyxIdAssistantActionKind action,
         NyxIdChatActionPostconditionResult result) =>
         (!result.Verified &&
@@ -1494,7 +1498,7 @@ public static class NyxIdChatBrowserActions
         return true;
     }
 
-    private static bool ReportsEqual(NyxIdChatActionReport left, NyxIdChatActionReport right) =>
+    internal static bool ReportsEqual(NyxIdChatActionReport left, NyxIdChatActionReport right) =>
         string.Equals(left.ActionRequestId, right.ActionRequestId, StringComparison.Ordinal) &&
         string.Equals(left.OriginTurnId, right.OriginTurnId, StringComparison.Ordinal) &&
         left.Disposition == right.Disposition &&

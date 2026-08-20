@@ -115,6 +115,8 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatOperationStepChangedCommittedEvent>(ApplyOperationStepChangedCommitted)
             .On<NyxIdChatOperationStalledEvent>(ApplyOperationStalled)
             .On<NyxIdChatOperationReconciledEvent>(ApplyOperationReconciled)
+            .On<NyxIdChatPostconditionContractUpgradeCommittedEvent>(
+                ApplyPostconditionContractUpgradeCommitted)
             .On<NyxIdChatLateOperationEvidenceCommittedEvent>(ApplyLateOperationEvidenceCommitted)
             .On<NyxIdChatControlFenceCommittedEvent>(ApplyControlFenceCommitted)
             .On<NyxIdChatContinuationAdmissionCommittedEvent>(ApplyContinuationAdmissionCommitted)
@@ -2210,7 +2212,95 @@ public sealed class NyxIdChatConversationGAgent
 
         if (signal.Kind == NyxIdChatRecoveryKind.PostconditionRedispatch)
         {
-            var command = NyxIdChatBrowserActions.TryBuildRecoveryDispatch(State, signal.Key);
+            var recoveryNow = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+            var direct =
+                NyxIdChatDirectServiceConnectPostconditionRecovery.BuildRequestedRecovery(
+                    State,
+                    signal.Key,
+                    recoveryNow);
+            if (direct.Status == NyxIdChatDirectServiceConnectRecoveryStatus.Invalid)
+            {
+                await CommitPostconditionContractUpgradeFailureAsync(
+                    signal.Key,
+                    recoveryNow,
+                    consumedLegacyResult: null);
+                return;
+            }
+
+            NyxIdChatOperationDispatchCommand? command;
+            if (direct.Status ==
+                NyxIdChatDirectServiceConnectRecoveryStatus.UpgradeRequired)
+            {
+                command = direct.Command;
+                if (command?.Key is null)
+                    return;
+                await PersistDomainEventAsync(
+                    new NyxIdChatPostconditionContractUpgradeCommittedEvent
+                    {
+                        Key = signal.Key.Clone(),
+                        RedispatchKey = command.Key.Clone(),
+                        Action = NyxIdAssistantActionKind.ServiceConnect,
+                        Outcome = NyxIdChatPostconditionContractUpgradeOutcome.Migrated,
+                        CommittedAt = recoveryNow.Clone(),
+                        ProgressSequence = direct.State.ProgressSequence,
+                        State = direct.State.Clone(),
+                    },
+                    CancellationToken.None);
+            }
+            else if (direct.Status == NyxIdChatDirectServiceConnectRecoveryStatus.Ready)
+            {
+                command = direct.Command;
+            }
+            else
+            {
+                var browser =
+                    NyxIdChatBrowserActionPostconditionRecovery.BuildRequestedRecovery(
+                        State,
+                        signal.Key,
+                        recoveryNow);
+                if (browser.Status ==
+                    NyxIdChatBrowserActionPostconditionRecoveryStatus.Invalid)
+                {
+                    await CommitPostconditionContractUpgradeFailureAsync(
+                        signal.Key,
+                        recoveryNow,
+                        consumedLegacyResult: null);
+                    return;
+                }
+
+                if (browser.Status ==
+                    NyxIdChatBrowserActionPostconditionRecoveryStatus.UpgradeRequired)
+                {
+                    command = browser.Command;
+                    if (command?.Key is null)
+                        return;
+                    await PersistDomainEventAsync(
+                        new NyxIdChatPostconditionContractUpgradeCommittedEvent
+                        {
+                            Key = signal.Key.Clone(),
+                            RedispatchKey = command.Key.Clone(),
+                            Action = browser.Action,
+                            Outcome =
+                                NyxIdChatPostconditionContractUpgradeOutcome.Migrated,
+                            CommittedAt = recoveryNow.Clone(),
+                            ProgressSequence = browser.State.ProgressSequence,
+                            State = browser.State.Clone(),
+                        },
+                        CancellationToken.None);
+                }
+                else if (browser.Status ==
+                         NyxIdChatBrowserActionPostconditionRecoveryStatus.Ready)
+                {
+                    command = browser.Command;
+                }
+                else
+                {
+                    command = NyxIdChatBrowserActions.TryBuildRecoveryDispatch(
+                        State,
+                        signal.Key);
+                }
+            }
+
             if (command is null)
                 return;
 
@@ -2218,7 +2308,7 @@ public sealed class NyxIdChatConversationGAgent
                     command,
                     ActiveInboundEnvelope?.Propagation?.CorrelationId ??
                     command.Key.OperationId,
-                    Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()));
+                    recoveryNow);
             return;
         }
 
@@ -2405,6 +2495,297 @@ public sealed class NyxIdChatConversationGAgent
         var acknowledgementRequired = RequiresResultAcknowledgement(State, signal);
         var committedSignal = signal;
         var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var isCurrentActiveLlmResult =
+            IsCurrentActiveInFlightOperation(State, signal.Key, currentOperation) &&
+            currentOperation.Kind == NyxIdChatStepKind.Llm;
+        var isCompletedDigestlessPostconditionDuplicate =
+            currentOperation.Kind == NyxIdChatStepKind.Postcondition &&
+            currentOperation.Phase == NyxIdChatOperationPhase.Succeeded &&
+            signal.ResultCase ==
+            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition &&
+            signal.ActionPostcondition.VerificationInputSha256.Length == 0;
+        if ((isCurrentActiveLlmResult || isCompletedDigestlessPostconditionDuplicate) &&
+            TryResolveCurrentActiveInFlightOperation(State, out var activeOperation) &&
+            activeOperation.Kind == NyxIdChatStepKind.Llm &&
+            activeOperation.Key is not null)
+        {
+            var completedUpgrade =
+                NyxIdChatDirectServiceConnectPostconditionRecovery.BuildCompletedUpgrade(
+                    State,
+                    now);
+            if (completedUpgrade.Status ==
+                NyxIdChatDirectServiceConnectRecoveryStatus.Invalid)
+            {
+                await CommitPostconditionContractUpgradeFailureAsync(
+                    activeOperation.Key,
+                    now,
+                    consumedLegacyResult: null);
+                return;
+            }
+
+            if (completedUpgrade.Status ==
+                NyxIdChatDirectServiceConnectRecoveryStatus.CompletedUpgradeRequired)
+            {
+                if (completedUpgrade.OriginalKey is null)
+                    return;
+                await PersistDomainEventAsync(
+                    new NyxIdChatPostconditionContractUpgradeCommittedEvent
+                    {
+                        Key = completedUpgrade.OriginalKey.Clone(),
+                        Action = NyxIdAssistantActionKind.ServiceConnect,
+                        Outcome = NyxIdChatPostconditionContractUpgradeOutcome.Migrated,
+                        CommittedAt = now.Clone(),
+                        ProgressSequence = completedUpgrade.State.ProgressSequence,
+                        State = completedUpgrade.State.Clone(),
+                    },
+                    CancellationToken.None);
+            }
+
+            if (completedUpgrade.Status ==
+                NyxIdChatDirectServiceConnectRecoveryStatus.NotApplicable)
+            {
+                var browserCompleted =
+                    NyxIdChatBrowserActionPostconditionRecovery.BuildCompletedUpgrade(
+                        State,
+                        activeOperation.Key,
+                        now);
+                if (browserCompleted.Status ==
+                    NyxIdChatBrowserActionPostconditionRecoveryStatus.Invalid)
+                {
+                    await CommitPostconditionContractUpgradeFailureAsync(
+                        activeOperation.Key,
+                        now,
+                        consumedLegacyResult: null);
+                    return;
+                }
+
+                if (browserCompleted.Status ==
+                    NyxIdChatBrowserActionPostconditionRecoveryStatus
+                        .CompletedUpgradeRequired)
+                {
+                    if (browserCompleted.OriginalKey is null)
+                        return;
+                    await PersistDomainEventAsync(
+                        new NyxIdChatPostconditionContractUpgradeCommittedEvent
+                        {
+                            Key = browserCompleted.OriginalKey.Clone(),
+                            Action = browserCompleted.Action,
+                            Outcome =
+                                NyxIdChatPostconditionContractUpgradeOutcome.Migrated,
+                            CommittedAt = now.Clone(),
+                            ProgressSequence = browserCompleted.State.ProgressSequence,
+                            State = browserCompleted.State.Clone(),
+                        },
+                        CancellationToken.None);
+                }
+            }
+        }
+
+        if (IsCurrentActiveInFlightOperation(State, signal.Key, currentOperation) &&
+            currentOperation.Kind == NyxIdChatStepKind.Postcondition &&
+            signal.ResultCase ==
+                NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition &&
+            signal.ActionPostcondition.VerificationInputSha256.Length ==
+            NyxIdChatActionPostconditionEvidence.Sha256Length)
+        {
+            var directUpgrade =
+                NyxIdChatDirectServiceConnectPostconditionRecovery.BuildInFlightUpgrade(
+                    State,
+                    signal.Key,
+                    now);
+            if (directUpgrade.Status ==
+                NyxIdChatDirectServiceConnectRecoveryStatus.Invalid)
+            {
+                await CommitPostconditionContractUpgradeFailureAsync(
+                    signal.Key,
+                    now,
+                    consumedLegacyResult: null);
+                return;
+            }
+
+            if (directUpgrade.Status ==
+                NyxIdChatDirectServiceConnectRecoveryStatus.UpgradeRequired)
+            {
+                await PersistDomainEventAsync(
+                    new NyxIdChatPostconditionContractUpgradeCommittedEvent
+                    {
+                        Key = signal.Key.Clone(),
+                        Action = NyxIdAssistantActionKind.ServiceConnect,
+                        Outcome = NyxIdChatPostconditionContractUpgradeOutcome.Migrated,
+                        CommittedAt = now.Clone(),
+                        ProgressSequence = directUpgrade.State.ProgressSequence,
+                        State = directUpgrade.State.Clone(),
+                    },
+                    CancellationToken.None);
+            }
+            else if (directUpgrade.Status ==
+                     NyxIdChatDirectServiceConnectRecoveryStatus.NotApplicable)
+            {
+                var browserUpgrade =
+                    NyxIdChatBrowserActionPostconditionRecovery.BuildInFlightUpgrade(
+                        State,
+                        signal.Key,
+                        now);
+                if (browserUpgrade.Status ==
+                    NyxIdChatBrowserActionPostconditionRecoveryStatus.Invalid)
+                {
+                    await CommitPostconditionContractUpgradeFailureAsync(
+                        signal.Key,
+                        now,
+                        consumedLegacyResult: null);
+                    return;
+                }
+
+                if (browserUpgrade.Status ==
+                    NyxIdChatBrowserActionPostconditionRecoveryStatus.UpgradeRequired)
+                {
+                    await PersistDomainEventAsync(
+                        new NyxIdChatPostconditionContractUpgradeCommittedEvent
+                        {
+                            Key = signal.Key.Clone(),
+                            Action = browserUpgrade.Action,
+                            Outcome =
+                                NyxIdChatPostconditionContractUpgradeOutcome.Migrated,
+                            CommittedAt = now.Clone(),
+                            ProgressSequence = browserUpgrade.State.ProgressSequence,
+                            State = browserUpgrade.State.Clone(),
+                        },
+                        CancellationToken.None);
+                }
+            }
+        }
+
+        if (signal.ResultCase ==
+                NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition &&
+            signal.ActionPostcondition.VerificationInputSha256.Length == 0)
+        {
+            if (TryResolveVerifiedCompletedBoundPostcondition(
+                    State,
+                    signal.Key,
+                    out var completedAction))
+            {
+                var consumedDigest = ComputeResultDigest(signal);
+                var fencedCompleted = State.Clone();
+                fencedCompleted.ProgressSequence = checked(State.ProgressSequence + 1);
+                fencedCompleted.UpdatedAt = now.Clone();
+                RememberResultAcknowledgementFence(fencedCompleted, signal);
+                await PersistDomainEventAsync(
+                    new NyxIdChatPostconditionContractUpgradeCommittedEvent
+                    {
+                        Key = signal.Key.Clone(),
+                        Action = completedAction,
+                        Outcome = NyxIdChatPostconditionContractUpgradeOutcome.LateResultFenced,
+                        CommittedAt = now.Clone(),
+                        ProgressSequence = fencedCompleted.ProgressSequence,
+                        State = fencedCompleted,
+                        ConsumedLegacyResultSha256 = ByteString.CopyFrom(consumedDigest),
+                    },
+                    CancellationToken.None);
+                await DispatchOperationResultAcknowledgementAsync(
+                    signal,
+                    CancellationToken.None);
+                return;
+            }
+
+            var fenced = State.Clone();
+            RememberResultAcknowledgementFence(fenced, signal);
+            var directRedispatch =
+                NyxIdChatDirectServiceConnectPostconditionRecovery.BuildFreshRedispatch(
+                    fenced,
+                    signal,
+                    now);
+            if (directRedispatch.Status ==
+                NyxIdChatDirectServiceConnectRecoveryStatus.Invalid)
+            {
+                await CommitPostconditionContractUpgradeFailureAsync(
+                    signal.Key,
+                    now,
+                    signal);
+                return;
+            }
+
+            if (directRedispatch.Status ==
+                NyxIdChatDirectServiceConnectRecoveryStatus.UpgradeRequired)
+            {
+                if (directRedispatch.Command?.Key is null)
+                    return;
+                var resultDigest = ComputeResultDigest(signal);
+                await PersistDomainEventAsync(
+                    new NyxIdChatPostconditionContractUpgradeCommittedEvent
+                    {
+                        Key = signal.Key.Clone(),
+                        RedispatchKey = directRedispatch.Command.Key.Clone(),
+                        Action = NyxIdAssistantActionKind.ServiceConnect,
+                        Outcome = NyxIdChatPostconditionContractUpgradeOutcome.Redispatched,
+                        CommittedAt = now.Clone(),
+                        ProgressSequence = directRedispatch.State.ProgressSequence,
+                        State = directRedispatch.State.Clone(),
+                        ConsumedLegacyResultSha256 = ByteString.CopyFrom(resultDigest),
+                    },
+                    CancellationToken.None);
+                await DispatchOperationResultAcknowledgementAsync(
+                    signal,
+                    CancellationToken.None);
+                await DispatchAuthorizedOperationAsync(
+                    directRedispatch.Command,
+                    ActiveInboundEnvelope?.Propagation?.CorrelationId ??
+                    signal.Key.OperationId,
+                    now);
+                return;
+            }
+
+            if (directRedispatch.Status ==
+                NyxIdChatDirectServiceConnectRecoveryStatus.NotApplicable)
+            {
+                var browserRedispatch =
+                    NyxIdChatBrowserActionPostconditionRecovery.BuildFreshRedispatch(
+                        fenced,
+                        signal,
+                        now);
+                if (browserRedispatch.Status ==
+                    NyxIdChatBrowserActionPostconditionRecoveryStatus.Invalid)
+                {
+                    await CommitPostconditionContractUpgradeFailureAsync(
+                        signal.Key,
+                        now,
+                        signal);
+                    return;
+                }
+
+                if (browserRedispatch.Status ==
+                    NyxIdChatBrowserActionPostconditionRecoveryStatus.UpgradeRequired)
+                {
+                    if (browserRedispatch.Command?.Key is null)
+                        return;
+                    var resultDigest = ComputeResultDigest(signal);
+                    await PersistDomainEventAsync(
+                        new NyxIdChatPostconditionContractUpgradeCommittedEvent
+                        {
+                            Key = signal.Key.Clone(),
+                            RedispatchKey = browserRedispatch.Command.Key.Clone(),
+                            Action = browserRedispatch.Action,
+                            Outcome =
+                                NyxIdChatPostconditionContractUpgradeOutcome.Redispatched,
+                            CommittedAt = now.Clone(),
+                            ProgressSequence = browserRedispatch.State.ProgressSequence,
+                            State = browserRedispatch.State.Clone(),
+                            ConsumedLegacyResultSha256 =
+                                ByteString.CopyFrom(resultDigest),
+                        },
+                        CancellationToken.None);
+                    await DispatchOperationResultAcknowledgementAsync(
+                        signal,
+                        CancellationToken.None);
+                    await DispatchAuthorizedOperationAsync(
+                        browserRedispatch.Command,
+                        ActiveInboundEnvelope?.Propagation?.CorrelationId ??
+                        signal.Key.OperationId,
+                        now);
+                    return;
+                }
+            }
+        }
+
         var lateEvidence = NyxIdChatControlCommands.ReconcileLateOperationEvidence(
             State,
             signal,
@@ -3550,6 +3931,339 @@ public sealed class NyxIdChatConversationGAgent
         return next;
     }
 
+    private static NyxIdChatConversationGAgentState ApplyPostconditionContractUpgradeCommitted(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatPostconditionContractUpgradeCommittedEvent evt)
+    {
+        if (evt.CommittedAt is null ||
+            evt.State?.ActiveTask is null ||
+            evt.State.ActiveTurn is null ||
+            evt.ProgressSequence <= current.ProgressSequence ||
+            evt.State.ProgressSequence != evt.ProgressSequence ||
+            !TimestampsEqual(evt.State.UpdatedAt, evt.CommittedAt) ||
+            !string.Equals(evt.State.ConversationActorId, current.ConversationActorId,
+                StringComparison.Ordinal) ||
+            !string.Equals(evt.State.ScopeId, current.ScopeId, StringComparison.Ordinal) ||
+            !string.Equals(evt.State.OwnerSubject, current.OwnerSubject,
+                StringComparison.Ordinal))
+        {
+            return current;
+        }
+
+        switch (evt.Outcome)
+        {
+            case NyxIdChatPostconditionContractUpgradeOutcome.Migrated:
+                if (evt.Key is null ||
+                    evt.Action is not (NyxIdAssistantActionKind.ServiceConnect or
+                        NyxIdAssistantActionKind.KeyCreate or
+                        NyxIdAssistantActionKind.KeyRotate) ||
+                    evt.ConsumedLegacyResultSha256.Length != 0)
+                {
+                    return current;
+                }
+
+                var originalSteps = current.ActiveTask?.Steps
+                    .Where(candidate => KeysEqual(candidate.Operation?.Key, evt.Key))
+                    .Take(2)
+                    .ToArray() ?? [];
+                if (originalSteps.Length != 1)
+                    return current;
+                var originalStep = originalSteps[0];
+                NyxIdChatConversationGAgentState? expectedMigrationState = null;
+                if (originalStep?.Status == NyxIdChatStepStatus.Running)
+                {
+                    if (evt.RedispatchKey is not null)
+                    {
+                        var directRequested =
+                            NyxIdChatDirectServiceConnectPostconditionRecovery
+                                .BuildRequestedRecovery(current, evt.Key, evt.CommittedAt);
+                        if (directRequested.Status ==
+                                NyxIdChatDirectServiceConnectRecoveryStatus.UpgradeRequired &&
+                            directRequested.Command?.Key is not null &&
+                            evt.Action == NyxIdAssistantActionKind.ServiceConnect &&
+                            KeysEqual(directRequested.Command.Key, evt.RedispatchKey))
+                        {
+                            expectedMigrationState = directRequested.State;
+                        }
+                        else
+                        {
+                            var browserRequested =
+                                NyxIdChatBrowserActionPostconditionRecovery
+                                    .BuildRequestedRecovery(
+                                        current,
+                                        evt.Key,
+                                        evt.CommittedAt);
+                            if (browserRequested.Status ==
+                                    NyxIdChatBrowserActionPostconditionRecoveryStatus
+                                        .UpgradeRequired &&
+                                browserRequested.Command?.Key is not null &&
+                                browserRequested.Action == evt.Action &&
+                                KeysEqual(browserRequested.Command.Key, evt.RedispatchKey))
+                            {
+                                expectedMigrationState = browserRequested.State;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var directInFlight =
+                            NyxIdChatDirectServiceConnectPostconditionRecovery
+                                .BuildInFlightUpgrade(current, evt.Key, evt.CommittedAt);
+                        if (directInFlight.Status ==
+                                NyxIdChatDirectServiceConnectRecoveryStatus.UpgradeRequired &&
+                            evt.Action == NyxIdAssistantActionKind.ServiceConnect)
+                        {
+                            expectedMigrationState = directInFlight.State;
+                        }
+                        else
+                        {
+                            var browserInFlight =
+                                NyxIdChatBrowserActionPostconditionRecovery
+                                    .BuildInFlightUpgrade(current, evt.Key, evt.CommittedAt);
+                            if (browserInFlight.Status ==
+                                    NyxIdChatBrowserActionPostconditionRecoveryStatus
+                                        .UpgradeRequired &&
+                                browserInFlight.Action == evt.Action)
+                            {
+                                expectedMigrationState = browserInFlight.State;
+                            }
+                        }
+                    }
+                }
+                else if (originalStep?.Status == NyxIdChatStepStatus.Done)
+                {
+                    var directCompleted =
+                        NyxIdChatDirectServiceConnectPostconditionRecovery
+                            .BuildCompletedUpgrade(current, evt.CommittedAt);
+                    if (directCompleted.Status ==
+                            NyxIdChatDirectServiceConnectRecoveryStatus
+                                .CompletedUpgradeRequired &&
+                        evt.Action == NyxIdAssistantActionKind.ServiceConnect &&
+                        evt.RedispatchKey is null)
+                    {
+                        expectedMigrationState = directCompleted.State;
+                    }
+                    else
+                    {
+                        var continuationSteps = current.ActiveTask?.Steps
+                            .Where(candidate => string.Equals(
+                                candidate.StepId,
+                                current.ActiveTask.ActiveStepId,
+                                StringComparison.Ordinal))
+                            .Take(2)
+                            .ToArray() ?? [];
+                        var continuationKey = continuationSteps.Length == 1
+                            ? continuationSteps[0].Operation?.Key
+                            : null;
+                        if (continuationKey is not null)
+                        {
+                            var browserCompleted =
+                                NyxIdChatBrowserActionPostconditionRecovery
+                                    .BuildCompletedUpgrade(
+                                        current,
+                                        continuationKey,
+                                        evt.CommittedAt);
+                            if (browserCompleted.Status ==
+                                    NyxIdChatBrowserActionPostconditionRecoveryStatus
+                                        .CompletedUpgradeRequired &&
+                                browserCompleted.Action == evt.Action &&
+                                evt.RedispatchKey is null &&
+                                KeysEqual(browserCompleted.OriginalKey, evt.Key))
+                            {
+                                expectedMigrationState = browserCompleted.State;
+                            }
+                        }
+                    }
+                }
+
+                return expectedMigrationState is not null &&
+                       expectedMigrationState.ToByteString().Equals(evt.State.ToByteString())
+                    ? evt.State.Clone()
+                    : current;
+
+            case NyxIdChatPostconditionContractUpgradeOutcome.Redispatched:
+                if (evt.Key is null ||
+                    evt.RedispatchKey is null ||
+                    evt.Action is not (NyxIdAssistantActionKind.ServiceConnect or
+                        NyxIdAssistantActionKind.KeyCreate or
+                        NyxIdAssistantActionKind.KeyRotate) ||
+                    evt.ConsumedLegacyResultSha256.Length != SHA256.HashSizeInBytes)
+                {
+                    return current;
+                }
+
+                var legacySteps = current.ActiveTask?.Steps
+                    .Where(candidate => KeysEqual(candidate.Operation?.Key, evt.Key))
+                    .Take(2)
+                    .ToArray() ?? [];
+                if (legacySteps.Length != 1)
+                    return current;
+                var legacyStep = legacySteps[0];
+                if (legacyStep?.Source?.Postcondition is not { } legacySource)
+                    return current;
+
+                var fenced = current.Clone();
+                fenced.ResultAcknowledgementFences.Add(
+                    new NyxIdChatOperationResultAcknowledgementFence
+                    {
+                        Key = evt.Key.Clone(),
+                        ResultSha256 = evt.ConsumedLegacyResultSha256,
+                    });
+                var directRedispatch =
+                    NyxIdChatDirectServiceConnectPostconditionRecovery.BuildFreshRedispatch(
+                        fenced,
+                        new NyxIdChatOperationResultSignal
+                        {
+                            Key = evt.Key.Clone(),
+                            ActionPostcondition = new NyxIdChatActionPostconditionResult
+                            {
+                                ActionRequestId = legacySource.ActionRequestId,
+                            },
+                        },
+                        evt.CommittedAt);
+                if (directRedispatch.Status ==
+                        NyxIdChatDirectServiceConnectRecoveryStatus.UpgradeRequired &&
+                    evt.Action == NyxIdAssistantActionKind.ServiceConnect &&
+                    directRedispatch.Command?.Key is not null &&
+                    KeysEqual(directRedispatch.Command.Key, evt.RedispatchKey) &&
+                    directRedispatch.State.ToByteString().Equals(evt.State.ToByteString()))
+                {
+                    return evt.State.Clone();
+                }
+
+                var browserRedispatch =
+                    NyxIdChatBrowserActionPostconditionRecovery.BuildFreshRedispatch(
+                        fenced,
+                        new NyxIdChatOperationResultSignal
+                        {
+                            Key = evt.Key.Clone(),
+                            ActionPostcondition = new NyxIdChatActionPostconditionResult
+                            {
+                                ActionRequestId = legacySource.ActionRequestId,
+                            },
+                        },
+                        evt.CommittedAt);
+                return browserRedispatch.Status ==
+                           NyxIdChatBrowserActionPostconditionRecoveryStatus.UpgradeRequired &&
+                       browserRedispatch.Action == evt.Action &&
+                       browserRedispatch.Command?.Key is not null &&
+                       KeysEqual(browserRedispatch.Command.Key, evt.RedispatchKey) &&
+                       browserRedispatch.State.ToByteString().Equals(evt.State.ToByteString())
+                    ? evt.State.Clone()
+                    : current;
+
+            case NyxIdChatPostconditionContractUpgradeOutcome.LateResultFenced:
+                if (evt.Key is null ||
+                    evt.RedispatchKey is not null ||
+                    evt.ConsumedLegacyResultSha256.Length != SHA256.HashSizeInBytes ||
+                    !string.IsNullOrEmpty(evt.FailureCode) ||
+                    !string.IsNullOrEmpty(evt.SafeMessage) ||
+                    !TryResolveVerifiedCompletedBoundPostcondition(
+                        current,
+                        evt.Key,
+                        out var expectedAction) ||
+                    evt.Action != expectedAction ||
+                    current.ResultAcknowledgementFences.Any(fence =>
+                        KeysEqual(fence.Key, evt.Key) &&
+                        CryptographicOperations.FixedTimeEquals(
+                            fence.ResultSha256.Span,
+                            evt.ConsumedLegacyResultSha256.Span)))
+                {
+                    return current;
+                }
+
+                var expectedFenced = current.Clone();
+                expectedFenced.ResultAcknowledgementFences.Add(
+                    new NyxIdChatOperationResultAcknowledgementFence
+                    {
+                        Key = evt.Key.Clone(),
+                        ResultSha256 = evt.ConsumedLegacyResultSha256,
+                    });
+                expectedFenced.ProgressSequence = checked(current.ProgressSequence + 1);
+                expectedFenced.UpdatedAt = evt.CommittedAt.Clone();
+                return expectedFenced.ToByteString().Equals(evt.State.ToByteString())
+                    ? evt.State.Clone()
+                    : current;
+
+            case NyxIdChatPostconditionContractUpgradeOutcome.Failed:
+                if (evt.Key is null ||
+                    evt.Action != NyxIdAssistantActionKind.Unspecified ||
+                    evt.RedispatchKey is not null ||
+                    !string.Equals(
+                        evt.FailureCode,
+                        NyxIdChatPostconditionContractUpgradeFailure.Code,
+                        StringComparison.Ordinal) ||
+                    !string.Equals(
+                        evt.SafeMessage,
+                        NyxIdChatPostconditionContractUpgradeFailure.SafeMessage,
+                        StringComparison.Ordinal) ||
+                    evt.ConsumedLegacyResultSha256.Length is not (0 or
+                        SHA256.HashSizeInBytes))
+                {
+                    return current;
+                }
+
+                var failedTargets = current.ActiveTask?.Steps
+                    .Where(candidate => KeysEqual(candidate.Operation?.Key, evt.Key))
+                    .Take(2)
+                    .ToArray() ?? [];
+                if (failedTargets.Length != 1 ||
+                    failedTargets[0].Operation is not { } failedOperation ||
+                    !IsCurrentActiveInFlightOperation(current, evt.Key, failedOperation) ||
+                    failedTargets[0].Kind != failedOperation.Kind ||
+                    failedTargets[0].Kind is not (NyxIdChatStepKind.Llm or
+                        NyxIdChatStepKind.Postcondition))
+                {
+                    return current;
+                }
+
+                var expectedFailureBase = current.Clone();
+                if (evt.ConsumedLegacyResultSha256.Length == SHA256.HashSizeInBytes)
+                {
+                    if (expectedFailureBase.ResultAcknowledgementFences.Any(fence =>
+                            KeysEqual(fence.Key, evt.Key) &&
+                            CryptographicOperations.FixedTimeEquals(
+                                fence.ResultSha256.Span,
+                                evt.ConsumedLegacyResultSha256.Span)))
+                    {
+                        return current;
+                    }
+
+                    expectedFailureBase.ResultAcknowledgementFences.Add(
+                        new NyxIdChatOperationResultAcknowledgementFence
+                        {
+                            Key = evt.Key.Clone(),
+                            ResultSha256 = evt.ConsumedLegacyResultSha256,
+                        });
+                }
+
+                var expectedFailure =
+                    NyxIdChatPostconditionContractUpgradeFailure.BuildState(
+                        expectedFailureBase,
+                        evt.Key,
+                        evt.CommittedAt);
+                if (expectedFailure.ActiveTurn is null ||
+                    expectedFailure.HistoryDeliveryReservation is null ||
+                    !string.Equals(
+                        expectedFailure.HistoryDeliveryReservation.TurnId,
+                        expectedFailure.ActiveTurn.TurnId,
+                        StringComparison.Ordinal))
+                {
+                    return current;
+                }
+
+                PrepareHistoryTerminalOutbox(
+                    expectedFailure,
+                    evt.CommittedAt);
+                return expectedFailure.ToByteString().Equals(evt.State.ToByteString())
+                    ? evt.State.Clone()
+                    : current;
+
+            default:
+                return current;
+        }
+    }
+
     private static bool OperationTurnMatchesReconciledState(
         NyxIdChatConversationGAgentState current,
         NyxIdChatConversationGAgentState reconciled,
@@ -3698,6 +4412,73 @@ public sealed class NyxIdChatConversationGAgent
 
         operation = candidate;
         return true;
+    }
+
+    private static bool IsCurrentActiveInFlightOperation(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationKey? key,
+        NyxIdChatOperationState operation) =>
+        key is not null &&
+        state.ActiveTask is not null &&
+        IsInFlight(operation.Phase) &&
+        string.Equals(state.ActiveTask.ActiveStepId, key.StepId, StringComparison.Ordinal) &&
+        string.Equals(
+            state.ActiveTask.ActiveOperationId,
+               key.OperationId,
+               StringComparison.Ordinal);
+
+    private static bool TryResolveCurrentActiveInFlightOperation(
+        NyxIdChatConversationGAgentState state,
+        out NyxIdChatOperationState operation)
+    {
+        operation = null!;
+        var task = state.ActiveTask;
+        if (task is null ||
+            string.IsNullOrWhiteSpace(task.ActiveStepId) ||
+            string.IsNullOrWhiteSpace(task.ActiveOperationId))
+        {
+            return false;
+        }
+
+        var matches = task.Steps
+            .Where(step =>
+                string.Equals(step.StepId, task.ActiveStepId, StringComparison.Ordinal) &&
+                string.Equals(
+                    step.Operation?.Key?.OperationId,
+                    task.ActiveOperationId,
+                    StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (matches.Length != 1 ||
+            matches[0].Operation?.Key is null ||
+            matches[0].Kind != matches[0].Operation.Kind ||
+            !IsInFlight(matches[0].Operation.Phase))
+        {
+            return false;
+        }
+
+        operation = matches[0].Operation;
+        return true;
+    }
+
+    private static bool TryResolveVerifiedCompletedBoundPostcondition(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationKey? key,
+        out NyxIdAssistantActionKind action)
+    {
+        action = NyxIdAssistantActionKind.Unspecified;
+        if (key is null || key.OperationGeneration != 1)
+            return false;
+
+        if (NyxIdChatDirectServiceConnectPostconditionRecovery
+            .HasVerifiedCompletedDirectState(state, key))
+        {
+            action = NyxIdAssistantActionKind.ServiceConnect;
+            return true;
+        }
+
+        return NyxIdChatBrowserActionPostconditionRecovery
+            .TryResolveVerifiedCompletedBoundAction(state, key, out action);
     }
 
     private static NyxIdChatOperationState? ResolveOutstandingRecoveryOperation(
@@ -3953,6 +4734,15 @@ public sealed class NyxIdChatConversationGAgent
 
     private bool PrepareHistoryTerminalOutbox(
         NyxIdChatConversationGAgentState state,
+        string? completedText = null) =>
+        PrepareHistoryTerminalOutbox(
+            state,
+            Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            completedText);
+
+    private static bool PrepareHistoryTerminalOutbox(
+        NyxIdChatConversationGAgentState state,
+        Timestamp fallbackObservedAt,
         string? completedText = null)
     {
         var turn = state.ActiveTurn;
@@ -3990,8 +4780,7 @@ public sealed class NyxIdChatConversationGAgent
             ErrorCode = turn.Status == NyxIdChatTurnStatus.Succeeded
                 ? string.Empty
                 : NormalizeOptional(turn.FailureCode) ?? string.Empty,
-            ObservedAt = turn.TerminalAt?.Clone() ??
-                         Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            ObservedAt = turn.TerminalAt?.Clone() ?? fallbackObservedAt.Clone(),
             Attempt = 1,
         };
 
@@ -5116,6 +5905,52 @@ public sealed class NyxIdChatConversationGAgent
                 .Select(static part => Convert.ToHexStringLower(
                     System.Security.Cryptography.SHA256.HashData(part.ToByteArray())))
                 .ToArray());
+
+    private async Task CommitPostconditionContractUpgradeFailureAsync(
+        NyxIdChatOperationKey key,
+        Timestamp committedAt,
+        NyxIdChatOperationResultSignal? consumedLegacyResult)
+    {
+        var failureBase = State.Clone();
+        var consumedDigest = ByteString.Empty;
+        if (consumedLegacyResult is not null)
+        {
+            RememberResultAcknowledgementFence(failureBase, consumedLegacyResult);
+            consumedDigest = ByteString.CopyFrom(ComputeResultDigest(consumedLegacyResult));
+        }
+
+        var failed =
+            NyxIdChatPostconditionContractUpgradeFailure.BuildState(
+                failureBase,
+                key,
+                committedAt);
+        var terminalPrepared = PrepareHistoryTerminalOutbox(failed);
+        await PersistDomainEventAsync(
+            new NyxIdChatPostconditionContractUpgradeCommittedEvent
+            {
+                Key = key.Clone(),
+                Action = NyxIdAssistantActionKind.Unspecified,
+                Outcome = NyxIdChatPostconditionContractUpgradeOutcome.Failed,
+                FailureCode =
+                    NyxIdChatPostconditionContractUpgradeFailure.Code,
+                SafeMessage =
+                    NyxIdChatPostconditionContractUpgradeFailure.SafeMessage,
+                CommittedAt = committedAt.Clone(),
+                ProgressSequence = failed.ProgressSequence,
+                State = failed,
+                ConsumedLegacyResultSha256 = consumedDigest,
+            },
+            CancellationToken.None);
+
+        if (consumedLegacyResult is not null)
+        {
+            await DispatchOperationResultAcknowledgementAsync(
+                consumedLegacyResult,
+                CancellationToken.None);
+        }
+        if (terminalPrepared)
+            await DispatchPendingHistoryTerminalAsync();
+    }
 
     private async Task DispatchOperationResultAcknowledgementAsync(
         NyxIdChatOperationResultSignal result,
