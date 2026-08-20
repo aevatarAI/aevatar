@@ -46,6 +46,13 @@ public sealed class NyxIdAssistantActionRegistry
     private const string PolicyCallerOwned = "NYXID_ACTION_POLICY_CALLER_OWNED";
     private const string RegistryInvalid = "NYXID_ACTION_REGISTRY_INVALID";
 
+    private const string ServiceReauthorizeIdentityInvalidMessage =
+        "The service reauthorization identity is invalid.";
+    private const string ServiceReauthorizeScopeCountInvalidMessage =
+        "Service reauthorization requires an exact nonempty scope set.";
+    private const string ServiceReauthorizeScopesInvalidMessage =
+        "The service reauthorization scopes are invalid.";
+
     private const string ServiceConnectParamsSchema = """
         {
           "oneOf": [
@@ -243,7 +250,7 @@ public sealed class NyxIdAssistantActionRegistry
     // Each revision exposes only actions that have a typed producer, wire
     // mapper, and typed postcondition reader on the canonical actor path.
     // Revision v8 pins service.reauthorize so the manifest loads, but the
-    // action stays closed until that path exists.
+    // action stays closed until the complete cross-repo path is released.
     private static readonly FrozenDictionary<string, FrozenSet<string>> ExecutableActionsByRevision =
         new Dictionary<string, FrozenSet<string>>(StringComparer.Ordinal)
         {
@@ -321,6 +328,7 @@ public sealed class NyxIdAssistantActionRegistry
             NyxIdAssistantActionKind.ServiceConnect => "service.connect",
             NyxIdAssistantActionKind.KeyCreate => "key.create",
             NyxIdAssistantActionKind.KeyRotate => "key.rotate",
+            NyxIdAssistantActionKind.ServiceReauthorize => "service.reauthorize",
             _ => null,
         };
         return wireAction is not null &&
@@ -594,22 +602,13 @@ public sealed class NyxIdAssistantActionRegistry
 
         var name = NormalizeString(requirement.Name, 256, required: true);
         var platform = NormalizeString(requirement.Platform, 128, required: true);
-        if (requirement.AllowedServiceIds.Count is < 1 or > 64)
-            throw Error(ParamsInvalid, "Key creation requires an exact nonempty service set.");
-
-        var allowedServiceIds = new List<string>(requirement.AllowedServiceIds.Count);
-        var distinct = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var serviceId in requirement.AllowedServiceIds)
-        {
-            var normalized = NormalizeString(serviceId, 256, required: true);
-            if (!string.Equals(serviceId, normalized, StringComparison.Ordinal) ||
-                !distinct.Add(normalized))
-            {
-                throw Error(ParamsInvalid, "The key creation service identities are invalid.");
-            }
-
-            allowedServiceIds.Add(normalized);
-        }
+        var allowedServiceIds = NormalizeDistinctSet(
+            requirement.AllowedServiceIds,
+            minCount: 1,
+            maxCount: 64,
+            maxItemLength: 256,
+            countInvalidMessage: "Key creation requires an exact nonempty service set.",
+            itemInvalidMessage: "The key creation service identities are invalid.");
 
         var value = new NyxIdKeyCreateParams
         {
@@ -633,13 +632,10 @@ public sealed class NyxIdAssistantActionRegistry
             throw Error(ActionUnsupported, "Key rotation is not present in the pinned registry.");
         }
 
-        var keyId = NormalizeString(requirement.KeyId, 256, required: true);
-        if (!string.Equals(requirement.KeyId, keyId, StringComparison.Ordinal) ||
-            keyId.Any(char.IsWhiteSpace) ||
-            keyId.Any(static character => character is '/' or '\\' or '?' or '#'))
-        {
-            throw Error(ParamsInvalid, "The key rotation identity is invalid.");
-        }
+        var keyId = NormalizeSafeIdentity(
+            requirement.KeyId,
+            256,
+            "The key rotation identity is invalid.");
 
         return new NyxIdAssistantActionValidation(
             entry.Definition.Clone(),
@@ -647,6 +643,38 @@ public sealed class NyxIdAssistantActionRegistry
             {
                 KeyRotate = new NyxIdKeyRotateParams { KeyId = keyId },
             });
+    }
+
+    public NyxIdAssistantActionValidation ResolveServiceReauthorize(
+        NyxIdServiceReauthorizeActionRequirement requirement)
+    {
+        ArgumentNullException.ThrowIfNull(requirement);
+        if (!_entries.TryGetValue("service.reauthorize", out var entry) ||
+            !_executableActions.Contains("service.reauthorize") ||
+            entry.Definition.Action != NyxIdAssistantActionKind.ServiceReauthorize)
+        {
+            throw Error(
+                ActionUnsupported,
+                "Service reauthorization is not present in the pinned registry.");
+        }
+
+        var userServiceId = NormalizeSafeIdentity(
+            requirement.UserServiceId,
+            256,
+            ServiceReauthorizeIdentityInvalidMessage);
+        var requestedScopes = NormalizeDistinctSet(
+            requirement.RequestedScopes,
+            minCount: 1,
+            maxCount: 64,
+            maxItemLength: 256,
+            countInvalidMessage: ServiceReauthorizeScopeCountInvalidMessage,
+            itemInvalidMessage: ServiceReauthorizeScopesInvalidMessage);
+
+        var value = new NyxIdServiceReauthorizeParams { UserServiceId = userServiceId };
+        value.RequestedScopes.Add(requestedScopes);
+        return new NyxIdAssistantActionValidation(
+            entry.Definition.Clone(),
+            new NyxIdAssistantActionParams { ServiceReauthorize = value });
     }
 
     private static NyxIdAssistantActionParams ParseServiceConnect(JsonElement root)
@@ -710,11 +738,25 @@ public sealed class NyxIdAssistantActionRegistry
     internal static NyxIdAssistantActionParams ParseServiceReauthorize(JsonElement root)
     {
         EnsureOnlyProperties(root, "userServiceId", "requestedScopes");
+        var requestedScopes = ReadStringArray(
+            root,
+            "requestedScopes",
+            64,
+            256,
+            rejectDuplicates: true,
+            rejectNormalizationChanges: true);
+        if (requestedScopes.Count == 0)
+            throw Error(ParamsInvalid, ServiceReauthorizeScopeCountInvalidMessage);
+
         var value = new NyxIdServiceReauthorizeParams
         {
-            UserServiceId = ReadRequiredString(root, "userServiceId", 256),
+            UserServiceId = ReadSafeIdentity(
+                root,
+                "userServiceId",
+                256,
+                ServiceReauthorizeIdentityInvalidMessage),
         };
-        value.RequestedScopes.AddRange(ReadStringArray(root, "requestedScopes", 64, 256));
+        value.RequestedScopes.AddRange(requestedScopes);
         return new NyxIdAssistantActionParams { ServiceReauthorize = value };
     }
 
@@ -1163,6 +1205,73 @@ public sealed class NyxIdAssistantActionRegistry
         return allowed.Contains(value, StringComparer.Ordinal)
             ? value
             : throw Error(ParamsInvalid, "An action enum value is invalid.");
+    }
+
+    private static string ReadSafeIdentity(
+        JsonElement element,
+        string name,
+        int maxLength,
+        string invalidMessage)
+    {
+        if (!element.TryGetProperty(name, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            throw Error(ParamsInvalid, "A required action string is missing.");
+        }
+
+        return NormalizeSafeIdentity(property.GetString(), maxLength, invalidMessage);
+    }
+
+    /// <summary>
+    /// Identity values travel verbatim into NyxID resource paths, so they must
+    /// already be canonical (no surrounding whitespace) and free of path or
+    /// query delimiters.
+    /// </summary>
+    internal static bool IsSafeIdentity(string value) =>
+        !value.Any(char.IsWhiteSpace) &&
+        !value.Any(static character => character is '/' or '\\' or '?' or '#');
+
+    private static string NormalizeSafeIdentity(
+        string? raw,
+        int maxLength,
+        string invalidMessage)
+    {
+        var normalized = NormalizeString(raw, maxLength, required: true);
+        if (!string.Equals(raw, normalized, StringComparison.Ordinal) ||
+            !IsSafeIdentity(normalized))
+        {
+            throw Error(ParamsInvalid, invalidMessage);
+        }
+
+        return normalized;
+    }
+
+    private static IReadOnlyList<string> NormalizeDistinctSet(
+        IReadOnlyCollection<string> values,
+        int minCount,
+        int maxCount,
+        int maxItemLength,
+        string countInvalidMessage,
+        string itemInvalidMessage)
+    {
+        if (values.Count < minCount || values.Count > maxCount)
+            throw Error(ParamsInvalid, countInvalidMessage);
+
+        var normalizedValues = new List<string>(values.Count);
+        var distinct = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var value in values)
+        {
+            var normalized = NormalizeString(value, maxItemLength, required: true);
+            if (!string.Equals(value, normalized, StringComparison.Ordinal) ||
+                !distinct.Add(normalized))
+            {
+                throw Error(ParamsInvalid, itemInvalidMessage);
+            }
+
+            normalizedValues.Add(normalized);
+        }
+
+        return normalizedValues;
     }
 
     private static string NormalizeString(string? value, int maxLength, bool required)

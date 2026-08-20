@@ -295,6 +295,7 @@ internal static class NyxIdChatTaskPlanWireMapper
                     ActionRequestId = source.Postcondition.ActionRequestId ?? string.Empty,
                     Check = source.Postcondition.Check ?? string.Empty,
                     ProviderResourceId = source.Postcondition.ProviderResourceId ?? string.Empty,
+                    Action = ParseAssistantAction(source.Postcondition.Action ?? string.Empty),
                 },
             };
         }

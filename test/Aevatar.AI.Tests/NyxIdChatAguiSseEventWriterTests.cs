@@ -675,7 +675,7 @@ public class NyxIdChatAguiSseEventWriterTests
             Request = new NyxIdChatActionRequestState
             {
                 SchemaVersion = 4,
-                RegistryRevision = "nyxid-assistant-actions.v5",
+                RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision,
                 ConversationActorId = "conversation-alpha",
                 OriginTurnId = "turn-alpha",
                 TaskId = "task-alpha",
@@ -738,10 +738,8 @@ public class NyxIdChatAguiSseEventWriterTests
           "actionRequestId": "action-alpha",
           "action": "service.reauthorize",
           "params": {
-            "serviceReauthorize": {
-              "userServiceId": "us-github-alpha",
-              "requestedScopes": ["repo", "read:org"]
-            }
+            "userServiceId": "us-github-alpha",
+            "requestedScopes": ["repo", "read:org"]
           }
         }
         """);

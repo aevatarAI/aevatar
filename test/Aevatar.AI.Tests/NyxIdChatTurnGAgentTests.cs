@@ -4239,6 +4239,75 @@ public sealed partial class NyxIdChatTurnGAgentTests
         execution.Result.ActionPostcondition.Verified.Should().BeTrue();
         execution.Result.ActionPostcondition.Resource.UserService.UserServiceId.Should().Be(
             "service-alpha");
+        execution.Result.ActionPostcondition.VerificationInputSha256.Length.Should().Be(
+            NyxIdChatActionPostconditionEvidence.Sha256Length);
+        execution.Result.ActionPostcondition.VerificationInputSha256.ToByteArray().Should().Equal(
+            NyxIdChatActionPostconditionEvidence
+                .ComputeVerificationInputSha256(command.ActionPostcondition)
+                .ToByteArray());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task OperationExecutor_Postcondition_ShouldOverwriteProviderDigest(
+        bool verified)
+    {
+        var providerDigest = ByteString.CopyFrom(
+            Enumerable.Repeat((byte)0xA5, NyxIdChatActionPostconditionEvidence.Sha256Length)
+                .ToArray());
+        var port = new RecordingActionPostconditionPort
+        {
+            Result = new NyxIdChatActionPostconditionResult
+            {
+                ActionRequestId = "action-alpha",
+                Disposition = NyxIdChatActionDisposition.Completed,
+                Verified = verified,
+                Resource = new NyxIdChatSafeResourceRef
+                {
+                    UserService = new NyxIdChatUserServiceRef
+                    {
+                        UserServiceId = "service-alpha",
+                    },
+                },
+                VerificationInputSha256 = providerDigest,
+            },
+        };
+        var executor = new NyxIdChatTurnOperationExecutor(
+            new CapabilityGeneratingReplyExecutor(),
+            port);
+        var command = PostconditionCommand(NyxIdChatActionDisposition.Completed);
+        var expected = NyxIdChatActionPostconditionEvidence.ComputeVerificationInputSha256(
+            command.ActionPostcondition);
+
+        var execution = await executor.ExecuteAsync(
+            command,
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        var actual = execution.Result.ActionPostcondition.VerificationInputSha256;
+        actual.Length.Should().Be(NyxIdChatActionPostconditionEvidence.Sha256Length);
+        actual.ToByteArray().Should().Equal(expected.ToByteArray());
+        actual.ToByteArray().Should().NotEqual(providerDigest.ToByteArray());
+    }
+
+    [Fact]
+    public void PostconditionEvidence_ShouldExcludeTransientToolContext()
+    {
+        var first = PostconditionCommand(NyxIdChatActionDisposition.Completed)
+            .ActionPostcondition;
+        first.ToolContext = Credentials("transient-token-alpha");
+        var second = first.Clone();
+        second.ToolContext = Credentials("transient-token-beta");
+
+        var firstDigest =
+            NyxIdChatActionPostconditionEvidence.ComputeVerificationInputSha256(first);
+        var secondDigest =
+            NyxIdChatActionPostconditionEvidence.ComputeVerificationInputSha256(second);
+
+        firstDigest.Length.Should().Be(NyxIdChatActionPostconditionEvidence.Sha256Length);
+        firstDigest.ToByteArray().Should().Equal(secondDigest.ToByteArray());
     }
 
     [Fact]
@@ -4302,6 +4371,10 @@ public sealed partial class NyxIdChatTurnGAgentTests
         execution.Result.ActionPostcondition.Verified.Should().BeFalse();
         execution.Result.ActionPostcondition.FailureCode.Should().Be(
             "NYXID_ACTION_POSTCONDITION_INPUT_INVALID");
+        execution.Result.ActionPostcondition.VerificationInputSha256.ToByteArray().Should().Equal(
+            NyxIdChatActionPostconditionEvidence
+                .ComputeVerificationInputSha256(PostconditionCommand(disposition).ActionPostcondition)
+                .ToByteArray());
     }
 
     private static NyxIdChatOperationDispatchCommand PostconditionCommand(
@@ -4330,6 +4403,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
                     ServiceSlug = "api-github",
                 },
             },
+            RequestedAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 8, 20, 8, 0, 0, TimeSpan.Zero)),
         },
     };
 

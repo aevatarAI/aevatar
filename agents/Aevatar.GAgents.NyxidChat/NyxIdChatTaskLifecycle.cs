@@ -129,8 +129,8 @@ public static class NyxIdChatTaskLifecycle
 
         if (signal.ResultCase ==
                 NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition &&
-            IsServiceConnectedPostcondition(currentStep) &&
-            !MatchesServiceConnectedPostcondition(currentStep, signal.ActionPostcondition))
+            (!IsServiceConnectedPostcondition(currentStep) ||
+             !MatchesServiceConnectedPostcondition(state, currentStep, signal.ActionPostcondition)))
         {
             return new NyxIdChatTaskLifecycleDecision(
                 NyxIdChatTransitionOutcome.Rejected,
@@ -1625,6 +1625,7 @@ public static class NyxIdChatTaskLifecycle
                     EffectStepId = completedToolKey.StepId,
                     Check = ServiceConnectedCheck,
                     ProviderResourceId = providerResourceId,
+                    Action = NyxIdAssistantActionKind.ServiceConnect,
                 },
             },
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
@@ -1673,6 +1674,7 @@ public static class NyxIdChatTaskLifecycle
             {
                 CatalogServiceConnect = serviceConnect.Clone(),
             },
+            RequestedAt = now.Clone(),
         };
 
         state.ActiveTask.Steps.Add(postconditionStep);
@@ -1712,19 +1714,14 @@ public static class NyxIdChatTaskLifecycle
             step.Kind == NyxIdChatStepKind.Postcondition &&
             step.Status == NyxIdChatStepStatus.Done &&
             step.ExternalEffect == NyxIdChatEffectEvidence.Confirmed &&
-            string.Equals(
-                step.Source?.Postcondition?.Check,
-                ServiceConnectedCheck,
-                StringComparison.Ordinal)) == true;
+            step.Source?.Postcondition?.Action == NyxIdAssistantActionKind.ServiceConnect) == true;
 
     private static bool IsServiceConnectedPostcondition(NyxIdChatTaskStepState step) =>
         step.Kind == NyxIdChatStepKind.Postcondition &&
-        string.Equals(
-            step.Source?.Postcondition?.Check,
-            ServiceConnectedCheck,
-            StringComparison.Ordinal);
+        step.Source?.Postcondition?.Action == NyxIdAssistantActionKind.ServiceConnect;
 
     private static bool MatchesServiceConnectedPostcondition(
+        NyxIdChatConversationGAgentState state,
         NyxIdChatTaskStepState step,
         NyxIdChatActionPostconditionResult result)
     {
@@ -1739,6 +1736,37 @@ public static class NyxIdChatTaskLifecycle
         {
             return false;
         }
+
+        var effectStep = state.ActiveTask?.Steps.FirstOrDefault(candidate =>
+            string.Equals(candidate.StepId, frozen.EffectStepId, StringComparison.Ordinal));
+        var serviceConnect = effectStep?.Source?.Tool?.ServiceConnectPostcondition;
+        var requestedAt = step.Operation?.RequestedAt;
+        var operationKey = step.Operation?.Key;
+        var expectedInput = serviceConnect is null || requestedAt is null || operationKey is null
+            ? null
+            : new NyxIdChatActionPostconditionInput
+            {
+                ScopeId = state.ScopeId,
+                OwnerSubject = state.OwnerSubject,
+                OriginTurnId = operationKey.TurnId,
+                ActionRequestId = frozen.ActionRequestId,
+                Action = NyxIdAssistantActionKind.ServiceConnect,
+                ResourceHint = new NyxIdChatSafeResourceRef
+                {
+                    UserService = new NyxIdChatUserServiceRef
+                    {
+                        UserServiceId = frozen.ProviderResourceId,
+                    },
+                },
+                ReportedDisposition = NyxIdChatActionDisposition.Completed,
+                Params = new NyxIdAssistantActionParams
+                {
+                    CatalogServiceConnect = serviceConnect.Clone(),
+                },
+                RequestedAt = requestedAt.Clone(),
+            };
+        if (!NyxIdChatActionPostconditionEvidence.Matches(expectedInput, result))
+            return false;
 
         var reportedUserServiceId = result.Resource?.UserService?.UserServiceId?.Trim();
         if (!string.IsNullOrWhiteSpace(reportedUserServiceId) &&

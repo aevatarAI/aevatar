@@ -304,6 +304,7 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                         ActionRequestId = source.Postcondition.ActionRequestId,
                         Check = source.Postcondition.Check,
                         ProviderResourceId = source.Postcondition.ProviderResourceId,
+                        Action = ToWireName(source.Postcondition.Action),
                     },
                 },
             NyxIdChatStepSource.SourceOneofCase.Input =>
@@ -654,6 +655,15 @@ public sealed class NyxIdChatConversationCurrentStateProjector
                             ServiceSlug = action.Params.ServiceAccessReview.ServiceSlug,
                             ResourceUri = action.Params.ServiceAccessReview.ResourceUri,
                         },
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
+                new NyxIdChatConversationActionParamsDocument
+                {
+                    ServiceReauthorize = new NyxIdChatConversationServiceReauthorizeDocument
+                    {
+                        UserServiceId = action.Params.ServiceReauthorize.UserServiceId,
+                        RequestedScopes = { action.Params.ServiceReauthorize.RequestedScopes },
+                    },
                 },
             _ => null,
         };

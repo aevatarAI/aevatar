@@ -43,6 +43,7 @@ enum NyxIdChatTurnIntent {
   NYX_ID_CHAT_TURN_INTENT_SERVICE_CONNECT = 1;
   NYX_ID_CHAT_TURN_INTENT_KEY_CREATE = 2;
   NYX_ID_CHAT_TURN_INTENT_KEY_ROTATE = 3;
+  NYX_ID_CHAT_TURN_INTENT_SERVICE_REAUTHORIZE = 4;
 }
 
 enum NyxIdChatTaskStatus {
@@ -398,6 +399,9 @@ message NyxIdChatPostconditionStepSource {
   string effect_step_id = 3;
   aevatar.ai.tool_providers.AgentToolOperationReadBackPayload tool_read_back = 4;
   string provider_resource_id = 5;
+  // Typed action identity for postcondition routing. Consumers must not infer
+  // the action from the presentation/check label.
+  NyxIdAssistantActionKind action = 6;
 }
 
 message NyxIdChatRetryToolInputState {
@@ -939,16 +943,21 @@ message NyxIdAssistantActionParams {
 // postcondition facts remain internal committed state and never leak into the
 // browser-action request frame.
 message NyxIdAssistantActionWireParams {
+  // Field 3 previously nested service.reauthorize params under a wrapper;
+  // the NyxID descriptor schema is flat, so the wire form now uses 9 and 10.
+  reserved 3;
+  reserved "service_reauthorize";
   oneof params {
     NyxIdCatalogServiceConnectParams catalog_service = 1;
     NyxIdCustomServiceConnectParams custom_service = 2;
-    NyxIdServiceReauthorizeParams service_reauthorize = 3;
     NyxIdServiceAccessReviewParams service_access_review = 8;
   }
   string key_create_name = 4 [json_name = "name"];
   string key_create_platform = 5 [json_name = "platform"];
   repeated string key_create_allowed_service_ids = 6 [json_name = "allowedServiceIds"];
   string key_rotate_key_id = 7 [json_name = "keyId"];
+  string service_reauthorize_user_service_id = 9 [json_name = "userServiceId"];
+  repeated string service_reauthorize_requested_scopes = 10 [json_name = "requestedScopes"];
 }
 
 message NyxIdAssistantActionRequestWirePayload {
@@ -1590,6 +1599,9 @@ message NyxIdChatActionPostconditionResult {
   NyxIdChatSafeResourceRef resource = 4;
   string failure_code = 5;
   string safe_message = 6;
+  // SHA-256 of the exact action postcondition input after removing the
+  // transient tool_context. It binds the result to the frozen request payload.
+  bytes verification_input_sha256 = 7;
 }
 
 message NyxIdChatOperationFailure {
