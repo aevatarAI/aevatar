@@ -122,11 +122,20 @@ the resource boundary enforceable without relying on prompt compliance.
 
 ### Host Composition
 
-Register `StudioWorkflowQueryToolSource` through
-`AddStudioProvisioningTools()` and compose it into `workspace.default` alongside
-the existing Studio query sources. Keep `WorkflowCatalogAgentToolSource` in the
-same tool set because explicit template discovery remains supported under its
-new tool names.
+Compose `StudioWorkflowQueryToolSource` into the explicit `studio.local` tool
+set alongside the existing Studio provisioning, member, binding, schedule, and
+query sources. `workspace.default` remains the public/default surface and must
+not include Studio-local sources. Keep `WorkflowCatalogAgentToolSource` in
+`workspace.default` because explicit public template discovery remains
+supported under its template-oriented tool names.
+
+The built-in Studio workflow selects `studio.local` through its role-level
+`tool_sets` contract. Request-scoped toolset resolution adds those exact tools
+to that workflow turn without registering them as ambient `IAgentToolSource`
+instances or visibility-sensitive `IWorkflowToolSource` instances. This keeps
+`ToolCallModule` discovery cache stable and preserves the durable
+`AgentWorkflowToolSourceAdapter` execution/reconciliation contract for normal
+workflow tools.
 
 ## Error Semantics
 
