@@ -83,6 +83,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<IRuntimeFleetCapabilityAdmissionReader,
             DenyAllRuntimeFleetCapabilityAdmissionReader>();
+        services.TryAddSingleton<IRuntimeFleetCapabilityQuiescenceReader,
+            DenyAllRuntimeFleetCapabilityQuiescenceReader>();
         services.TryAddSingleton<OrleansRuntimeFleetMembershipOptions>();
         services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetMembershipSnapshotSource,
             OrleansRuntimeFleetMembershipSnapshotSource>());

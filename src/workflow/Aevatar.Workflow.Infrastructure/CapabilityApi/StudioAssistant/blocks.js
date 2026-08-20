@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260820-m56-trajectory-ledger";
+import { validateActionRequest } from "./protocol.js?v=20260820-m57-trajectory-persistence";
 
 // Assistant prose is always Markdown text. Executable cards are built only
 // from actor-authored, schema-v4 action requests.

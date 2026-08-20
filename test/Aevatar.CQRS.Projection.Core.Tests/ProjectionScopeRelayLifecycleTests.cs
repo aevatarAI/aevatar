@@ -57,6 +57,24 @@ public sealed class ProjectionScopeRelayLifecycleTests
     }
 
     [Fact]
+    public async Task DurableReleasedScope_ReplayedAfterReleaseCommit_ShouldRetryRelayRemovalWithoutAnotherCommit()
+    {
+        var (agent, stream) = CreateAgent(
+            "projection-scope-release-recovery",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var eventSourcing = (LifecycleEventSourcing)agent.EventSourcing!;
+        agent.State.Released = true;
+        agent.State.ObservationAttached = false;
+        agent.State.ReleasedAtObservedVersion = 7;
+
+        await agent.HandleReleaseAsync(new ReleaseProjectionScopeCommand());
+
+        stream.RemovedRelayTargetIds.Should().Equal("projection-scope-release-recovery");
+        eventSourcing.PersistedEvents.OfType<ProjectionScopeReleasedEvent>().Should().BeEmpty();
+        agent.State.ReleasedAtObservedVersion.Should().Be(7);
+    }
+
+    [Fact]
     public async Task LegacyActiveScope_Ensure_ShouldPersistOneGenerationMigrationAndPublishExactRelay()
     {
         var (agent, stream) = CreateAgent(

@@ -34,6 +34,9 @@ public static class ServiceCollectionExtensions
             ICommittedStatePublicationHook,
             WorkflowRunCommittedStateRedactionHook>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            WorkflowToolCallAttemptPersistenceTelemetryHook>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IRuntimeFleetCapabilityAdvertisement,
             WorkflowNormalizedStateCapabilityAdvertisement>());
         return services;

@@ -558,6 +558,45 @@ message NyxIdChatTaskStepState {
   // evidence authorizes this explicit retry.
   NyxIdChatOperationKey retry_authorization_source_key = 28;
   NyxIdChatStepGuard guard = 29;
+  // Bounded, sanitized transcript facts kept so the turn's operation ledger
+  // survives past the live event stream. Credentials, operation admissions and
+  // raw content parts never enter this record.
+  NyxIdChatOperationLedgerFacts operation_ledger_facts = 30;
+}
+
+// Sanitized, size-bounded ledger facts for one committed operation result.
+// Each preview is truncated for storage; `previews_truncated` says so honestly
+// instead of presenting a fragment as the complete payload.
+message NyxIdChatOperationLedgerFacts {
+  // Tool result bodies are untrusted external text and are deliberately absent:
+  // conversation actor state is re-read when rebuilding model input.
+  reserved 5;
+  reserved "result_preview";
+  aevatar.ai.TokenUsagePayload usage = 1;
+  string input_preview = 2;
+  string output_preview = 3;
+  string arguments_preview = 4;
+  bool previews_truncated = 6;
+  string model = 7;
+  string provider = 8;
+  string finish_reason = 9;
+}
+
+// One operation of a terminal turn, snapshotted from the owning task's steps so
+// it can be appended together with the turn's chat history record.
+message NyxIdChatTurnOperationSnapshot {
+  string operation_id = 1;
+  string step_id = 2;
+  int32 order = 3;
+  NyxIdChatStepKind kind = 4;
+  NyxIdChatStepStatus status = 5;
+  string title = 6;
+  string description = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp completed_at = 9;
+  string terminal_code = 10;
+  string safe_message = 11;
+  NyxIdChatOperationLedgerFacts ledger_facts = 12;
 }
 
 message NyxIdChatPlanRevisionRecord {
@@ -1273,6 +1312,10 @@ message NyxIdChatHistoryTerminalOutbox {
   string error_code = 7;
   google.protobuf.Timestamp observed_at = 8;
   int32 attempt = 9;
+  // The turn's operation ledger, snapshotted once when this outbox is first
+  // prepared. Retries reuse the committed snapshot so the idempotency guard
+  // keeps comparing the same bytes.
+  repeated NyxIdChatTurnOperationSnapshot operations = 10;
 }
 
 // Typed self-continuation and durable retry payload. Full terminal content is

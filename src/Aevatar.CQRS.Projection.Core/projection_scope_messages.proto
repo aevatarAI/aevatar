@@ -59,6 +59,9 @@ message ProjectionScopeState {
   // contract that may write ProjectionScopeStatusDocument for this scope.
   // Status writers only replicate this decision and never choose it.
   ProjectionScopeStatusRoute status_route = 29;
+  // Highest source version observed when this scope committed its release. A re-dispatched
+  // status-writer release confirms this durable watermark rather than a later transient value.
+  int64 released_at_observed_version = 30;
 }
 
 // Cutover phases of a status route. A route is created WARMING (the new writer observes and
@@ -100,6 +103,12 @@ message ProjectionScopeStatusRoute {
   // writer confirms its committed release with the highest source version it observed; a
   // confirmation below this version is recorded as released-before-drained.
   int64 blocked_version = 11;
+  // Source scope version of the latest receipt-gated WARMING probe. This is distinct from the
+  // original cutover start and fences out caught-up reports queued before bridge quiescence.
+  int64 warming_probe_version = 12;
+  // Source scope version of the first receipt-gated BLOCKED drain probe. Retries reuse this
+  // durable fence so an authenticated delayed release confirmation can still complete cutover.
+  int64 drain_probe_version = 13;
 }
 
 message ProjectionObservedEnvelopeMetadata {
@@ -203,6 +212,12 @@ message ReleaseProjectionScopeCommand {
   // release to root_actor_id with ProjectionScopeStatusWriterReleasedEvent, also when it was
   // already released (the source re-dispatches until it holds the confirmation).
   int64 status_route_epoch = 5;
+  // Exact previous writer selected by the source-owned route. A status writer must not release
+  // or confirm when this does not name its own actor identity.
+  string expected_writer_actor_id = 6;
+  // Source BLOCKED commit version that the previous writer must have observed before it may
+  // commit or confirm release. This is a drain fence, not dispatch-acceptance evidence.
+  int64 required_observed_version = 7;
 }
 
 message ReplayProjectionFailuresCommand {
@@ -252,6 +267,8 @@ message ProjectionObservationAttachmentUpdatedEvent {
 
 message ProjectionScopeReleasedEvent {
   google.protobuf.Timestamp occurred_at_utc = 1;
+  // Highest source version observed when release was committed.
+  int64 last_observed_version = 2;
 }
 
 message ProjectionScopeEnvelopeReceivedEvent {
@@ -372,14 +389,29 @@ message ProjectionScopeStatusWriterCaughtUpEvent {
   int64 route_epoch = 2;
   int64 observed_version = 3;
   google.protobuf.Timestamp observed_at_utc = 4;
+  // Exact warming writer that observed the source version. The source accepts the report only
+  // from this actor's direct envelope.
+  string writer_actor_id = 5;
 }
 
-// A no-op committed fact the source records while a route is warming and no observation has
-// been committed since warming started: its publication carries the warming route through the
-// relay so the warming writer can report caught-up even for an otherwise idle source.
+// A receipt-gated committed probe the source records while a persisted route is warming. Its
+// publication carries the warming route through the relay so the writer can report caught-up.
+// The first probe establishes required_observed_version; retries preserve that durable fence so
+// a delayed authenticated report can still advance the route.
 message ProjectionScopeStatusRouteWarmingProbedEvent {
   int64 route_epoch = 1;
   google.protobuf.Timestamp occurred_at_utc = 2;
+  int64 required_observed_version = 3;
+}
+
+// Receipt-gated recovery probe for an already persisted BLOCKED route. Before this event is
+// committed the source has re-created/re-ensured the exact previous writer and restored its
+// relay. The first probe establishes required_observed_version from its authoritative source
+// commit version; retries preserve that durable fence while re-publishing the probe.
+message ProjectionScopeStatusRouteDrainProbedEvent {
+  int64 route_epoch = 1;
+  int64 required_observed_version = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
 }
 
 // Phase 4: the previous writer's relay was removed and its scope released for this epoch.
@@ -402,6 +434,9 @@ message ProjectionScopeStatusWriterReleasedEvent {
   // Highest source version the writer observed before it released (0 if unknown).
   int64 last_observed_version = 3;
   google.protobuf.Timestamp released_at_utc = 4;
+  // Exact actor that committed the release. The source accepts confirmation only from the
+  // previous writer selected by its durable route.
+  string writer_actor_id = 5;
 }
 
 // The writer of an ACTIVE terminal route is unchanged but the route contract is upgraded in

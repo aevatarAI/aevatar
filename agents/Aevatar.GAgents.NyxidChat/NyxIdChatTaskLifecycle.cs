@@ -87,7 +87,26 @@ public static class NyxIdChatTaskLifecycle
     // exact-service approvals park the actor-owned continuation before effect.
     public static readonly TimeSpan ToolApprovalExpiryWindow = TimeSpan.FromMinutes(10);
 
+    /// <summary>
+    /// Reconciles one operation result and records its durable ledger facts.
+    /// </summary>
+    /// <remarks>
+    /// Recording wraps every reconciliation branch, including a model reply whose
+    /// only output is a tool call, so the transcript keeps one record per Model
+    /// and Tool operation exactly as the live trajectory renders them.
+    /// </remarks>
     public static NyxIdChatTaskLifecycleDecision ApplyOperationResult(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationResultSignal signal,
+        Timestamp now)
+    {
+        var decision = ReconcileOperationResult(state, signal, now);
+        if (decision.Outcome == NyxIdChatTransitionOutcome.Accepted)
+            NyxIdChatOperationLedger.RecordResult(decision.State, signal);
+        return decision;
+    }
+
+    private static NyxIdChatTaskLifecycleDecision ReconcileOperationResult(
         NyxIdChatConversationGAgentState state,
         NyxIdChatOperationResultSignal signal,
         Timestamp now)

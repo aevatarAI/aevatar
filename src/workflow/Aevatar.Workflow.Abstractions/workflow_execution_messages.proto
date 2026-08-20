@@ -731,10 +731,27 @@ message WorkflowRunExecutionContextUpdatedEvent
 }
 message WorkflowRunExecutionContextClearedEvent { string run_id = 1; }
 message WorkflowCommandObservedEvent { string command_id = 1; }
+message WorkflowToolCallAttemptPersistenceFact
+{
+  string scope_id = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string call_id = 4;
+  string execution_id = 5;
+  string continuation_id = 6;
+  int32 attempt = 7;
+  // Captured when the event payload is assembled before commit. This is not
+  // the commit-completion time; committed_event_id/state_version prove the
+  // durable boundary on the emitted timing observation.
+  google.protobuf.Timestamp observed_at_utc = 8;
+  int64 preparation_elapsed_ms = 9;
+}
+
 message WorkflowExecutionStateUpsertedEvent
 {
   string scope_key = 1;
   google.protobuf.Any state = 2;
+  repeated WorkflowToolCallAttemptPersistenceFact tool_call_attempt_persistence_facts = 3;
 }
 message WorkflowExecutionStateClearedEvent  { string scope_key = 1; }
 message WorkflowStoppedEvent {
@@ -1707,6 +1724,8 @@ message WorkflowToolCallAttemptTimingObservation
     int64 completion_delivery_elapsed_ms = 18;
     int64 actor_reconciliation_elapsed_ms = 19;
   }
+  string committed_event_id = 20;
+  int64 committed_state_version = 21;
 }
 
 // Internal self-signal emitted only after the provider response has crossed its

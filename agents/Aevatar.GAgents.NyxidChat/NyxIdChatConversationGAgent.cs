@@ -1354,7 +1354,12 @@ public sealed class NyxIdChatConversationGAgent
                         ToHistoryTerminalStatus(pending.Status),
                         pending.Text,
                         pending.ErrorCode,
-                        pending.ObservedAt.ToDateTimeOffset()),
+                        pending.ObservedAt.ToDateTimeOffset(),
+                        // Absent rather than empty: a turn that ran no Model or Tool
+                        // operation reported no ledger at all.
+                        pending.Operations.Count == 0
+                            ? null
+                            : pending.Operations.Select(ToHistoryTurnOperation).ToList()),
                     CancellationToken.None);
 
             await PersistDomainEventAsync(new NyxIdChatHistoryTerminalDispatchedEvent
@@ -4786,6 +4791,10 @@ public sealed class NyxIdChatConversationGAgent
 
         if (state.PendingHistoryTerminal is { } existing)
         {
+            // The ledger snapshot is taken once, when the outbox is first prepared.
+            // Retries reuse the committed snapshot so this idempotency guard keeps
+            // comparing the same bytes even if the task advanced meanwhile.
+            outbox.Operations.AddRange(existing.Operations.Select(operation => operation.Clone()));
             if (!existing.ToByteString().Equals(outbox.ToByteString()))
             {
                 throw new InvalidOperationException(
@@ -4795,6 +4804,7 @@ public sealed class NyxIdChatConversationGAgent
             return false;
         }
 
+        outbox.Operations.AddRange(NyxIdChatOperationLedger.SnapshotTurn(state, turn.TurnId));
         state.PendingHistoryTerminal = outbox;
         return true;
     }
@@ -5168,6 +5178,46 @@ public sealed class NyxIdChatConversationGAgent
             NyxIdChatTurnStatus.Blocked => ChatHistoryTurnTerminalStatus.Blocked,
             _ => throw new ArgumentOutOfRangeException(nameof(status), status, null),
         };
+
+    private static ChatHistoryTurnOperation ToHistoryTurnOperation(
+        NyxIdChatTurnOperationSnapshot snapshot)
+    {
+        var facts = snapshot.LedgerFacts;
+        return new ChatHistoryTurnOperation(
+            OperationId: snapshot.OperationId,
+            Order: snapshot.Order,
+            Kind: snapshot.Kind == NyxIdChatStepKind.Llm
+                ? ChatHistoryTurnOperationKind.Model
+                : ChatHistoryTurnOperationKind.Tool,
+            Title: snapshot.Title,
+            Status: ToHistoryOperationStatus(snapshot.Status),
+            StartedAt: snapshot.StartedAt?.ToDateTimeOffset(),
+            CompletedAt: snapshot.CompletedAt?.ToDateTimeOffset(),
+            Model: NormalizeOptional(facts?.Model),
+            Provider: NormalizeOptional(facts?.Provider),
+            FinishReason: NormalizeOptional(facts?.FinishReason),
+            PromptTokens: facts?.Usage?.PromptTokens ?? 0,
+            CompletionTokens: facts?.Usage?.CompletionTokens ?? 0,
+            TotalTokens: facts?.Usage?.TotalTokens ?? 0,
+            InputPreview: NormalizeOptional(facts?.InputPreview),
+            OutputPreview: NormalizeOptional(facts?.OutputPreview),
+            ArgumentsPreview: NormalizeOptional(facts?.ArgumentsPreview),
+            PreviewsTruncated: facts?.PreviewsTruncated ?? false,
+            SafeMessage: NormalizeOptional(snapshot.SafeMessage) ??
+                         NormalizeOptional(snapshot.TerminalCode));
+    }
+
+    private static string ToHistoryOperationStatus(NyxIdChatStepStatus status) => status switch
+    {
+        NyxIdChatStepStatus.Done => "done",
+        NyxIdChatStepStatus.Failed => "error",
+        NyxIdChatStepStatus.Cancelled => "stopped",
+        NyxIdChatStepStatus.Skipped => "skipped",
+        NyxIdChatStepStatus.Uncertain => "uncertain",
+        NyxIdChatStepStatus.Running => "running",
+        NyxIdChatStepStatus.Waiting => "waiting",
+        _ => "closed",
+    };
 
     private async Task PersistOperationDispatchFailureAsync(
         NyxIdChatOperationKey operationKey,

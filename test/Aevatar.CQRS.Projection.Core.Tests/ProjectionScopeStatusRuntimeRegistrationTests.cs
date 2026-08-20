@@ -128,20 +128,19 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
                 Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapability.ProjectionScopeStatusTerminalV2)
             .Subject;
 
-        // The fleet authority opens the terminal gate only when every silo advertises exactly the
-        // contract the source scope demands before warming the terminal route.
+        // Phase A uses the known V2 capability with a distinct bridge contract. It therefore
+        // closes old V2 admission in mixed fleets and quiesces only after bridge unanimity.
         var capability = advertisement.GetCapability();
-        capability.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        ProjectionScopeStatusGAgent.ContractVersion.Should().Be(2);
         capability.ContractId.Should().Be(
             Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapabilityContracts
-                .ProjectionScopeStatusTerminalV2);
-        capability.ReaderContractVersion.Should().Be((int)ProjectionScopeStatusGAgent.ContractVersion);
+                .ProjectionScopeStatusTerminalQuiescenceV1);
         capability.ReaderContractVersion.Should().Be(
             Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapabilityContracts
-                .ProjectionScopeStatusTerminalReaderVersion);
+                .ProjectionScopeStatusTerminalQuiescenceReaderVersion);
         capability.ReaderContractVersion.Should().Be(
-            2,
-            "the phased status route bumped the terminal reader contract to v2");
+            3,
+            "the Phase-A binary understands the terminal quiescence receipt");
         advertisement.GetReaderImplementationType().Should().Be(typeof(ProjectionScopeStatusGAgent));
     }
 

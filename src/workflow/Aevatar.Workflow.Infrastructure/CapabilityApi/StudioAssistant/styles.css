@@ -6262,12 +6262,24 @@ body:has(.settings-dialog[open]) #servicesButton,
 .trajectory-payload-group + .trajectory-payload-group { margin-top: 12px; }
 
 .trajectory-payload-group > span {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 5px;
   color: var(--tertiary);
   font-size: 9px;
   font-weight: 650;
   text-transform: uppercase;
+}
+
+.trajectory-payload-note {
+  flex: none;
+  color: var(--warning);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 550;
+  text-transform: none;
 }
 
 @media (max-width: 720px) {

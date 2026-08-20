@@ -5,9 +5,9 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <summary>
 /// Advertises to the runtime fleet manifest that this silo can activate the terminal status
 /// materializer (<see cref="ProjectionScopeStatusGAgent"/>). The fleet authority opens the
-/// <see cref="RuntimeFleetCapability.ProjectionScopeStatusTerminalV2"/> gate only once every
-/// active silo advertises this contract, which is what lets a source scope adopt the terminal
-/// status route without an old binary ever observing a flipped source.
+/// <see cref="RuntimeFleetCapability.ProjectionScopeStatusTerminalV2"/> capability under the
+/// distinct Phase-A bridge contract. This deliberately stops satisfying the old V2 route gate:
+/// mixed fleets close admission, while unanimous bridge readers can quiesce it.
 /// </summary>
 internal sealed class ProjectionScopeStatusTerminalCapabilityAdvertisement
     : IRuntimeFleetCapabilityAdvertisement
@@ -16,8 +16,9 @@ internal sealed class ProjectionScopeStatusTerminalCapabilityAdvertisement
         new()
         {
             Capability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
-            ReaderContractVersion = (int)ProjectionScopeStatusGAgent.ContractVersion,
-            ContractId = ProjectionScopeStatusGAgent.ContractId,
+            ReaderContractVersion =
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceReaderVersion,
+            ContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceV1,
         };
 
     public Type GetReaderImplementationType() => typeof(ProjectionScopeStatusGAgent);

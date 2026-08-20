@@ -212,31 +212,6 @@ public sealed partial class ToolCallModule
         RecordToolCallTiming(observation);
     }
 
-    /// <summary>
-    /// Records <c>pending_state_persisted</c> for <paramref name="pending"/>'s attempt. Emitted
-    /// exactly once per attempt, immediately after the first successful <c>SaveStateAsync</c>
-    /// that persists that attempt number (initial attempt: <c>StartToolExecutionAsync</c>;
-    /// retry attempt N: <c>ScheduleToolRetryAsync</c>). Later saves of the same attempt
-    /// (watchdog/retry lease, phase flip, recovery) do not re-emit it.
-    /// </summary>
-    private void RecordPendingStatePersisted(
-        IWorkflowExecutionContext ctx,
-        PendingToolCallExecutionState pending,
-        long preparationStartedAtTimestamp)
-    {
-        var observation = CreateToolCallTimingObservation(
-            ctx,
-            pending.RunId,
-            pending.StepId,
-            pending.CallId,
-            pending.ExecutionId,
-            pending.ContinuationId,
-            pending.Attempt,
-            WorkflowToolCallAttemptWaterline.PendingStatePersisted);
-        observation.PreparationElapsedMs = ElapsedMilliseconds(ctx, preparationStartedAtTimestamp);
-        RecordToolCallTiming(observation);
-    }
-
     private static WorkflowToolCallReconciliationDisposition ResolveDeadlineReconciliationDisposition(
         bool outcomeMayBeUnknown) =>
         outcomeMayBeUnknown

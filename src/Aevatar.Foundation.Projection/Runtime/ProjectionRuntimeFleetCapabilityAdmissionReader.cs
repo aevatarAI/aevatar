@@ -4,7 +4,8 @@ using Aevatar.Foundation.Abstractions.Runtime;
 namespace Aevatar.Foundation.Projection.Runtime;
 
 public sealed class ProjectionRuntimeFleetCapabilityAdmissionReader
-    : IRuntimeFleetCapabilityAdmissionReader
+    : IRuntimeFleetCapabilityAdmissionReader,
+        IRuntimeFleetCapabilityQuiescenceReader
 {
     private readonly IProjectionDocumentReader<
         RuntimeFleetCapabilityAuthorityCurrentStateDocument,
@@ -103,7 +104,7 @@ public sealed class ProjectionRuntimeFleetCapabilityAdmissionReader
         var admission = new RuntimeFleetCapabilityAdmission
         {
             Capability = capability,
-            Status = RuntimeFleetCapabilityGateStatus.Open,
+            Status = gate.Status,
             AuthorityActorId = document.AuthorityActorId,
             AuthorityStateVersion = document.StateVersion,
             CapabilityEpoch = gate.CapabilityEpoch,
@@ -124,5 +125,62 @@ public sealed class ProjectionRuntimeFleetCapabilityAdmissionReader
                 Incarnation = member.Incarnation,
             }));
         return admission;
+    }
+
+    public async Task<RuntimeFleetCapabilityQuiescenceEvidence?> GetQuiescenceAsync(
+        RuntimeFleetCapability capability,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (_documentReader == null)
+            return null;
+
+        var document = await _documentReader.GetAsync(
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            ct);
+        if (document == null ||
+            !string.Equals(
+                document.AuthorityActorId,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal) ||
+            document.StateVersion <= 0)
+        {
+            return null;
+        }
+
+        var matchingGates = document.Gates
+            .Where(gate => gate.Capability == capability)
+            .ToArray();
+        if (matchingGates.Length != 1)
+            return null;
+
+        var gate = matchingGates[0];
+        if (gate.Status != RuntimeFleetCapabilityGateStatus.Quiesced ||
+            gate.CapabilityEpoch != long.MaxValue ||
+            gate.QuiescenceReaderContractVersion <= 0 ||
+            gate.MembershipEpoch <= 0 ||
+            string.IsNullOrWhiteSpace(gate.RequiredContractId) ||
+            string.IsNullOrWhiteSpace(gate.MembershipDigest) ||
+            string.IsNullOrWhiteSpace(gate.DeploymentRevision) ||
+            gate.ChangedAt == null ||
+            string.IsNullOrWhiteSpace(gate.LastTransitionId))
+        {
+            return null;
+        }
+
+        return new RuntimeFleetCapabilityQuiescenceEvidence
+        {
+            Capability = capability,
+            AuthorityActorId = document.AuthorityActorId,
+            AuthorityStateVersion = document.StateVersion,
+            CapabilityEpoch = gate.CapabilityEpoch,
+            ContractId = gate.RequiredContractId,
+            QuiescenceReaderContractVersion = gate.QuiescenceReaderContractVersion,
+            QuiescedMembershipEpoch = gate.MembershipEpoch,
+            QuiescedMembershipDigest = gate.MembershipDigest,
+            QuiescedDeploymentRevision = gate.DeploymentRevision,
+            QuiescedAt = gate.ChangedAt.Clone(),
+            QuiescenceTransitionId = gate.LastTransitionId,
+        };
     }
 }

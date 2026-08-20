@@ -151,6 +151,107 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task WorkflowStudio_StoredOperations_ShouldRestoreTurnScopedTrajectoryWithoutSynthesizingTiming()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name) {
+              const start = source.indexOf('function ' + name + '(');
+              assert.notEqual(start, -1, name + ' must exist in the served Studio app');
+              const end = source.indexOf('\n}\n', start);
+              assert.notEqual(end, -1, name + ' must close at column zero');
+              return source.slice(start, end + 3);
+            }
+
+            const context = {
+              Map, Set, Number, String, Object, Array, JSON, Boolean,
+              createRunState: () => ({ status: 'idle', events: [], tools: new Map(),
+                startedAt: null, completedAt: null, context: {}, request: null }),
+              createId: prefix => prefix + '-generated',
+              mergeUsage: (left, right) => right ?? left,
+              traceOperationKindLabel: kind => kind.toUpperCase(),
+            };
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('ensureTraceOperationState')}
+              ${functionSource('orderedTraceOperations')}
+              ${functionSource('traceOperationKey')}
+              ${functionSource('upsertTraceOperation')}
+              ${functionSource('requestTraceInput')}
+              ${functionSource('createInputTraceOperation')}
+              ${functionSource('traceServerTimestamp')}
+              ${functionSource('traceOperationDurationMs')}
+              ${functionSource('restoredTraceKey')}
+              ${functionSource('ensureRestoredRequestTrace')}
+              ${functionSource('restoredOperationTimestamp')}
+              ${functionSource('restoredOperationUsage')}
+              ${functionSource('applyRestoredOperation')}
+              ${functionSource('restoreTrajectoryFromStoredOperations')}
+            `, context);
+
+            const entry = { actorId: 'conversation-a', traces: new Map(), traceOrder: [] };
+            const operations = [
+              { turnId: 'turn-a', operationId: 'op-1', order: 1, kind: 'model',
+                title: 'deepseek-v4-pro', status: 'done', model: 'deepseek-v4-pro',
+                startedAt: '2026-08-20T08:00:00.000Z', completedAt: '2026-08-20T08:00:02.000Z',
+                totalTokens: 4397, outputPreview: 'plan', previewsTruncated: true },
+              { turnId: 'turn-a', operationId: 'op-2', order: 2, kind: 'tool',
+                title: 'service.reconnect', status: 'error',
+                startedAt: '2026-08-20T08:00:03.000Z', completedAt: null,
+                safeMessage: 'NYXID_REFRESH_REQUIRED' },
+              { turnId: 'turn-b', operationId: 'op-3', order: 1, kind: 'model',
+                title: 'deepseek-v4-pro', status: 'done', startedAt: null, completedAt: null },
+            ];
+            const messages = [
+              { role: 'user', turnId: 'turn-a', content: 'reconnect the service' },
+              { role: 'assistant', turnId: 'turn-a', content: 'done' },
+            ];
+
+            context.restoreTrajectoryFromStoredOperations(entry, operations, messages);
+
+            assert.deepEqual([...entry.traces.keys()], ['turn:turn-a', 'turn:turn-b']);
+            assert.deepEqual(entry.traceOrder, ['turn:turn-b', 'turn:turn-a'],
+              'newest container first so the ledger renders oldest to newest');
+
+            const turnA = entry.traces.get('turn:turn-a');
+            assert.equal(turnA.serverTurnId, 'turn-a');
+            assert.equal(turnA.restored, true);
+            const records = context.orderedTraceOperations(turnA);
+            // Join before comparing: the ledger array is built inside the vm realm.
+            assert.equal(records.map(record => record.kind).join('|'), 'input|model|tool');
+            assert.equal(records[0].input, 'reconnect the service');
+            assert.equal(records[1].previewsTruncated, true);
+            assert.equal(records[1].usage.totalTokens, 4397);
+            assert.equal(context.traceOperationDurationMs(records[1]), 2000);
+            assert.equal(records[2].error, 'NYXID_REFRESH_REQUIRED');
+            assert.equal(records[2].completedAt, null);
+            assert.equal(context.traceOperationDurationMs(records[2]), null,
+              'a tool that never reported completion keeps no duration');
+
+            const turnB = context.orderedTraceOperations(entry.traces.get('turn:turn-b'));
+            assert.equal(turnB.at(-1).startedAt, null,
+              'absent timing must not be replaced with the load time');
+
+            // Re-running the restore must not duplicate the recovered containers.
+            context.restoreTrajectoryFromStoredOperations(entry, operations, messages);
+            assert.equal(entry.traces.size, 2);
+            assert.equal(context.orderedTraceOperations(turnA).length, 3);
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("restoreTrajectoryFromStoredOperations(entry, storedOperations, messages);");
+        app.Should().Contain("if (isConversationActor) restoreTrajectoryFromActorProjection(entry, result.projection);");
+        // Tool result bodies are never archived, so the restore path must not read one.
+        app.Should().NotContain("operation?.resultPreview");
+    }
+
+    [Fact]
     public async Task WorkflowStudio_OperationDetails_ShouldStayIsolatedFromTheDefaultConversationView()
     {
         var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);

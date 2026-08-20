@@ -163,6 +163,9 @@ public static partial class NyxIdChatEndpoints
             : Results.Ok(new
             {
                 messages.Messages,
+                // Durable trajectory ledger for the stored turns. Studio rebuilds its
+                // per-turn trace containers from these facts instead of inferring them.
+                messages.Operations,
                 messages.StateVersion,
                 ProjectionStatus = messages.ProjectionStatus == ChatHistoryConversationProjectionStatus.Pending
                     ? "pending"
