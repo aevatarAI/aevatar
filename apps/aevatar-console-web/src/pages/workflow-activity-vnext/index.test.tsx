@@ -2182,6 +2182,30 @@ describe('Workflow Activity vNext editor', () => {
     ).toHaveTextContent('Saved at 2026-08-04 10:01:00 UTC');
   });
 
+  it('opens a template-created workflow in a save-ready state', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source?source=template';
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const saveWorkflowButton = await screen.findByRole('button', {
+      name: 'Save workflow',
+    });
+    expect(saveWorkflowButton).toBeEnabled();
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Unsaved changes');
+
+    fireEvent.click(saveWorkflowButton);
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1),
+    );
+    await waitFor(() => expect(saveWorkflowButton).toBeDisabled());
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Saved at 2026-08-04 10:01:00 UTC');
+  });
+
   it('publishes a saved workflow in one click and waits for observed evidence before showing Published', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
@@ -3058,6 +3082,9 @@ describe('Workflow Activity vNext editor', () => {
     mockStudioApi.getWorkflowDraftFile
       .mockRejectedValueOnce(unavailable)
       .mockResolvedValueOnce(adoptedDraft);
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      { workflowId: 'wf-draft-api' },
+    ]);
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -3593,6 +3620,9 @@ describe('Workflow Activity vNext editor', () => {
       },
     });
     mockStudioApi.getWorkflowDraftFile.mockReturnValue(new Promise(() => {}));
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      { workflowId: 'wf-draft-api' },
+    ]);
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -5856,6 +5886,9 @@ describe('Workflow Activity vNext creation', () => {
   });
 
   it('instantiates a public template with its authority version and opens the materialized draft', async () => {
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      { workflowId: 'wf-created-alpha' },
+    ]);
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     const templateButton = await screen.findByRole('button', {
       name: 'Use template',
@@ -5880,7 +5913,7 @@ describe('Workflow Activity vNext creation', () => {
     );
     expect(mockStudioApi.parseYaml).not.toHaveBeenCalled();
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha?source=template',
     );
   });
 

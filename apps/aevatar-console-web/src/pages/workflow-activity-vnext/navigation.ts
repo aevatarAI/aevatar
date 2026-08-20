@@ -43,8 +43,11 @@ export function buildWorkflowActivityTemplatesHref(scopeId: string): string {
 export function buildWorkflowActivityEditorHref(
   scopeId: string,
   workflowId: string,
+  query?: Readonly<Record<string, string | undefined>>,
 ): string {
-  return `${buildWorkflowActivitySectionHref(scopeId, 'workflows')}/${encode(workflowId)}`;
+  const base = `${buildWorkflowActivitySectionHref(scopeId, 'workflows')}/${encode(workflowId)}`;
+  const suffix = buildQuerySuffix(query);
+  return suffix ? `${base}?${suffix}` : base;
 }
 
 export function buildWorkflowActivityEditorRunHref(
