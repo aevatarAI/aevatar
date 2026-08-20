@@ -135,9 +135,12 @@ describe('WorkflowScheduleSurface', () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByText('Review schedule', { selector: 'h2' }),
+        screen.getByText('Review schedule', { selector: '.ant-modal-title' }),
       ).toBeVisible(),
     );
+    expect(
+      screen.queryByRole('heading', { name: 'Review schedule' }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText('Daily workflow run')).toBeVisible();
     expect(screen.getByText('Weekdays at 09:00')).toBeVisible();
     expect(screen.getByText('Run input')).toBeVisible();
@@ -182,8 +185,13 @@ describe('WorkflowScheduleSurface', () => {
       ).toBeGreaterThanOrEqual(2),
     );
     expect(
-      screen.getByRole('heading', { name: 'Schedule request accepted' }),
+      screen.getByText('Schedule request accepted', {
+        selector: '.ant-modal-title',
+      }),
     ).toBeVisible();
+    expect(
+      screen.queryByRole('heading', { name: 'Schedule request accepted' }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText('Refreshing Workflow schedules')).toBeVisible();
     expect(mockToast.success).not.toHaveBeenCalled();
   });
@@ -217,15 +225,20 @@ describe('WorkflowScheduleSurface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
     await waitFor(() =>
       expect(
-        screen.getByText('Review schedule', { selector: 'h2' }),
+        screen.getByText('Review schedule', { selector: '.ant-modal-title' }),
       ).toBeVisible(),
     );
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
     await waitFor(() =>
       expect(
-        screen.getByRole('heading', { name: 'Schedule request accepted' }),
+        screen.getByText('Schedule request accepted', {
+          selector: '.ant-modal-title',
+        }),
       ).toBeVisible(),
     );
+    expect(
+      screen.queryByRole('heading', { name: 'Schedule request accepted' }),
+    ).not.toBeInTheDocument();
     await waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(2));
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[1]);

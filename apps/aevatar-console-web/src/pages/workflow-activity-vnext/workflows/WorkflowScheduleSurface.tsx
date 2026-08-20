@@ -668,9 +668,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     <div className="wa-vnext__schedule-review">
       {workflowContext}
       <section className="wa-vnext__schedule-review-panel">
-        <h2>
-          {t('workflowActivityVNext.schedule.reviewTitle', 'Review schedule')}
-        </h2>
         <dl className="wa-vnext__schedule-review-details">
           <div>
             <dt>{t('workflowActivityVNext.schedule.workflow', 'Workflow')}</dt>
@@ -752,12 +749,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     <div className="wa-vnext__schedule-accepted" role="status">
       {workflowContext}
       <div className="wa-vnext__schedule-accepted-panel">
-        <h2>
-          {t(
-            'workflowActivityVNext.schedule.requestAccepted',
-            'Schedule request accepted',
-          )}
-        </h2>
         <p>
           {t(
             'workflowActivityVNext.schedule.refreshingSchedules',
