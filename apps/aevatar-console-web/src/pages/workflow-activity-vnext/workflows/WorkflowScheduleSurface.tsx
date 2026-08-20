@@ -156,6 +156,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   const [acceptedMessage, setAcceptedMessage] = React.useState<string | null>(
     null,
   );
+  const [pendingObservationScheduleId, setPendingObservationScheduleId] =
+    React.useState<string | null>(null);
 
   const previewing = creationStep === 'previewing';
   const busy = previewing || saving;
@@ -173,6 +175,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         includeTotalCount: true,
         take: 50,
       }),
+    refetchInterval: pendingObservationScheduleId ? 1000 : false,
     refetchOnMount: 'always',
     retry: false,
   });
@@ -188,7 +191,19 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setCronMode(false);
     setPreview(null);
     setAcceptedMessage(null);
+    setPendingObservationScheduleId(null);
   }, [mode, open, workflowId]);
+
+  React.useEffect(() => {
+    if (!pendingObservationScheduleId || !schedules.data) return;
+    if (
+      schedules.data.items.some(
+        (schedule) => schedule.scheduleId === pendingObservationScheduleId,
+      )
+    ) {
+      setPendingObservationScheduleId(null);
+    }
+  }, [pendingObservationScheduleId, schedules.data]);
 
   const refreshSchedules = React.useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey });
@@ -285,8 +300,13 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         setEditingSchedule(null);
         await refreshSchedules();
       } else {
-        await workflowScheduleApi.create(scopeId, workflowId, input);
+        const receipt = await workflowScheduleApi.create(
+          scopeId,
+          workflowId,
+          input,
+        );
         setCreationStep('accepted');
+        setPendingObservationScheduleId(receipt.scheduleId);
         setSaving(false);
         void refreshSchedules().catch((error) => {
           toast.error(errorMessage(error));

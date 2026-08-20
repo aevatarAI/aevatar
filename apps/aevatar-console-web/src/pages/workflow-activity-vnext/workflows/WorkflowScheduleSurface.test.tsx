@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import * as React from 'react';
 import { workflowScheduleApi } from '@/shared/api/workflowScheduleApi';
 import WorkflowScheduleSurface from './WorkflowScheduleSurface';
@@ -244,6 +250,59 @@ describe('WorkflowScheduleSurface', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[1]);
     expect(onClose).toHaveBeenCalledTimes(1);
     resolveRefresh({ items: [], nextCursor: null, totalCount: 0 });
+    view.unmount();
+  });
+
+  it('keeps refreshing until the accepted schedule is observed', async () => {
+    let listCallCount = 0;
+    const observedSchedule = {
+      scheduleId: 'schedule-alpha',
+      displayName: 'Observed schedule',
+      prompt: '',
+      cronExpression: '0 9 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      enabled: true,
+      createdAt: '2026-08-20T00:00:00Z',
+      updatedAt: '2026-08-20T00:00:00Z',
+      nextFireAt: null,
+      lastFireAt: null,
+      fireCount: 0,
+      failureCount: 0,
+    };
+    mockedWorkflowScheduleApi.list.mockImplementation(() => {
+      listCallCount += 1;
+      return Promise.resolve({
+        items: listCallCount >= 3 ? [observedSchedule] : [],
+        nextCursor: null,
+        totalCount: listCallCount >= 3 ? 1 : 0,
+      });
+    });
+    const view = renderSurface(true);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
+      target: { value: 'Observed schedule' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
+    await waitFor(() =>
+      expect(
+        screen.getByText('Review schedule', { selector: '.ant-modal-title' }),
+      ).toBeVisible(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+
+    await waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText('Refreshing Workflow schedules')).toBeVisible();
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
+    await waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(3));
+
+    const observedCallCount = listCallCount;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
+    expect(listCallCount).toBe(observedCallCount);
     view.unmount();
   });
 
