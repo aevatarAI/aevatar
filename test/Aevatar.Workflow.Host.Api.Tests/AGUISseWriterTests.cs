@@ -202,6 +202,29 @@ public sealed class AGUISseWriterTests
     }
 
     [Fact]
+    public async Task StartAsync_WhenFirstStartFails_ShouldRemainRetryable()
+    {
+        var bodyFeature = new RecordingResponseBodyFeature(
+            new MemoryStream(),
+            failFirstStart: true);
+        var http = new DefaultHttpContext();
+        http.Features.Set<IHttpResponseBodyFeature>(bodyFeature);
+
+        await using var writer = new AGUISseWriter(
+            http.Response,
+            heartbeatInterval: TimeSpan.FromMinutes(5));
+        var firstStart = async () => await writer.StartAsync();
+
+        await firstStart.Should().ThrowAsync<IOException>();
+        writer.ResponseStarted.Should().BeFalse();
+
+        await writer.StartAsync();
+
+        writer.ResponseStarted.Should().BeTrue();
+        bodyFeature.StartCount.Should().Be(2);
+    }
+
+    [Fact]
     public async Task DisposeAsync_DuringWrite_ShouldWaitForActiveFrame()
     {
         var body = new BlockingWriteStream();
@@ -386,7 +409,9 @@ public sealed class AGUISseWriterTests
         public override void SetLength(long value) => throw new NotSupportedException();
     }
 
-    private sealed class RecordingResponseBodyFeature(Stream stream) : IHttpResponseBodyFeature
+    private sealed class RecordingResponseBodyFeature(
+        Stream stream,
+        bool failFirstStart = false) : IHttpResponseBodyFeature
     {
         private readonly StreamResponseBodyFeature _inner = new(stream);
         private int _startCount;
@@ -397,7 +422,10 @@ public sealed class AGUISseWriterTests
 
         public Task StartAsync(CancellationToken cancellationToken = default)
         {
-            Interlocked.Increment(ref _startCount);
+            var startCount = Interlocked.Increment(ref _startCount);
+            if (failFirstStart && startCount == 1)
+                return Task.FromException(new IOException("Injected response start failure."));
+
             return _inner.StartAsync(cancellationToken);
         }
 
