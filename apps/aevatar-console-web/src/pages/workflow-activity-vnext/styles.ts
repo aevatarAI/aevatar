@@ -227,11 +227,6 @@ export const workflowActivityVNextCss = `
 .wa-vnext__creation-actions .ant-btn { min-width: 156px; }
 .wa-vnext__creation-template-preview { border-left: 2px solid var(--wa-blue); padding: 2px 0 2px 14px; }
 .wa-vnext__template-browser { display: grid; gap: 18px; min-width: 0; }
-.wa-vnext__template-browser-heading { align-items: flex-start; display: flex; gap: 20px; justify-content: space-between; }
-.wa-vnext__template-browser-heading .ant-btn { margin-left: -12px; }
-.wa-vnext__template-browser-heading h2 { font-size: 22px; line-height: 28px; margin: 4px 0 0; }
-.wa-vnext__template-browser-heading p { margin: 6px 0 0; max-width: 680px; }
-.wa-vnext__template-page-status { color: var(--wa-muted); font-size: 12px; padding-top: 8px; white-space: nowrap; }
 .wa-vnext__template-toolbar { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }
 .wa-vnext__template-search { flex: 1 1 320px; max-width: 560px; }
 .wa-vnext__template-sort { align-items: center; display: flex; flex: 0 0 auto; gap: 8px; }
@@ -248,7 +243,6 @@ export const workflowActivityVNextCss = `
 .wa-vnext__template-fact span { color: var(--wa-muted); font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
 .wa-vnext__template-fact strong { font-size: 12px; font-weight: 600; line-height: 17px; overflow-wrap: anywhere; }
 .wa-vnext__template-actions { align-items: center; display: flex; gap: 8px; justify-content: flex-end; min-width: 184px; }
-.wa-vnext__template-pagination { align-items: center; display: flex; justify-content: space-between; min-height: 34px; }
 .wa-vnext__template-detail { display: grid; gap: 16px; padding-top: 4px; }
 .wa-vnext__template-preview-heading { display: grid; gap: 3px; }
 .wa-vnext__template-preview-heading strong { font-size: 14px; line-height: 20px; }
@@ -736,7 +730,6 @@ export const workflowActivityVNextCss = `
   .wa-vnext__account-profile, .wa-vnext__account-section-heading { align-items: stretch; flex-direction: column; }
   .wa-vnext__account-profile > .ant-btn, .wa-vnext__account-section-heading > .ant-btn { width: 100%; }
   .wa-vnext__state--compact { padding: 18px; }
-  .wa-vnext__template-browser-heading { flex-direction: column; gap: 8px; }
   .wa-vnext__template-toolbar { align-items: stretch; flex-direction: column; }
   .wa-vnext__template-search { flex-basis: auto; max-width: none; width: 100%; }
   .wa-vnext__template-sort { align-items: stretch; display: grid; gap: 6px; width: 100%; }
@@ -744,9 +737,6 @@ export const workflowActivityVNextCss = `
   .wa-vnext__template-facts { grid-template-columns: 1fr; }
   .wa-vnext__template-actions { width: 100%; }
   .wa-vnext__template-actions .ant-btn { flex: 1 1 0; }
-  .wa-vnext__template-pagination { align-items: stretch; flex-direction: column; gap: 10px; }
-  .wa-vnext__template-pagination .ant-space { display: grid; grid-template-columns: 1fr 1fr; }
-  .wa-vnext__template-pagination .ant-btn { width: 100%; }
   .wa-vnext__publish-review-item { gap: 6px; padding-block: 10px; }
 }
 @media (max-width: 360px) {

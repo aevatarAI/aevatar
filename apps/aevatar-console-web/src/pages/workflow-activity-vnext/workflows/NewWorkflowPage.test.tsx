@@ -448,6 +448,98 @@ describe('New workflow save-target recovery', () => {
     expect(screen.queryByText('Incident triage')).not.toBeInTheDocument();
   });
 
+  it('uses the Activity pagination control for template pages', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
+
+    const pagination = await screen.findByTestId('activity-pagination');
+
+    expect(pagination).toHaveClass('ant-pagination');
+    expect(
+      screen.queryByRole('button', { name: 'Previous' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Next' }),
+    ).not.toBeInTheDocument();
+    expect(
+      pagination.querySelector('.ant-pagination-options-quick-jumper input'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens a known template page with its saved cursor', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockRuntimeCatalogApi.listWorkflowTemplates
+      .mockResolvedValueOnce({
+        items: [
+          {
+            templateId: 'template-page-one',
+            displayName: 'Page one template',
+            description: 'First page.',
+            defaultDraftName: 'Page one template',
+            authorityStateVersion: 1,
+            stepCount: 1,
+            requiredConnections: [],
+            requiresLlmProvider: false,
+            freshness: {
+              projectionWatermark: '2026-08-18T00:00:00Z',
+              lastEventId: 'event-template-one',
+              versionSemantics: 'workflow-catalog-authority-state-version',
+            },
+          },
+        ],
+        nextCursor: 'cursor-two',
+        freshness: {
+          projectionWatermark: '2026-08-18T00:00:00Z',
+          lastEventId: 'event-template-one',
+          versionSemantics: 'workflow-catalog-authority-state-version',
+        },
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            templateId: 'template-page-two',
+            displayName: 'Page two template',
+            description: 'Second page.',
+            defaultDraftName: 'Page two template',
+            authorityStateVersion: 2,
+            stepCount: 1,
+            requiredConnections: [],
+            requiresLlmProvider: false,
+            freshness: {
+              projectionWatermark: '2026-08-18T00:00:00Z',
+              lastEventId: 'event-template-two',
+              versionSemantics: 'workflow-catalog-authority-state-version',
+            },
+          },
+        ],
+        nextCursor: null,
+        freshness: {
+          projectionWatermark: '2026-08-18T00:00:00Z',
+          lastEventId: 'event-template-two',
+          versionSemantics: 'workflow-catalog-authority-state-version',
+        },
+      });
+
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
+    expect(await screen.findByText('Page one template')).toBeInTheDocument();
+
+    fireEvent.click(
+      within(await screen.findByTestId('activity-pagination')).getByTitle('2'),
+    );
+
+    expect(await screen.findByText('Page two template')).toBeInTheDocument();
+    expect(screen.queryByText('Page one template')).not.toBeInTheDocument();
+    expect(
+      mockRuntimeCatalogApi.listWorkflowTemplates,
+    ).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        cursor: 'cursor-two',
+        take: 12,
+      }),
+    );
+  });
+
   it('views template details without creating, then uses the same instantiate action from the modal', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
     mockRuntimeCatalogApi.getWorkflowTemplate.mockResolvedValue({

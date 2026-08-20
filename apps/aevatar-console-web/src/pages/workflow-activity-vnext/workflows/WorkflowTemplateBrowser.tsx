@@ -1,5 +1,4 @@
-import { LeftOutlined, RightOutlined } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { type Edge, MarkerType } from '@xyflow/react';
 import {
   Alert,
@@ -7,6 +6,7 @@ import {
   Empty,
   Input,
   Modal,
+  Pagination,
   Select,
   Space,
   Typography,
@@ -17,6 +17,7 @@ import GraphCanvas from '@/shared/graphs/GraphCanvas';
 import { t } from '@/shared/i18n/messages';
 import type {
   WorkflowTemplateDetail,
+  WorkflowTemplateListResponse,
   WorkflowTemplateSummary,
 } from '@/shared/models/runtime/workflowTemplates';
 import { history } from '@/shared/navigation/history';
@@ -33,12 +34,24 @@ type WorkflowTemplateBrowserProps = {
   readonly scopeId: string;
 };
 
+interface TemplatePaginationState {
+  readonly filterKey: string;
+  readonly page: number;
+  readonly cursors: readonly (string | undefined)[];
+}
+
 type TemplateFailure = {
   readonly message: string;
   readonly surface: 'browser' | 'modal';
   readonly stale: boolean;
   readonly templateId: string;
 };
+
+function createTemplatePaginationState(
+  filterKey: string,
+): TemplatePaginationState {
+  return { filterKey, page: 1, cursors: [undefined] };
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -357,10 +370,9 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
   scopeId,
 }) => {
   const toast = useConsoleToast();
+  const queryClient = useQueryClient();
   const [search, setSearch] = React.useState('');
   const [sort, setSort] = React.useState('-updated');
-  const [cursor, setCursor] = React.useState<string | null>(null);
-  const [cursorHistory, setCursorHistory] = React.useState<string[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = React.useState<
     string | null
   >(null);
@@ -368,23 +380,61 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
     string | null
   >(null);
   const [failure, setFailure] = React.useState<TemplateFailure | null>(null);
-  const materialization = useDraftMaterialization(scopeId);
+  const filterKey = React.useMemo(
+    () => JSON.stringify([scopeId, search.trim(), sort]),
+    [scopeId, search, sort],
+  );
+  const [pagination, setPagination] = React.useState<TemplatePaginationState>(
+    () => createTemplatePaginationState(filterKey),
+  );
+  const [isResolvingPage, setIsResolvingPage] = React.useState(false);
+  const [pageNavigationError, setPageNavigationError] = React.useState<
+    unknown | null
+  >(null);
+  const [pendingPage, setPendingPage] = React.useState<number | null>(null);
+  const navigationRequestId = React.useRef(0);
+  const currentFilterKey = React.useRef(filterKey);
+  currentFilterKey.current = filterKey;
+  const activePagination =
+    pagination.filterKey === filterKey
+      ? pagination
+      : createTemplatePaginationState(filterKey);
+  const currentCursor = activePagination.cursors[activePagination.page - 1];
 
-  const listQuery = useQuery({
-    queryKey: [
-      'workflow-activity-vnext',
-      'workflow-templates',
-      search.trim(),
-      sort,
-      cursor,
-    ],
-    queryFn: () =>
+  React.useEffect(() => {
+    if (pagination.filterKey === filterKey) return;
+    navigationRequestId.current += 1;
+    setIsResolvingPage(false);
+    setPageNavigationError(null);
+    setPendingPage(null);
+    setPagination(createTemplatePaginationState(filterKey));
+  }, [filterKey, pagination.filterKey]);
+
+  const templateQueryKey = React.useCallback(
+    (cursor: string | undefined) =>
+      [
+        'workflow-activity-vnext',
+        'workflow-templates',
+        filterKey,
+        cursor,
+      ] as const,
+    [filterKey],
+  );
+  const fetchTemplatePage = React.useCallback(
+    (cursor: string | undefined) =>
       runtimeCatalogApi.listWorkflowTemplates({
         query: search.trim() || undefined,
         sort,
         cursor,
         take: TEMPLATE_PAGE_SIZE,
       }),
+    [search, sort],
+  );
+  const materialization = useDraftMaterialization(scopeId);
+
+  const listQuery = useQuery({
+    queryKey: templateQueryKey(currentCursor),
+    queryFn: () => fetchTemplatePage(currentCursor),
   });
   const detailQuery = useQuery({
     enabled: Boolean(selectedTemplateId),
@@ -477,26 +527,91 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
       ? failure
       : null;
 
-  const goToNextPage = () => {
-    if (!nextCursor) return;
-    setCursorHistory((history) => [...history, cursor ?? '']);
-    setCursor(nextCursor);
-  };
+  const paginationTotal =
+    activePagination.page * TEMPLATE_PAGE_SIZE + (nextCursor ? 1 : 0);
+  const goToPage = React.useCallback(
+    async (requestedPage: number) => {
+      const maximumKnownPage = Math.max(
+        1,
+        Math.ceil(paginationTotal / TEMPLATE_PAGE_SIZE),
+      );
+      if (
+        requestedPage < 1 ||
+        requestedPage === activePagination.page ||
+        requestedPage > maximumKnownPage
+      ) {
+        return;
+      }
 
-  const goToPreviousPage = () => {
-    setCursorHistory((history) => {
-      const previous = [...history];
-      const previousCursor = previous.pop();
-      setCursor(previousCursor || null);
-      return previous;
-    });
-  };
+      const requestId = navigationRequestId.current + 1;
+      navigationRequestId.current = requestId;
+      setIsResolvingPage(true);
+      setPageNavigationError(null);
+      setPendingPage(requestedPage);
 
-  const resetQuery = (nextValue: string) => {
-    setSearch(nextValue);
-    setCursor(null);
-    setCursorHistory([]);
-  };
+      try {
+        const cursors = [...activePagination.cursors];
+        for (let page = 1; page < requestedPage; page += 1) {
+          if (cursors[page] !== undefined) continue;
+
+          const cursor = cursors[page - 1];
+          const queryKey = templateQueryKey(cursor);
+          const pageData =
+            queryClient.getQueryData<WorkflowTemplateListResponse>(queryKey) ??
+            (await queryClient.fetchQuery({
+              queryKey,
+              queryFn: () => fetchTemplatePage(cursor),
+            }));
+
+          if (
+            navigationRequestId.current !== requestId ||
+            currentFilterKey.current !== filterKey
+          ) {
+            return;
+          }
+          if (!pageData?.nextCursor) {
+            throw new Error('The requested template page is unavailable.');
+          }
+          cursors[page] = pageData.nextCursor;
+        }
+
+        if (
+          navigationRequestId.current !== requestId ||
+          currentFilterKey.current !== filterKey
+        ) {
+          return;
+        }
+        setPagination({ filterKey, page: requestedPage, cursors });
+        setPendingPage(null);
+      } catch (error) {
+        if (
+          navigationRequestId.current === requestId &&
+          currentFilterKey.current === filterKey
+        ) {
+          setPageNavigationError(error);
+        }
+      } finally {
+        if (
+          navigationRequestId.current === requestId &&
+          currentFilterKey.current === filterKey
+        ) {
+          setIsResolvingPage(false);
+        }
+      }
+    },
+    [
+      activePagination,
+      fetchTemplatePage,
+      filterKey,
+      paginationTotal,
+      queryClient,
+      templateQueryKey,
+    ],
+  );
+  const retryPageNavigation = React.useCallback(() => {
+    if (pendingPage === null) return;
+    void goToPage(pendingPage);
+  }, [goToPage, pendingPage]);
 
   const refreshTemplate = async () => {
     const [listResult, detailResult] = await Promise.all([
@@ -523,18 +638,6 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
           'Workflow templates',
         )}
       >
-        <div className="wa-vnext__template-browser-heading">
-          <span className="wa-vnext__template-page-status">
-            {t(
-              'workflowActivityVNext.new.templateBrowser.page',
-              'Page {page}',
-              {
-                page: cursorHistory.length + 1,
-              },
-            )}
-          </span>
-        </div>
-
         {browserFailure ? (
           <Alert
             action={
@@ -628,7 +731,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
               'Search templates',
             )}
             className="wa-vnext__template-search"
-            onChange={(event) => resetQuery(event.target.value)}
+            onChange={(event) => setSearch(event.target.value)}
             placeholder={t(
               'workflowActivityVNext.new.templateBrowser.search',
               'Search templates',
@@ -644,11 +747,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                 'workflowActivityVNext.new.templateBrowser.sort',
                 'Sort templates',
               )}
-              onChange={(value) => {
-                setSort(value);
-                setCursor(null);
-                setCursorHistory([]);
-              }}
+              onChange={(value) => setSort(value)}
               options={[
                 {
                   label: t(
@@ -768,36 +867,41 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
           </div>
         )}
 
-        <div className="wa-vnext__template-pagination">
-          <Typography.Text type="secondary">
-            {currentItems.length > 0
-              ? t(
-                  'workflowActivityVNext.new.templateBrowser.templatesOnPage',
-                  '{count} templates on this page',
-                  { count: currentItems.length },
-                )
-              : ''}
-          </Typography.Text>
-          <Space>
-            <Button
-              disabled={cursorHistory.length === 0 || creationLocked}
-              icon={<LeftOutlined aria-hidden="true" />}
-              onClick={goToPreviousPage}
-            >
-              {t(
-                'workflowActivityVNext.new.templateBrowser.previous',
-                'Previous',
-              )}
-            </Button>
-            <Button
-              disabled={!nextCursor || creationLocked}
-              icon={<RightOutlined aria-hidden="true" />}
-              onClick={goToNextPage}
-            >
-              {t('workflowActivityVNext.new.templateBrowser.next', 'Next')}
-            </Button>
-          </Space>
+        <div className="wa-vnext__activity-footer">
+          <span aria-live="polite">
+            {t('workflowActivityVNext.activity.page', 'Page {page}', {
+              page: activePagination.page,
+            })}
+          </span>
+          <Pagination
+            current={activePagination.page}
+            data-testid="activity-pagination"
+            disabled={creationLocked || isResolvingPage || listQuery.isFetching}
+            onChange={(page) => void goToPage(page)}
+            pageSize={TEMPLATE_PAGE_SIZE}
+            showQuickJumper={false}
+            showSizeChanger={false}
+            total={paginationTotal}
+          />
         </div>
+        {pageNavigationError ? (
+          <div className="wa-vnext__pagination-actions" role="alert">
+            <p>
+              {t(
+                'workflowActivityVNext.activity.pageUnavailable',
+                "Couldn't load this page",
+              )}
+            </p>
+            <Button onClick={retryPageNavigation}>
+              {t('workflowActivityVNext.common.retry', 'Retry')}
+            </Button>
+            <TechnicalDetails>
+              {pageNavigationError instanceof Error
+                ? pageNavigationError.message
+                : String(pageNavigationError)}
+            </TechnicalDetails>
+          </div>
+        ) : null}
       </section>
 
       <Modal

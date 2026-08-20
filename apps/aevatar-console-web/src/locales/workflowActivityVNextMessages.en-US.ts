@@ -351,11 +351,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.templateBrowser.sort.nameDesc': 'Name: Z to A',
   'workflowActivityVNext.new.templateBrowser.sort.oldest':
     'Last updated: oldest first',
-  'workflowActivityVNext.new.templateBrowser.page': 'Page {page}',
-  'workflowActivityVNext.new.templateBrowser.templatesOnPage':
-    '{count} templates on this page',
-  'workflowActivityVNext.new.templateBrowser.previous': 'Previous',
-  'workflowActivityVNext.new.templateBrowser.next': 'Next',
   'workflowActivityVNext.new.templateBrowser.loading': 'Loading templates…',
   'workflowActivityVNext.new.templateBrowser.loadFailed':
     'Templates could not be loaded',

@@ -330,11 +330,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateBrowser.sort.nameDesc': '名称：Z 到 A',
     'workflowActivityVNext.new.templateBrowser.sort.oldest':
       '更新时间：最早优先',
-    'workflowActivityVNext.new.templateBrowser.page': '第 {page} 页',
-    'workflowActivityVNext.new.templateBrowser.templatesOnPage':
-      '本页 {count} 个模板',
-    'workflowActivityVNext.new.templateBrowser.previous': '上一页',
-    'workflowActivityVNext.new.templateBrowser.next': '下一页',
     'workflowActivityVNext.new.templateBrowser.loading': '正在加载模板…',
     'workflowActivityVNext.new.templateBrowser.loadFailed': '无法加载模板',
     'workflowActivityVNext.new.templateBrowser.unavailable':
