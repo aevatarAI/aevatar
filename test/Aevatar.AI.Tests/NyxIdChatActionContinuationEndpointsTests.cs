@@ -5,6 +5,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -69,16 +70,17 @@ public partial class NyxIdChatEndpointsCoverageTests
         var stateQuery = new FixedNyxIdChatStateQueryPort(
             NyxIdChatConversationStateQueryResult.NotFound());
         var dispatchPort = new StubActorDispatchPort(runtime);
-        using var services = new ServiceCollection()
+        var services = new ServiceCollection()
             .AddLogging()
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery)
+            .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery);
+        using var provider = services
             .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
-        var interaction = services.GetRequiredService<
+        var interaction = provider.GetRequiredService<
             ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
         var command = new NyxIdChatCommand(
             actorId,
@@ -314,16 +316,17 @@ public partial class NyxIdChatEndpointsCoverageTests
         };
         var stateQuery = new FixedNyxIdChatStateQueryPort(
             NyxIdChatConversationStateQueryResult.NotFound());
-        using var services = new ServiceCollection()
+        var services = new ServiceCollection()
             .AddLogging()
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(new StubActorDispatchPort(runtime))
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery)
+            .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery);
+        using var provider = services
             .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
-        var interaction = services.GetRequiredService<
+        var interaction = provider.GetRequiredService<
             ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
         var command = new NyxIdActionContinuationCommand(
             actorId,
@@ -963,15 +966,16 @@ public partial class NyxIdChatEndpointsCoverageTests
             },
         };
         var dispatchPort = new StubActorDispatchPort(runtime);
-        using var services = new ServiceCollection()
+        var services = new ServiceCollection()
             .AddLogging()
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
-            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort);
+        using var provider = services
             .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
-        var interaction = services.GetRequiredService<
+        var interaction = provider.GetRequiredService<
             ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
         var report = new NyxIdChatActionReport
         {
@@ -1037,3 +1041,4 @@ public partial class NyxIdChatEndpointsCoverageTests
         }
     }
 }
+

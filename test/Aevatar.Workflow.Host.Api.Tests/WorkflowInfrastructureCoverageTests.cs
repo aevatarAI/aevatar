@@ -7,6 +7,7 @@ using Aevatar.Configuration;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Streaming;
@@ -250,6 +251,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddSingleton<IStreamForwardingRegistry>(forwardingRegistry);
         services.AddSingleton<IStreamForwardingBindingAuthority>(forwardingRegistry);
         services.AddSingleton<Aevatar.Foundation.Abstractions.IStreamProvider, InMemoryStreamProvider>();
+        services.AddSingleton<IStreamForwardingRegistry, InMemoryStreamForwardingRegistry>();
+        services.AddSingleton<IStreamForwardingBindingAuthority>(sp =>
+            (InMemoryStreamForwardingRegistry)sp.GetRequiredService<IStreamForwardingRegistry>());
         services.AddSingleton<IScriptRuntimeCommandPort, RecordingScriptRuntimeCommandPort>();
         services.AddSingleton<IWorkflowRunProvisioningPort, RecordingWorkflowRunProvisioningPort>();
 
