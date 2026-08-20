@@ -82,10 +82,10 @@ describe('WorkflowScheduleSurface', () => {
 
     await waitFor(() =>
       expect(
-        screen.getAllByRole('button', { name: 'New schedule' })[0],
+        screen.getByRole('button', { name: 'New schedule' }),
       ).toBeVisible(),
     );
-    fireEvent.click(screen.getAllByRole('button', { name: 'New schedule' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'New schedule' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
       target: { value: 'Daily workflow run' },
     });
@@ -115,5 +115,25 @@ describe('WorkflowScheduleSurface', () => {
         mockedWorkflowScheduleApi.list.mock.calls.length,
       ).toBeGreaterThanOrEqual(2),
     );
+  });
+
+  it('keeps the empty schedule state compact with one create action', async () => {
+    renderSurface(true);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'No schedules yet' }),
+      ).toBeVisible(),
+    );
+
+    expect(
+      screen.getAllByRole('button', { name: 'New schedule' }),
+    ).toHaveLength(1);
+    expect(
+      document.querySelector('.wa-vnext-schedule-modal'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'No schedules yet' }),
+    ).toHaveClass('wa-vnext__schedule-empty-title');
   });
 });

@@ -471,8 +471,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
               })}
             </div>
           ) : (
-            <div className="wa-vnext__state wa-vnext__state--compact">
-              <h3>
+            <div className="wa-vnext__schedule-empty">
+              <h3 className="wa-vnext__schedule-empty-title">
                 {t('workflowActivityVNext.schedule.empty', 'No schedules yet')}
               </h3>
               <p>
@@ -481,13 +481,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                   'Create a recurring schedule for this published Workflow.',
                 )}
               </p>
-              <Button
-                icon={<PlusOutlined />}
-                onClick={openCreate}
-                type="primary"
-              >
-                {t('workflowActivityVNext.schedule.new', 'New schedule')}
-              </Button>
             </div>
           )}
         </>
@@ -673,6 +666,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       footer={null}
       onCancel={onClose}
       open={open}
+      rootClassName="wa-vnext-schedule-modal"
       title={workflowName}
       width={820}
     >
