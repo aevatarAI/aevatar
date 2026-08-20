@@ -133,7 +133,7 @@ describe('WorkflowScheduleSurface', () => {
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });
 
-  it('previews five server fire times before creating and keeps accepted state visible', async () => {
+  it('previews five fire times before creating and keeps accepted state visible', async () => {
     renderSurface(true);
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {

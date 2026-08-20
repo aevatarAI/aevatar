@@ -254,9 +254,7 @@ def annotation(x: float, y: float, number: str, title: str, body: str,
 
 def schedule_summary(x: float, y: float, width: float, *, state: str | None = None) -> None:
     rect(x, y, width, 74, bg=BLUE_BG, stroke="#84adff")
-    text(x + 16, y + 14, "WORKFLOW SCHEDULE", FS_SMALL, BLUE,
-         font=FONT_MONO, width=width - 32)
-    text(x + 16, y + 38,
+    text(x + 16, y + 24,
          "Weekly Feedback Report · Published",
          FS_BODY, INK, width=width - 32)
     if state:
@@ -309,37 +307,26 @@ def schedule_fields(
     text(zone_x + 12, time_y + 14, time_zone, FS_SMALL, INK, width=zone_w - 30)
     text(zone_x + zone_w - 20, time_y + 14, "▾", FS_SMALL, MUTED, width=12)
 
-    preview_y = y + (146 if compact else 90)
-    preview_h = 112 if compact else 92
-    rect(x, preview_y, width, preview_h, bg=GREEN_BG, stroke=GREEN)
-    text(x + 14, preview_y + 14, human_summary, FS_BODY, GREEN,
-         width=width * 0.5)
-    text(x + width - 210, preview_y + 16,
-         "SERVER RESPONSE" if show_preview else "SERVER PREVIEW REQUIRED",
-         FS_SMALL, MUTED, font=FONT_MONO, width=196, align="right")
-    text(x + 14, preview_y + 50,
-         preview_copy if show_preview else "Next five fires appear after review.",
-         FS_SMALL, INK if show_preview else MUTED, width=width * 0.56)
-    cron_y = preview_y + (78 if compact else 50)
+    if show_preview:
+        preview_y = y + (146 if compact else 90)
+        preview_h = 112 if compact else 92
+        rect(x, preview_y, width, preview_h, bg=GREEN_BG, stroke=GREEN)
+        text(x + 14, preview_y + 14, human_summary, FS_BODY, GREEN,
+             width=width * 0.5)
+        text(x + 14, preview_y + 50, preview_copy, FS_SMALL, INK,
+             width=width * 0.8)
+        cron_y = preview_y + (78 if compact else 50)
+    else:
+        text(x, y + 88, human_summary, FS_BODY, GREEN, width=width * 0.5)
+        cron_y = y + (126 if compact else 122)
     text(x + (14 if compact else width * 0.58), cron_y,
          "write it as cron instead", FS_SMALL, BLUE, width=178)
     text(x + width - 110, cron_y, cron_expression, FS_SMALL, MUTED,
          font=FONT_MONO, width=100, align="right")
 
-    needs_y = preview_y + preview_h + 28
-    text(x, needs_y, "WHAT IT NEEDS", FS_SMALL, MUTED, font=FONT_MONO)
-    text(x + 142, needs_y, "filled fresh at every fire", FS_SMALL, MUTED,
-         width=220)
-    field(x, needs_y + 28, width, "Starting prompt (optional)", "No prompt",
+    input_y = preview_y + preview_h + 28 if show_preview else cron_y + 42
+    field(x, input_y, width, "Run input (optional)", "No prompt",
           disabled=True, h=54)
-
-    outcome_y = needs_y + 120
-    text(x, outcome_y, "WHAT WILL HAPPEN", FS_SMALL, MUTED, font=FONT_MONO)
-    rect(x, outcome_y + 22, width, 78, bg=SUBTLE, stroke=LINE)
-    text(x + 14, outcome_y + 35,
-         f"Runs {human_summary[0].lower() + human_summary[1:]}, as you, until somebody pauses it.\n"
-         "This recurring configuration belongs to the Workflow shown above.",
-         FS_SMALL, INK, width=width - 28)
 
 
 def frame_workflows_list(index: int) -> None:
@@ -442,8 +429,8 @@ def frame_creation_review(index: int) -> None:
     field(cx + 680, cy + 144, 494, "Schedule name", "Weekly Feedback Report recurring work")
     field(cx + 184, cy + 224, 476, "Repeat", "Every weekday at 09:00")
     field(cx + 680, cy + 224, 494, "Time zone", "Asia/Shanghai")
-    field(cx + 184, cy + 304, 990, "Prompt (optional)", "No prompt", disabled=True)
-    text(cx + 184, cy + 392, "NEXT FIVE FIRES · SERVER PREVIEW", FS_SMALL, MUTED,
+    field(cx + 184, cy + 304, 990, "Run input (optional)", "No prompt", disabled=True)
+    text(cx + 184, cy + 392, "NEXT FIVE FIRE TIMES", FS_SMALL, MUTED,
          font=FONT_MONO, width=520)
     rect(cx + 184, cy + 424, 990, 176, bg=GREEN_BG, stroke=GREEN)
     fires = [
@@ -461,11 +448,8 @@ def frame_creation_review(index: int) -> None:
         dot(fire_x, fire_y, 24, GREEN, bg=GREEN_BG)
         text(fire_x, fire_y + 4, number, FS_SMALL, GREEN, width=24, align="center")
         text(fire_x + 38, fire_y + 4, label, FS_SMALL, INK, width=230)
-    text(cx + 184, cy + 628,
-         "Preview times came from POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview.",
-         FS_SMALL, MUTED, font=FONT_MONO, width=990)
     text(cx + 184, cy + 674,
-         "Create schedule sends the reviewed name, cron expression, time zone, enabled state, and optional prompt.",
+         "Create schedule sends the reviewed name, cron expression, time zone, enabled state, and optional run input.",
          FS_SMALL, INK, width=860)
     button(cx + 886, cy + 742, 170, "Create schedule", primary=True, color=BLUE)
     button(cx + 1068, cy + 742, 106, "Back", color=MUTED)
@@ -565,7 +549,7 @@ def frame_schedule_detail(index: int) -> None:
     field(cx + 1032, cy + 400, 236, "Time zone", "Asia/Shanghai")
     field(cx + 776, cy + 478, 240, "Last fire", "Mon 17 Aug · Succeeded")
     field(cx + 1032, cy + 478, 236, "Runs", "12 total · 1 failed")
-    field(cx + 776, cy + 556, 492, "Prompt (optional)", "No prompt", disabled=True)
+    field(cx + 776, cy + 556, 492, "Run input (optional)", "No prompt", disabled=True)
     text(cx + 776, cy + 650, "RECENT FIRES", FS_SMALL, MUTED, font=FONT_MONO, width=180)
     text(cx + 776, cy + 680, "Mon 17 Aug · Succeeded   ·   Mon 10 Aug · Succeeded", FS_SMALL, INK, width=492)
     text(cx + 776, cy + 716, "Schedule facts are returned by the Workflow-scoped API.", FS_SMALL, MUTED, width=492)

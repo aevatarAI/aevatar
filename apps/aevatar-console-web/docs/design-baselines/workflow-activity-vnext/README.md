@@ -156,10 +156,10 @@ failures rather than undocumented implementation choices.
 - `prototype-schedule.html`：打开后直接进入已发布 Workflow 的新建 Schedule 配置，不需要先从 Draft 列表寻找入口。
 - `schedule-workflows-list-modal.png`：从 Workflows 列表直接打开的新建 Schedule modal。
 - `schedule-workflow-editor-panel.png`：Workflow 编辑器右侧的新建 Schedule panel。
-- `schedule-review.png`：确认 Workflow、名称、周期、时区、可选 prompt、创建后启用状态与服务端五次预览的创建复核页。
+- `schedule-review.png`：确认 Workflow、名称、周期、时区、可选运行输入、创建后启用状态与五次 next-fire 预览的创建复核页。
 - `schedule-creation-pending.png`：创建命令 `202 Accepted` 后等待 Schedule 状态的页面。
 - `schedule-detail.png`：Workflow 内的 Schedule 详情与生命周期动作。
-- `schedule-edit.png`：Workflow 内修改重复规则、时间、时区和可选 prompt 的页面。
+- `schedule-edit.png`：Workflow 内修改重复规则、时间、时区和可选运行输入的页面。
 - `prototype-workflows.png`：Workflows 桌面视图截图。
 - `prototype-activity.png`：Activity 桌面视图截图。
 - `prototype-mobile.png`：Activity 移动视图截图。
@@ -237,11 +237,11 @@ Production Data Truth Rule，也不覆盖设计规范中的
 Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidraw`，按下面顺序检查：
 
 1. `01 · Workflows — quick schedule modal`：在 Workflow 列表点击已发布行的 `Schedule`，直接打开新建配置弹窗，不先进入编辑器。
-2. `02 · Workflow — schedule setup panel`：在画布旁用 `Repeat`、时间和时区构造重复规则；默认只显示人类可读摘要，`write it as cron instead` 才打开 raw cron，并由服务端返回 next-fire 预览。
-3. `03 · Schedule — review before creation`：确认 Workflow、Schedule name、周期、时区、可选 prompt、enabled 与服务端返回的五次预览，然后直接创建。
+2. `02 · Workflow — schedule setup panel`：在画布旁用 `Repeat`、时间和时区构造重复规则；默认只显示人类可读摘要，`write it as cron instead` 才打开 raw cron，Review 时显示 next-fire 预览。
+3. `03 · Schedule — review before creation`：确认 Workflow、Schedule name、周期、时区、可选运行输入、enabled 与五次 next-fire 预览，然后直接创建。
 4. `04 · Schedule — creation pending`：创建命令返回 `202 Accepted` 后刷新当前 Workflow 的 Schedule list/detail，不提前声称 Active 或 next fire 已存在。
 5. `05 · Workflow — schedule detail`：在 Workflow canvas 旁查看 API 返回的 enabled、next/last fire、计数、最近 fires 与生命周期动作。
-6. `06 · Workflow — change schedule`：在 Workflow panel 修改周期和 prompt，并在 `PUT` 中保留服务端读到的 enabled 状态。
+6. `06 · Workflow — change schedule`：在 Workflow panel 修改周期和运行输入，并在 `PUT` 中保留已读取的 enabled 状态。
 上述 6 个 frame 分别渲染为独立 1440×900 PNG；不再生成九宫格或总览拼图。
 
 重点不是逐个查看控件，而是沿着这条主路径检查语义是否连贯：

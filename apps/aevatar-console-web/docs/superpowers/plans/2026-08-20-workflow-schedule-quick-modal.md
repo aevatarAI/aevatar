@@ -22,7 +22,7 @@
 
 - [x] **Step 2: Add failing Schedule-surface tests for configure and review states**
 
-  Assert that the configure view renders `How often`, `What it needs`, `What will happen`, and a `Review schedule` button. Select the custom cron path or use the default weekday preset, click review, resolve `workflowScheduleApi.preview`, and assert the returned five fire times plus `Create schedule` are shown.
+  Assert that the configure view renders `How often`, `Run input (optional)`, the repeat controls, and a `Review schedule` button. Select the custom cron path or use the default weekday preset, click review, resolve `workflowScheduleApi.preview`, and assert the returned five fire times plus `Create schedule` are shown.
 
 - [x] **Step 3: Run the focused tests and confirm RED**
 
@@ -47,7 +47,7 @@
 
 - [x] **Step 2: Render the design-aligned configure view**
 
-  Render the blue Workflow context block, Schedule name, `How often` repeat/time/timezone controls, server-preview notice, `write it as cron instead` disclosure, `What it needs` prompt field, `What will happen` explanation, and footer actions `Cancel` plus `Review schedule`. Map presets to five-field cron without calculating fire times in the browser.
+  Render the blue Workflow context block, Schedule name, `How often` repeat/time/timezone controls, `write it as cron instead` disclosure, `Run input (optional)`, and footer actions `Cancel` plus `Review schedule`. Map presets to five-field cron without calculating fire times in the browser.
 
 - [x] **Step 3: Render previewing, review, and accepted states**
 
@@ -97,7 +97,7 @@
 
 - [x] **Step 1: Add dedicated schedule quick-modal tokens and layout rules**
 
-  Match the baseline proportions: 820px modal, compact header, blue context panel, two-column form grid on desktop, stacked controls on mobile, section dividers, green server-preview/review panels, and a footer with one primary action.
+  Match the baseline proportions: 820px modal, compact header, blue context panel, two-column form grid on desktop, stacked controls on mobile, section dividers, review and next-fire panels, and a footer with one primary action.
 
 - [x] **Step 2: Scope portal tokens and focus styles**
 
@@ -144,6 +144,6 @@
 - `bash tools/ci/test_stability_guards.sh`: passed.
 - `git diff --check HEAD~3..HEAD`: passed.
 - `python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/verify-baseline.py`: passed; 17/17 baseline frames, 6/6 Schedule frames, 6 standalone 1440x900 Schedule PNGs, and byte-identical generator output.
-- Chrome visual verification: desktop and 390px mobile Catalogue quick modal, editor Schedule Drawer reuse, and server-backed Review state with five returned fire times; no horizontal overflow at 390px. No Schedule was created.
+- Chrome visual verification: desktop and 390px mobile Catalogue quick modal, editor Schedule Drawer reuse, and Review state with five returned fire times; no horizontal overflow at 390px. No Schedule was created.
 - Accepted create observation: React Query refetches the workflow-scoped list every second after `202 Accepted` and stops only when the receipt `scheduleId` appears in the read model; the regression test covers two misses followed by an observed item.
 - Full frontend suite, full typecheck, and production build remain delegated to GitHub CI under the local incremental validation policy.

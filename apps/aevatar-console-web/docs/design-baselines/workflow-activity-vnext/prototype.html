@@ -1134,7 +1134,6 @@ steps:
     let quickScheduleStep = "configure";
     let quickScheduleDraft = null;
     let quickSchedulePreview = null;
-    let quickScheduleAcceptedReceipt = null;
     let quickScheduleRequestVersion = 0;
     let canvasZoom = null;
     let runContext = null;
@@ -1375,7 +1374,6 @@ steps:
       quickScheduleStep = "configure";
       quickScheduleDraft = null;
       quickSchedulePreview = null;
-      quickScheduleAcceptedReceipt = null;
     }
 
     function closeScheduleQuickModal() {
@@ -1446,13 +1444,19 @@ steps:
     function updateQuickScheduleRepeatPresentation(content) {
       const repeatInput = content.querySelector("#quick-schedule-repeat");
       const timeInput = content.querySelector("#quick-schedule-repeat-time");
+      const repeatField = repeatInput.closest("label");
+      const timeField = timeInput.closest("label");
       const cronInput = content.querySelector("#quick-schedule-cron");
       const cronEditor = content.querySelector("#quick-schedule-cron-editor");
       const generatedCron = content.querySelector("#quick-schedule-generated-cron");
       const humanSummary = content.querySelector("#quick-schedule-human-summary");
+      const cronModeButton = content.querySelector("#quick-schedule-cron-mode");
       const customCron = repeatInput.value === "Write cron yourself";
+      repeatField.hidden = customCron;
+      timeField.hidden = customCron;
       timeInput.disabled = customCron || repeatInput.value === "Every hour";
       cronEditor.hidden = !customCron;
+      cronModeButton.textContent = customCron ? "use the repeat builder" : "write it as cron instead";
       if (!customCron) cronInput.value = quickScheduleCronForRepeat(repeatInput.value, timeInput.value);
       generatedCron.textContent = cronInput.value.trim();
       humanSummary.textContent = quickScheduleHumanSummary(repeatInput.value, timeInput.value, cronInput.value.trim());
@@ -1498,14 +1502,13 @@ steps:
               <label><span class="field-label">In</span><input class="input" id="quick-schedule-time-zone" value="${escapeHtml(quickScheduleDraft.timeZone)}"></label>
             </div>
             <div class="schedule-repeat-preview">
-              <div class="schedule-repeat-preview-row"><strong id="quick-schedule-human-summary">Every weekday at 09:00</strong><span>worked out by the server</span></div>
-              <div class="schedule-repeat-preview-row"><span>Next five fires · server preview required</span><span><button type="button" class="schedule-cron-action" id="quick-schedule-cron-mode">write it as cron instead</button><code class="schedule-cron-code" id="quick-schedule-generated-cron">${escapeHtml(quickScheduleDraft.cronExpression)}</code></span></div>
+              <div class="schedule-repeat-preview-row"><strong id="quick-schedule-human-summary">Every weekday at 09:00</strong></div>
+              <div class="schedule-repeat-preview-row"><span>Next five fire times</span><span><button type="button" class="schedule-cron-action" id="quick-schedule-cron-mode">write it as cron instead</button><code class="schedule-cron-code" id="quick-schedule-generated-cron">${escapeHtml(quickScheduleDraft.cronExpression)}</code></span></div>
             </div>
-            <label class="schedule-cron-editor" id="quick-schedule-cron-editor" hidden><span class="field-label">Cron</span><input class="input mono" id="quick-schedule-cron" value="${escapeHtml(quickScheduleDraft.cronExpression)}"><small>Use a five-field cron. Complex expressions reopen here without being rounded to a preset.</small></label>
+            <label class="schedule-cron-editor" id="quick-schedule-cron-editor" hidden><span class="field-label">Cron expression</span><input class="input mono" id="quick-schedule-cron" value="${escapeHtml(quickScheduleDraft.cronExpression)}"><small>Use a five-field cron. Complex expressions reopen here without being rounded to a preset.</small></label>
           </section>
           <section class="schedule-quick-section schedule-needs-field">
-            <div class="schedule-quick-section-heading"><strong>What it needs</strong><span>filled fresh at every fire</span></div>
-            <label><span class="field-label">Starting prompt (optional)</span><textarea class="textarea" id="quick-schedule-prompt">${escapeHtml(quickScheduleDraft.prompt)}</textarea></label>
+            <label><span class="field-label">Run input (optional)</span><textarea class="textarea" id="quick-schedule-prompt">${escapeHtml(quickScheduleDraft.prompt)}</textarea></label>
           </section>`;
         const repeatInput = content.querySelector("#quick-schedule-repeat");
         const timeInput = content.querySelector("#quick-schedule-repeat-time");
@@ -1515,9 +1518,9 @@ steps:
         timeInput.oninput = () => updateQuickScheduleRepeatPresentation(content);
         cronInput.oninput = () => updateQuickScheduleRepeatPresentation(content);
         content.querySelector("#quick-schedule-cron-mode").onclick = () => {
-          repeatInput.value = "Write cron yourself";
+          repeatInput.value = repeatInput.value === "Write cron yourself" ? "Every weekday" : "Write cron yourself";
           updateQuickScheduleRepeatPresentation(content);
-          cronInput.focus();
+          if (repeatInput.value === "Write cron yourself") cronInput.focus();
         };
         updateQuickScheduleRepeatPresentation(content);
         footer.innerHTML = `<button type="button" class="button" id="quick-schedule-cancel">Cancel</button><button type="button" class="button primary" id="quick-schedule-review">Review schedule</button>`;
@@ -1527,14 +1530,14 @@ steps:
       }
 
       if (quickScheduleStep === "previewing") {
-        content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Checking</span></div><div class="schedule-quick-review"><div><h3>Requesting server preview</h3><p>Production sends the exact cron expression and IANA timezone to <code>POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview</code>. The browser never calculates future fires; it renders the returned preview.</p></div></div>`;
+        content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Checking</span></div><div class="schedule-quick-review"><div><h3>Previewing schedule</h3><p>Checking the recurring setup.</p></div></div>`;
         footer.innerHTML = `<button type="button" class="button" id="quick-schedule-preview-cancel">Cancel</button><button type="button" class="button primary" disabled>Previewing...</button>`;
         footer.querySelector("#quick-schedule-preview-cancel").onclick = exitScheduleCreation;
         return;
       }
 
       if (quickScheduleStep === "accepted") {
-        content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Pending</span></div><div class="schedule-quick-review"><div><h3>202 Accepted</h3><p>The client is waiting for the server and refreshing Workflow schedules through <code>GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules</code>. Receipt: <code>${escapeHtml(quickScheduleAcceptedReceipt?.scheduleId || "pending")}</code>.</p></div><div class="schedule-quick-preview"><strong>Not yet Active</strong><p>Enabled state and next fire are shown only after the Workflow-scoped list or detail read model observes the Schedule.</p></div></div>`;
+        content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Pending</span></div><div class="schedule-quick-review"><div><h3>202 Accepted</h3><p>Refreshing this Workflow's schedules until the new Schedule appears.</p></div><div class="schedule-quick-preview"><strong>Not yet Active</strong><p>Enabled state and next fire appear after the new Schedule is visible.</p></div></div>`;
         footer.innerHTML = `<button type="button" class="button primary" id="quick-schedule-close-accepted">Close</button>`;
         footer.querySelector("#quick-schedule-close-accepted").onclick = exitScheduleCreation;
         return;
@@ -1547,7 +1550,7 @@ steps:
         return;
       }
       const humanSummary = quickScheduleHumanSummary(quickScheduleDraft.cadence, quickScheduleDraft.repeatTime, quickScheduleDraft.cronExpression);
-      content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>Workflow Schedule</span></div><span class="schedule-state">Review</span></div><div class="schedule-quick-review"><div><h3>Review schedule</h3><p>Confirm the values that will be sent to the Workflow-scoped create endpoint.</p></div><div class="schedule-quick-grid"><div><span class="field-label">Schedule name</span><strong>${escapeHtml(quickScheduleDraft.name)}</strong></div><div><span class="field-label">Repeat</span><strong>${escapeHtml(humanSummary)}</strong></div><div><span class="field-label">Time zone</span><strong>${escapeHtml(quickScheduleDraft.timeZone)}</strong></div><div><span class="field-label">Enabled after creation</span><strong>${quickScheduleDraft.enabled ? "Yes" : "No"}</strong></div><div class="full"><span class="field-label">Prompt (optional)</span><strong>${escapeHtml(quickScheduleDraft.prompt || "No prompt")}</strong></div></div><div class="schedule-quick-preview"><strong>Next five fires · server response ${escapeHtml(quickSchedulePreview.requestId)}</strong><ul>${quickSchedulePreview.fires.map(fire => `<li>${escapeHtml(fire)} · ${escapeHtml(quickScheduleDraft.timeZone)}</li>`).join("")}</ul></div><p class="schedule-quick-note"><code>POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules</code> sends displayName, cronExpression, timezone, enabled, and prompt. Existing Schedule management remains in the Workflow panel.</p></div>`;
+      content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>Review</span></div><span class="schedule-state">Review</span></div><div class="schedule-quick-review"><div><h3>Review schedule</h3><p>Confirm the values before creating this Schedule.</p></div><div class="schedule-quick-grid"><div><span class="field-label">Schedule name</span><strong>${escapeHtml(quickScheduleDraft.name)}</strong></div><div><span class="field-label">Repeat</span><strong>${escapeHtml(humanSummary)}</strong></div><div><span class="field-label">Time zone</span><strong>${escapeHtml(quickScheduleDraft.timeZone)}</strong></div><div><span class="field-label">Enabled after creation</span><strong>${quickScheduleDraft.enabled ? "Yes" : "No"}</strong></div><div class="full"><span class="field-label">Run input (optional)</span><strong>${escapeHtml(quickScheduleDraft.prompt || "No prompt")}</strong></div></div><div class="schedule-quick-preview"><strong>Next five fire times</strong><ul>${quickSchedulePreview.fires.map(fire => `<li>${escapeHtml(fire)} · ${escapeHtml(quickScheduleDraft.timeZone)}</li>`).join("")}</ul></div></div>`;
       footer.innerHTML = `<button type="button" class="button" id="quick-schedule-back">Back</button><button type="button" class="button primary" id="quick-schedule-confirm">Create schedule</button>`;
       footer.querySelector("#quick-schedule-back").onclick = () => {
         quickSchedulePreview = null;
@@ -1586,12 +1589,12 @@ steps:
         return;
       }
       if (cronExpression.split(/\s+/).length !== 5) {
-        showToast("Enter a five-field cron expression before requesting server validation.");
+        showToast("Enter a five-field cron expression before previewing.");
         content.querySelector("#quick-schedule-cron").focus();
         return;
       }
       if (!isValidTimeZone(timeZone)) {
-        showToast("Enter a valid IANA timezone before requesting server validation.");
+        showToast("Enter a valid IANA timezone before previewing.");
         content.querySelector("#quick-schedule-time-zone").focus();
         return;
       }
@@ -1614,7 +1617,7 @@ steps:
         if (!preview) {
           quickScheduleStep = "configure";
           renderScheduleCreation();
-          showToast("The Workflow Schedule API could not preview this recurrence.");
+          showToast("This recurrence could not be previewed.");
           return;
         }
         quickSchedulePreview = structuredClone(preview);
@@ -1637,11 +1640,7 @@ steps:
         prompt: quickScheduleDraft.prompt,
         headers: {}
       };
-      quickScheduleAcceptedReceipt = {
-        scheduleId: "sch-pending-feedback",
-        location: `/api/scopes/${quickScheduleWorkflow.scopeId}/workflows/${quickScheduleWorkflow.id}/schedules/sch-pending-feedback`,
-        request: createRequest
-      };
+      void createRequest;
       quickScheduleStep = "accepted";
       renderScheduleCreation();
       refreshWorkflowSchedules(quickScheduleWorkflow);
@@ -1912,11 +1911,17 @@ steps:
     function updateScheduleEditRepeatPresentation(panel, locked = false) {
       const repeatInput = panel.querySelector("#schedule-edit-repeat");
       const timeInput = panel.querySelector("#schedule-edit-repeat-time");
+      const repeatField = repeatInput.closest("label");
+      const timeField = timeInput.closest("label");
       const cronInput = panel.querySelector("#schedule-edit-cron");
       const cronEditor = panel.querySelector("#schedule-edit-cron-editor");
+      const cronModeButton = panel.querySelector("#schedule-edit-cron-mode");
       const customCron = repeatInput.value === "Write cron yourself";
+      repeatField.hidden = customCron;
+      timeField.hidden = customCron;
       timeInput.disabled = locked || customCron || repeatInput.value === "Every hour";
       cronEditor.hidden = !customCron;
+      cronModeButton.textContent = customCron ? "use the repeat builder" : "write it as cron instead";
       if (!customCron) cronInput.value = quickScheduleCronForRepeat(repeatInput.value, timeInput.value);
       panel.querySelector("#schedule-edit-generated-cron").textContent = cronInput.value.trim();
       panel.querySelector("#schedule-edit-human-summary").textContent = quickScheduleHumanSummary(repeatInput.value, timeInput.value, cronInput.value.trim());
@@ -1986,8 +1991,8 @@ steps:
         <div class="studio-panel-body">
           <section class="schedule-summary"><div class="schedule-summary-top"><strong>Workflow Schedule</strong><span class="schedule-state${scheduleStateClass(schedule)}">${state}</span></div><p>Managed from this Workflow</p></section>
           <label class="form-row"><span class="field-label">Schedule name</span><input class="input" id="schedule-edit-name" value="${escapeHtml(editModel.name)}" ${pending ? "disabled" : ""}></label>
-          <div class="form-row"><span class="field-label">How often</span><div class="schedule-repeat-builder"><label><span class="field-label">Repeat</span><select class="select" id="schedule-edit-repeat" ${pending ? "disabled" : ""}><option>Every hour</option><option>Every day</option><option>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Every Mon, Wed and Fri</option><option>Write cron yourself</option></select></label><label><span class="field-label">At</span><input class="input" id="schedule-edit-repeat-time" type="time" value="${escapeHtml(editModel.repeatTime)}" ${pending ? "disabled" : ""}></label><label><span class="field-label">In</span><input class="input" id="schedule-edit-time-zone" value="${escapeHtml(editModel.timeZone)}" ${pending ? "disabled" : ""}></label></div><div class="schedule-repeat-preview"><div class="schedule-repeat-preview-row"><strong id="schedule-edit-human-summary">${escapeHtml(editModel.humanSummary)}</strong><span>server-owned next fire</span></div><div class="schedule-repeat-preview-row"><span>${escapeHtml(schedule.nextFireAt)}</span><span><button type="button" class="schedule-cron-action" id="schedule-edit-cron-mode" ${pending ? "disabled" : ""}>write it as cron instead</button><code class="schedule-cron-code" id="schedule-edit-generated-cron">${escapeHtml(editModel.cronExpression)}</code></span></div></div><label class="schedule-cron-editor" id="schedule-edit-cron-editor" ${editModel.customCron ? "" : "hidden"}><span class="field-label">Cron</span><input class="input mono" id="schedule-edit-cron" value="${escapeHtml(editModel.cronExpression)}" ${pending ? "disabled" : ""}><small>Complex expressions stay in raw-cron mode and are never rounded to a preset.</small></label></div>
-          <label class="form-row"><span class="field-label">Prompt (optional)</span><textarea class="textarea" id="schedule-edit-prompt" ${pending ? "disabled" : ""}>${escapeHtml(editModel.prompt)}</textarea><small>Sent with each scheduled run only when provided.</small></label>
+          <div class="form-row"><span class="field-label">How often</span><div class="schedule-repeat-builder"><label><span class="field-label">Repeat</span><select class="select" id="schedule-edit-repeat" ${pending ? "disabled" : ""}><option>Every hour</option><option>Every day</option><option>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Every Mon, Wed and Fri</option><option>Write cron yourself</option></select></label><label><span class="field-label">At</span><input class="input" id="schedule-edit-repeat-time" type="time" value="${escapeHtml(editModel.repeatTime)}" ${pending ? "disabled" : ""}></label><label><span class="field-label">In</span><input class="input" id="schedule-edit-time-zone" value="${escapeHtml(editModel.timeZone)}" ${pending ? "disabled" : ""}></label></div><div class="schedule-repeat-preview"><div class="schedule-repeat-preview-row"><strong id="schedule-edit-human-summary">${escapeHtml(editModel.humanSummary)}</strong></div><div class="schedule-repeat-preview-row"><span>${escapeHtml(schedule.nextFireAt)}</span><span><button type="button" class="schedule-cron-action" id="schedule-edit-cron-mode" ${pending ? "disabled" : ""}>write it as cron instead</button><code class="schedule-cron-code" id="schedule-edit-generated-cron">${escapeHtml(editModel.cronExpression)}</code></span></div></div><label class="schedule-cron-editor" id="schedule-edit-cron-editor" ${editModel.customCron ? "" : "hidden"}><span class="field-label">Cron expression</span><input class="input mono" id="schedule-edit-cron" value="${escapeHtml(editModel.cronExpression)}" ${pending ? "disabled" : ""}><small>Complex expressions stay in raw-cron mode and are never rounded to a preset.</small></label></div>
+          <label class="form-row"><span class="field-label">Run input (optional)</span><textarea class="textarea" id="schedule-edit-prompt" ${pending ? "disabled" : ""}>${escapeHtml(editModel.prompt)}</textarea></label>
           <label class="schedule-toggle"><span>Schedule is active</span><input id="schedule-enabled" type="checkbox" role="switch" ${schedule.enabled ? "checked" : ""} ${pending ? "disabled" : ""}></label>
           <div class="form-row"><span class="field-label">${previewLabel}</span><ul class="schedule-preview">${schedulePreview(schedule).map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>
           <div class="form-row"><span class="field-label">Last fire</span><p class="muted" style="margin:4px 0 0">${escapeHtml(schedule.lastFireAt)} · ${schedule.fireCount} total · ${schedule.failureCount} failed</p></div>
@@ -2004,9 +2009,10 @@ steps:
       panel.querySelector("#schedule-edit-repeat-time").oninput = () => updateScheduleEditRepeatPresentation(panel, Boolean(pending));
       panel.querySelector("#schedule-edit-cron").oninput = () => updateScheduleEditRepeatPresentation(panel, Boolean(pending));
       document.querySelector("#schedule-edit-cron-mode").onclick = () => {
-        panel.querySelector("#schedule-edit-repeat").value = "Write cron yourself";
+        const repeatInput = panel.querySelector("#schedule-edit-repeat");
+        repeatInput.value = repeatInput.value === "Write cron yourself" ? "Every weekday" : "Write cron yourself";
         updateScheduleEditRepeatPresentation(panel, Boolean(pending));
-        panel.querySelector("#schedule-edit-cron").focus();
+        if (repeatInput.value === "Write cron yourself") panel.querySelector("#schedule-edit-cron").focus();
       };
       updateScheduleEditRepeatPresentation(panel, Boolean(pending));
       document.querySelector("#schedule-enabled").onchange = event => {

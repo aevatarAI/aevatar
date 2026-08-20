@@ -23,12 +23,12 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "873264abdaee639bd6cefe2b784fef26498aaef4d31946ee9e6c1512d0261d8d",
-    "schedule-workflow-editor-panel.png": "189fa4bb97f36ed6f8af7454ecad03255d12862061808553c5ada52240232cfc",
-    "schedule-review.png": "9ad34eb17cbebfa5ae75f94d684550f7750b9a750f44dae0de83f906f44d13f2",
-    "schedule-creation-pending.png": "79cbf3606069d0cb9d24dcbd8625e6561271bc3e725afc4d102d8fb446eeacea",
-    "schedule-detail.png": "198c7e2679cfa797fd677714b88f5b04e45544145bc64ece29557e32f82986d8",
-    "schedule-edit.png": "a7529bfb627a17a0ff7b9284db2dcd9bfaec60628e7b6dbccc8c9cb1fed6abb3",
+    "schedule-workflows-list-modal.png": "a70b97f12956cdfa6295e062f84b17196ebdf970941d2fcdc0b441439897a300",
+    "schedule-workflow-editor-panel.png": "7d2fdebc28b45a4d0de532889b207f111206f253657d1cfd1be0cba74983e724",
+    "schedule-review.png": "7c172330b556696fecbe2fd404870cad8d1f6711290a7a30e2a0b7c6235ae05e",
+    "schedule-creation-pending.png": "6513f3140b11388049461a1a7a9bceef590b14ee9a2cb24491d62319a23149dd",
+    "schedule-detail.png": "4cd0c478d0f5c8cf3afa76a34fbcaf091b7f35106706ab5102026e02ed06001f",
+    "schedule-edit.png": "f4ecd76d0b466383aed408f89628991abb46d4a7eebad07a23f68c4fc5de75c8",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
@@ -36,7 +36,7 @@ OBSOLETE_SCHEDULE_PNGS = (
     "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "709f570fab7ed53eb90d674e6f44e83b6ace47594730b63f15390ab12c9c37e2"
+EXPECTED_SCHEDULE_SHA256 = "a53632168678b82baa1999aa8db116f820320baa922e0cc92d842618777ed988"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -214,11 +214,11 @@ def main() -> None:
     if "Schedule" not in schedule_visible_text:
         raise SystemExit("schedule entry point is missing from the schedule design board")
     for required in ("Workflow Schedule", "write it as cron instead", "Time zone",
-                     "NEXT FIVE FIRES", "Review schedule", "Create schedule",
+                     "NEXT FIVE FIRE TIMES", "Review schedule", "Create schedule",
                      "202 Accepted", "Run now", "Pause", "Delete"):
         if required.casefold() not in schedule_visible_text_casefolded:
             raise SystemExit(f"schedule frame is missing required copy: {required}")
-    if "prompt (optional)" not in schedule_visible_text_casefolded:
+    if "run input (optional)" not in schedule_visible_text_casefolded:
         raise SystemExit("schedule frame incorrectly hides optional recurring prompt semantics")
     for required_state in ("enabled after creation", "not yet active"):
         if required_state not in schedule_visible_text_casefolded:
@@ -300,12 +300,11 @@ def main() -> None:
             "repeat",
             "every weekday at 09:00",
             "write it as cron instead",
-            "server preview required",
             "post /api/scopes/{scopeid}/workflows/{workflowid}/schedules/preview",
             "no prompt",
         ):
             if required not in configure_text:
-                raise SystemExit(f"{configure_frame_name} is missing server-owned preview semantics: {required}")
+                raise SystemExit(f"{configure_frame_name} is missing Schedule configuration content: {required}")
         if "cron expression" in configure_text:
             raise SystemExit(f"{configure_frame_name} exposes raw cron as a default primary field")
 
@@ -333,7 +332,7 @@ def main() -> None:
         "asia/shanghai",
         "no prompt",
         "enabled after creation",
-        "next five fires",
+        "next five fire times",
         "create schedule",
         "post /api/scopes/{scopeid}/workflows/{workflowid}/schedules",
     ):
@@ -397,8 +396,7 @@ def main() -> None:
         "Review schedule",
         "Create schedule",
         "without leaving Workflows",
-        "server preview required",
-        "never calculates future fires",
+        "Next five fire times",
         "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview",
         "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules",
         "Repeat",
@@ -412,7 +410,7 @@ def main() -> None:
         "const presetCron = quickScheduleCronByRepeat[repeat]",
         "browserTimeZone()",
         "202 Accepted",
-        "waiting for the server",
+        "Refreshing this Workflow's schedules until the new Schedule appears.",
         "Not yet Active",
         "Save and publish the latest changes before scheduling.",
     ):
@@ -445,7 +443,7 @@ def main() -> None:
     ):
         if forbidden in prototype_text:
             raise SystemExit(f"prototype quick-create Schedule modal still contains optimistic or shared sample state: {forbidden}")
-    if '<span class="field-label">Cron expression</span>' in configure_creation_text:
+    if 'id="quick-schedule-cron-editor" hidden' not in configure_creation_text:
         raise SystemExit("prototype quick-create Schedule exposes raw cron as a default primary field")
     for required in (
         'id="quick-schedule-name"',
@@ -544,7 +542,7 @@ def main() -> None:
             raise SystemExit(f"prototype Schedule flow uses the wrong product owner: {forbidden}")
     if "teamId" in prototype_text or "memberId" in prototype_text:
         raise SystemExit("pure Workflow prototype fixtures still require Team or Member identity")
-    if "Prompt (optional)" not in prototype_text:
+    if "Run input (optional)" not in prototype_text:
         raise SystemExit("prototype does not expose prompt as optional")
     if "Schedule update accepted." not in prototype_text or "Schedule deletion accepted." not in prototype_text:
         raise SystemExit("prototype does not model accepted Workflow Schedule mutations")
