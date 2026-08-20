@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260817-m55-operation-auth-trajectory";
+import { validateActionRequest } from "./protocol.js?v=20260820-m56-trajectory-ledger";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",

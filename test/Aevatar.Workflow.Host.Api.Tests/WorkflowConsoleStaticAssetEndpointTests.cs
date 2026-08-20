@@ -93,6 +93,20 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             html.Should().Contain("id=\"traceViewButton\"");
             html.Should().Contain("id=\"requestTracePanel\"");
             html.Should().Contain("id=\"traceReadonlyNotice\"");
+            html.Should().Contain("class=\"trajectory-toolbar\"");
+            html.Should().Contain("id=\"trajectoryDurationButton\"");
+            html.Should().Contain("id=\"trajectoryFoldRequestsButton\"");
+            html.Should().Contain("id=\"trajectoryFoldCallsButton\"");
+            html.Should().Contain("id=\"trajectorySearchInput\"");
+            html.Should().Contain("id=\"trajectoryOverviewTrack\"");
+            html.Should().Contain("class=\"trajectory-table\"");
+            html.Should().Contain("id=\"trajectoryDetails\"");
+            html.Should().Contain("id=\"trajectoryDetailsResize\"");
+            // Requests are ledger sections, not a separate navigation rail, and the
+            // operation inspector belongs to the trajectory rather than the run drawer.
+            html.Should().NotContain("id=\"requestTraceList\"");
+            html.Should().NotContain("class=\"request-trace-workspace\"");
+            html.Should().NotContain("id=\"traceOperationSection\"");
             html.Should().Contain("\"enableStudioWireInspector\":false");
             html.Should().NotContain("class=\"studio-tabs\"");
             html.Should().Contain("<div class=\"group-label\">当前实录</div>");

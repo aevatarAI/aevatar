@@ -151,7 +151,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
-    public async Task WorkflowStudio_OperationInspector_ShouldStayIsolatedFromTheDefaultConversationView()
+    public async Task WorkflowStudio_OperationDetails_ShouldStayIsolatedFromTheDefaultConversationView()
     {
         var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
         const string script = """
@@ -167,64 +167,137 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               return source.slice(start, end);
             }
 
-            const toggles = [];
-            const fact = () => ({textContent:'', className:'', title:'', classList:{toggle(){}}});
-            const entry = {mainView:'conversation'};
-            const record = {
-              key:'model:model-0', id:'model-0', kind:'model', title:'deepseek-chat',
-              status:'done', model:'deepseek-chat', provider:'deepseek', round:0,
-              sessionId:'session-alpha',
-              finishReason:'stop', usage:{totalTokens:12}, input:'Prompt', output:'Answer',
-              reasoning:'', error:'', tools:['search'], startedAt:1700000000000,
-              completedAt:1700000000100,
+            function node(tag) {
+              const self = {
+                tag, children: [], textContent: '', title: '', hidden: false,
+                dataset: {}, style: { setProperty() {} }, attributes: {},
+                className: '', parentElement: null,
+                classList: {
+                  toggle(name, force) { self.toggles.push([name, force]); },
+                  add() {}, remove() {},
+                },
+                toggles: [],
+                append(...items) { self.children.push(...items); },
+                replaceChildren(...items) { self.children = items; },
+                setAttribute(name, value) { self.attributes[name] = value; },
+                addEventListener() {},
+                getBoundingClientRect() { return { width: 400 }; },
+              };
+              Object.defineProperty(self, 'childElementCount', { get: () => self.children.length });
+              return self;
+            }
+
+            const panel = node('aside');
+            panel.parentElement = node('div');
+            const dom = {
+              trajectoryDetails: panel,
+              trajectoryDetailsKind: node('span'),
+              trajectoryDetailsLocation: node('span'),
+              trajectoryDetailsTabs: node('div'),
+              trajectoryDetailsBody: node('div'),
             };
-            const trace = {selected:record};
+            const record = {
+              key: 'model:model-0', id: 'model-0', kind: 'model', title: 'deepseek-chat',
+              status: 'done', model: 'deepseek-chat', provider: 'deepseek', round: 0,
+              sessionId: 'session-alpha', finishReason: 'stop', usage: { totalTokens: 12 },
+              input: 'Prompt', output: 'Answer', reasoning: '', error: '', tools: ['search'],
+              startedAt: 1700000000000, completedAt: 1700000000100,
+            };
+            const trace = { key: 'client-request-one', clientRequestId: 'client-request-one', selected: record };
+            const entry = { mainView: 'conversation' };
+            const trajectory = {
+              detailsOpen: false, detailsTab: null, detailsWidth: null,
+              rows: [{ type: 'operation', trace, number: 2, record, collapsedCalls: [] }],
+            };
             const context = {
-              state:{activeConversation:entry},
-              dom:{
-                traceOperationSection:{classList:{toggle(name, hidden){toggles.push([name, hidden]);}}},
-                traceOperationKindFact:fact(), traceOperationTitleFact:fact(),
-                traceOperationIdFact:fact(), traceOperationStatusFact:fact(),
-                traceOperationStartedFact:fact(), traceOperationDurationFact:fact(),
-                traceOperationInputSection:fact(), traceOperationOutputSection:fact(),
-                traceOperationInputFact:fact(), traceOperationOutputFact:fact(),
+              TRAJECTORY_DETAILS_DEFAULT_WIDTH: 340,
+              trajectory,
+              state: { activeConversation: entry },
+              dom,
+              document: { createElement: node },
+              el(tag, className, text) {
+                const created = node(tag);
+                if (className) created.className = className;
+                if (text !== undefined) created.textContent = text;
+                return created;
               },
-              inspectorRequestTrace:() => trace,
-              selectedTraceOperation:candidate => candidate?.selected || null,
-              traceOperationKindLabel:kind => kind.toUpperCase(),
-              traceOperationStatusLabel:status => status,
-              traceOperationStartedAt:() => '22:13:20.000',
-              traceOperationDuration:() => '100ms',
+              selectedRequestTrace: () => trace,
+              selectedTraceOperation: candidate => candidate?.selected || null,
+              inspectorRequestTrace: () => trace,
+              trajectoryRowTitle: () => 'deepseek-chat',
+              traceOperationKindLabel: kind => kind.toUpperCase(),
+              traceOperationStatusLabel: status => status,
+              traceOperationStartedAt: () => '22:13:20.000',
+              traceOperationDuration: () => '100ms',
             };
             vm.createContext(context);
             vm.runInContext(`
-              ${functionSource('inspectorTraceOperation', 'renderTraceOperationInspector')}
-              ${functionSource('renderTraceOperationInspector', 'paintRunStatus')}
+              ${functionSource('selectedTrajectoryRecord', 'selectTraceOperation')}
+              ${functionSource('trajectoryDetailTabs', 'trajectoryFactList')}
+              ${functionSource('trajectoryFactList', 'trajectoryPayloadGroup')}
+              ${functionSource('trajectoryPayloadGroup', 'renderTrajectoryDetailBody')}
+              ${functionSource('renderTrajectoryDetailBody', 'setTrajectoryDetailsWidth')}
+              ${functionSource('setTrajectoryDetailsWidth', 'renderTrajectoryDetails')}
+              ${functionSource('renderTrajectoryDetails', 'updateTrajectoryToolbar')}
+              ${functionSource('inspectorTraceOperation', 'paintRunStatus')}
             `, context);
 
             assert.equal(context.inspectorTraceOperation(entry, trace), null,
               'the default conversation view must not select an operation');
-            context.renderTraceOperationInspector(trace);
-            assert.deepEqual(toggles.at(-1), ['hidden', true]);
-            assert.equal(context.dom.traceOperationTitleFact.textContent, '',
-              'hidden trajectory facts must not overwrite the original inspector');
+
+            context.renderTrajectoryDetails(entry);
+            assert.deepEqual(panel.toggles.at(-1), ['hidden', true],
+              'a closed details pane stays hidden');
+            assert.equal(dom.trajectoryDetailsLocation.textContent, '',
+              'hidden trajectory facts must not be written');
 
             entry.mainView = 'traces';
+            trajectory.detailsOpen = true;
             assert.equal(context.inspectorTraceOperation(entry, trace), record);
-            context.renderTraceOperationInspector(trace);
-            assert.deepEqual(toggles.at(-1), ['hidden', false]);
-            assert.equal(context.dom.traceOperationTitleFact.textContent, 'deepseek-chat');
-            assert.equal(context.dom.traceOperationDurationFact.textContent, '100ms');
-            assert.match(context.dom.traceOperationInputFact.textContent, /Available tools:\nsearch/);
-            assert.match(context.dom.traceOperationOutputFact.textContent, /Provider: deepseek/);
-            assert.match(context.dom.traceOperationOutputFact.textContent, /Total tokens: 12/);
+            context.renderTrajectoryDetails(entry);
+            assert.deepEqual(panel.toggles.at(-1), ['hidden', false]);
+            assert.equal(dom.trajectoryDetailsKind.textContent, 'MODEL');
+            assert.equal(dom.trajectoryDetailsKind.dataset.kind, 'model');
+            assert.equal(dom.trajectoryDetailsLocation.textContent, 'Req 2 · deepseek-chat');
+            assert.deepEqual(
+              dom.trajectoryDetailsTabs.children.map(tab => tab.textContent),
+              ['概览', '输入', '输出', '计时'],
+              'tabs appear only when the operation captured those facts');
+            assert.equal(trajectory.detailsTab, 'overview');
+
+            const facts = dom.trajectoryDetailsBody.children[0];
+            const readFacts = () => facts.children.map(row => row.children.map(cell => cell.textContent));
+            assert.deepEqual(readFacts().slice(0, 4), [
+              ['状态', 'done'], ['Operation', 'model-0'], ['开始', '22:13:20.000'], ['Duration', '100ms'],
+            ]);
+            assert.ok(readFacts().some(([term, value]) => term === 'Total tokens' && value === '12'));
+
+            trajectory.detailsTab = 'input';
+            context.renderTrajectoryDetails(entry);
+            const input = dom.trajectoryDetailsBody.children[0];
+            assert.deepEqual(
+              input.children.map(group => group.children[0].textContent),
+              ['Input', 'Available tools']);
+
+            trajectory.detailsTab = 'output';
+            context.renderTrajectoryDetails(entry);
+            assert.deepEqual(
+              dom.trajectoryDetailsBody.children[0].children.map(group => group.children[1].textContent),
+              ['Answer']);
+
+            const bare = { ...record, input: '', output: '', reasoning: '', error: '', startedAt: null };
+            trace.selected = bare;
+            trajectory.detailsTab = null;
+            context.renderTrajectoryDetails(entry);
+            assert.deepEqual(dom.trajectoryDetailsTabs.children.map(tab => tab.textContent), ['概览'],
+              'missing facts must not create empty inspector tabs');
             """;
 
         var result = await RunNodeAsync(script, app);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
         app.Should().Contain("const operation = inspectorTraceOperation(entry, trace);");
-        app.Should().Contain("const record = inspectorTraceOperation(state.activeConversation, trace);");
+        app.Should().Contain("const record = trajectory.detailsOpen ? selectedTrajectoryRecord(entry) : null;");
     }
 
     [Fact]
