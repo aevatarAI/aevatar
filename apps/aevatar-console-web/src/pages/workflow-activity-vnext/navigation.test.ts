@@ -17,13 +17,11 @@ describe('Workflow Activity vNext navigation', () => {
     );
   });
 
-  it('adds an encoded editor entry source without changing the canonical path', () => {
+  it('builds an encoded canonical workflow editor URL', () => {
     expect(
-      buildWorkflowActivityEditorHref('scope-alpha', 'workflow alpha', {
-        source: 'template',
-      }),
+      buildWorkflowActivityEditorHref('scope-alpha', 'workflow alpha'),
     ).toBe(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/workflow%20alpha?source=template',
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/workflow%20alpha',
     );
   });
 });

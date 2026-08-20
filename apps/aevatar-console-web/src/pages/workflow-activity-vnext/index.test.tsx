@@ -2182,33 +2182,26 @@ describe('Workflow Activity vNext editor', () => {
     ).toHaveTextContent('Saved at 2026-08-04 10:01:00 UTC');
   });
 
-  it('opens a template-created workflow in a save-ready state', async () => {
+  it('opens an instantiated template draft as already saved', async () => {
     mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source?source=template';
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     const saveWorkflowButton = await screen.findByRole('button', {
       name: 'Save workflow',
     });
-    expect(saveWorkflowButton).toBeEnabled();
+    expect(saveWorkflowButton).toBeDisabled();
     expect(
       screen.getByRole('status', { name: 'Workflow save status' }),
-    ).toHaveTextContent('Unsaved changes');
-
-    fireEvent.click(saveWorkflowButton);
-    await waitFor(() =>
-      expect(mockStudioApi.saveWorkflow).toHaveBeenCalledTimes(1),
-    );
-    await waitFor(() => expect(saveWorkflowButton).toBeDisabled());
-    expect(
-      screen.getByRole('status', { name: 'Workflow save status' }),
-    ).toHaveTextContent('Saved at 2026-08-04 10:01:00 UTC');
+    ).toHaveTextContent('Saved at 2026-08-04 10:00:00 UTC');
+    expect(mockStudioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(history.replace).not.toHaveBeenCalled();
   });
 
   it('preserves template tool set scopes through serialize and save', async () => {
     mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source?source=template';
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
     const parsedDocument = {
       name: 'committed_source',
       roles: [
@@ -2242,6 +2235,9 @@ describe('Workflow Activity vNext editor', () => {
 
     const saveWorkflowButton = await screen.findByRole('button', {
       name: 'Save workflow',
+    });
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Committed source updated' },
     });
     fireEvent.click(saveWorkflowButton);
 
@@ -6028,7 +6024,7 @@ describe('Workflow Activity vNext creation', () => {
     );
     expect(mockStudioApi.parseYaml).not.toHaveBeenCalled();
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha?source=template',
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
     );
   });
 

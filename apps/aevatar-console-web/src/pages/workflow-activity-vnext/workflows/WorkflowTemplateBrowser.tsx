@@ -451,11 +451,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
 
   const navigateToWorkflow = React.useCallback(
     (workflowId: string) =>
-      history.push(
-        buildWorkflowActivityEditorHref(scopeId, workflowId, {
-          source: 'template',
-        }),
-      ),
+      history.push(buildWorkflowActivityEditorHref(scopeId, workflowId)),
     [scopeId],
   );
 

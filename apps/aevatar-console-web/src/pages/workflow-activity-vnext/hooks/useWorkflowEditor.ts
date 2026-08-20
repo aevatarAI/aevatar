@@ -89,19 +89,6 @@ function currentLocationSuffix(): string {
   }
 }
 
-function isTemplateEditorEntry(): boolean {
-  try {
-    return (
-      new URL(
-        getLocationSnapshot() || '/',
-        'http://console.local',
-      ).searchParams.get('source') === 'template'
-    );
-  } catch {
-    return false;
-  }
-}
-
 function readSseRunId(event: unknown): string {
   if (!event || typeof event !== 'object') return '';
   const record = event as Record<string, unknown>;
@@ -230,7 +217,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const configurationGenerationRef = React.useRef(0);
   const loadedSignatureRef = React.useRef('');
   const loadedRouteWorkflowIdRef = React.useRef('');
-  const templateEntryWorkflowIdRef = React.useRef('');
   const pendingRouteWorkflowIdRef = React.useRef<string | null>(null);
   const structuralMutationGenerationRef = React.useRef(0);
   const structuralMutationPendingRef = React.useRef(false);
@@ -272,9 +258,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     const signature = workflowSignature(source.data);
     const enteredDifferentRoute =
       loadedRouteWorkflowIdRef.current !== routeWorkflowId;
-    const openedFromTemplate =
-      isTemplateEditorEntry() &&
-      templateEntryWorkflowIdRef.current !== routeWorkflowId;
     if (
       loadedSignatureRef.current === signature ||
       (dirtyRef.current && !enteredDifferentRoute)
@@ -288,15 +271,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     setDocument(source.data.document ?? null);
     setLayout(source.data.layout ?? null);
     setFindings(source.data.findings);
-    if (openedFromTemplate) {
-      templateEntryWorkflowIdRef.current = routeWorkflowId;
-      markLocalEdit();
-      history.replace(
-        buildWorkflowActivityEditorHref(scopeId, routeWorkflowId),
-      );
-    } else {
-      markClean();
-    }
+    markClean();
     setSaveError('');
     setStructuralMutationError('');
     setFailedNodeType(null);
@@ -332,7 +307,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     return () => {
       cancelled = true;
     };
-  }, [markClean, markLocalEdit, routeWorkflowId, scopeId, source.data]);
+  }, [markClean, routeWorkflowId, source.data]);
 
   React.useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
