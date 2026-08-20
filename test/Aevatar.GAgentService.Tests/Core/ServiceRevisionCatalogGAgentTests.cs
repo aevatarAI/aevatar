@@ -581,11 +581,20 @@ public sealed class ServiceRevisionCatalogGAgentTests
         var identity = GAgentServiceTestKit.CreateIdentity("svc-padded-workflow-name");
         const string revisionId = "rev-padded-workflow-name";
         var actorId = ServiceActorIds.RevisionCatalog(identity);
+        var spec = CreateWorkflowRevisionSpec(identity, revisionId);
+        spec.WorkflowSpec!.WorkflowName = "  legacy-workflow  ";
+        var artifactSpec = spec.Clone();
+        artifactSpec.WorkflowSpec!.WorkflowId = revisionId;
         var artifact = new PreparedServiceRevisionArtifactAssembler().Assemble(
-            CreateWorkflowArtifact(
-                identity,
-                revisionId,
-                ExternalCapabilityExecutionMode.Interactive));
+            WorkflowServiceRevisionArtifactBuilder.Build(
+                artifactSpec,
+                "legacy-workflow",
+                new WorkflowAuthorizationDependencies
+                {
+                    ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+                },
+                artifactSpec.WorkflowSpec.CapabilityAdmissionPlan));
+        var expectedArtifactHash = artifact.ArtifactHash;
         var adapter = new RecordingAdapter(
             _ => Task.FromResult(artifact.Clone()),
             ServiceImplementationKind.Workflow);
@@ -593,8 +602,6 @@ public sealed class ServiceRevisionCatalogGAgentTests
             eventStore,
             adapter,
             actorId);
-        var spec = CreateWorkflowRevisionSpec(identity, revisionId);
-        spec.WorkflowSpec!.WorkflowName = "  legacy-workflow  ";
 
         await agent.HandleCreateRevisionAsync(new CreateServiceRevisionCommand
         {
@@ -615,12 +622,19 @@ public sealed class ServiceRevisionCatalogGAgentTests
             .Be(ServiceRevisionStatus.Published);
         agent.State.Revisions[revisionId].PreparedArtifact.DeploymentPlan.WorkflowPlan.WorkflowName
             .Should().Be("legacy-workflow");
+        agent.State.Revisions[revisionId].ArtifactHash.Should().Be(expectedArtifactHash);
+        agent.State.Revisions[revisionId].PreparedArtifact.ProtocolDescriptorSet.IsEmpty.Should().BeFalse();
         adapter.PrepareCalls.Should().Be(2);
 
         var replayed = CreateAgent(eventStore, adapter, actorId);
         await replayed.ActivateAsync();
         replayed.State.Revisions[revisionId].Status.Should()
             .Be(ServiceRevisionStatus.Published);
+        replayed.State.Revisions[revisionId].ArtifactHash.Should().Be(expectedArtifactHash);
+        replayed.State.Revisions[revisionId].PreparedArtifact.ProtocolDescriptorSet
+            .ToByteArray()
+            .Should()
+            .Equal(artifact.ProtocolDescriptorSet.ToByteArray());
         await replayed.HandlePrepareRevisionAsync(new PrepareServiceRevisionCommand
         {
             Identity = identity.Clone(),
