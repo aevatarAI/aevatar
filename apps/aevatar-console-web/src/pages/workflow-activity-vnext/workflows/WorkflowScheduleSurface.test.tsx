@@ -62,12 +62,7 @@ describe('WorkflowScheduleSurface', () => {
     });
     mockedWorkflowScheduleApi.create.mockResolvedValue({
       scheduleId: 'schedule-alpha',
-      scheduleActorId: 'schedule-actor-alpha',
       accepted: true,
-      commandId: 'command-alpha',
-      correlationId: 'correlation-alpha',
-      ackedAt: '2026-08-20T08:00:00Z',
-      ackStage: 'accepted',
     });
   });
 
