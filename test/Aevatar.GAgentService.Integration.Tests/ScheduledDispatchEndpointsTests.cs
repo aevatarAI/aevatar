@@ -15,6 +15,7 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -2846,7 +2847,7 @@ public sealed class ScheduledDispatchEndpointsTests
         host.RevisionCatalog.UpsertRevision(
             "tenant:app:default:workflow",
             "rev-active",
-            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+            BuildWorkflowPreparedArtifact("rev-active"));
 
         var response = await host.Client.PostAsJsonAsync("/api/schedules", new
         {
@@ -3272,6 +3273,43 @@ public sealed class ScheduledDispatchEndpointsTests
                 },
             },
         };
+
+    private static PreparedServiceRevisionArtifact BuildWorkflowPreparedArtifact(string revisionId)
+    {
+        const string workflowYaml = "name: workflow\nsteps: []";
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        return WorkflowServiceRevisionArtifactBuilder.Build(
+            new ServiceRevisionSpec
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "tenant",
+                    AppId = "app",
+                    Namespace = "default",
+                    ServiceId = "workflow",
+                },
+                RevisionId = revisionId,
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowId = revisionId,
+                    WorkflowName = "workflow",
+                    WorkflowYaml = workflowYaml,
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                },
+            },
+            "workflow",
+            new WorkflowAuthorizationDependencies
+            {
+                ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+            },
+            capabilityAdmissionPlan);
+    }
 
     private static ByteString BuildProtocolDescriptorSetFor(MessageDescriptor descriptor)
     {
