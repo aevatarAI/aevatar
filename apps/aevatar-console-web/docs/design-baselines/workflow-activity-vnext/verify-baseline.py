@@ -23,12 +23,12 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "2870a584fa814b7011326f98bd63480941b4c9e01bfc42f58a18a29003b0bfe2",
-    "schedule-workflow-editor-panel.png": "52db5a84dfca08ef5ac540e03d0931f69e46a16dbc4ce2fe5d1994582ccf4b6e",
-    "schedule-review.png": "1bc8adbc4be3514cc99cae7b0e1fa09d3c133910307d322ac180f49b63da4944",
-    "schedule-creation-pending.png": "c03e966168aed50837e9b3def3537579f6923d8d2be5add867c43e63432cbcee",
-    "schedule-detail.png": "14f6ba7cbb11f035817781eff9dbf56b2c13ad0d4e3ba5193c56de41b3551430",
-    "schedule-edit.png": "06429fbb9145bfcae5fe8a522b089f46957e7f19c3c3743e6dda8941a51be884",
+    "schedule-workflows-list-modal.png": "9105ffbea6267740428dddfe9f1c253b46565dd183570923e1736b628fd70e80",
+    "schedule-workflow-editor-panel.png": "467bb6de9827b7feb783bbf6d02b90adb4c2f81e4061523c20927e5d87a91368",
+    "schedule-review.png": "4c0ac3d8709ebaebef14546b83697a472c51b6071459e94dd84d49be976a3861",
+    "schedule-creation-pending.png": "c7387a76a6dcbd8d929a9ba603878bc38481d6b9750e12f2cf3f63512180b04b",
+    "schedule-detail.png": "0c78e9690f95fd9e1ab48601abb987d8f523026905b1ae7ac83a896dad76b458",
+    "schedule-edit.png": "2ac828c239f3de1daa4e4a7572e46b6fbf0d4f229cebd89860f2724815b97c14",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
@@ -36,7 +36,7 @@ OBSOLETE_SCHEDULE_PNGS = (
     "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "c6d72b82d900845f3af75c272a0c8d164d3143588e909043f387e9dfccb41a62"
+EXPECTED_SCHEDULE_SHA256 = "574d7d380e9752bfb02e5dfe847af0a7ebbb9abdc47750383d36c51a5188919e"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -57,7 +57,7 @@ EXPECTED_FRAMES = (
     "17 Settings - Advanced and responsive",
 )
 EXPECTED_SCHEDULE_FRAMES = (
-    "01 · Workflows — quick schedule modal",
+    "01 · Workflows — schedule management modal",
     "02 · Workflow — schedule setup panel",
     "03 · Schedule — review before creation",
     "04 · Schedule — creation pending",
@@ -283,30 +283,25 @@ def main() -> None:
         if forbidden in schedule_visible_text_casefolded:
             raise SystemExit(f"Schedule design still links to Activity: {forbidden}")
 
-    quick_modal_text = schedule_frame_text("01 · Workflows — quick schedule modal").casefold()
-    for required in ("new schedule", "without leaving workflows", "review schedule"):
+    quick_modal_text = schedule_frame_text("01 · Workflows — schedule management modal").casefold()
+    for required in ("schedules", "new schedule", "edit", "pause", "run now", "delete"):
         if required not in quick_modal_text:
-            raise SystemExit(f"Workflow catalogue quick-create modal is missing: {required}")
-    if "open the editor" not in quick_modal_text:
-        raise SystemExit("Workflow catalogue frame does not preserve the optional editor path")
-    for configure_frame_name in (
-        "01 · Workflows — quick schedule modal",
-        "02 · Workflow — schedule setup panel",
+            raise SystemExit(f"Workflow catalogue Schedule management modal is missing: {required}")
+    configure_frame_name = "02 · Workflow — schedule setup panel"
+    configure_text = schedule_frame_text(configure_frame_name).casefold()
+    for required in (
+        "schedule name",
+        "weekly feedback report recurring work",
+        "repeat",
+        "every weekday at 09:00",
+        "write it as cron instead",
+        "post /api/scopes/{scopeid}/workflows/{workflowid}/schedules/preview",
+        "no prompt",
     ):
-        configure_text = schedule_frame_text(configure_frame_name).casefold()
-        for required in (
-            "schedule name",
-            "weekly feedback report recurring work",
-            "repeat",
-            "every weekday at 09:00",
-            "write it as cron instead",
-            "post /api/scopes/{scopeid}/workflows/{workflowid}/schedules/preview",
-            "no prompt",
-        ):
-            if required not in configure_text:
-                raise SystemExit(f"{configure_frame_name} is missing Schedule configuration content: {required}")
-        if "cron expression" in configure_text:
-            raise SystemExit(f"{configure_frame_name} exposes raw cron as a default primary field")
+        if required not in configure_text:
+            raise SystemExit(f"{configure_frame_name} is missing Schedule configuration content: {required}")
+    if "cron expression" in configure_text:
+        raise SystemExit(f"{configure_frame_name} exposes raw cron as a default primary field")
 
     schedule_edit_text = schedule_frame_text("06 · Workflow — change schedule").casefold()
     for required in (
@@ -384,16 +379,19 @@ def main() -> None:
     if 'data-schedule-workflow="${item.id}"' not in prototype_text:
         raise SystemExit("prototype does not expose Schedule from published Workflow rows")
     if 'button.onclick = () => openScheduleQuickModal(button.dataset.scheduleWorkflow)' not in prototype_text:
-        raise SystemExit("Workflow list Schedule action does not open the quick-create modal")
+        raise SystemExit("Workflow list Schedule action does not open the management modal")
     for required in (
         'id="schedule-quick-modal"',
         "function openScheduleQuickModal",
+        "function renderScheduleModalList",
         "function openSchedulePanelCreation",
         "function renderScheduleCreation",
         "function requestQuickSchedulePreview",
         "function acceptQuickScheduleCreation",
         "Review schedule",
         "Create schedule",
+        "Recurring runs owned by",
+        'id="quick-schedule-new"',
         "without leaving Workflows",
         "Next five fire times",
         "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview",

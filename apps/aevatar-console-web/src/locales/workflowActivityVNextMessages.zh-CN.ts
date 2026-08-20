@@ -548,7 +548,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.noPrompt': '无运行输入',
     'workflowActivityVNext.schedule.nextFire': '下次 {date}',
     'workflowActivityVNext.schedule.nextFiveFires': '接下来的五次触发时间',
-    'workflowActivityVNext.schedule.open': '计划',
+    'workflowActivityVNext.schedule.open': '计划任务',
     'workflowActivityVNext.schedule.openAria': '管理 {name} 的计划任务',
     'workflowActivityVNext.schedule.preview': '预览下次运行',
     'workflowActivityVNext.schedule.previewTitle': '接下来的计划运行',

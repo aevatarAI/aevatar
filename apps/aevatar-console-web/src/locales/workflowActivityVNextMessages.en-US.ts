@@ -586,7 +586,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.noPrompt': 'No prompt',
   'workflowActivityVNext.schedule.nextFire': 'Next {date}',
   'workflowActivityVNext.schedule.nextFiveFires': 'Next five fire times',
-  'workflowActivityVNext.schedule.open': 'Schedule',
+  'workflowActivityVNext.schedule.open': 'Schedules',
   'workflowActivityVNext.schedule.openAria': 'Manage schedules for {name}',
   'workflowActivityVNext.schedule.preview': 'Preview next fires',
   'workflowActivityVNext.schedule.previewTitle': 'Next scheduled fires',

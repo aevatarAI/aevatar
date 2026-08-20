@@ -1103,6 +1103,7 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       </Modal>
       <WorkflowScheduleSurface
         available={Boolean(scheduleTarget?.activeRevisionId)}
+        initialView="list"
         mode="modal"
         onClose={() => setScheduleTarget(null)}
         open={Boolean(scheduleTarget)}

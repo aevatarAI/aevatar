@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task with verification checkpoints.
 
-**Goal:** Make Workflow Schedule creation match the approved Schedule design baseline by opening a direct quick modal from the catalogue and sharing one configure/preview/review/create flow with the editor panel.
+**Goal:** Make Workflow Schedule management match the approved Schedule design baseline by opening a management modal from the catalogue, exposing existing Schedules for editing, and sharing one configure/preview/review/create flow with the editor panel.
 
-**Architecture:** Keep `WorkflowScheduleSurface` as the single owner of Schedule query and mutation state. Replace the nested form Modal with a surface-local state machine (`configure`, `previewing`, `review`) that renders either inside the catalogue Modal or the editor Drawer. The catalogue entry opens directly in `configure`; after create it closes with a Toast, while the editor returns to list management with the same Toast. Continue using only workflow-scoped Schedule APIs.
+**Architecture:** Keep `WorkflowScheduleSurface` as the single owner of Schedule query and mutation state. The catalogue entry opens the same list management view as the editor Drawer; `New schedule` enters the surface-local state machine (`configure`, `previewing`, `review`). After create the catalogue closes with a Toast, while the editor returns to list management with the same Toast. Continue using only workflow-scoped Schedule APIs.
 
 **Tech Stack:** React, TypeScript, Ant Design, TanStack Query, Jest Testing Library, existing Workflow vNext CSS tokens and i18n helpers.
 
@@ -16,9 +16,9 @@
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/workflows/WorkflowScheduleSurface.test.tsx`
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/index.test.tsx`
 
-- [x] **Step 1: Add a failing catalogue test for direct quick-modal creation**
+- [x] **Step 1: Add a failing catalogue test for the Schedule management modal**
 
-  Render the published catalogue row, click `Manage schedules for Published workflow`, and assert that the visible dialog is titled `New schedule`, contains the Workflow context and `Review schedule`, and does not contain the Schedule list toolbar or a second `Create schedule` dialog.
+  Render the published catalogue row, click `Manage schedules for Published workflow`, and assert that the visible dialog shows `Schedules`, `No schedules yet`, and `New schedule`, without entering the creation form.
 
 - [x] **Step 2: Add failing Schedule-surface tests for configure and review states**
 
@@ -67,7 +67,7 @@
 
   Expected result: all Schedule surface tests pass.
 
-### Task 3: Make the catalogue entry open the quick modal directly
+### Task 3: Make the catalogue entry open the Schedule management modal
 
 **Files:**
 - Modify: `apps/aevatar-console-web/src/pages/workflow-activity-vnext/workflows/WorkflowsPage.tsx`
@@ -75,11 +75,11 @@
 
 - [x] **Step 1: Pass a direct-create intent to the modal surface**
 
-  Keep the existing workflow identity and availability guard, but make the catalogue `Schedule` action render the surface in direct `configure` mode. The list view remains available only in the editor panel.
+  Keep the existing workflow identity and availability guard, but make the catalogue `Schedules` action render the surface in `list` mode. The list exposes `New schedule` and existing row actions; the editor panel continues to use the same list state.
 
 - [x] **Step 2: Update the catalogue regression assertion**
 
-  Assert that clicking the published row Schedule action opens exactly one dialog with `New schedule`, the context block, and no `Schedules` list heading.
+  Assert that clicking the published row Schedules action opens exactly one dialog with `Schedules`, `No schedules yet`, and `New schedule`, while `Review schedule` is absent until the user chooses to create one.
 
 - [x] **Step 3: Run the targeted catalogue test**
 

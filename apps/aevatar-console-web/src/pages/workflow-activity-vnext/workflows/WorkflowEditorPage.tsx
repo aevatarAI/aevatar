@@ -1028,7 +1028,7 @@ const WorkflowEditorPage: React.FC<{
                   )
             }
           >
-            {t('workflowActivityVNext.schedule.open', 'Schedule')}
+            {t('workflowActivityVNext.schedule.open', 'Schedules')}
           </Button>
           {!publicationCurrent &&
             (publishReadinessIssues.length > 0 ? (

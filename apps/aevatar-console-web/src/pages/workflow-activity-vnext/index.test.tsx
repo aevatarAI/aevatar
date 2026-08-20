@@ -633,7 +633,7 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
-  it('opens the published Workflow Schedule action as one direct quick modal', async () => {
+  it('opens the published Workflow Schedule action as a management modal', async () => {
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([
         createCatalogueRow({
@@ -659,14 +659,21 @@ describe('Workflow Activity vNext catalogue', () => {
       }),
     );
 
-    await waitFor(() => expect(screen.getByText('New schedule')).toBeVisible());
-    expect(screen.getByText('Published workflow · Published')).toBeVisible();
+    await waitFor(() =>
+      expect(
+        screen.getByText('Schedules', { selector: '.ant-modal-title' }),
+      ).toBeVisible(),
+    );
+    expect(screen.getByText('No schedules yet')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'New schedule' })).toBeVisible();
+    expect(
+      screen.getByText('Recurring runs for Published workflow'),
+    ).toBeVisible();
     expect(screen.queryByText('WORKFLOW SCHEDULE')).not.toBeInTheDocument();
     expect(screen.queryByText('What will happen')).not.toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Review schedule' }),
-    ).toBeVisible();
-    expect(screen.queryByText('Schedules')).not.toBeInTheDocument();
+      screen.queryByRole('button', { name: 'Review schedule' }),
+    ).not.toBeInTheDocument();
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });
 

@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 BASELINE_DIR = Path(__file__).resolve().parent
 SOURCE = BASELINE_DIR / "aevatar-workflow-schedule-design.excalidraw"
 FRAME_OUTPUTS = (
-    ("01 · Workflows — quick schedule modal", "schedule-workflows-list-modal.png"),
+    ("01 · Workflows — schedule management modal", "schedule-workflows-list-modal.png"),
     ("02 · Workflow — schedule setup panel", "schedule-workflow-editor-panel.png"),
     ("03 · Schedule — review before creation", "schedule-review.png"),
     ("04 · Schedule — creation pending", "schedule-creation-pending.png"),

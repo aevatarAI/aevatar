@@ -154,7 +154,7 @@ failures rather than undocumented implementation choices.
 - `verify-baseline.py`：仓库内校验器，验证主画板和 Schedule 画板 SHA-256、两个生成器的确定性输出、17 个主画板 frame、6 个 Schedule frame、6 张独立 PNG，并拒绝旧的拼板总览图。
 - `prototype.html`：可直接在浏览器打开的交互原型，不需要安装依赖或启动服务。
 - `prototype-schedule.html`：打开后直接进入已发布 Workflow 的新建 Schedule 配置，不需要先从 Draft 列表寻找入口。
-- `schedule-workflows-list-modal.png`：从 Workflows 列表直接打开的新建 Schedule modal。
+- `schedule-workflows-list-modal.png`：从 Workflows 列表打开的 Schedule 管理 modal，展示已创建的 Schedule 及 Edit/Pause/Run now/Delete 操作。
 - `schedule-workflow-editor-panel.png`：Workflow 编辑器右侧的新建 Schedule panel。
 - `schedule-review.png`：确认 Workflow、名称、周期、时区、可选运行输入、创建后启用状态与五次 next-fire 预览的创建复核页。
 - `schedule-creation-pending.png`：创建命令 `202 Accepted` 后回到列表并显示 Toast 的页面。
@@ -236,7 +236,7 @@ Production Data Truth Rule，也不覆盖设计规范中的
 
 Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidraw`，按下面顺序检查：
 
-1. `01 · Workflows — quick schedule modal`：在 Workflow 列表点击已发布行的 `Schedule`，直接打开新建配置弹窗，不先进入编辑器。
+1. `01 · Workflows — schedule management modal`：在 Workflow 列表点击已发布行的 `Schedules`，打开该 Workflow 的管理弹窗；已创建的 Schedule 在这里可查看、编辑、暂停、立即运行或删除，`New schedule` 进入创建流程。
 2. `02 · Workflow — schedule setup panel`：在画布旁用 `Repeat`、时间和时区构造重复规则；默认只显示人类可读摘要，`write it as cron instead` 才打开 raw cron，Review 时显示 next-fire 预览。
 3. `03 · Schedule — review before creation`：确认 Workflow、Schedule name、周期、时区、可选运行输入、enabled 与五次 next-fire 预览，然后直接创建。
 4. `04 · Schedule — creation pending`：创建命令返回 `202 Accepted` 后立即回到列表并显示 Toast；后台继续刷新当前 Workflow 的 Schedule list/detail，不提前声称 Active 或 next fire 已存在。
@@ -263,10 +263,10 @@ Workflows
 以下步骤只用于操作独立原型。步骤中的 `localStorage`、计时器、示例用户和
 示例记录不是 API 行为，也不是生产实现要求。
 
-1. 打开 `prototype.html`，默认进入 Workflows；点击已发布 Workflow 行的 `Schedule` 会直接打开 `New schedule` 配置弹窗，弹窗关闭后仍留在列表。只评审编辑器 Schedule panel 时可直接打开 `prototype-schedule.html`。
+1. 打开 `prototype.html`，默认进入 Workflows；点击已发布 Workflow 行的 `Schedules` 会打开该 Workflow 的 Schedule 管理弹窗。列表内的 `New schedule` 进入配置流程，已有 Schedule 可进入编辑和生命周期操作。只评审编辑器 Schedule panel 时可直接打开 `prototype-schedule.html`。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
 3. 在画布点击节点，右侧打开 Node configuration；`Add node` 从左侧打开 Node library；`Edit YAML` 从右侧打开 YAML 面板。
-4. 打开一个已发布 Workflow，点击编辑器里的 `Schedule` 检查右侧 Workflow schedules 面板，再点击 `New schedule` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 保持禁用并显示 publish 原因。列表行 modal 与编辑器 panel 共享 `configure -> previewing -> review -> create -> toast`：先调用 `/api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview`，再直接调用 Workflow-scoped create；`202 Accepted` 后关闭 modal、显示 Toast，并刷新当前 Workflow 的 list/detail，不提前声称 Active 或 next fire 已存在。详情、更新、enable/disable、run-now 与 delete 也只使用相同的 Workflow-scoped resource。Schedule 流程不提供 Activity 跳转或筛选。
+4. 打开一个已发布 Workflow，点击编辑器里的 `Schedules` 检查右侧 Workflow schedules 面板，再点击 `New schedule` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 保持禁用并显示 publish 原因。Workflows 管理 modal 与编辑器 panel 共享 `list -> configure -> previewing -> review -> create -> toast -> list`：先调用 `/api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview`，再直接调用 Workflow-scoped create；`202 Accepted` 后关闭创建视图、显示 Toast，并刷新当前 Workflow 的 list/detail，不提前声称 Active 或 next fire 已存在。已有 Schedule 可从管理列表进入编辑、enable/disable、run-now 与 delete，这些操作也只使用相同的 Workflow-scoped resource。Schedule 流程不提供 Activity 跳转或筛选。
 5. 在列表或编辑器点击 `Run`，确认修订、输入、连接和外部影响。
 6. 勾选外部影响确认后点击 `Run`。记录会立即写入浏览器 `localStorage`，编辑器显示运行状态。
 7. 打开 Activity，点击任意一行查看详情。

@@ -31,6 +31,7 @@ import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 
 type WorkflowScheduleSurfaceProps = {
+  readonly initialView?: ScheduleSurfaceView;
   readonly mode: 'modal' | 'panel';
   readonly open: boolean;
   readonly onClose: () => void;
@@ -192,6 +193,7 @@ function errorMessage(error: unknown): string {
 
 const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   available,
+  initialView,
   mode,
   onClose,
   open,
@@ -206,7 +208,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     [scopeId, workflowId],
   );
   const [surfaceView, setSurfaceView] = React.useState<ScheduleSurfaceView>(
-    mode === 'modal' ? 'form' : 'list',
+    initialView ?? (mode === 'modal' ? 'form' : 'list'),
   );
   const [creationStep, setCreationStep] =
     React.useState<CreationStep>('configure');
@@ -255,7 +257,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
 
   React.useEffect(() => {
     if (!open) return;
-    setSurfaceView(mode === 'modal' ? 'form' : 'list');
+    setSurfaceView(initialView ?? (mode === 'modal' ? 'form' : 'list'));
     setCreationStep('configure');
     setEditingSchedule(null);
     setForm(emptyForm());
@@ -267,7 +269,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setPreview(null);
     setAcceptedMessage(null);
     setPendingObservationScheduleId(null);
-  }, [mode, open, workflowId]);
+  }, [initialView, mode, open, workflowId]);
 
   React.useEffect(() => {
     if (!pendingObservationScheduleId || !schedules.data) return;
@@ -314,7 +316,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
 
   const leaveForm = () => {
     if (busy) return;
-    if (mode === 'modal') {
+    if (mode === 'modal' && initialView !== 'list') {
       onClose();
       return;
     }
@@ -540,7 +542,9 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   const surfaceTitle = editingSchedule
     ? t('workflowActivityVNext.schedule.editTitle', 'Edit schedule')
     : surfaceView === 'list'
-      ? workflowName
+      ? mode === 'modal'
+        ? t('workflowActivityVNext.schedule.title', 'Schedules')
+        : workflowName
       : creationStep === 'review'
         ? t('workflowActivityVNext.schedule.reviewTitle', 'Review schedule')
         : t('workflowActivityVNext.schedule.new', 'New schedule');

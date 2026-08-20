@@ -330,7 +330,7 @@ def schedule_fields(
 
 
 def frame_workflows_list(index: int) -> None:
-    fx, fy = begin_frame(index, "01 · Workflows — quick schedule modal")
+    fx, fy = begin_frame(index, "01 · Workflows — schedule management modal")
     cx, cy, cw = app_shell(fx, fy, "Workflows", title="Workflows",
                            subtitle="Published capabilities can run manually or on a schedule.")
     button(cx + cw - 170, fy + 18, 142, "Start a run", color=INK)
@@ -363,22 +363,44 @@ def frame_workflows_list(index: int) -> None:
         text(cx + 488, y + 34, last, FS_SMALL, MUTED, width=150)
         text(cx + 678, y + 34, starts, FS_SMALL, INK, font=FONT_MONO, width=220)
         badge(cx + 948, y + 31, state, "ok" if state == "Published" else "muted")
-        button(cx + 1140, y + 28, 80, "Schedule",
+        button(cx + 1140, y + 28, 90, "Schedules",
                color=BLUE if state == "Published" else MUTED,
                bg=BLUE_BG if state == "Published" else SUBTLE)
         button(cx + 1228, y + 28, 62, "Open")
     modal_x, modal_y, modal_w, modal_h = cx + 520, cy + 18, 760, 890
     rect(cx + 500, cy + 10, cw - 512, 910, bg="#eef2f6", stroke="#eef2f6", radius=False)
     rect(modal_x, modal_y, modal_w, modal_h, bg=SURFACE, stroke=INK, sw=2)
-    text(modal_x + 28, modal_y + 26, "New schedule", FS_HEAD, INK, width=300)
-    text(modal_x + 28, modal_y + 58, "Configure recurring work without leaving Workflows.", FS_SMALL, MUTED, width=520)
+    text(modal_x + 28, modal_y + 26, "Schedules", FS_HEAD, INK, width=300)
+    text(modal_x + 28, modal_y + 58,
+         "Recurring runs owned by Weekly Feedback Report.", FS_SMALL, MUTED,
+         width=520)
     button(modal_x + modal_w - 58, modal_y + 20, 32, "×", color=MUTED)
-    schedule_summary(modal_x + 28, modal_y + 92, modal_w - 56)
-    schedule_fields(modal_x + 28, modal_y + 186, modal_w - 56)
-    button(modal_x + modal_w - 230, modal_y + 824, 202, "Review schedule", primary=True, color=BLUE)
-    button(modal_x + modal_w - 324, modal_y + 824, 84, "Cancel", color=MUTED)
-    annotation(fx + FRAME_W + 42, fy + 160, "1", "Quick create, no navigation",
-                "The published Workflow row opens this modal directly. POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview provides the fires; open the editor later for management.")
+    rect(modal_x + 28, modal_y + 94, modal_w - 56, 72, bg=BLUE_BG, stroke="#84adff")
+    text(modal_x + 48, modal_y + 112, "Weekly Feedback Report", FS_BODY, INK,
+         width=360)
+    text(modal_x + 48, modal_y + 142, "Published Workflow · 2 schedules", FS_SMALL,
+         MUTED, width=360)
+    button(modal_x + modal_w - 176, modal_y + 112, 120, "New schedule",
+           primary=True, color=BLUE)
+    text(modal_x + 28, modal_y + 194, "SCHEDULES", FS_SMALL, MUTED,
+         font=FONT_MONO, width=200)
+    schedule_rows = [
+        ("Weekly feedback report", "Weekdays · 09:00 · Asia/Shanghai", "Enabled", "ok"),
+        ("Monthly billing review", "Monthly · day 1 · Asia/Shanghai", "Paused", "muted"),
+    ]
+    for row_index, (name, summary, state, kind) in enumerate(schedule_rows):
+        row_y = modal_y + 224 + row_index * 154
+        rect(modal_x + 28, row_y, modal_w - 56, 132, bg=SURFACE, stroke=LINE)
+        text(modal_x + 48, row_y + 18, name, FS_BODY, INK, width=330)
+        badge(modal_x + modal_w - 132, row_y + 16, state, kind)
+        text(modal_x + 48, row_y + 52, summary, FS_SMALL, MUTED, width=420)
+        button(modal_x + 48, row_y + 84, 70, "Edit", color=BLUE)
+        button(modal_x + 126, row_y + 84, 82,
+               "Pause" if state == "Enabled" else "Enable", color=MUTED)
+        button(modal_x + 216, row_y + 84, 88, "Run now", color=MUTED)
+        button(modal_x + 314, row_y + 84, 76, "Delete", color=RED)
+    annotation(fx + FRAME_W + 42, fy + 160, "1", "Manage schedules where they are created",
+                "The published Workflow row opens its Schedule management modal. Existing entries are readable and editable; New schedule starts the shared configure/review flow.")
     end_frame()
 
 
@@ -387,7 +409,7 @@ def frame_schedule_setup(index: int) -> None:
     cx, cy, cw = app_shell(fx, fy, "Workflows", title="Weekly Feedback Report",
                            subtitle="Published · v7 · finance workspace")
     button(cx + cw - 528, fy + 18, 70, "Run", color=INK)
-    button(cx + cw - 446, fy + 18, 94, "Schedule", primary=True, color=BLUE)
+    button(cx + cw - 446, fy + 18, 104, "Schedules", primary=True, color=BLUE)
     button(cx + cw - 344, fy + 18, 94, "Add node", color=INK)
     button(cx + cw - 242, fy + 18, 88, "Save", color=INK)
     button(cx + cw - 146, fy + 18, 116, "Publish", color=INK)

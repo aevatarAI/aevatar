@@ -41,6 +41,7 @@ function renderSurface(
   available: boolean,
   mode: 'modal' | 'panel' = 'modal',
   onClose = jest.fn(),
+  initialView?: 'form' | 'list',
 ) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -52,6 +53,7 @@ function renderSurface(
       <QueryClientProvider client={queryClient}>
         <WorkflowScheduleSurface
           available={available}
+          initialView={initialView}
           mode={mode}
           onClose={onClose}
           open
@@ -256,7 +258,9 @@ describe('WorkflowScheduleSurface', () => {
         'Schedule request accepted. It will appear in the list shortly.',
       ),
     );
-    expect(screen.getByText('Schedules')).toBeVisible();
+    expect(
+      screen.getByText('Weekly review', { selector: '.ant-drawer-title' }),
+    ).toBeVisible();
     await waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(2));
     resolveRefresh({ items: [], nextCursor: null, totalCount: 0 });
     view.unmount();
@@ -511,5 +515,55 @@ describe('WorkflowScheduleSurface', () => {
     expect(
       screen.getByRole('heading', { name: 'No schedules yet' }),
     ).toHaveClass('wa-vnext__schedule-empty-title');
+  });
+
+  it('opens the modal list with existing schedules ready to edit', async () => {
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [
+        {
+          scheduleId: 'schedule-alpha',
+          displayName: 'Daily workflow run',
+          prompt: '',
+          cronExpression: '0 9 * * 1-5',
+          timezone: 'Asia/Shanghai',
+          enabled: true,
+          createdAt: '2026-08-20T00:00:00Z',
+          updatedAt: '2026-08-20T00:00:00Z',
+          nextFireAt: '2026-08-21T01:00:00Z',
+          lastFireAt: null,
+          fireCount: 0,
+          failureCount: 0,
+        },
+      ],
+      nextCursor: null,
+      totalCount: 1,
+    });
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+
+    await waitFor(() =>
+      expect(screen.getByText('Daily workflow run')).toBeVisible(),
+    );
+    expect(
+      screen.getByText('Schedules', { selector: '.ant-modal-title' }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Edit Daily workflow run' }),
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'New schedule' })).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Edit Daily workflow run' }),
+    );
+    expect(screen.getByText('Edit schedule')).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Schedule name' })).toHaveValue(
+      'Daily workflow run',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByText('Daily workflow run')).toBeVisible();
+    expect(
+      screen.getByText('Schedules', { selector: '.ant-modal-title' }),
+    ).toBeVisible();
   });
 });

@@ -53,9 +53,10 @@ state. They never fall back to Team Automation.
 
 ### Workflows Catalogue
 
-Each published Workflow row exposes `Schedule` beside `Run` and `Open`.
-The action opens a modal over the current list so users can configure recurring
-work without navigating into the editor.
+Each published Workflow row exposes `Schedules` beside `Run` and `Open`.
+The action opens a management modal over the current list. It is the durable
+place to see every Schedule owned by that Workflow and provides `New schedule`
+for creation without navigating into the editor.
 
 Draft and unavailable Workflows keep the action disabled and explain that the
 Workflow must be saved and published.

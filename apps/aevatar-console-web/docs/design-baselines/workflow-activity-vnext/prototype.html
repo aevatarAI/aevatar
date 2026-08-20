@@ -1410,13 +1410,47 @@ steps:
       };
     }
 
+    function renderScheduleModalList(workflow) {
+      const content = document.querySelector("#schedule-quick-content");
+      const footer = document.querySelector("#schedule-quick-footer");
+      const schedules = prototypeWorkflowSchedules[workflow.scopeId]?.[workflow.id] || [];
+      const rows = schedules.map(scheduleListRow).join("");
+      document.querySelector("#schedule-quick-title").textContent = "Schedules";
+      document.querySelector("#schedule-quick-subtitle").textContent = `Recurring runs owned by ${workflow.name}.`;
+      content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>Published Workflow · ${schedules.length} schedule${schedules.length === 1 ? "" : "s"}</span></div><span class="schedule-state">Managed</span></div><div class="section-heading" style="margin:0 0 10px"><div><h3>Schedules</h3><p>${schedules.length ? "Select a Schedule to review its configuration." : "Create recurring work for this published Workflow."}</p></div><button type="button" class="button small primary" id="quick-schedule-new">New schedule</button></div>${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : `<div class="schedule-quick-review"><p>No schedules yet.</p></div>`}`;
+      footer.innerHTML = `<button type="button" class="button" id="quick-schedule-refresh">Refresh</button>`;
+      document.querySelector("#quick-schedule-new").onclick = () => {
+        initializeScheduleCreation(workflow, "modal");
+        renderScheduleCreation();
+      };
+      document.querySelector("#quick-schedule-refresh").onclick = () => {
+        refreshWorkflowSchedules(workflow);
+        showToast("Workflow schedules refreshed.");
+      };
+      document.querySelectorAll("#schedule-quick-content [data-schedule-id]").forEach(button => {
+        button.onclick = () => {
+          const scheduleId = button.dataset.scheduleId;
+          closeScheduleQuickModal();
+          currentWorkflow = workflow;
+          schedulePanelOpen = true;
+          schedulePanelMode = "detail";
+          selectedScheduleId = scheduleId;
+          renderEditor();
+          showView("editor");
+          renderSchedulePanel();
+        };
+      });
+    }
+
     function openScheduleQuickModal(id) {
       const workflow = workflows.find(item => item.id === id && canScheduleWorkflow(item));
       if (!workflow) return;
-      initializeScheduleCreation(workflow, "modal");
-      renderScheduleCreation();
+      resetScheduleCreation();
+      scheduleCreationSurface = "modal";
+      quickScheduleWorkflow = workflow;
+      renderScheduleModalList(workflow);
       document.querySelector("#schedule-quick-modal").hidden = false;
-      setTimeout(() => document.querySelector("#schedule-quick-content #quick-schedule-name")?.focus(), 0);
+      setTimeout(() => document.querySelector("#quick-schedule-new")?.focus(), 0);
     }
 
     function openSchedulePanelCreation() {
