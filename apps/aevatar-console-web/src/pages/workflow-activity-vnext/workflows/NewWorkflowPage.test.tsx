@@ -6,6 +6,7 @@ import {
   renderWithQueryClient,
 } from '../../../../tests/reactQueryTestUtils';
 import NewWorkflowPage from './NewWorkflowPage';
+import WorkflowTemplatesPage from './WorkflowTemplatesPage';
 
 jest.mock('@umijs/max', () => ({
   getIntl: () => ({
@@ -440,23 +441,11 @@ describe('New workflow save-target recovery', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'Use template' }),
     );
-    expect(await screen.findByText('Incident triage')).toBeVisible();
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'Use template Incident triage',
-      }),
-    );
 
-    await waitFor(() =>
-      expect(mockStudioApi.instantiateWorkflowTemplate).toHaveBeenCalledWith({
-        expectedAuthorityStateVersion: 7,
-        scopeId: 'scope-alpha',
-        templateId: 'template-incident-triage',
-      }),
-    );
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates',
     );
+    expect(screen.queryByText('Incident triage')).not.toBeInTheDocument();
   });
 
   it('views template details without creating, then uses the same instantiate action from the modal', async () => {
@@ -504,10 +493,7 @@ describe('New workflow save-target recovery', () => {
       },
     });
 
-    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Use template' }),
-    );
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
     fireEvent.click(
       await screen.findByRole('button', { name: 'View Incident triage' }),
     );
@@ -591,10 +577,7 @@ describe('New workflow save-target recovery', () => {
       })
       .mockResolvedValueOnce(acceptedTemplateReceipt);
 
-    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Use template' }),
-    );
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
     fireEvent.click(
       await screen.findByRole('button', { name: 'View Incident triage' }),
     );
@@ -662,10 +645,7 @@ describe('New workflow save-target recovery', () => {
       retry: jest.fn(),
     });
 
-    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Use template' }),
-    );
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
 
     const instantiate = await screen.findByRole('button', {
       name: 'Use template Incident triage',

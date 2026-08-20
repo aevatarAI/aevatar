@@ -340,10 +340,8 @@ const workflowActivityVNextMessages = {
     'Choose an available save location before creating the workflow.',
   'workflowActivityVNext.new.templateBrowser.title': 'Start from a template',
   'workflowActivityVNext.new.templateBrowser.description':
-    'Browse public templates and start from a ready-made workflow.',
+    'Browse public templates, inspect details, or create a draft directly.',
   'workflowActivityVNext.new.templateBrowser.changeMethod': 'Change method',
-  'workflowActivityVNext.new.templateBrowser.body':
-    'Browse public workflow templates, inspect their contract, or create a draft directly.',
   'workflowActivityVNext.new.templateBrowser.search': 'Search templates',
   'workflowActivityVNext.new.templateBrowser.sort': 'Sort templates',
   'workflowActivityVNext.new.templateBrowser.sort.recent': 'Recently updated',
@@ -358,6 +356,10 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.templateBrowser.loading': 'Loading templates…',
   'workflowActivityVNext.new.templateBrowser.loadFailed':
     'Templates could not be loaded',
+  'workflowActivityVNext.new.templateBrowser.unavailable':
+    'Templates are not available in this environment.',
+  'workflowActivityVNext.new.templateBrowser.unavailableDescription':
+    'The template catalog is not available in this environment yet.',
   'workflowActivityVNext.new.templateBrowser.retry': 'Retry',
   'workflowActivityVNext.new.templateBrowser.signIn':
     'Sign in to browse public workflow templates.',

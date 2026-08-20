@@ -56,6 +56,11 @@ export default [
     hideInMenu: true,
   },
   {
+    path: '/scopes/:scopeId/workflow-activity-vnext/workflows/new/templates',
+    component: './workflow-activity-vnext',
+    hideInMenu: true,
+  },
+  {
     path: '/scopes/:scopeId/workflow-activity-vnext/workflows/:workflowId',
     component: './workflow-activity-vnext',
     hideInMenu: true,

@@ -5798,6 +5798,63 @@ describe('Workflow Activity vNext creation', () => {
     expect(screen.queryByText(/2026\.08\.1/)).not.toBeInTheDocument();
   });
 
+  it('navigates to the canonical template route from the creation chooser', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const templateButton = await screen.findByRole('button', {
+      name: 'Use template',
+    });
+    await waitFor(() => expect(templateButton).toBeEnabled());
+    fireEvent.click(templateButton);
+
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates',
+    );
+    expect(screen.queryByText('Incident triage')).not.toBeInTheDocument();
+  });
+
+  it('renders the template route with one page heading and returns to the chooser', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates';
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Start from a template' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole('heading', { name: 'Start from a template' }),
+    ).toHaveLength(1);
+    expect(
+      screen.getByText(
+        'Browse public templates, inspect details, or create a draft directly.',
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change method' }));
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new',
+    );
+  });
+
+  it('explains when the template contract is unavailable and keeps the raw error in technical details', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates';
+    mockRuntimeCatalogApi.listWorkflowTemplates.mockRejectedValue(
+      Object.assign(new Error('HTTP 404 Not Found'), { status: 404 }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByText(
+        'Templates are not available in this environment.',
+      ),
+    ).toBeVisible();
+    expect(screen.getByText('HTTP 404 Not Found')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+  });
+
   it('instantiates a public template with its authority version and opens the materialized draft', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     const templateButton = await screen.findByRole('button', {
@@ -5805,6 +5862,9 @@ describe('Workflow Activity vNext creation', () => {
     });
     await waitFor(() => expect(templateButton).toBeEnabled());
     fireEvent.click(templateButton);
+    setMockLocation(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates',
+    );
     fireEvent.click(
       await screen.findByRole('button', {
         name: 'Use template Incident triage',

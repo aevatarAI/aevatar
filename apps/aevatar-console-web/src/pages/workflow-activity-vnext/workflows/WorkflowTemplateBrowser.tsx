@@ -1,8 +1,4 @@
-import {
-  ArrowLeftOutlined,
-  LeftOutlined,
-  RightOutlined,
-} from '@ant-design/icons';
+import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -32,7 +28,6 @@ import TechnicalDetails from '../TechnicalDetails';
 const TEMPLATE_PAGE_SIZE = 12;
 
 type WorkflowTemplateBrowserProps = {
-  readonly onBack: () => void;
   readonly scopeId: string;
 };
 
@@ -307,7 +302,6 @@ function TemplateDetailBody({
 }
 
 const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
-  onBack,
   scopeId,
 }) => {
   const toast = useConsoleToast();
@@ -467,26 +461,6 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
         )}
       >
         <div className="wa-vnext__template-browser-heading">
-          <div>
-            <Button icon={<ArrowLeftOutlined />} onClick={onBack} type="text">
-              {t(
-                'workflowActivityVNext.new.templateBrowser.changeMethod',
-                'Change method',
-              )}
-            </Button>
-            <Typography.Title level={2}>
-              {t(
-                'workflowActivityVNext.new.templateBrowser.title',
-                'Start from a template',
-              )}
-            </Typography.Title>
-            <Typography.Paragraph type="secondary">
-              {t(
-                'workflowActivityVNext.new.templateBrowser.body',
-                'Browse public workflow templates, inspect their contract, or create a draft directly.',
-              )}
-            </Typography.Paragraph>
-          </div>
           <span className="wa-vnext__template-page-status">
             {t(
               'workflowActivityVNext.new.templateBrowser.page',
@@ -668,15 +642,29 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                       'workflowActivityVNext.new.templateBrowser.signIn',
                       'Sign in to browse public workflow templates.',
                     )
-                  : errorMessage(listQuery.error)
+                  : hasStatus(listQuery.error, 404)
+                    ? t(
+                        'workflowActivityVNext.new.templateBrowser.unavailableDescription',
+                        'The template catalog is not available in this environment yet.',
+                      )
+                    : errorMessage(listQuery.error)
               }
               message={t(
-                'workflowActivityVNext.new.templateBrowser.loadFailed',
-                'Templates could not be loaded',
+                hasStatus(listQuery.error, 404)
+                  ? 'workflowActivityVNext.new.templateBrowser.unavailable'
+                  : 'workflowActivityVNext.new.templateBrowser.loadFailed',
+                hasStatus(listQuery.error, 404)
+                  ? 'Templates are not available in this environment.'
+                  : 'Templates could not be loaded',
               )}
               showIcon
               type="error"
             />
+            {hasStatus(listQuery.error, 404) ? (
+              <TechnicalDetails>
+                {errorMessage(listQuery.error)}
+              </TechnicalDetails>
+            ) : null}
           </div>
         ) : currentItems.length === 0 ? (
           <div className="wa-vnext__state wa-vnext__state--compact">

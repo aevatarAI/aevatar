@@ -36,6 +36,10 @@ export function buildWorkflowActivityNewHref(scopeId: string): string {
   return `${buildWorkflowActivitySectionHref(scopeId, 'workflows')}/new`;
 }
 
+export function buildWorkflowActivityTemplatesHref(scopeId: string): string {
+  return `${buildWorkflowActivityNewHref(scopeId)}/templates`;
+}
+
 export function buildWorkflowActivityEditorHref(
   scopeId: string,
   workflowId: string,

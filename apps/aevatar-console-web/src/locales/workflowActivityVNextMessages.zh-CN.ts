@@ -319,10 +319,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '请先选择可用的保存位置，再创建工作流。',
     'workflowActivityVNext.new.templateBrowser.title': '从模板开始',
     'workflowActivityVNext.new.templateBrowser.description':
-      '浏览公开模板，从现成的工作流开始。',
+      '浏览公开模板、查看详情，或直接创建草稿。',
     'workflowActivityVNext.new.templateBrowser.changeMethod': '更换创建方式',
-    'workflowActivityVNext.new.templateBrowser.body':
-      '浏览公开工作流模板、查看契约，或直接创建草稿。',
     'workflowActivityVNext.new.templateBrowser.search': '搜索模板',
     'workflowActivityVNext.new.templateBrowser.sort': '模板排序',
     'workflowActivityVNext.new.templateBrowser.sort.recent': '最近更新',
@@ -336,6 +334,10 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateBrowser.next': '下一页',
     'workflowActivityVNext.new.templateBrowser.loading': '正在加载模板…',
     'workflowActivityVNext.new.templateBrowser.loadFailed': '无法加载模板',
+    'workflowActivityVNext.new.templateBrowser.unavailable':
+      '当前环境暂不提供模板。',
+    'workflowActivityVNext.new.templateBrowser.unavailableDescription':
+      '当前环境尚未部署模板目录服务。',
     'workflowActivityVNext.new.templateBrowser.retry': '重试',
     'workflowActivityVNext.new.templateBrowser.signIn':
       '登录后才能浏览公开工作流模板。',

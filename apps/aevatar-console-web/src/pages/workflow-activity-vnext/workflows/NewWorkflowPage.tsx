@@ -20,10 +20,10 @@ import { useDraftMaterialization } from '../hooks/useDraftMaterialization';
 import {
   buildWorkflowActivityEditorHref,
   buildWorkflowActivitySectionHref,
+  buildWorkflowActivityTemplatesHref,
 } from '../navigation';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
-import WorkflowTemplateBrowser from './WorkflowTemplateBrowser';
 import {
   createBlankWorkflowYaml,
   hasBlockingFindings,
@@ -255,6 +255,10 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   const selectMode = (nextMode: WorkflowCreationMode) => {
     setFailure('');
     setFindings([]);
+    if (nextMode === 'template') {
+      history.push(buildWorkflowActivityTemplatesHref(scopeId));
+      return;
+    }
     setMode(nextMode);
   };
 
@@ -262,12 +266,8 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
     <WorkflowActivityVNextShell
       activeSection="workflows"
       description={t(
-        mode === 'template'
-          ? 'workflowActivityVNext.new.templateBrowser.description'
-          : 'workflowActivityVNext.new.description',
-        mode === 'template'
-          ? 'Browse public templates and start from a ready-made workflow.'
-          : 'Choose how you want to start.',
+        'workflowActivityVNext.new.description',
+        'Choose how you want to start.',
       )}
       headerActions={
         <Button
@@ -280,14 +280,9 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
         </Button>
       }
       scopeId={scopeId}
-      title={t(
-        mode === 'template'
-          ? 'workflowActivityVNext.new.templateBrowser.title'
-          : 'workflowActivityVNext.new.title',
-        mode === 'template' ? 'Start from a template' : 'New workflow',
-      )}
+      title={t('workflowActivityVNext.new.title', 'New workflow')}
     >
-      {mode !== 'template' && workspace.isError ? (
+      {workspace.isError ? (
         <Alert
           action={
             <Space wrap>
@@ -315,7 +310,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
           type="error"
         />
       ) : null}
-      {mode !== 'template' && workspace.data?.directories.length === 0 ? (
+      {workspace.data?.directories.length === 0 ? (
         <Alert
           action={
             <Space wrap>
@@ -340,12 +335,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
         />
       ) : null}
 
-      {mode === 'template' ? (
-        <WorkflowTemplateBrowser
-          onBack={() => setMode(null)}
-          scopeId={scopeId}
-        />
-      ) : !mode ? (
+      {!mode ? (
         <fieldset
           aria-label={t(
             'workflowActivityVNext.new.chooserAria',
