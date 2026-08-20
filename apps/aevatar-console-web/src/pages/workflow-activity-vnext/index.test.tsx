@@ -20,6 +20,20 @@ import {
 import WorkflowActivityVNextPage from './index';
 import { workflowActivityVNextCss } from './styles';
 
+jest.mock('@/shared/api/workflowScheduleApi', () => ({
+  workflowScheduleApi: {
+    create: jest.fn(),
+    delete: jest.fn(),
+    disable: jest.fn(),
+    enable: jest.fn(),
+    get: jest.fn(),
+    list: jest.fn(),
+    preview: jest.fn(),
+    runNow: jest.fn(),
+    update: jest.fn(),
+  },
+}));
+
 type SerializableWorkflowDocument = {
   readonly name?: string;
 };
@@ -492,6 +506,11 @@ const mockWorkflowActivityApi = jest.requireMock(
 ).workflowActivityApi as {
   getRun: jest.Mock;
 };
+const mockWorkflowScheduleApi = jest.requireMock(
+  '@/shared/api/workflowScheduleApi',
+).workflowScheduleApi as {
+  list: jest.Mock;
+};
 const mockObserveUserLlmSave = jest.requireMock(
   '@/pages/settings/userLlmSaveObservation',
 ).observeUserLlmSave as jest.Mock;
@@ -504,6 +523,11 @@ describe('Workflow Activity vNext catalogue', () => {
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([]),
     );
+    mockWorkflowScheduleApi.list.mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      totalCount: 0,
+    });
     mockScopesApi.archiveWorkflow.mockResolvedValue({
       scopeId: 'scope-alpha',
       workflowId: 'wf-alpha',
@@ -607,6 +631,46 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(workflowActivityVNextCss).toContain(
       '.wa-vnext__table--workflow-catalogue { min-width: 1160px; }',
     );
+  });
+
+  it('opens the published Workflow Schedule action as one direct quick modal', async () => {
+    mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
+      createCatalogueResponse([
+        createCatalogueRow({
+          workflowId: 'wf-published',
+          name: 'Published workflow',
+          committed: {
+            serviceKey: 'svc-published',
+            workflowName: 'published_workflow',
+            actorId: 'actor-published',
+            activeRevisionId: 'revision-published',
+            deploymentId: 'deployment-published',
+            deploymentStatus: 'Running',
+          },
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Manage schedules for Published workflow',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('New schedule', { selector: 'h2' }),
+      ).toBeVisible(),
+    );
+    expect(screen.getAllByText('Workflow').length).toBeGreaterThan(1);
+    expect(screen.getAllByText('Published workflow').length).toBeGreaterThan(1);
+    expect(
+      screen.getByRole('button', { name: 'Review schedule' }),
+    ).toBeVisible();
+    expect(screen.queryByText('Schedules')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });
 
   it('refreshes the workflow catalogue when returning from the editor', async () => {

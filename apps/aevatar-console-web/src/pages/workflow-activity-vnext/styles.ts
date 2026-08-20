@@ -639,6 +639,8 @@ export const workflowActivityVNextCss = `
 }
 .wa-vnext-schedule-modal .ant-modal-content { border-radius: var(--wa-radius); }
 .wa-vnext-schedule-modal .ant-btn, .wa-vnext-schedule-drawer .ant-btn { font-size: 12px; }
+.wa-vnext__schedule-surface-title { color: var(--wa-ink); font-size: 16px; font-weight: 650; line-height: 22px; margin: 0; }
+.wa-vnext__schedule-form-title { color: var(--wa-ink); font-size: 15px; line-height: 21px; margin: 0; }
 .wa-vnext__schedule-surface { display: grid; gap: 16px; min-width: 0; }
 .wa-vnext__schedule-toolbar { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
 .wa-vnext__schedule-toolbar p { color: var(--wa-muted); margin: 4px 0 0; }
@@ -656,6 +658,33 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-enabled { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
 .wa-vnext__schedule-preview-list { margin: 0; padding-left: 18px; }
 .wa-vnext__schedule-preview-list li { margin: 3px 0; }
+.wa-vnext__schedule-create, .wa-vnext__schedule-review, .wa-vnext__schedule-accepted { display: grid; gap: 18px; min-width: 0; }
+.wa-vnext__schedule-context { align-items: center; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; display: flex; gap: 10px; justify-content: space-between; padding: 12px 14px; }
+.wa-vnext__schedule-context span { color: #1d4ed8; font-size: 11px; font-weight: 650; text-transform: uppercase; }
+.wa-vnext__schedule-context strong { color: #172554; font-size: 13px; overflow-wrap: anywhere; text-align: right; }
+.wa-vnext__schedule-section { border-bottom: 1px solid var(--wa-line); display: grid; gap: 12px; padding-bottom: 18px; }
+.wa-vnext__schedule-section:last-of-type { border-bottom: 0; padding-bottom: 0; }
+.wa-vnext__schedule-section h3 { color: var(--wa-ink); font-size: 13px; line-height: 18px; margin: 0; }
+.wa-vnext__schedule-repeat-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) minmax(120px, .7fr) minmax(0, 1fr); }
+.wa-vnext__schedule-repeat-grid .ant-select { width: 100%; }
+.wa-vnext__schedule-cron-toggle { justify-self: start; padding-inline: 0; }
+.wa-vnext__schedule-cron-field { max-width: 420px; }
+.wa-vnext__schedule-server-preview { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; display: grid; gap: 4px; padding: 10px 12px; }
+.wa-vnext__schedule-server-preview strong { color: #166534; font-size: 12px; }
+.wa-vnext__schedule-server-preview span, .wa-vnext__schedule-explanation { color: #475467; font-size: 12px; line-height: 18px; margin: 0; }
+.wa-vnext__schedule-previewing { color: #166534; font-size: 12px; font-weight: 650; }
+.wa-vnext__schedule-footer { align-items: center; border-top: 1px solid var(--wa-line); display: flex; gap: 8px; justify-content: flex-end; padding-top: 14px; }
+.wa-vnext__schedule-review-panel { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; display: grid; gap: 16px; padding: 16px; }
+.wa-vnext__schedule-review-panel h2, .wa-vnext__schedule-accepted-panel h2 { color: var(--wa-ink); font-size: 15px; line-height: 21px; margin: 0; }
+.wa-vnext__schedule-review-details { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.wa-vnext__schedule-review-details div { display: grid; gap: 3px; min-width: 0; }
+.wa-vnext__schedule-review-details dt { color: var(--wa-muted); font-size: 11px; font-weight: 650; }
+.wa-vnext__schedule-review-details dd { color: var(--wa-ink); font-size: 12px; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__schedule-fire-preview { border-top: 1px solid #bbf7d0; display: grid; gap: 8px; padding-top: 14px; }
+.wa-vnext__schedule-fire-preview strong { color: #166534; font-size: 12px; }
+.wa-vnext__schedule-accepted-panel { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; display: grid; gap: 8px; padding: 18px; }
+.wa-vnext__schedule-accepted-panel p { color: #166534; font-size: 13px; font-weight: 650; margin: 0; }
+.wa-vnext__schedule-accepted-panel span { color: #475467; font-size: 12px; line-height: 18px; }
 .wa-vnext-schedule-drawer .ant-drawer-content { background: var(--wa-surface); }
 .wa-vnext-schedule-drawer .ant-drawer-header { border-bottom-color: var(--wa-line); }
 .wa-vnext-schedule-drawer .ant-drawer-title, .wa-vnext-schedule-drawer .ant-drawer-close { color: var(--wa-ink); }
@@ -747,6 +776,14 @@ export const workflowActivityVNextCss = `
   .wa-vnext__schedule-toolbar .ant-space, .wa-vnext__schedule-row .ant-space { width: 100%; }
   .wa-vnext__schedule-toolbar .ant-btn, .wa-vnext__schedule-row .ant-btn { flex: 1 1 auto; }
   .wa-vnext__publish-review-item { gap: 6px; padding-block: 10px; }
+}
+@media (max-width: 767px) {
+  .wa-vnext-schedule-modal .ant-modal-content { padding: 18px; }
+  .wa-vnext__schedule-repeat-grid, .wa-vnext__schedule-review-details { grid-template-columns: 1fr; }
+  .wa-vnext__schedule-context { align-items: flex-start; flex-direction: column; }
+  .wa-vnext__schedule-context strong { text-align: left; }
+  .wa-vnext__schedule-footer { align-items: stretch; flex-direction: column-reverse; }
+  .wa-vnext__schedule-footer .ant-btn { width: 100%; }
 }
 @media (max-width: 360px) {
   .wa-vnext__settings-actions.ant-space { grid-template-columns: 1fr; }

@@ -559,10 +559,17 @@ const workflowActivityVNextMessages = {
     'Schedule accepted. Refreshing the Workflow schedule list…',
   'workflowActivityVNext.schedule.actionAccepted':
     'Schedule action accepted. Refreshing the Workflow schedule list…',
+  'workflowActivityVNext.schedule.acceptedDescription':
+    'The request is continuing in the background. Closing this view will not cancel it.',
+  'workflowActivityVNext.schedule.backToSchedules': 'Back to schedules',
   'workflowActivityVNext.schedule.create': 'Create schedule',
+  'workflowActivityVNext.schedule.createExplanation':
+    'This Workflow will receive the configured input on each scheduled fire.',
   'workflowActivityVNext.schedule.createTitle': 'Create schedule',
   'workflowActivityVNext.schedule.created': 'Schedule creation accepted',
   'workflowActivityVNext.schedule.cron': 'Cron expression',
+  'workflowActivityVNext.schedule.cronSummary': 'Cron: {cron}',
+  'workflowActivityVNext.schedule.daily': 'Every day',
   'workflowActivityVNext.schedule.deleteAccepted':
     'Schedule deletion accepted. Refreshing the Workflow schedule list…',
   'workflowActivityVNext.schedule.deleteAria': 'Delete {name}',
@@ -575,29 +582,58 @@ const workflowActivityVNextMessages = {
     'Create a recurring schedule for this published Workflow.',
   'workflowActivityVNext.schedule.enableAria': 'Enable {name}',
   'workflowActivityVNext.schedule.enabled': 'Enabled',
+  'workflowActivityVNext.schedule.howOften': 'How often',
   'workflowActivityVNext.schedule.loadFailed': "Schedules couldn't be loaded",
   'workflowActivityVNext.schedule.loading': 'Loading schedules…',
   'workflowActivityVNext.schedule.name': 'Name',
   'workflowActivityVNext.schedule.new': 'New schedule',
   'workflowActivityVNext.schedule.nextFire': 'Next {date}',
+  'workflowActivityVNext.schedule.nextFiveFires': 'Next five fire times',
   'workflowActivityVNext.schedule.open': 'Schedule',
   'workflowActivityVNext.schedule.openAria': 'Manage schedules for {name}',
   'workflowActivityVNext.schedule.preview': 'Preview next fires',
   'workflowActivityVNext.schedule.previewTitle': 'Next scheduled fires',
+  'workflowActivityVNext.schedule.previewing': 'Previewing schedule…',
   'workflowActivityVNext.schedule.prompt': 'Run input (optional)',
+  'workflowActivityVNext.schedule.promptReview': 'Run input',
   'workflowActivityVNext.schedule.publishBeforeOpen':
     'Publish this Workflow before managing schedules.',
   'workflowActivityVNext.schedule.refreshAria': 'Refresh schedules',
   'workflowActivityVNext.schedule.runNowAria': 'Run {name} now',
+  'workflowActivityVNext.schedule.repeat': 'Repeat',
+  'workflowActivityVNext.schedule.repeatSummary': '{repeat} at {time}',
+  'workflowActivityVNext.schedule.reviewAction': 'Review schedule',
+  'workflowActivityVNext.schedule.reviewTitle': 'Review schedule',
   'workflowActivityVNext.schedule.save': 'Save changes',
+  'workflowActivityVNext.schedule.scheduleName': 'Schedule name',
+  'workflowActivityVNext.schedule.requestAccepted': 'Schedule request accepted',
+  'workflowActivityVNext.schedule.refreshingSchedules':
+    'Refreshing Workflow schedules',
+  'workflowActivityVNext.schedule.serverPreviewDescription':
+    'The next five fire times are calculated when you review.',
+  'workflowActivityVNext.schedule.serverPreviewTitle':
+    'Previewed by the server',
   'workflowActivityVNext.schedule.subtitle': 'Recurring runs for {name}',
+  'workflowActivityVNext.schedule.time': 'Time',
   'workflowActivityVNext.schedule.timezone': 'Timezone',
   'workflowActivityVNext.schedule.title': 'Schedules',
+  'workflowActivityVNext.schedule.updateAccepted':
+    'Schedule update accepted. Refreshing Workflow schedules.',
+  'workflowActivityVNext.schedule.updateExplanation':
+    'The updated schedule will keep its current enabled state.',
+  'workflowActivityVNext.schedule.useRepeatBuilder': 'use the repeat builder',
   'workflowActivityVNext.schedule.unavailableDescription':
     'Publish a runnable Workflow before creating a recurring schedule.',
   'workflowActivityVNext.schedule.unavailableTitle':
     'Schedule is unavailable until this Workflow is published',
   'workflowActivityVNext.schedule.updated': 'Schedule update accepted',
+  'workflowActivityVNext.schedule.weekdays': 'Weekdays',
+  'workflowActivityVNext.schedule.whatItNeeds': 'What it needs',
+  'workflowActivityVNext.schedule.whatWillHappen': 'What will happen',
+  'workflowActivityVNext.schedule.writeCron': 'write it as cron instead',
+  'workflowActivityVNext.schedule.workflow': 'Workflow',
+  'workflowActivityVNext.schedule.enabledAfterCreation':
+    'Enabled after creation',
   'workflowActivityVNext.state.forbidden':
     "You don't have access to this workspace",
   'workflowActivityVNext.state.unauthorized': 'Sign in to continue',

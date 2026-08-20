@@ -31,7 +31,7 @@ jest.mock('@/shared/ui/ConsoleToast', () => ({
   useConsoleToast: () => mockToast,
 }));
 
-function renderSurface(available: boolean) {
+function renderSurface(available: boolean, mode: 'modal' | 'panel' = 'modal') {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { gcTime: 0, retry: false },
@@ -41,7 +41,7 @@ function renderSurface(available: boolean) {
     <QueryClientProvider client={queryClient}>
       <WorkflowScheduleSurface
         available={available}
-        mode="modal"
+        mode={mode}
         onClose={jest.fn()}
         open
         scopeId="scope-alpha"
@@ -64,6 +64,17 @@ describe('WorkflowScheduleSurface', () => {
       scheduleId: 'schedule-alpha',
       accepted: true,
     });
+    mockedWorkflowScheduleApi.preview.mockResolvedValue({
+      cronExpression: '0 9 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      nextFireTimes: [
+        '2026-08-21T01:00:00Z',
+        '2026-08-24T01:00:00Z',
+        '2026-08-25T01:00:00Z',
+        '2026-08-26T01:00:00Z',
+        '2026-08-27T01:00:00Z',
+      ],
+    });
   });
 
   it('does not query schedules for an unpublished Workflow', () => {
@@ -77,18 +88,68 @@ describe('WorkflowScheduleSurface', () => {
     expect(workflowScheduleApi.list).not.toHaveBeenCalled();
   });
 
-  it('creates a schedule with workflow-only fields and refreshes the list', async () => {
+  it('opens modal creation directly with one design-aligned configure surface', async () => {
     renderSurface(true);
 
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'New schedule' }),
+        screen.getByText('New schedule', { selector: 'h2' }),
       ).toBeVisible(),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'New schedule' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+    expect(screen.getByText('Workflow')).toBeVisible();
+    expect(screen.getByText('Weekly review')).toBeVisible();
+    expect(screen.getByText('How often')).toBeVisible();
+    expect(screen.getByText('What it needs')).toBeVisible();
+    expect(screen.getByText('What will happen')).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Review schedule' }),
+    ).toBeVisible();
+    expect(screen.queryByText('Schedules')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Refresh schedules' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  });
+
+  it('previews five server fire times before creating and keeps accepted state visible', async () => {
+    renderSurface(true);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
       target: { value: 'Daily workflow run' },
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
+
+    await waitFor(() =>
+      expect(workflowScheduleApi.preview).toHaveBeenCalledWith(
+        'scope-alpha',
+        'wf-alpha',
+        expect.objectContaining({
+          count: 5,
+          cronExpression: '0 9 * * 1-5',
+          timezone: expect.any(String),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText('Review schedule', { selector: 'h2' }),
+      ).toBeVisible(),
+    );
+    expect(screen.getByText('Daily workflow run')).toBeVisible();
+    expect(screen.getByText('Weekdays at 09:00')).toBeVisible();
+    expect(screen.getByText('Enabled after creation')).toBeVisible();
+    for (const fireAt of [
+      '2026-08-21T01:00:00Z',
+      '2026-08-24T01:00:00Z',
+      '2026-08-25T01:00:00Z',
+      '2026-08-26T01:00:00Z',
+      '2026-08-27T01:00:00Z',
+    ]) {
+      expect(
+        document.querySelector(`time[datetime="${fireAt}"]`),
+      ).toBeVisible();
+    }
+
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
 
     await waitFor(() =>
@@ -115,10 +176,13 @@ describe('WorkflowScheduleSurface', () => {
         mockedWorkflowScheduleApi.list.mock.calls.length,
       ).toBeGreaterThanOrEqual(2),
     );
+    expect(screen.getByText('Schedule request accepted')).toBeVisible();
+    expect(screen.getByText('Refreshing Workflow schedules')).toBeVisible();
+    expect(mockToast.success).not.toHaveBeenCalled();
   });
 
   it('keeps the empty schedule state compact with one create action', async () => {
-    renderSurface(true);
+    renderSurface(true, 'panel');
 
     await waitFor(() =>
       expect(
@@ -130,7 +194,7 @@ describe('WorkflowScheduleSurface', () => {
       screen.getAllByRole('button', { name: 'New schedule' }),
     ).toHaveLength(1);
     expect(
-      document.querySelector('.wa-vnext-schedule-modal'),
+      document.querySelector('.wa-vnext-schedule-drawer'),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('heading', { name: 'No schedules yet' }),
