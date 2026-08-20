@@ -1,0 +1,256 @@
+# Workflow Schedule vNext Design Specification
+
+**Status:** Design baseline for frontend implementation
+
+**Backend authority:** [Issue #3446](https://github.com/aevatarAI/aevatar/issues/3446)
+and the workflow-scoped Schedule facade merged by PR #3451.
+
+## Product Decision
+
+The previous design implied that a Workflow Schedule was a Team member
+automation requiring a separate authorization review. The backend and the pure
+Workflow product model define something else: a recurring Schedule is a child
+resource of one Workflow, addressed by exact `scopeId + workflowId`.
+
+The corrected model is:
+
+```mermaid
+flowchart LR
+    W["Published Workflow"] --> S["Workflow Schedule"]
+    S --> F["Scheduled fires"]
+    F --> R["Workflow execution"]
+```
+
+- Workflow owns Schedule configuration, list, detail, and mutations.
+- Schedule is not a Workflow graph node, Run-dialog mode, global setting, or
+  Team member automation.
+- Team Automation remains a separate Team/Member product resource.
+- Activity remains a separate Run history surface. No Activity page or
+  Schedule-to-Activity link belongs in this design supplement.
+
+## Identity Boundary
+
+The frontend Schedule resource needs only:
+
+```text
+scopeId
+workflowId
+scheduleId
+```
+
+`scopeId + workflowId` select the exact Schedule collection.
+`scheduleId` selects one resource inside that collection.
+
+The frontend must not require or infer `teamId`, `memberId`, or
+`publishedServiceId` for this flow. The backend resolves the published
+service, service endpoint, active revision, and authenticated NyxID owner
+binding behind the Workflow facade.
+
+Draft, unpublished, or not-ready Workflows show an unavailable validation
+state. They never fall back to Team Automation.
+
+## Information Architecture
+
+### Workflows Catalogue
+
+Each published Workflow row exposes `Schedule` beside `Run` and `Open`.
+The action opens a modal over the current list so users can configure recurring
+work without navigating into the editor.
+
+Draft and unavailable Workflows keep the action disabled and explain that the
+Workflow must be saved and published.
+
+### Workflow Editor
+
+`Schedule` appears beside `Run` in the editor header. It opens the existing
+right-side surface while preserving the canvas. The panel contains:
+
+- a list of Schedules returned for this Workflow;
+- the same new-Schedule flow used by the catalogue modal;
+- Schedule detail and editing;
+- enable or disable, run-now, and delete actions.
+
+The modal and panel are two containers for one state machine, not two resource
+models.
+
+## Creation Flow
+
+The shared state machine is:
+
+```text
+configure -> previewing -> review -> accepted -> refresh list/detail
+```
+
+### Configure
+
+The primary form order is:
+
+| UI field | API field | Behavior |
+| --- | --- | --- |
+| Schedule name | `displayName` | Editable and required |
+| Repeat + time | `cronExpression` | Common recurring rules use the human builder |
+| Raw cron | `cronExpression` | Opens only through `write it as cron instead` |
+| Time zone | `timezone` | Browser IANA zone with `UTC` fallback |
+| Prompt | `prompt` | Optional; empty means no fixed prompt |
+| Enabled after creation | `enabled` | Explicit create request state |
+
+`headers` is supported by the API but is not a primary first-release field.
+The UI can add it later under an advanced surface without changing the core
+flow.
+
+The first release supports recurring five-field cron only. It does not expose
+one-shot fields even if lower layers contain them.
+
+### Preview
+
+`Review schedule` validates the local form and calls:
+
+```text
+POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview
+```
+
+The request contains `cronExpression`, `timezone`, and `count: 5`. The
+browser never calculates future fire times. A preview error returns the user
+to the form with the invalid field still editable.
+
+### Review
+
+Review is a normal creation confirmation, not an authorization screen. It
+shows:
+
+- Workflow name;
+- Schedule name;
+- recurrence and timezone;
+- optional prompt;
+- enabled-after-creation state;
+- five fire times returned by preview.
+
+No Team/Member identity, service identity, node grant, LLM selection,
+credential, permission digest, or policy version appears.
+
+`Create schedule` calls:
+
+```text
+POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules
+```
+
+with:
+
+```json
+{
+  "displayName": "Weekly feedback report recurring work",
+  "cronExpression": "0 9 * * 1-5",
+  "timezone": "Asia/Shanghai",
+  "enabled": true,
+  "prompt": ""
+}
+```
+
+### Accepted
+
+Create returns `202 Accepted` and a mutation receipt. The UI may show the
+receipt's Schedule identity, but it must not claim Active, next fire, or final
+state from the command response.
+
+The modal shows `Refreshing Workflow schedules` and polls or refreshes the
+Workflow-scoped list or detail until the read model observes the mutation.
+Closing the modal does not cancel the accepted server command.
+
+## Existing Schedule Management
+
+The list and detail surfaces use:
+
+```text
+GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules
+GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
+```
+
+The UI may present only typed response facts, including:
+
+- display name, cron expression, timezone, enabled state, and prompt;
+- next and last fire;
+- last error and error code;
+- fire and failure counts;
+- recent fires;
+- service revision only when useful as secondary diagnostics.
+
+Low-level service, actor, command, correlation, credential, or Team fields do
+not belong in the primary product UI.
+
+### Edit
+
+Edit hydrates the observed Schedule values and sends a full replacement:
+
+```text
+PUT /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
+```
+
+The request must preserve the observed `enabled` value. Editing cadence or
+prompt on a paused Schedule must not enable it accidentally.
+
+The update response is `202 Accepted`; the detail remains pending until a
+refresh observes the new state.
+
+### Lifecycle Actions
+
+| Action | Existing endpoint | UI rule |
+| --- | --- | --- |
+| Enable | `POST .../{scheduleId}:enable` | Show pending, then refresh |
+| Disable | `POST .../{scheduleId}:disable` | Show pending, then refresh |
+| Run now | `POST .../{scheduleId}:run-now` | Confirm external effects, then refresh |
+| Delete | `DELETE .../{scheduleId}` | Confirm, then remove only after refresh |
+
+All four return accepted receipts. The UI does not optimistically mutate
+authoritative Schedule state.
+
+There is no `Review and reauthorize` action because the Workflow Schedule API
+does not expose or require an authorization-preflight lifecycle.
+
+## API Compatibility
+
+The existing backend covers every required first-release interaction:
+
+| Screen or behavior | Backend support |
+| --- | --- |
+| Workflow Schedule list | Workflow-scoped `GET` collection |
+| Five-fire preview | Workflow-scoped `POST .../preview` |
+| Create | Workflow-scoped `POST`, `202 Accepted` |
+| Accepted observation | Collection/detail `GET` |
+| Detail | Workflow-scoped detail `GET` |
+| Edit | Workflow-scoped `PUT`, `202 Accepted` |
+| Enable/disable | Colon action routes |
+| Run now | Colon action route |
+| Delete | Workflow-scoped `DELETE`, `202 Accepted` |
+
+No backend contract gap remains for this design, so issue #3446 does not need
+an additional comment.
+
+## Standalone Review Artifacts
+
+The deterministic Schedule source contains exactly six independently useful
+`1440x900` scenes:
+
+1. `schedule-workflows-list-modal.png`
+2. `schedule-workflow-editor-panel.png`
+3. `schedule-review.png`
+4. `schedule-creation-pending.png`
+5. `schedule-detail.png`
+6. `schedule-edit.png`
+
+There is no contact sheet, combined overview, Activity frame, or authorization
+review image.
+
+## Verification Contract
+
+- The baseline verifier rejects Team/Member, generic Schedule API,
+  authorization-preflight, credential, grant, policy, and reauthorization
+  terms in the Schedule area.
+- The verifier requires all Workflow-scoped collection, detail, mutation, and
+  action routes.
+- The prototype must key fixtures by exact `scopeId + workflowId`.
+- The prototype must preserve observed `enabled` on update and refresh after
+  every accepted mutation.
+- The generator, Excalidraw, renderer, and six PNGs must be deterministic and
+  source-linked.
+- Focused frontend checks are local; the full suite and build remain delegated
+  to GitHub CI.
