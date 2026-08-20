@@ -287,7 +287,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       } else {
         await workflowScheduleApi.create(scopeId, workflowId, input);
         setCreationStep('accepted');
-        await refreshSchedules();
+        setSaving(false);
+        void refreshSchedules().catch((error) => {
+          toast.error(errorMessage(error));
+        });
       }
     } catch (error) {
       toast.error(errorMessage(error));
@@ -370,16 +373,46 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         time: repeatTime,
       });
 
+  const toggleCronMode = () => {
+    setPreview(null);
+    if (cronMode) {
+      setForm((current) => ({
+        ...current,
+        cronExpression: cronFromRepeat(repeatPreset, repeatTime),
+      }));
+    }
+    setCronMode((current) => !current);
+  };
+
   const surfaceTitle = editingSchedule
     ? t('workflowActivityVNext.schedule.editTitle', 'Edit schedule')
-    : surfaceView === 'form'
-      ? t('workflowActivityVNext.schedule.new', 'New schedule')
-      : workflowName;
+    : surfaceView === 'list'
+      ? workflowName
+      : creationStep === 'review'
+        ? t('workflowActivityVNext.schedule.reviewTitle', 'Review schedule')
+        : creationStep === 'accepted'
+          ? t(
+              'workflowActivityVNext.schedule.requestAccepted',
+              'Schedule request accepted',
+            )
+          : t('workflowActivityVNext.schedule.new', 'New schedule');
 
   const workflowContext = (
     <div className="wa-vnext__schedule-context">
-      <span>{t('workflowActivityVNext.schedule.workflow', 'Workflow')}</span>
-      <strong>{workflowName}</strong>
+      <span>
+        {t('workflowActivityVNext.schedule.contextLabel', 'WORKFLOW SCHEDULE')}
+      </span>
+      <strong>
+        {workflowName} ·{' '}
+        {t('workflowActivityVNext.schedule.published', 'Published')}
+      </strong>
+      {editingSchedule ? (
+        <Tag color={editingSchedule.enabled ? 'green' : 'default'}>
+          {editingSchedule.enabled
+            ? t('workflowActivityVNext.schedule.enabled', 'Enabled')
+            : t('workflowActivityVNext.schedule.disabled', 'Disabled')}
+        </Tag>
+      ) : null}
     </div>
   );
 
@@ -474,7 +507,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         </div>
         <Button
           className="wa-vnext__schedule-cron-toggle"
-          onClick={() => setCronMode((current) => !current)}
+          onClick={toggleCronMode}
           type="link"
         >
           {cronMode
@@ -607,7 +640,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
 
   const configureView = (
     <div className="wa-vnext__schedule-create">
-      <h2 className="wa-vnext__schedule-form-title">{surfaceTitle}</h2>
       {formFields}
       <footer className="wa-vnext__schedule-footer">
         <Button disabled={busy} onClick={leaveForm}>
@@ -674,14 +706,16 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                 : t('workflowActivityVNext.common.no', 'No')}
             </dd>
           </div>
-          {form.prompt.trim() ? (
-            <div>
-              <dt>
-                {t('workflowActivityVNext.schedule.promptReview', 'Run input')}
-              </dt>
-              <dd>{form.prompt}</dd>
-            </div>
-          ) : null}
+          <div>
+            <dt>
+              {t('workflowActivityVNext.schedule.promptReview', 'Run input')}
+            </dt>
+            <dd>
+              {form.prompt.trim()
+                ? form.prompt
+                : t('workflowActivityVNext.schedule.noPrompt', 'No prompt')}
+            </dd>
+          </div>
         </dl>
         <div className="wa-vnext__schedule-fire-preview">
           <strong>

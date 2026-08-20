@@ -531,6 +531,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.created': '计划任务创建请求已受理',
     'workflowActivityVNext.schedule.cron': 'Cron 表达式',
     'workflowActivityVNext.schedule.cronSummary': 'Cron：{cron}',
+    'workflowActivityVNext.schedule.contextLabel': '工作流计划任务',
     'workflowActivityVNext.schedule.daily': '每天',
     'workflowActivityVNext.schedule.deleteAccepted':
       '计划任务删除请求已受理，正在刷新工作流计划列表…',
@@ -549,6 +550,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.loading': '正在加载计划任务…',
     'workflowActivityVNext.schedule.name': '名称',
     'workflowActivityVNext.schedule.new': '新建计划任务',
+    'workflowActivityVNext.schedule.noPrompt': '无运行输入',
     'workflowActivityVNext.schedule.nextFire': '下次 {date}',
     'workflowActivityVNext.schedule.nextFiveFires': '接下来的五次触发时间',
     'workflowActivityVNext.schedule.open': '计划',
@@ -556,6 +558,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.preview': '预览下次运行',
     'workflowActivityVNext.schedule.previewTitle': '接下来的计划运行',
     'workflowActivityVNext.schedule.previewing': '正在预览计划任务…',
+    'workflowActivityVNext.schedule.published': '已发布',
     'workflowActivityVNext.schedule.prompt': '运行输入（可选）',
     'workflowActivityVNext.schedule.promptReview': '运行输入',
     'workflowActivityVNext.schedule.publishBeforeOpen':

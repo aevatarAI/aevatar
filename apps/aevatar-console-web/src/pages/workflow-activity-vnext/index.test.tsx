@@ -659,13 +659,9 @@ describe('Workflow Activity vNext catalogue', () => {
       }),
     );
 
-    await waitFor(() =>
-      expect(
-        screen.getByText('New schedule', { selector: 'h2' }),
-      ).toBeVisible(),
-    );
-    expect(screen.getAllByText('Workflow').length).toBeGreaterThan(1);
-    expect(screen.getAllByText('Published workflow').length).toBeGreaterThan(1);
+    await waitFor(() => expect(screen.getByText('New schedule')).toBeVisible());
+    expect(screen.getByText('WORKFLOW SCHEDULE')).toBeVisible();
+    expect(screen.getByText('Published workflow · Published')).toBeVisible();
     expect(
       screen.getByRole('button', { name: 'Review schedule' }),
     ).toBeVisible();

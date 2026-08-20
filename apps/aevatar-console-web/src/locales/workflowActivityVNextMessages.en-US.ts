@@ -569,6 +569,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.created': 'Schedule creation accepted',
   'workflowActivityVNext.schedule.cron': 'Cron expression',
   'workflowActivityVNext.schedule.cronSummary': 'Cron: {cron}',
+  'workflowActivityVNext.schedule.contextLabel': 'WORKFLOW SCHEDULE',
   'workflowActivityVNext.schedule.daily': 'Every day',
   'workflowActivityVNext.schedule.deleteAccepted':
     'Schedule deletion accepted. Refreshing the Workflow schedule list…',
@@ -587,6 +588,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.loading': 'Loading schedules…',
   'workflowActivityVNext.schedule.name': 'Name',
   'workflowActivityVNext.schedule.new': 'New schedule',
+  'workflowActivityVNext.schedule.noPrompt': 'No prompt',
   'workflowActivityVNext.schedule.nextFire': 'Next {date}',
   'workflowActivityVNext.schedule.nextFiveFires': 'Next five fire times',
   'workflowActivityVNext.schedule.open': 'Schedule',
@@ -594,6 +596,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.preview': 'Preview next fires',
   'workflowActivityVNext.schedule.previewTitle': 'Next scheduled fires',
   'workflowActivityVNext.schedule.previewing': 'Previewing schedule…',
+  'workflowActivityVNext.schedule.published': 'Published',
   'workflowActivityVNext.schedule.prompt': 'Run input (optional)',
   'workflowActivityVNext.schedule.promptReview': 'Run input',
   'workflowActivityVNext.schedule.publishBeforeOpen':
