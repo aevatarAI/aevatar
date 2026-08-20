@@ -581,6 +581,11 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                     continue;
                 }
 
+                if (IsYamlNullScalar(scalarNode))
+                {
+                    continue;
+                }
+
                 if (!string.IsNullOrWhiteSpace(scalarNode.Value))
                 {
                     values.Add(scalarNode.Value.Trim());
@@ -592,6 +597,11 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
 
         if (listNode is YamlScalarNode scalar)
         {
+            if (IsYamlNullScalar(scalar))
+            {
+                return null;
+            }
+
             return (scalar.Value ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList();
@@ -599,6 +609,21 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
 
         findings.Add(ValidationFinding.Error($"{path}/{key}", $"`{key}` must be a list or comma-delimited string."));
         return [];
+    }
+
+    private static bool IsYamlNullScalar(YamlScalarNode scalar)
+    {
+        if (scalar.Tag == "tag:yaml.org,2002:null")
+        {
+            return true;
+        }
+
+        if (!scalar.Tag.IsEmpty || scalar.Style != ScalarStyle.Plain)
+        {
+            return false;
+        }
+
+        return scalar.Value is null or "" or "~" or "null" or "Null" or "NULL";
     }
 
     private Dictionary<string, object?> SerializeRole(RoleModel role)
@@ -744,9 +769,14 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
     {
         if (value is not null)
         {
-            dictionary[key] = value;
+            dictionary[key] = value.Select(ToYamlStringListItem).ToList();
         }
     }
+
+    private static object ToYamlStringListItem(string value) =>
+        value is "null" or "Null" or "NULL" or "~"
+            ? new YamlScalarNode(value) { Style = ScalarStyle.DoubleQuoted }
+            : value;
 
     private static void AddIfNotBlank(
         IDictionary<string, object?> dictionary,

@@ -254,6 +254,86 @@ public sealed class WorkflowCompatibilityProfileTests
         runtimeRoundTrip.Steps[2].AgentToolScope.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("null")]
+    [InlineData("Null")]
+    [InlineData("NULL")]
+    [InlineData("~")]
+    public void Parse_WhenRoleAndStepToolSetsUseYamlNullScalars_ShouldPreserveInheritedScopeThroughRoundTrips(
+        string nullMarker)
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        var scalarSuffix = string.IsNullOrEmpty(nullMarker) ? string.Empty : $" {nullMarker}";
+        var yaml = $"""
+            name: inherited_tool_set_scope
+            roles:
+              - id: inherited
+                tool_sets:{scalarSuffix}
+            steps:
+              - id: inherited_step
+                type: llm_call
+                target_role: inherited
+                tool_sets:{scalarSuffix}
+            """;
+
+        var studioParse = service.Parse(yaml);
+
+        studioParse.Document.Should().NotBeNull();
+        studioParse.Document!.Roles[0].ToolSets.Should().BeNull();
+        studioParse.Document.Steps[0].ToolSets.Should().BeNull();
+        var runtimeParse = new WorkflowParser().Parse(yaml);
+        runtimeParse.Roles[0].AgentToolScope.Should().BeNull();
+        runtimeParse.Steps[0].AgentToolScope.Should().BeNull();
+
+        var serialized = service.Serialize(studioParse.Document);
+        serialized.Should().NotContain("tool_sets:");
+        var studioRoundTrip = service.Parse(serialized);
+        studioRoundTrip.Document!.Roles[0].ToolSets.Should().BeNull();
+        studioRoundTrip.Document.Steps[0].ToolSets.Should().BeNull();
+        var runtimeRoundTrip = new WorkflowParser().Parse(serialized);
+        runtimeRoundTrip.Roles[0].AgentToolScope.Should().BeNull();
+        runtimeRoundTrip.Steps[0].AgentToolScope.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("~")]
+    public void Parse_WhenRoleAndStepToolSetsUseQuotedNullLikeStrings_ShouldPreserveLiteralScopeThroughRoundTrips(
+        string literal)
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        var yaml = $$"""
+            name: literal_tool_set_scope
+            roles:
+              - id: literal_role
+                tool_sets: "{{literal}}"
+            steps:
+              - id: literal_step
+                type: llm_call
+                target_role: literal_role
+                tool_sets: [{{literal}}, "{{literal}}"]
+            """;
+
+        var studioParse = service.Parse(yaml);
+
+        studioParse.Document.Should().NotBeNull();
+        studioParse.Document!.Roles[0].ToolSets.Should().Equal(literal);
+        studioParse.Document.Steps[0].ToolSets.Should().Equal(literal);
+        var runtimeParse = new WorkflowParser().Parse(yaml);
+        runtimeParse.Roles[0].AgentToolScope!.ToolSetRefs.Should().Equal(literal);
+        runtimeParse.Steps[0].AgentToolScope!.ToolSetRefs.Should().Equal(literal);
+
+        var serialized = service.Serialize(studioParse.Document);
+        serialized.Should().Contain($"\"{literal}\"");
+        var studioRoundTrip = service.Parse(serialized);
+        studioRoundTrip.Document!.Roles[0].ToolSets.Should().Equal(literal);
+        studioRoundTrip.Document.Steps[0].ToolSets.Should().Equal(literal);
+        var runtimeRoundTrip = new WorkflowParser().Parse(serialized);
+        runtimeRoundTrip.Roles[0].AgentToolScope!.ToolSetRefs.Should().Equal(literal);
+        runtimeRoundTrip.Steps[0].AgentToolScope!.ToolSetRefs.Should().Equal(literal);
+    }
+
     [Fact]
     public void Parse_WhenAllowedToolsScalarContainsNonRuntimeDelimiters_ShouldPreserveRuntimeTokenization()
     {
