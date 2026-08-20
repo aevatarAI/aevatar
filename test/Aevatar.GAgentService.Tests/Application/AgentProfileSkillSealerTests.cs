@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
@@ -130,6 +131,7 @@ public sealed class AgentProfileSkillSealerTests
     [Theory]
     [InlineData("task-name")]
     [InlineData("task-ref")]
+    [InlineData("task-selector-risk")]
     [InlineData("recovery-name")]
     [InlineData("recovery-ref")]
     public async Task ResolveAndSealAsync_ShouldRequireTaskAndRecoveryPoliciesWithinMaximum(string violation)
@@ -142,6 +144,12 @@ public sealed class AgentProfileSkillSealerTests
                 break;
             case "task-ref":
                 draft.RuntimeProfile.Members[0].TaskToolPolicy.ToolSetRefs.Add("task.extra");
+                break;
+            case "task-selector-risk":
+                draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(
+                    Selector("api-github", AgentToolOperationRiskPayload.ReadOnly));
+                draft.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(
+                    Selector("api-github", AgentToolOperationRiskPayload.Write));
                 break;
             case "recovery-name":
                 draft.RuntimeProfile.RecoveryToolPolicy.ToolNames.Add("admin");
@@ -158,6 +166,71 @@ public sealed class AgentProfileSkillSealerTests
         result.Diagnostics.Should().ContainSingle(diagnostic =>
             diagnostic.Code == "PROFILE_TOOL_POLICY_EXCEEDS_MAXIMUM");
         resolver.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("invalid-slug", "PROFILE_CONNECTED_SERVICE_SLUG_INVALID")]
+    [InlineData("empty-risks", "PROFILE_CONNECTED_SERVICE_RISKS_REQUIRED")]
+    [InlineData("destructive", "PROFILE_CONNECTED_SERVICE_RISK_INVALID")]
+    [InlineData("duplicate", "PROFILE_CONNECTED_SERVICE_SELECTOR_DUPLICATE")]
+    public async Task ResolveAndSealAsync_ShouldRejectInvalidConnectedServiceSelectors(
+        string violation,
+        string expectedCode)
+    {
+        var draft = Draft();
+        var selector = violation switch
+        {
+            "invalid-slug" => Selector("API-GitHub", AgentToolOperationRiskPayload.ReadOnly),
+            "empty-risks" => Selector("api-github"),
+            "destructive" => Selector("api-github", AgentToolOperationRiskPayload.Destructive),
+            _ => Selector("api-github", AgentToolOperationRiskPayload.ReadOnly),
+        };
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(selector);
+        if (violation == "duplicate")
+        {
+            draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(
+                Selector("api-github", AgentToolOperationRiskPayload.Write));
+        }
+        var resolver = new RecordingResolver();
+
+        var result = await NewSealer(resolver).ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().Contain(diagnostic => diagnostic.Code == expectedCode);
+        resolver.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void NormalizeDraft_ShouldCanonicalizeConnectedServiceSelectorsAndRisks()
+    {
+        var left = Draft();
+        left.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add([
+            Selector(
+                "api-slack",
+                AgentToolOperationRiskPayload.Write,
+                AgentToolOperationRiskPayload.ReadOnly),
+            Selector("api-github", AgentToolOperationRiskPayload.ReadOnly),
+        ]);
+        var right = Draft();
+        right.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add([
+            Selector("api-github", AgentToolOperationRiskPayload.ReadOnly),
+            Selector(
+                "api-slack",
+                AgentToolOperationRiskPayload.ReadOnly,
+                AgentToolOperationRiskPayload.Write),
+        ]);
+
+        var normalized = AgentProfileDeterminism.NormalizeDraft(left);
+
+        AgentProfileDeterminism.ComputeDraftDigest(left)
+            .Should().Equal(AgentProfileDeterminism.ComputeDraftDigest(right));
+        normalized.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors
+            .Select(static selector => selector.CatalogServiceSlug)
+            .Should().Equal("api-github", "api-slack");
+        normalized.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors[1].AllowedRisks
+            .Should().Equal(
+                AgentToolOperationRiskPayload.ReadOnly,
+                AgentToolOperationRiskPayload.Write);
     }
 
     [Fact]
@@ -282,6 +355,14 @@ public sealed class AgentProfileSkillSealerTests
                 },
             },
         },
+    };
+
+    private static AgentProfileConnectedServiceSelector Selector(
+        string catalogServiceSlug,
+        params AgentToolOperationRiskPayload[] allowedRisks) => new()
+    {
+        CatalogServiceSlug = catalogServiceSlug,
+        AllowedRisks = { allowedRisks },
     };
 
     private static ResolvedOrnnSkillPackage Package(string? mismatch = null) => new()

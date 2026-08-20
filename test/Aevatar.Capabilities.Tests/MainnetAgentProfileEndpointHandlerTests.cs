@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
@@ -691,6 +692,91 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
     }
 
     [Fact]
+    public async Task UpdateDraft_ShouldMapTypedConnectedServiceSelectors()
+    {
+        var owner = AgentProfileOwners.ForScope("scope-alpha");
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(owner, 9, Entry("prof-research", "research", AgentProfileProvisioningStatus.Active)),
+        };
+        var management = new RecordingManagementQuery
+        {
+            Snapshot = Management(owner, "prof-research", "research", authorityVersion: 9),
+        };
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(catalog, management, actors);
+        using var request = Request(
+            HttpMethod.Put,
+            "/api/scopes/scope-alpha/agent-profiles/research/draft",
+            "scope-alpha",
+            "user-alpha");
+        request.Content = JsonContent.Create(new
+        {
+            draft = DraftInput([
+                new
+                {
+                    catalogServiceSlug = "api-github",
+                    allowedRisks = new[] { "READ_ONLY", "WRITE" },
+                },
+            ]),
+            expectedVersion = 9,
+            idempotencyKey = "update-connected-service-selector",
+        });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var selector = actors.DraftCommands.Should().ContainSingle().Subject.Draft.RuntimeProfile
+            .MaximumToolPolicy.ConnectedServiceSelectors.Should().ContainSingle().Subject;
+        selector.CatalogServiceSlug.Should().Be("api-github");
+        selector.AllowedRisks.Should().Equal(
+            AgentToolOperationRiskPayload.ReadOnly,
+            AgentToolOperationRiskPayload.Write);
+    }
+
+    [Fact]
+    public async Task GetProfile_ShouldReturnTypedConnectedServiceSelectors()
+    {
+        var owner = AgentProfileOwners.ForScope("scope-alpha");
+        var snapshot = Management(owner, "prof-research", "research", authorityVersion: 9);
+        snapshot.Draft!.RuntimeProfile.MaximumToolPolicy = new AgentProfileToolPolicy();
+        snapshot.Draft!.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(
+            new AgentProfileConnectedServiceSelector
+            {
+                CatalogServiceSlug = "api-github",
+                AllowedRisks =
+                {
+                    AgentToolOperationRiskPayload.ReadOnly,
+                    AgentToolOperationRiskPayload.Write,
+                },
+            });
+        var management = new RecordingManagementQuery { Snapshot = snapshot };
+        var catalog = new RecordingCatalogQuery
+        {
+            Resolve = _ => Catalog(
+                owner,
+                9,
+                Entry("prof-research", "research", AgentProfileProvisioningStatus.Active)),
+        };
+        await using var host = await AgentProfileTestHost.StartAsync(catalog, management);
+
+        var response = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            "/api/scopes/scope-alpha/agent-profiles/research",
+            "scope-alpha",
+            "user-alpha"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var selector = payload.RootElement.GetProperty("draft").GetProperty("runtimeProfile")
+            .GetProperty("maximumToolPolicy").GetProperty("connectedServiceSelectors")[0];
+        selector.GetProperty("catalogServiceSlug").GetString().Should().Be("api-github");
+        selector.GetProperty("allowedRisks").EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("READ_ONLY", "WRITE");
+    }
+
+    [Fact]
     public async Task UpdateDraft_ShouldRejectConflictingExpectedVersionsBeforeDispatch()
     {
         var owner = AgentProfileOwners.ForScope("scope-alpha");
@@ -876,7 +962,7 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         return request;
     }
 
-    private static object DraftInput() => new
+    private static object DraftInput(object[]? connectedServiceSelectors = null) => new
     {
         displayName = "Research",
         purpose = "Research evidence",
@@ -886,8 +972,18 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
             agentKind = AgentProfilePolicies.NyxIdChatAgentKind,
             routeToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
             activationMode = "SHADOW",
-            maximumToolPolicy = new { toolNames = Array.Empty<string>(), toolSetRefs = Array.Empty<string>() },
-            recoveryToolPolicy = new { toolNames = Array.Empty<string>(), toolSetRefs = Array.Empty<string>() },
+            maximumToolPolicy = new
+            {
+                toolNames = Array.Empty<string>(),
+                toolSetRefs = Array.Empty<string>(),
+                connectedServiceSelectors = connectedServiceSelectors ?? [],
+            },
+            recoveryToolPolicy = new
+            {
+                toolNames = Array.Empty<string>(),
+                toolSetRefs = Array.Empty<string>(),
+                connectedServiceSelectors = Array.Empty<object>(),
+            },
             members = Array.Empty<object>(),
         },
     };

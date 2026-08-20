@@ -70,6 +70,10 @@ MINUS deny policy
 
 `routeToolSetRef` 只能引用 Host 为 `nyxid.chat` 静态注册的 tool set。Profile draft、Admin 页面或 published state 都不能动态创建 tool set、注入 tool instance、授予 credential/scope 或扩张 caller authority。
 
+`maximum/recovery/task` policy 可以把 literal tool name、tool-set ref 与 `connectedServiceSelectors` 相加。selector 以 canonical `catalogServiceSlug` 和非空 `allowedRisks`（仅 `READ_ONLY/WRITE`）表达 connected-service operation 类别；它只匹配本 turn 已由 route discovery 和 caller authorization 准入的工具，并读取 exact typed admission 中 server-sealed 的 catalog slug 与 risk。`serviceInstanceId`、opaque `nyxop_*` 名称、展示 descriptor、method/path 都不是 selector 权威。多个同类 exact connection 会全部匹配，但每个工具仍保留自己的 exact execution admission；未匹配 selector 不会使其他显式允许项失效。
+
+Task/recovery selector 必须按 catalog slug 被 maximum selector 的 risk 集覆盖；selector 不能触发 rediscovery、创建连接、改变 credential，或扩大静态 route ceiling。validate/publish 会拒绝非法 slug、空/未知/破坏性 risk 与 policy 内重复 slug，canonical sealing 会稳定排序 selector 与 risk。maximum 拒绝掉动态 operation 时 runtime 只记录按 typed presentation kind 聚合的 bounded count，不记录工具名、连接或 endpoint 身份。
+
 ## Legacy 删除
 
 以下链路不再是生产事实源，也不得回归：

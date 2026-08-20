@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
@@ -412,7 +413,18 @@ internal static class AgentProfileEndpoints
     private static object? Mutation(AgentProfileMutationOutcome? value) => value?.Operation is null ? null : new { operationId = value.Operation.OperationId, commandId = value.Operation.CommandId, correlationId = value.Operation.CorrelationId, status = Short(value.Status), code = value.Code, authorityStateVersion = value.AuthorityStateVersion, draftRevision = value.DraftRevision, publishedRevision = value.PublishedRevision };
     private static object Draft(AgentProfileDraft value) => new { displayName = value.DisplayName, purpose = value.Purpose, instructions = value.Instructions, runtimeProfile = Runtime(value.RuntimeProfile) };
     private static object Runtime(AgentProfileSnapshot value) => new { agentKind = value.AgentKind, routeToolSetRef = value.RouteToolSetRef, activationMode = Short(value.ActivationMode), maximumToolPolicy = Policy(value.MaximumToolPolicy), recoveryToolPolicy = Policy(value.RecoveryToolPolicy), maxPlanSteps = value.MaxPlanSteps, handoffTtlSeconds = value.HandoffTtlSeconds, classifierTimeoutMs = value.ClassifierTimeoutMs, exactSkillFetchTimeoutMs = value.ExactSkillFetchTimeoutMs, maxSelectedSkillBytes = value.MaxSelectedSkillBytes, members = value.Members.Select(member => new { intentId = member.IntentId, routingDescription = member.RoutingDescription, skillRef = new { guid = member.SkillRef?.Guid, literalVersion = member.SkillRef?.LiteralVersion }, explicitTriggerAliases = member.ExplicitTriggerAliases, taskToolPolicy = Policy(member.TaskToolPolicy), sideEffectClass = Short(member.SideEffectClass), expectedSkillName = member.ExpectedSkillName, reviewedPublisherId = member.ReviewedPublisherId }) };
-    private static object Policy(AgentProfileToolPolicy? value) => new { toolNames = value is null ? Array.Empty<string>() : value.ToolNames.ToArray(), toolSetRefs = value is null ? Array.Empty<string>() : value.ToolSetRefs.ToArray() };
+    private static object Policy(AgentProfileToolPolicy? value) => new
+    {
+        toolNames = value is null ? Array.Empty<string>() : value.ToolNames.ToArray(),
+        toolSetRefs = value is null ? Array.Empty<string>() : value.ToolSetRefs.ToArray(),
+        connectedServiceSelectors = value is null
+            ? Array.Empty<object>()
+            : value.ConnectedServiceSelectors.Select(static selector => new
+            {
+                catalogServiceSlug = selector.CatalogServiceSlug,
+                allowedRisks = selector.AllowedRisks.Select(Risk).ToArray(),
+            }).ToArray<object>(),
+    };
 
     private static AgentProfileDraft ToDraft(AgentProfileDraftInput? input)
     {
@@ -421,7 +433,19 @@ internal static class AgentProfileEndpoints
         return new AgentProfileDraft { DisplayName = Required(input.DisplayName, "draft.displayName"), Purpose = input.Purpose?.Trim() ?? string.Empty, Instructions = Required(input.Instructions, "draft.instructions"), RuntimeProfile = new AgentProfileSnapshot { AgentKind = Required(runtime.AgentKind, "draft.runtimeProfile.agentKind"), RouteToolSetRef = Required(runtime.RouteToolSetRef, "draft.runtimeProfile.routeToolSetRef"), ActivationMode = Activation(runtime.ActivationMode), MaximumToolPolicy = Policy(runtime.MaximumToolPolicy), RecoveryToolPolicy = Policy(runtime.RecoveryToolPolicy), MaxPlanSteps = runtime.MaxPlanSteps, HandoffTtlSeconds = runtime.HandoffTtlSeconds, ClassifierTimeoutMs = runtime.ClassifierTimeoutMs, ExactSkillFetchTimeoutMs = runtime.ExactSkillFetchTimeoutMs, MaxSelectedSkillBytes = runtime.MaxSelectedSkillBytes, Members = { runtime.Members?.Select(Member) ?? [] } } };
     }
     private static AgentProfileSkillMember Member(AgentProfileSkillMemberInput input) => new() { IntentId = input.IntentId?.Trim() ?? string.Empty, RoutingDescription = input.RoutingDescription?.Trim() ?? string.Empty, SkillRef = new ExactRemoteSkillRef { Guid = input.SkillRef?.Guid?.Trim() ?? string.Empty, LiteralVersion = input.SkillRef?.LiteralVersion?.Trim() ?? string.Empty }, ExplicitTriggerAliases = { input.ExplicitTriggerAliases ?? [] }, TaskToolPolicy = Policy(input.TaskToolPolicy), SideEffectClass = SideEffect(input.SideEffectClass), ExpectedSkillName = input.ExpectedSkillName?.Trim() ?? string.Empty, ReviewedPublisherId = input.ReviewedPublisherId?.Trim() ?? string.Empty };
-    private static AgentProfileToolPolicy Policy(AgentProfileToolPolicyInput? input) => new() { ToolNames = { input?.ToolNames ?? [] }, ToolSetRefs = { input?.ToolSetRefs ?? [] } };
+    private static AgentProfileToolPolicy Policy(AgentProfileToolPolicyInput? input) => new()
+    {
+        ToolNames = { input?.ToolNames ?? [] },
+        ToolSetRefs = { input?.ToolSetRefs ?? [] },
+        ConnectedServiceSelectors =
+        {
+            input?.ConnectedServiceSelectors?.Select(static selector => new AgentProfileConnectedServiceSelector
+            {
+                CatalogServiceSlug = selector.CatalogServiceSlug?.Trim() ?? string.Empty,
+                AllowedRisks = { selector.AllowedRisks?.Select(Risk) ?? [] },
+            }) ?? [],
+        },
+    };
 
     private static async Task<T?> OptionalBodyAsync<T>(HttpContext http, CancellationToken ct) where T : class
     {
@@ -634,6 +658,21 @@ internal static class AgentProfileEndpoints
     private static AgentProfileReferenceOwnerKind ReferenceOwner(string? value) => value?.Trim().ToLowerInvariant() switch { "caller" => AgentProfileReferenceOwnerKind.Caller, "system" => AgentProfileReferenceOwnerKind.System, _ => throw new ArgumentException("agentProfile.ownerKind must be caller or system.") };
     private static AgentProfileActivationMode Activation(string? value) => value?.Trim().ToUpperInvariant() switch { "SHADOW" => AgentProfileActivationMode.Shadow, "ENFORCED" => AgentProfileActivationMode.Enforced, _ => throw new ArgumentException("activationMode is invalid.") };
     private static AgentProfileSideEffectClass SideEffect(string? value) => value?.Trim().ToUpperInvariant() switch { "READ_ONLY" => AgentProfileSideEffectClass.ReadOnly, "EXTERNAL_HANDOFF" => AgentProfileSideEffectClass.ExternalHandoff, "SERVICE_CALL" => AgentProfileSideEffectClass.ServiceCall, "MAINTENANCE" => AgentProfileSideEffectClass.Maintenance, _ => throw new ArgumentException("sideEffectClass is invalid.") };
+    private static string Risk(AgentToolOperationRiskPayload value) => value switch
+    {
+        AgentToolOperationRiskPayload.ReadOnly => "READ_ONLY",
+        AgentToolOperationRiskPayload.Write => "WRITE",
+        AgentToolOperationRiskPayload.Destructive => "DESTRUCTIVE",
+        _ => "UNSPECIFIED",
+    };
+    private static AgentToolOperationRiskPayload Risk(string? value) => value?.Trim().ToUpperInvariant() switch
+    {
+        "READ_ONLY" => AgentToolOperationRiskPayload.ReadOnly,
+        "WRITE" => AgentToolOperationRiskPayload.Write,
+        "DESTRUCTIVE" => AgentToolOperationRiskPayload.Destructive,
+        "UNSPECIFIED" => AgentToolOperationRiskPayload.Unspecified,
+        _ => throw new ArgumentException("connectedServiceSelectors.allowedRisks is invalid."),
+    };
     private static void Audit(RouteHandlerBuilder builder, string operation, params string[] routes) => builder.WithEndpointAudit($"agent-profile.{operation}", AuditSensitivityLevel.Confidential, "agent-profile", routes.Length == 1 ? EndpointAuditTargetResolvers.FromRouteValue("agent-profile", routes[0]) : EndpointAuditTargetResolvers.FromRouteValues("agent-profile", routes));
 
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -653,7 +692,14 @@ internal static class AgentProfileEndpoints
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AgentProfileRuntimeInput(string? AgentKind, string? RouteToolSetRef, string? ActivationMode, AgentProfileToolPolicyInput? MaximumToolPolicy, AgentProfileToolPolicyInput? RecoveryToolPolicy, int MaxPlanSteps, int HandoffTtlSeconds, int ClassifierTimeoutMs, int ExactSkillFetchTimeoutMs, int MaxSelectedSkillBytes, IReadOnlyList<AgentProfileSkillMemberInput>? Members);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-    internal sealed record AgentProfileToolPolicyInput(IReadOnlyList<string>? ToolNames, IReadOnlyList<string>? ToolSetRefs);
+    internal sealed record AgentProfileToolPolicyInput(
+        IReadOnlyList<string>? ToolNames,
+        IReadOnlyList<string>? ToolSetRefs,
+        IReadOnlyList<AgentProfileConnectedServiceSelectorInput>? ConnectedServiceSelectors);
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    internal sealed record AgentProfileConnectedServiceSelectorInput(
+        string? CatalogServiceSlug,
+        IReadOnlyList<string>? AllowedRisks);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AgentProfileSkillMemberInput(string? IntentId, string? RoutingDescription, ExactRemoteSkillRefInput? SkillRef, IReadOnlyList<string>? ExplicitTriggerAliases, AgentProfileToolPolicyInput? TaskToolPolicy, string? SideEffectClass, string? ExpectedSkillName, string? ReviewedPublisherId);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

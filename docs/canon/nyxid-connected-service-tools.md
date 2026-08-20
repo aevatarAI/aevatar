@@ -53,6 +53,8 @@ route slug、catalog slug 与 readiness capability ID 始终是四个独立身�
 
 MCP catalog 中 `is_user_service=true` 的 `service_id` 是 exact UserService identity；`endpoint_id` 是 service-local opaque operation identity。`PublishedEndpoint` selector 使用 `user_service_id + endpoint_id`，display name、method、path 与 slug 都不能替代或重建任一 ID。`AuthoredRequest` selector 使用 typed request contract，并且只有 authenticated binder 对当前 digest/risk 的确认生成 `NyxIdExplicitRequestGrant` 后才能成为 admitted proof；它不把 request contract 降级为 endpoint selector。
 
+`catalog_service_slug` 是 NyxID catalog class identity，不是 exact connection identity。current-turn operation factory 从 exact `/keys` observation 把它写入 `AgentToolOperationAdmission`，admission digest 与 Protobuf checkpoint 都覆盖该值；presentation 只投影同一 admission，不再独立持有一份安全事实。它可供 Agent Profile 做服务类别缩权，但不能替代 `user_service_id + endpoint_id` 的执行 selector，也不能从 display、route slug 或 tool name 反推。
+
 ## 2. Shared MCP catalog adapter
 
 普通 current-turn discovery 与 published-operation workflow admission 共用 `NyxIdMcpOperationCatalog`; published runtime keeps its exact MCP endpoint-digest revalidation. Authored-request runtime does not use this adapter. The adapter accepts only stable contract:
@@ -79,6 +81,8 @@ NyxID `contract_version=1.0` 没有发布独立的 typed current-turn exposure p
 Milestone 40 的唯一 model-visible Class-P contract 是 request-local dynamic operation tools：每个 server-admitted operation 对应一个 bounded argument-only schema 和 opaque request-local tool name，并在服务端映射回同一份冻结 `user_service_id + service_slug + endpoint_id + canonical operation digest`、risk 与 argument contract；根级 `catalog_digest` 作为 source observation provenance 随 admission 保留，但不属于 terminal exact authority key。opaque name、description 与 schema 都不得泄露 selector 或 digest；description 只携带 server-authored、bounded、normalized service/operation label，使模型在多 operation 场景可以区分工具。normalized label 只要包含任一 exact service ID、service slug、endpoint ID、catalog digest 或 contract digest，就必须整体降级为通用 `Connected service` / `Operation`；endpoint name 缺失时也不得把 endpoint ID fallback 暴露给模型。模型参数不得包含 service/endpoint/catalog selector。`search_connected_service_operations + invoke_connected_service_operation(candidate_ref)` 不属于本里程碑，不得作为第二条选择链路并存。
 
 current-turn discovery request-locally 读取并解析 MCP catalog，与 `/keys` exact inventory 求交后生成 operation tool，并只记录 bounded diagnostics/count。MCP 或 `/keys` discovery 不可用、无 caller token、无有效实例或 identity conflict 时，Class-P surface 为空；管理 surface 不作为 fallback。
+
+Profile connected-service selector 只在上述 request-local catalog 已经完成 route discovery、typed visibility 与 caller authorization 后执行。selector 使用 canonical `catalog_service_slug` 加 `READ_ONLY/WRITE` risk 集匹配 exact operation admission；同类服务的多个 connection 全部匹配并继续保留各自 exact proof。selector 不按 opaque `nyxop_*` 名称、presentation、HTTP method/path 或 `service_instance_id` 匹配，不重新读取 NyxID，也不创建/修复连接。literal name、tool-set ref 与 selector 在单个 policy 内相加，而 maximum、recovery 与 task policy 继续取交集；因此 selector 只能缩小现有 surface，不能扩大 route authority。未匹配 selector 贡献空集，非法 sealed selector fail closed。
 
 浏览器授权后的原请求续接仍使用同一条通用 Class-P 主链，不为任何 provider 建立专用分支。只有 actor-owned typed postcondition 已验证一个 exact UserService，且跨 turn correlation 同时匹配 accepted continuation admission、origin/continuation turn、task、完整 operation key、action request 与 postcondition dependency 时，conversation actor 才能派发 `NyxIdChatVerifiedAuthorizationContinuation`。该 closed protobuf 只包含安全 action/step/resource identity、从 typed action params 冻结的 `service_slug`、验证时间与 resume requirement；不包含 token、credential 或 generic metadata bag。
 

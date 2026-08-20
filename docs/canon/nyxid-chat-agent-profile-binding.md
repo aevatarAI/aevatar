@@ -48,6 +48,10 @@ Turn-local materialization 继续使用已固化 snapshot 与既有 `AgentProfil
 
 Runtime 先对 route-owned tools、registered tools、typed visibility、Profile maximum/recovery/task policy 与 caller authorization 取交集，再执行 bounded routing/classification。任何 profile、exact fetch、identity、collision、capability 或 integrity 失败都只能继续缩权；交集为空即 restricted-empty，不能退回 unrestricted。
 
+每层 Profile tool policy 内的 literal tool name、tool-set ref 与 connected-service selector 是并集，maximum、recovery 与选中的 task policy 仍按既有规则取交集。connected-service selector 只包含 canonical `catalog_service_slug` 与非空 `READ_ONLY/WRITE` risk 集；它只能匹配 route discovery 已经得到的工具，并读取 server-sealed `AgentToolOperationAdmission.catalog_service_slug` 与 `execution_policy.risk`。它不得读取展示 descriptor、opaque tool name、`service_instance_id`、HTTP method 或 path 来猜测安全语义，也不得触发额外 discovery 或扩大 route ceiling。相同 catalog service 的多个 exact connection 会各自保留 exact admission 并同时匹配；未匹配 selector 只贡献空集。
+
+Task/recovery selector 的 risk 集必须是 maximum 中同 slug selector 的子集。非法 slug、空 risk、`UNSPECIFIED/DESTRUCTIVE` 或同一 policy 内重复 slug 在 validate/publish 时拒绝；runtime 对无效 sealed snapshot 继续 fail closed。maximum 过滤动态工具时只按 typed presentation kind 输出 bounded count diagnostic，不记录 opaque name、connection identity、endpoint 或参数，且该诊断不改变既有降级判定。
+
 Request-local `AgentProfileTurnCatalog` 不是 DI service、cache 或进程级上下文。非 Profile consumer 必须显式传 `null`；当前只有 genuinely unprofiled NyxID Chat 允许这个值表达未绑定。
 
 ## Static route tool ceiling

@@ -8,6 +8,7 @@ using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -160,9 +161,19 @@ public sealed class AgentProfileTurnCatalogMaterializer
         var available = new HashSet<string>(availableTools.Keys, StringComparer.OrdinalIgnoreCase);
         available.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
 
-        var maximum = await ResolvePolicyAsync(profile.MaximumToolPolicy, toolContext, diagnostics, ct);
-        available.IntersectWith(maximum.Names);
-        var recovery = await ResolvePolicyAsync(profile.RecoveryToolPolicy, toolContext, diagnostics, ct);
+        var maximum = await ResolvePolicyAsync(
+            profile.MaximumToolPolicy,
+            availableTools,
+            toolContext,
+            diagnostics,
+            ct);
+        ApplyMaximumPolicy(available, maximum.Names, availableTools, diagnostics);
+        var recovery = await ResolvePolicyAsync(
+            profile.RecoveryToolPolicy,
+            availableTools,
+            toolContext,
+            diagnostics,
+            ct);
         var recoveryNames = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
         if (routeTools.HadFailure || hadMergeFailure ||
@@ -218,7 +229,12 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 diagnostics);
         }
 
-        var taskPolicy = await ResolvePolicyAsync(candidate.TaskToolPolicy, toolContext, diagnostics, ct);
+        var taskPolicy = await ResolvePolicyAsync(
+            candidate.TaskToolPolicy,
+            availableTools,
+            toolContext,
+            diagnostics,
+            ct);
         if (taskPolicy.HadFailure)
         {
             return CreatePreparation(
@@ -305,10 +321,20 @@ public sealed class AgentProfileTurnCatalogMaterializer
             out var hadMergeFailure);
         var eligible = new HashSet<string>(availableTools.Keys, StringComparer.OrdinalIgnoreCase);
         eligible.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
-        var maximum = await ResolvePolicyAsync(profile.MaximumToolPolicy, toolContext, diagnostics, ct);
-        eligible.IntersectWith(maximum.Names);
+        var maximum = await ResolvePolicyAsync(
+            profile.MaximumToolPolicy,
+            availableTools,
+            toolContext,
+            diagnostics,
+            ct);
+        ApplyMaximumPolicy(eligible, maximum.Names, availableTools, diagnostics);
         eligible.IntersectWith(committedAuthority.AuthorityCeilingToolNames);
-        var recovery = await ResolvePolicyAsync(profile.RecoveryToolPolicy, toolContext, diagnostics, ct);
+        var recovery = await ResolvePolicyAsync(
+            profile.RecoveryToolPolicy,
+            availableTools,
+            toolContext,
+            diagnostics,
+            ct);
         var recoveryNames = new HashSet<string>(eligible, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
 
@@ -474,13 +500,14 @@ public sealed class AgentProfileTurnCatalogMaterializer
         {
             var maximum = await ResolvePolicyAsync(
                 profile.MaximumToolPolicy,
+                routeTools.Tools,
                 toolContext,
                 diagnostics,
                 ct);
             if (maximum.HadFailure)
                 return RestrictedEmptyCatalog(diagnostics);
 
-            eligible.IntersectWith(maximum.Names);
+            ApplyMaximumPolicy(eligible, maximum.Names, routeTools.Tools, diagnostics);
         }
 
         var selectedTools = SelectTools(routeTools.Tools, eligible);
@@ -901,6 +928,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
 
     private async Task<ToolPolicyResolution> ResolvePolicyAsync(
         AgentProfileToolPolicy? policy,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
         AgentToolExecutionContext toolContext,
         List<AgentProfileTurnDiagnostic> diagnostics,
         CancellationToken ct)
@@ -927,8 +955,90 @@ public sealed class AgentProfileTurnCatalogMaterializer
             hadFailure |= resolution.HadFailure;
         }
 
+        var selectorSlugs = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var selector in policy.ConnectedServiceSelectors)
+        {
+            if (!IsValidConnectedServiceSelector(selector) ||
+                !selectorSlugs.Add(selector.CatalogServiceSlug))
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ProfileInvalid,
+                    "connected_service_selector_invalid"));
+                hadFailure = true;
+                continue;
+            }
+
+            names.UnionWith(availableTools
+                .Where(pair => MatchesConnectedServiceSelector(pair.Value, selector))
+                .Select(static pair => pair.Key));
+        }
+
         return new ToolPolicyResolution(names, hadFailure);
     }
+
+    private static bool IsValidConnectedServiceSelector(
+        AgentProfileConnectedServiceSelector selector) =>
+        NyxIdServiceSlugPolicy.IsCanonical(selector.CatalogServiceSlug) &&
+        selector.AllowedRisks.Count > 0 &&
+        selector.AllowedRisks.All(static risk =>
+            risk is AgentToolOperationRiskPayload.ReadOnly or AgentToolOperationRiskPayload.Write);
+
+    private static bool MatchesConnectedServiceSelector(
+        IAgentTool tool,
+        AgentProfileConnectedServiceSelector selector)
+    {
+        if (tool is not IAgentToolOperationAdmissionOwner owner ||
+            !string.Equals(
+                owner.OperationAdmission.CatalogServiceSlug,
+                selector.CatalogServiceSlug,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var risk = owner.OperationAdmission.ExecutionPolicy.Risk switch
+        {
+            AgentToolOperationRisk.ReadOnly => AgentToolOperationRiskPayload.ReadOnly,
+            AgentToolOperationRisk.Write => AgentToolOperationRiskPayload.Write,
+            _ => AgentToolOperationRiskPayload.Unspecified,
+        };
+        return selector.AllowedRisks.Contains(risk);
+    }
+
+    private static void ApplyMaximumPolicy(
+        HashSet<string> eligible,
+        IReadOnlySet<string> maximumNames,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        List<AgentProfileTurnDiagnostic> diagnostics)
+    {
+        var removed = eligible
+            .Where(name => !maximumNames.Contains(name))
+            .ToArray();
+        eligible.IntersectWith(maximumNames);
+        if (removed.Length == 0)
+            return;
+
+        var byKind = removed
+            .Select(name => availableTools.TryGetValue(name, out var tool)
+                ? DiagnosticKind(tool.Presentation.Kind)
+                : "unknown")
+            .GroupBy(static kind => kind, StringComparer.Ordinal)
+            .OrderBy(static group => group.Key, StringComparer.Ordinal)
+            .Select(static group => $"{group.Key}={group.Count()}");
+        diagnostics.Add(new AgentProfileTurnDiagnostic(
+            AgentProfileTurnDiagnosticCode.MaximumPolicyFilteredTools,
+            $"removed={removed.Length};{string.Join(';', byKind)}"));
+    }
+
+    private static string DiagnosticKind(ToolPresentationKind kind) => kind switch
+    {
+        ToolPresentationKind.NyxIdOperation => "nyx_id_operation",
+        ToolPresentationKind.Mcp => "mcp",
+        ToolPresentationKind.Skill => "skill",
+        ToolPresentationKind.BuiltIn => "built_in",
+        ToolPresentationKind.Generic => "generic",
+        _ => "unspecified",
+    };
 
     private async Task<ToolDiscoveryResolution> DiscoverToolSetAsync(
         string? toolSetName,

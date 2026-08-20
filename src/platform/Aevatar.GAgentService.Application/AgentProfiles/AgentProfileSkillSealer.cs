@@ -183,7 +183,18 @@ public sealed class AgentProfileSkillSealer : IAgentProfileSkillSealer
         var maximumToolSetRefs = maximum?.ToolSetRefs.ToHashSet(StringComparer.Ordinal) ?? [];
         var toolNames = policy?.ToolNames.ToHashSet(StringComparer.Ordinal) ?? [];
         var toolSetRefs = policy?.ToolSetRefs.ToHashSet(StringComparer.Ordinal) ?? [];
-        return toolNames.IsSubsetOf(maximumToolNames) && toolSetRefs.IsSubsetOf(maximumToolSetRefs)
+        var maximumSelectors = maximum?.ConnectedServiceSelectors
+            .GroupBy(static selector => selector.CatalogServiceSlug, StringComparer.Ordinal)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.SelectMany(static selector => selector.AllowedRisks).ToHashSet(),
+                StringComparer.Ordinal) ?? [];
+        var selectorsWithinMaximum = policy?.ConnectedServiceSelectors.All(selector =>
+            maximumSelectors.TryGetValue(selector.CatalogServiceSlug, out var allowedRisks) &&
+            selector.AllowedRisks.All(allowedRisks.Contains)) ?? true;
+        return toolNames.IsSubsetOf(maximumToolNames) &&
+               toolSetRefs.IsSubsetOf(maximumToolSetRefs) &&
+               selectorsWithinMaximum
             ? []
             : [new AgentProfileSealingDiagnostic(
                 "PROFILE_TOOL_POLICY_EXCEEDS_MAXIMUM",
