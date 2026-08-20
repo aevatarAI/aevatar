@@ -210,6 +210,10 @@ public sealed class WorkflowDeliveryGAgent
             throw new InvalidOperationException("workflow delivery already has a different installation.");
         }
 
+        var acceptanceInput = WorkflowDeliveryConventions.ResolveAcceptanceInput(
+            State.Package.AcceptancePolicy.Input,
+            command.RequestedAtUtc,
+            command.AuthenticatedOwner?.SubjectExternalUserId);
         var installation = new WorkflowInstallationState
         {
             InstallationId = command.InstallationId.Trim(),
@@ -226,6 +230,7 @@ public sealed class WorkflowDeliveryGAgent
             OperationId = WorkflowDeliveryConventions.NormalizeRequired(command.OperationId, "operation_id"),
             CapabilityAdmissionPlan = command.CapabilityAdmissionPlan.Clone(),
             AuthenticatedOwner = command.AuthenticatedOwner?.Clone(),
+            AcceptanceInput = acceptanceInput,
             CreatedAtUtc = command.RequestedAtUtc.Clone(),
             UpdatedAtUtc = command.RequestedAtUtc.Clone(),
         };
@@ -822,11 +827,14 @@ public sealed class WorkflowDeliveryGAgent
         WorkflowDeliveryConventions.NormalizeRequired(package.CreatedBy, "package.created_by");
         RequireTimestamp(package.CreatedAtUtc, "package.created_at_utc");
         if (package.AcceptancePolicy == null ||
-            package.AcceptancePolicy.Mode == WorkflowDeliveryAcceptanceMode.Unspecified)
+            package.AcceptancePolicy.Mode is not (
+                WorkflowDeliveryAcceptanceMode.AutomaticPreview or
+                WorkflowDeliveryAcceptanceMode.Manual))
             throw new InvalidOperationException("workflow delivery acceptance policy is required.");
         if (package.AcceptancePolicy.Mode == WorkflowDeliveryAcceptanceMode.Manual &&
             string.IsNullOrWhiteSpace(package.AcceptancePolicy.Limitation))
             throw new InvalidOperationException("manual workflow delivery acceptance policy requires a limitation.");
+        WorkflowDeliveryConventions.ValidateAcceptanceInput(package.AcceptancePolicy.Input);
         var expectedPackageHash = WorkflowDeliveryConventions.ComputePackageHash(package);
         if (!string.Equals(package.PackageHash, expectedPackageHash, StringComparison.Ordinal))
             throw new InvalidOperationException("workflow delivery package hash does not match its immutable content.");
@@ -855,7 +863,10 @@ public sealed class WorkflowDeliveryGAgent
             throw new InvalidOperationException("workflow installation source hash does not match the immutable package.");
         if (command.TriggerIntent == null || command.TriggerIntent.Kind == WorkflowDeliveryTriggerKind.Unspecified)
             throw new InvalidOperationException("workflow installation trigger intent is required.");
-        if (command.AuthenticatedOwner != null ||
+        var recipeRequiresOwner = State.Package.AcceptancePolicy?.Input?.Bindings.Any(static binding =>
+            binding.SourceCase ==
+                WorkflowDeliveryAcceptanceInputBinding.SourceOneofCase.AuthenticatedOwnerExternalUserId) == true;
+        if (command.AuthenticatedOwner != null || recipeRequiresOwner ||
             command.TriggerIntent.Kind is WorkflowDeliveryTriggerKind.OneShot or WorkflowDeliveryTriggerKind.Cron)
             ValidateAuthorizationOwner(command.AuthenticatedOwner);
         var schemaKeys = State.Package.VariableSchema.Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
@@ -909,7 +920,7 @@ public sealed class WorkflowDeliveryGAgent
     private static void ValidateAuthorizationOwner(WorkflowDeliveryAuthorizationOwnerContext? context)
     {
         if (context == null)
-            throw new InvalidOperationException("scheduled workflow installation requires authenticated authorization owner context.");
+            throw new InvalidOperationException("workflow installation requires authenticated authorization owner context.");
         ValidateOwnerIdentity(context.Owner, "authenticated_owner.owner");
         var subjectPlatform = WorkflowDeliveryConventions.NormalizeRequired(
             context.SubjectPlatform,
@@ -1227,7 +1238,9 @@ public sealed class WorkflowDeliveryGAgent
         string.Equals(state.Note, command.Note?.Trim() ?? string.Empty, StringComparison.Ordinal) &&
         string.Equals(state.CreatedBy, command.CreatedBy?.Trim(), StringComparison.Ordinal);
 
-    private static bool SameInstallation(WorkflowInstallationState state, StartWorkflowInstallationCommand command) =>
+    private static bool SameInstallation(
+        WorkflowInstallationState state,
+        StartWorkflowInstallationCommand command) =>
         string.Equals(state.InstallationId, command.InstallationId?.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.IdempotencyKey, command.IdempotencyKey?.Trim(), StringComparison.Ordinal) &&
         string.Equals(state.ScopeId, command.ScopeId?.Trim(), StringComparison.Ordinal) &&

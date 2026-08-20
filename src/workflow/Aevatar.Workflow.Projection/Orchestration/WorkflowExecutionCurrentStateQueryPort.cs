@@ -206,6 +206,16 @@ public sealed class WorkflowExecutionCurrentStateQueryPort : IWorkflowExecutionC
             });
         }
 
+        if (!string.IsNullOrWhiteSpace(query.RunId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowExecutionCurrentStateDocument.RunId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.RunId.Trim()),
+            });
+        }
+
         if (!string.IsNullOrWhiteSpace(query.WorkflowId))
         {
             filters.Add(new ProjectionDocumentFilter

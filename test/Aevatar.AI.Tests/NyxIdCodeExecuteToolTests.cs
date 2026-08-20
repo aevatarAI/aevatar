@@ -347,6 +347,93 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     }
 
     [Fact]
+    public async Task ReconcileOperationAsync_V6WorkflowRejectsCatalogProvenanceWithMatchingId()
+    {
+        var durable = new StubDurableCodeExecutionPort();
+        var tool = CreateDurableTool(durable, TimeProvider.System);
+        var context = SetWorkflowExecutionContext();
+        var operationId = OpaqueOperationId('4');
+        var pending = PendingOperation(operationId, "provider-known") with
+        {
+            RouteIdentitySource = CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog,
+        };
+
+        var reconciled = await tool.ReconcileOperationAsync(
+            new AgentToolOperationReconciliationRequest(
+                operationId,
+                """{"language":"python","code":"print(42)"}""",
+                context,
+                pending));
+
+        reconciled.Disposition.Should().Be(AgentToolOperationReconciliationDisposition.Completed);
+        reconciled.CompletedOutcome!.ResultJson.Should().Contain("code_execution_admission_invalid");
+        durable.StatusRequests.Should().BeEmpty();
+        durable.ResultRequests.Should().BeEmpty();
+        durable.SubmitRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReconcileOperationAsync_V4WorkflowUsesCatalogRouteFromStartedDurableReceipt()
+    {
+        var now = new DateTimeOffset(2026, 8, 18, 2, 34, 0, TimeSpan.Zero);
+        var operationId = OpaqueOperationId('e');
+        var durable = new StubDurableCodeExecutionPort();
+        durable.SubmitOutcomes.Enqueue(new DurableCodeExecutionSubmitOutcome(
+            DurableReceipt("provider-known") with
+            {
+                ResolvedRoute = ResolvedRoute,
+                CreatedAt = now,
+                ExpiresAt = now.AddMinutes(10),
+            },
+            null));
+        durable.StatusOutcomes.Enqueue(new DurableCodeExecutionStatusOutcome(
+            DurableSnapshot(
+                "provider-known",
+                DurableCodeExecutionState.Succeeded,
+                now.AddMinutes(10)) with
+            {
+                ResolvedRoute = ResolvedRoute,
+            },
+            NotModified: false,
+            ETag: "\"version-2\"",
+            RetryAfter: null,
+            Failure: null));
+        durable.ResultOutcomes.Enqueue(new DurableCodeExecutionResultOutcome(
+            CodeExecutionOutcome.Succeeded(
+                new CodeExecutionResult("42\n", string.Empty, 0),
+                ResolvedRoute),
+            Pending: false,
+            RetryAfter: null,
+            Failure: null));
+        var tool = CreateDurableTool(durable, new FakeTimeProvider(now));
+        var context = SetLegacyWorkflowExecutionContext();
+        const string arguments = """{"language":"python","code":"print(42)"}""";
+
+        var started = await tool.StartOperationAsync(new AgentToolOperationStartRequest(
+            operationId,
+            "call-v4",
+            tool.Name,
+            arguments,
+            context));
+
+        var reconciled = await tool.ReconcileOperationAsync(
+            new AgentToolOperationReconciliationRequest(
+                operationId,
+                arguments,
+                context,
+                started.PendingOperation));
+
+        started.Disposition.Should().Be(AgentToolOperationStartDisposition.Pending);
+        started.PendingOperation!.UserServiceId.Should().Be(ResolvedRoute.UserServiceId);
+        started.PendingOperation.RouteIdentitySource.Should().Be(ResolvedRoute.Source);
+        reconciled.Disposition.Should().Be(AgentToolOperationReconciliationDisposition.Completed);
+        reconciled.CompletedOutcome!.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        durable.StatusRequests.Should().ContainSingle().Which.Route.Should().Be(ResolvedRoute);
+        durable.ResultRequests.Should().ContainSingle().Which.Route.Should().Be(ResolvedRoute);
+        durable.SubmitRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ReconcileOperationAsync_SubmitRecoveryKnownReceiptUsesProviderExpiry()
     {
         var now = new DateTimeOffset(2026, 8, 14, 12, 0, 0, TimeSpan.Zero);
@@ -785,6 +872,43 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
                     "us-code-admitted",
                     CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
                 new CodeExecutionCallerContext("workflow-bearer", "workflow-bearer")));
+    }
+
+    [Fact]
+    public async Task CancelOperationAsync_V4WorkflowUsesCatalogRouteFromDurableReceipt()
+    {
+        var now = new DateTimeOffset(2026, 8, 18, 2, 34, 0, TimeSpan.Zero);
+        var operationId = OpaqueOperationId('f');
+        var durable = new StubDurableCodeExecutionPort();
+        durable.CancelOutcomes.Enqueue(new DurableCodeExecutionCancelOutcome(
+            DurableSnapshot(
+                "provider-known",
+                DurableCodeExecutionState.Running,
+                now.AddMinutes(10),
+                cancelRequested: true) with
+            {
+                ResolvedRoute = ResolvedRoute,
+            },
+            null));
+        var tool = CreateDurableTool(durable, new FakeTimeProvider(now));
+        var context = SetLegacyWorkflowExecutionContext();
+        var pending = PendingOperation(operationId, "provider-known") with
+        {
+            UserServiceId = ResolvedRoute.UserServiceId,
+            RouteIdentitySource = ResolvedRoute.Source,
+            ExpiresAtUnixMs = now.AddMinutes(10).ToUnixTimeMilliseconds(),
+        };
+
+        var cancelled = await tool.CancelOperationAsync(new AgentToolOperationCancellationRequest(
+            operationId,
+            """{"language":"python","code":"print(42)"}""",
+            context,
+            pending,
+            AgentToolOperationCancellationReason.WorkflowStopped,
+            DeadlineUnixMs: now.AddMinutes(1).ToUnixTimeMilliseconds()));
+
+        cancelled.Disposition.Should().Be(AgentToolOperationCancellationDisposition.Pending);
+        durable.CancelRequests.Should().ContainSingle().Which.Route.Should().Be(ResolvedRoute);
     }
 
     [Fact]
@@ -1587,6 +1711,21 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
                 AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
             OperationAdmission = CodeExecutionAdmission("us-code-admitted"),
+        };
+        AgentToolRequestContext.Current = context;
+        return context;
+    }
+
+    private static AgentToolExecutionContext SetLegacyWorkflowExecutionContext()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "workflow-bearer",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
         };
         AgentToolRequestContext.Current = context;
         return context;

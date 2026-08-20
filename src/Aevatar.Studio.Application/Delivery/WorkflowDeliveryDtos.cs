@@ -55,7 +55,8 @@ public sealed record WorkflowDeliveryConnectionSlotView(
 
 public sealed record WorkflowDeliveryPackageAcceptancePolicyView(
     bool AutomaticAcceptanceSupported,
-    string? Limitation);
+    string? Limitation,
+    bool InputDeclared);
 
 public sealed record WorkflowDeliveryPackageView(
     string PackageVersionId,

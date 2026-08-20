@@ -1019,8 +1019,8 @@ public sealed class ScopeBindingReadinessQueryServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
-                    WorkflowName = "invoice_file_extract",
-                    WorkflowYaml = "name: invoice_file_extract\nsteps: []",
+                    WorkflowName = "document_file_extract",
+                    WorkflowYaml = "name: document_file_extract\nsteps: []",
                     ExecutionMode = executionMode,
                     CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                     {

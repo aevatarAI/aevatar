@@ -396,18 +396,7 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
             SourceHash = package.SourceHash,
             PackageHash = package.PackageHash,
             RiskSummary = package.RiskSummary,
-            AcceptancePolicy = new WorkflowDeliveryAcceptancePolicy
-            {
-                Mode = package.AcceptancePolicy.Mode switch
-                {
-                    DeliveryApplication.WorkflowDeliveryAcceptanceMode.AutomaticPreview =>
-                        WorkflowDeliveryAcceptanceMode.AutomaticPreview,
-                    DeliveryApplication.WorkflowDeliveryAcceptanceMode.Manual =>
-                        WorkflowDeliveryAcceptanceMode.Manual,
-                    _ => WorkflowDeliveryAcceptanceMode.Unspecified,
-                },
-                Limitation = package.AcceptancePolicy.Limitation ?? string.Empty,
-            },
+            AcceptancePolicy = MapAcceptancePolicy(package.AcceptancePolicy),
             CreatedBy = package.CreatedBy,
             CreatedAtUtc = Timestamp.FromDateTimeOffset(package.CreatedAtUtc),
         };
@@ -422,6 +411,84 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
         snapshot.ParserDiagnostics.Add(package.ParserDiagnostics ??
             throw new ArgumentNullException(nameof(package.ParserDiagnostics)));
         return snapshot;
+    }
+
+    private static WorkflowDeliveryAcceptancePolicy MapAcceptancePolicy(
+        DeliveryApplication.WorkflowDeliveryAcceptancePolicy value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var policy = new WorkflowDeliveryAcceptancePolicy
+        {
+            Mode = value.Mode switch
+            {
+                DeliveryApplication.WorkflowDeliveryAcceptanceMode.AutomaticPreview =>
+                    WorkflowDeliveryAcceptanceMode.AutomaticPreview,
+                DeliveryApplication.WorkflowDeliveryAcceptanceMode.Manual =>
+                    WorkflowDeliveryAcceptanceMode.Manual,
+                _ => WorkflowDeliveryAcceptanceMode.Unspecified,
+            },
+            Limitation = value.Limitation ?? string.Empty,
+        };
+        if (value.InputDeclared)
+            policy.Input = MapAcceptanceInput(value.Input);
+        return policy;
+    }
+
+    private static WorkflowDeliveryAcceptanceInputRecipe MapAcceptanceInput(
+        DeliveryApplication.WorkflowDeliveryAcceptanceInputRecipe value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(value.Literals);
+        ArgumentNullException.ThrowIfNull(value.Bindings);
+        var recipe = new WorkflowDeliveryAcceptanceInputRecipe
+        {
+            Literals = value.Literals.Clone(),
+        };
+        recipe.Bindings.Add(value.Bindings.Select(MapAcceptanceInputBinding));
+        WorkflowDeliveryConventions.ValidateAcceptanceInput(recipe);
+        return recipe;
+    }
+
+    private static WorkflowDeliveryAcceptanceInputBinding MapAcceptanceInputBinding(
+        DeliveryApplication.WorkflowDeliveryAcceptanceInputBinding value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var binding = new WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = value.Key,
+            Prefix = value.Prefix,
+            Suffix = value.Suffix,
+        };
+        switch (value.Source)
+        {
+            case DeliveryApplication.WorkflowDeliveryInstallationCreatedAtUtcInput source:
+                binding.InstallationCreatedAtUtc = new WorkflowDeliveryInstallationCreatedAtUtcInput
+                {
+                    DateProjection = source.DateProjection switch
+                    {
+                        DeliveryApplication.WorkflowDeliveryAcceptanceDateProjection.UtcDate =>
+                            WorkflowDeliveryAcceptanceDateProjection.UtcDate,
+                        DeliveryApplication.WorkflowDeliveryAcceptanceDateProjection.UtcYearMonth =>
+                            WorkflowDeliveryAcceptanceDateProjection.UtcYearMonth,
+                        DeliveryApplication.WorkflowDeliveryAcceptanceDateProjection.UtcIsoWeek =>
+                            WorkflowDeliveryAcceptanceDateProjection.UtcIsoWeek,
+                        DeliveryApplication.WorkflowDeliveryAcceptanceDateProjection.UtcCompactDate =>
+                            WorkflowDeliveryAcceptanceDateProjection.UtcCompactDate,
+                        _ => throw new InvalidOperationException(
+                            "Workflow delivery acceptance input date projection is unsupported."),
+                    },
+                    DayOffset = source.DayOffset,
+                };
+                break;
+            case DeliveryApplication.WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput:
+                binding.AuthenticatedOwnerExternalUserId =
+                    new WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput();
+                break;
+            default:
+                throw new InvalidOperationException(
+                    "Workflow delivery acceptance input binding source is unsupported.");
+        }
+        return binding;
     }
 
     private static WorkflowDeliveryVariableDefinition MapVariable(

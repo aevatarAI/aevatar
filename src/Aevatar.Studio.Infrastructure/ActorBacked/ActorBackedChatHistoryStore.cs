@@ -424,7 +424,8 @@ internal sealed class ActorBackedChatHistoryStore :
             UpdatedAt: FromUnixMs(document.UpdatedAtMs),
             MessageCount: document.MessageCount,
             LlmRoute: string.IsNullOrEmpty(document.LlmRoute) ? null : document.LlmRoute,
-            LlmModel: string.IsNullOrEmpty(document.LlmModel) ? null : document.LlmModel);
+            LlmModel: string.IsNullOrEmpty(document.LlmModel) ? null : document.LlmModel,
+            StateVersion: document.StateVersion);
 
     private static IEnumerable<StoredChatMessage> ToStoredChatMessages(ChatConversationTurnDocument turn)
     {

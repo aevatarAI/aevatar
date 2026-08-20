@@ -5,7 +5,7 @@ Scope: GitHub issue #1929 Phase 1 validation artifacts.
 
 ## Purpose
 
-This guide records how to validate migration of n8n external form pages to Aevatar typed Lark card interactions. Phase 1 does not change production code. It creates a repeatable probe, a reimbursement shadow fixture, and an evidence checklist for a real Lark run.
+This guide records how to validate migration of n8n external form pages to Aevatar typed Lark card interactions. Phase 1 does not change production code. It creates a repeatable domain-neutral structured-review fixture and an evidence checklist for a real Lark run.
 
 ## Target Capabilities
 
@@ -16,25 +16,25 @@ This guide records how to validate migration of n8n external form pages to Aevat
 
 ## Probe Fixture
 
-Use `demos/lark-interaction-probe/cn-reimbursement-shadow.yaml`.
+Use `demos/lark-interaction-probe/structured-review-shadow.yaml`.
 
-The fixture models a China reimbursement review form with 18 logical fields:
+The fixture models a domain-neutral record review form with 18 logical fields:
 
-1. `employee_name`
-2. `employee_id`
-3. `department`
-4. `cost_center`
-5. `expense_date`
-6. `expense_type`
-7. `vendor_name`
-8. `invoice_title`
-9. `invoice_number`
-10. `currency`
-11. `amount`
-12. `tax_amount`
-13. `project_code`
-14. `payment_method`
-15. `approval_owner`
+1. `record_name`
+2. `record_id`
+3. `group`
+4. `category`
+5. `effective_date`
+6. `review_type`
+7. `source_name`
+8. `source_title`
+9. `source_reference`
+10. `locale`
+11. `quantity`
+12. `secondary_quantity`
+13. `project_reference`
+14. `delivery_method`
+15. `review_owner`
 16. `risk_level`
 17. `comments`
 18. `attachment_note`
@@ -64,9 +64,9 @@ Do not mark the migration complete until this section is filled with real eviden
 
 ## File Upload Migration
 
-The n8n form upload field is not migrated as a raw upload widget in Phase 1. For reimbursement flows, capture attachment references through Lark/NyxID document or message surfaces that already own file delivery, and store only stable references in the workflow form result.
+The n8n form upload field is not migrated as a raw upload widget in Phase 1. Capture attachment references through Lark/NyxID document or message surfaces that already own file delivery, and store only stable references in the workflow form result.
 
-For generated reimbursement documents, use the Lark document creation path. For pdfco-like PDF generation, the migration decision is `replace_with_lark_docx_create`.
+For generated review documents, use the Lark document creation path. For pdfco-like PDF generation, the migration decision is `replace_with_lark_docx_create`.
 
 ## Acceptance Notes
 

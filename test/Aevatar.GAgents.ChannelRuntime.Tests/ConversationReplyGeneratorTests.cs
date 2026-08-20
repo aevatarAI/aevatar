@@ -782,7 +782,7 @@ public sealed class ConversationReplyGeneratorTests
             Id = "msg-follow-up-provider",
             ChannelId = ChannelId.From("lark"),
             Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
-            Content = new MessageContent { Text = "/invoice-approval" },
+            Content = new MessageContent { Text = "/project-summary" },
         };
         var attachmentContext = new ChatAttachmentInputContext(
             [
@@ -1512,7 +1512,7 @@ public sealed class ConversationReplyGeneratorTests
     [Fact]
     public async Task GenerateReplyAsync_WithLarkPdfFileAttachment_AddsExtractedTextPart()
     {
-        var pdfBytes = BuildSimplePdf("Invoice total 42.00 USD");
+        var pdfBytes = BuildSimplePdf("Document value 42.00 USD");
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "report.pdf"));
         var fileArtifacts = new RecordingWorkflowFileArtifactPort();
@@ -1558,7 +1558,7 @@ public sealed class ConversationReplyGeneratorTests
             part.Kind == ContentPartKind.Text &&
             part.Text != null &&
             part.Text.Contains("PDF attachment 'report.pdf' extracted text", StringComparison.Ordinal) &&
-            part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal));
+            part.Text.Contains("Document value 42.00 USD", StringComparison.Ordinal));
         providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
             .NotContain("Attachment visibility warning");
         lark.Downloads.Should().ContainSingle().Which.Should().Be((
@@ -1575,7 +1575,7 @@ public sealed class ConversationReplyGeneratorTests
         ingress.MediaType.Should().Be("application/pdf");
         result.AppendedHistory.Should().NotContain(entry =>
             entry.ContentParts.Any(part =>
-                part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal)));
+                part.Text.Contains("Document value 42.00 USD", StringComparison.Ordinal)));
         result.AppendedHistory.SelectMany(entry => entry.ContentParts)
             .Should().Contain(part =>
                 part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text &&

@@ -5,9 +5,10 @@
 # into the image, so the values committed in this repository never reach production.
 # Without Aevatar:Delivery:ConsoleWebBaseUrl, delivery responses carry no product-console link.
 #
-# Only the product-console key is written and the obsolete connect-callback key is removed;
-# every other setting is preserved byte-for-byte by
-# round-tripping the document through a JSON parser. Prints a diff and requires an
+# Only the product-console key is written and the obsolete connect-callback key is removed.
+# Retired catalog keys are reported but preserved so this helper remains usable during a
+# rolling deployment; every other setting is preserved semantically while the document is
+# round-tripped through a JSON parser. Prints a diff and requires an
 # explicit APPLY=1 to write.
 set -euo pipefail
 
@@ -31,14 +32,20 @@ import json, os, sys
 current, target = sys.argv[1], sys.argv[2]
 cfg = json.load(open(current))
 delivery = cfg.setdefault("Aevatar", {}).setdefault("Delivery", {})
+legacy_keys = sorted(
+    key for key in ("AllowedWorkflowNames", "UseShippedWorkflowAllowlist")
+    if key in delivery
+)
+if legacy_keys:
+    joined = ", ".join(legacy_keys)
+    print(
+        "warning: retired Aevatar:Delivery settings remain for rolling compatibility: " +
+        joined + ". New hosts ignore them; remove them after the rollout because they do not "
+        "configure typed packages.",
+        file=sys.stderr,
+    )
 delivery.pop("ConsoleBaseUrl", None)
 delivery["ConsoleWebBaseUrl"] = os.environ["CONSOLE_WEB_BASE_URL"]
-# Creating this section is itself a behaviour change: the allowlist falls back to the
-# shipped packages only while Aevatar:Delivery is ABSENT. Once the section exists it fails
-# closed unless it names an allowlist or opts in, so writing the URLs alone would remove
-# every deliverable package. Opt in explicitly, without touching a configured allowlist.
-if "AllowedWorkflowNames" not in delivery:
-    delivery["UseShippedWorkflowAllowlist"] = True
 json.dump(cfg, open(target, "w"), indent=2, ensure_ascii=False)
 PY
 
@@ -55,6 +62,9 @@ if a != b:
     raise SystemExit("error: the rewrite changed settings outside Aevatar:Delivery; refusing to apply")
 print("verified: no setting outside Aevatar:Delivery changed")
 PY
+
+echo "delivery package prerequisite: this helper does not create Aevatar:Delivery:Packages or mount YAML sources."
+echo "Each configured package requires a matching {workflowName}.yaml under Aevatar:Delivery:PackageDirectory before rollout."
 
 if [ "${APPLY:-0}" != "1" ]; then
   echo "dry run only. Re-run with APPLY=1 to write the ConfigMap and restart the deployment."

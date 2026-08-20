@@ -24,6 +24,9 @@ function resolvePublicPath(value?: string): string {
  * @description 部署时的路径，如果部署在非根目录下，需要配置这个变量
  * @doc https://umijs.org/docs/api/config#publicpath
  */
+const BASE_PATH: string = resolvePublicPath(
+  process.env.AEVATAR_CONSOLE_BASE_PATH,
+);
 const PUBLIC_PATH: string = resolvePublicPath(
   process.env.AEVATAR_CONSOLE_PUBLIC_PATH,
 );
@@ -36,7 +39,7 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
    */
   hash: true,
 
-  base: PUBLIC_PATH,
+  base: BASE_PATH,
   publicPath: PUBLIC_PATH,
 
   /**
@@ -170,6 +173,9 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
     ),
     'process.env.AEVATAR_CONSOLE_PUBLIC_PATH': JSON.stringify(
       process.env.AEVATAR_CONSOLE_PUBLIC_PATH,
+    ),
+    'process.env.AEVATAR_CONSOLE_BASE_PATH': JSON.stringify(
+      process.env.AEVATAR_CONSOLE_BASE_PATH,
     ),
   },
 });

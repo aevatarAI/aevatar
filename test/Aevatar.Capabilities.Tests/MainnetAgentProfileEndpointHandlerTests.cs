@@ -8,6 +8,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Application.AgentProfiles;
+using Aevatar.Mainnet.Host.Api.AI;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using FluentAssertions;
 using Google.Protobuf;
@@ -40,8 +41,108 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         payload.RootElement.GetProperty("resourceUrl").GetString()
             .Should().Be("/api/scopes/scope-alpha/agent-profiles/research");
+        payload.RootElement.GetProperty("actorId").GetString().Should().NotBeNullOrWhiteSpace();
         actors.CreateCommands.Should().ContainSingle(command =>
             command.Owner.Scope.ScopeId == "scope-alpha" && command.ProfileSlug == "research");
+    }
+
+    [Fact]
+    public async Task CreateAIProfile_ShouldUseCallerScopeAndHideInternalActorIdentity()
+    {
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
+        using var request = Request(HttpMethod.Post, "/api/ai/agents", "scope-alpha", "user-alpha");
+        request.Headers.Add("Idempotency-Key", "create-ai-alpha");
+        request.Content = JsonContent.Create(new { profileSlug = "research" });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        payload.RootElement.GetProperty("resourceUrl").GetString()
+            .Should().Be("/api/ai/agents/research");
+        payload.RootElement.TryGetProperty("actorId", out _).Should().BeFalse();
+        actors.CreateCommands.Should().ContainSingle(command =>
+            command.Owner.Scope.ScopeId == "scope-alpha" &&
+            command.ProfileSlug == "research");
+    }
+
+    [Fact]
+    public async Task CreateAIProfile_WithoutCallerScope_ShouldRejectBeforeDispatch()
+    {
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
+        using var request = Request(HttpMethod.Post, "/api/ai/agents", string.Empty, "user-alpha");
+        request.Headers.Add("Idempotency-Key", "create-ai-without-scope");
+        request.Content = JsonContent.Create(new { profileSlug = "research" });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await ErrorMessageAsync(response)).Should().Be("A single authenticated scope is required.");
+        actors.CreateCommands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAIDefaultAgent_ShouldHideSystemRolloutControls()
+    {
+        await using var host = await AgentProfileTestHost.StartAsync();
+
+        var response = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            "/api/ai/agents/default/nyxid.chat",
+            "scope-alpha",
+            "user-alpha"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        payload.RootElement.TryGetProperty("enabled", out _).Should().BeFalse();
+        payload.RootElement.TryGetProperty("cohortBasisPoints", out _).Should().BeFalse();
+        payload.RootElement.GetProperty("authorityStateVersion").GetInt64().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AIEditorOptions_ShouldExposeBackendAuthoringConstraints()
+    {
+        await using var host = await AgentProfileTestHost.StartAsync();
+
+        var response = await host.Client.SendAsync(Request(
+            HttpMethod.Get,
+            "/api/ai/agents/editor-options",
+            "scope-alpha",
+            "user-alpha"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        payload.RootElement.GetProperty("supportedAgentKinds").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().Contain(AgentProfilePolicies.NyxIdChatAgentKind);
+        payload.RootElement.GetProperty("activationModes").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().BeEquivalentTo("SHADOW", "ENFORCED");
+    }
+
+    [Fact]
+    public async Task SetAIDefaultAgent_ShouldRejectSystemRolloutControls()
+    {
+        var actors = new RecordingActorPort();
+        await using var host = await AgentProfileTestHost.StartAsync(actorPort: actors);
+        using var request = Request(
+            HttpMethod.Put,
+            "/api/ai/agents/default/nyxid.chat",
+            "scope-alpha",
+            "user-alpha");
+        request.Headers.Add("Idempotency-Key", "set-ai-default");
+        request.Content = JsonContent.Create(new
+        {
+            agentProfile = new { ownerKind = "caller", profileSlug = "research" },
+            enabled = false,
+        });
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        actors.BindingCommands.Should().BeEmpty();
     }
 
     [Fact]
@@ -686,6 +787,7 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
             app.UseAuthentication();
             app.UseAuthorization();
             app.MapAgentProfileEndpoints();
+            app.MapAIWorkspaceAgentManagementEndpoints();
             await app.StartAsync();
             return new AgentProfileTestHost(app);
         }

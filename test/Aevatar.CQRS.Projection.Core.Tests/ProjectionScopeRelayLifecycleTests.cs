@@ -6,6 +6,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -54,6 +56,46 @@ public sealed class ProjectionScopeRelayLifecycleTests
         agent.State.Released.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task LegacyActiveScope_Ensure_ShouldPersistOneGenerationMigrationAndPublishExactRelay()
+    {
+        var (agent, stream) = CreateAgent(
+            "projection-scope-legacy",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var eventSourcing = (LifecycleEventSourcing)agent.EventSourcing!;
+
+        await agent.HandleEnsureAsync(new EnsureProjectionScopeCommand { RootActorId = RootActorId });
+        await agent.HandleEnsureAsync(new EnsureProjectionScopeCommand { RootActorId = RootActorId });
+
+        agent.State.ActivationGeneration.Should().Be(1);
+        eventSourcing.PersistedEvents.OfType<ProjectionScopeActivationGenerationMigratedEvent>()
+            .Should().ContainSingle();
+        var relay = stream.UpsertedRelays.Should().HaveCount(2).And.Subject.Last();
+        relay.TargetActorKind.Should().Be("projection.test-scope");
+        relay.ActivationGeneration.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ReleasedScope_Ensure_ShouldIncrementActivationGeneration()
+    {
+        var (agent, stream) = CreateAgent(
+            "projection-scope-restarted",
+            ProjectionRuntimeMode.DurableMaterialization);
+        agent.State.Released = true;
+        agent.State.ActivationGeneration = 3;
+
+        await agent.HandleEnsureAsync(new EnsureProjectionScopeCommand
+        {
+            RootActorId = RootActorId,
+            ProjectionKind = "test-kind",
+            Mode = ProjectionScopeMode.DurableMaterialization,
+        });
+
+        agent.State.ActivationGeneration.Should().Be(4);
+        stream.UpsertedRelays.Should().ContainSingle()
+            .Which.ActivationGeneration.Should().Be(4);
+    }
+
     private static (LifecycleScopeAgent Agent, RecordingStream Stream) CreateAgent(
         string scopeId,
         ProjectionRuntimeMode runtimeMode)
@@ -64,6 +106,13 @@ public sealed class ProjectionScopeRelayLifecycleTests
             EventSourcing = new LifecycleEventSourcing(),
             Services = new ServiceCollection()
                 .AddSingleton<IStreamProvider>(new SingleStreamProvider(stream))
+                .AddSingleton<IAgentKindRegistry>(new AgentKindRegistry(
+                [
+                    new AgentRegistration(
+                        "projection.test-scope",
+                        typeof(LifecycleScopeAgent),
+                        typeof(ProjectionScopeState)),
+                ]))
                 .BuildServiceProvider(),
         };
 
@@ -108,6 +157,7 @@ public sealed class ProjectionScopeRelayLifecycleTests
     {
         public string StreamId { get; } = streamId;
         public List<string> RemovedRelayTargetIds { get; } = [];
+        public List<StreamForwardingBinding> UpsertedRelays { get; } = [];
 
         public Task ProduceAsync<T>(T message, CancellationToken ct = default)
             where T : IMessage => throw new NotSupportedException();
@@ -115,8 +165,11 @@ public sealed class ProjectionScopeRelayLifecycleTests
         public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
             where T : IMessage, new() => throw new NotSupportedException();
 
-        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+        {
+            UpsertedRelays.Add(binding);
+            return Task.CompletedTask;
+        }
 
         public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default)
         {
@@ -132,6 +185,7 @@ public sealed class ProjectionScopeRelayLifecycleTests
     private sealed class LifecycleEventSourcing : IEventSourcingBehavior<ProjectionScopeState>
     {
         private readonly List<IMessage> _pending = [];
+        public List<IMessage> PersistedEvents { get; } = [];
         public long CurrentVersion { get; private set; }
 
         public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage => _pending.Add(evt);
@@ -141,6 +195,7 @@ public sealed class ProjectionScopeRelayLifecycleTests
             var result = new EventStoreCommitResult();
             foreach (var evt in _pending)
             {
+                PersistedEvents.Add(evt);
                 result.CommittedEvents.Add(new StateEvent
                 {
                     EventId = Guid.NewGuid().ToString("N"),
@@ -163,9 +218,15 @@ public sealed class ProjectionScopeRelayLifecycleTests
 
         public void DiscardPendingEvents() => _pending.Clear();
 
-        public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) =>
-            evt is ProjectionScopeReleasedEvent released
-                ? ProjectionScopeStateApplier.ApplyReleased(current, released)
-                : current;
+        public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) => evt switch
+        {
+            ProjectionScopeStartedEvent started => ProjectionScopeStateApplier.ApplyStarted(current, started),
+            ProjectionScopeActivationGenerationMigratedEvent migrated =>
+                ProjectionScopeStateApplier.ApplyActivationGenerationMigrated(current, migrated),
+            ProjectionObservationAttachmentUpdatedEvent attached =>
+                ProjectionScopeStateApplier.ApplyAttachmentUpdated(current, attached),
+            ProjectionScopeReleasedEvent released => ProjectionScopeStateApplier.ApplyReleased(current, released),
+            _ => current,
+        };
     }
 }

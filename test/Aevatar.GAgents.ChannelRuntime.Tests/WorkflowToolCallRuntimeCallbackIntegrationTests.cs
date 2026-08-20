@@ -116,8 +116,8 @@ public sealed class WorkflowToolCallRuntimeCallbackIntegrationTests
     {
         const string scopeId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
         return $"scope-workflow:{scopeId}-237314c299:" +
-               "fin-invoice-precheck-approval-3054bff174:gagent-service:deployment:" +
-               $"{scopeId}:default:default:fin_invoice_precheck_approval:" +
+               "workflow-external-document-processing-3054bff174:gagent-service:deployment:" +
+               $"{scopeId}:default:default:workflow-external-document-processing:" +
                $"rev-20260815001423-9354:run:{new string('c', 32)}";
     }
 }

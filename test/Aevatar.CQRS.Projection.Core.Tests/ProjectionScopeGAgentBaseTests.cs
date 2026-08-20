@@ -324,6 +324,55 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleReplayAsync_WhenAutomatic_ShouldSkipRetryExhaustedFailures()
+    {
+        var processedVersions = new List<long>();
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-automatic-replay",
+            onProcess: envelope =>
+            {
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                processedVersions.Add(version);
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: new TrackingEventSourcing());
+        agent.State.Active = false;
+        await agent.InitializeForTestAsync();
+        agent.State.Active = true;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-exhausted",
+            SourceVersion = 1,
+            RetryExhausted = true,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-automatic-replay",
+                version: 1),
+        });
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-recoverable",
+            SourceVersion = 2,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-automatic-replay",
+                version: 2),
+        });
+
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand
+        {
+            MaxItems = 1,
+            AutomaticRecovery = true,
+        });
+
+        processedVersions.Should().Equal(2);
+        agent.State.Failures.Should().ContainSingle()
+            .Which.FailureId.Should().Be("failure-exhausted");
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldSwallow_DeterministicProjectionFailure()
     {
         var agent = BuildActivatedAgent(

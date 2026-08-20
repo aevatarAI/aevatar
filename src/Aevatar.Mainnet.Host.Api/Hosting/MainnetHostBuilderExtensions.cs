@@ -57,6 +57,7 @@ using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
+using Aevatar.Mainnet.Host.Api.AI;
 using Aevatar.Mainnet.Host.Api.Chat;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
@@ -193,6 +194,9 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddAgentProfileApplication();
         builder.Services.TryAddSingleton<IAgentProfileActorPort, AgentProfileActorPort>();
         builder.Services.TryAddSingleton<AgentProfileApplicationService>();
+        builder.Services.TryAddSingleton<IAgentProfileCatalogApplicationService>(serviceProvider =>
+            serviceProvider.GetRequiredService<AgentProfileApplicationService>());
+        builder.Services.AddAIWorkspace(builder.Configuration);
         builder.AddStudioCapability();
         builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.AddAuditTrailCapabilityBundle();
@@ -551,7 +555,6 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<ConditionEvaluateAgentToolSource>,
-                    CreateToolSource<DomainEvidenceAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
                     CreateToolSource<OrnnSearchAgentToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
@@ -586,6 +589,8 @@ public static class MainnetHostBuilderExtensions
         app.MapChatRoutePolicyAdminEndpoints();
         app.MapLLMModelCatalogEndpoints();
         app.MapAgentProfileEndpoints();
+        app.MapAIWorkspaceEndpoints();
+        app.MapAIWorkspaceAgentManagementEndpoints();
         app.MapDefaultVoiceAgentEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();

@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text.Json;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
@@ -103,10 +101,7 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
             WorkflowDeliveryAcceptancePolicies.EnsureTriggerSupported(
                 delivery.Package,
                 installation.TriggerIntent.Kind);
-            var acceptancePrompt = BuildAcceptancePrompt(
-                delivery.Package.WorkflowName,
-                installation.CreatedAtUtc,
-                owner.SubjectExternalUserId);
+            var acceptanceInput = ResolveAcceptanceInput(delivery.Package, installation);
             var bearerToken = await _accessTokenProvider.IssueAsync(
                 new WorkflowCallerNyxIdAuthority
                 {
@@ -134,7 +129,6 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
             var request = new ProvisionWorkflowRequest(
                 $"{delivery.Package.DisplayName} [{delivery.DeliveryId}]",
                 installation.ResolvedYaml,
-                Prompt: acceptancePrompt,
                 RunImmediately: installation.TriggerIntent.Kind == WorkflowDeliveryTriggerKind.OneShot,
                 Cron: installation.TriggerIntent.Kind == WorkflowDeliveryTriggerKind.Cron
                     ? installation.TriggerIntent.Cron
@@ -143,6 +137,7 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
                 Caller: callerCredential)
             {
                 TeamId = installation.TeamId,
+                AcceptanceInput = acceptanceInput,
                 CapabilityAdmission = capabilityAdmission,
                 AuthenticatedOwner = shouldSchedule ? owner : null,
                 ProvisioningBearerToken = shouldSchedule ? bearerToken : null,
@@ -238,57 +233,24 @@ public sealed class WorkflowDeliveryProvisioningExecutor : IWorkflowDeliveryProv
             installation.OperationId);
     }
 
-    internal static string BuildAcceptancePrompt(
-        string workflowName,
-        DateTimeOffset installationCreatedAtUtc,
-        string operatorId)
+    internal static Google.Protobuf.WellKnownTypes.Struct ResolveAcceptanceInput(
+        Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryPackageSnapshot package,
+        WorkflowInstallationSnapshot installation)
     {
-        var runDateValue = installationCreatedAtUtc.UtcDateTime.Date;
-        var runDate = runDateValue.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var periodLabel = runDateValue.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-
-        return workflowName switch
+        ArgumentNullException.ThrowIfNull(package);
+        ArgumentNullException.ThrowIfNull(installation);
+        if (package.AcceptancePolicy == null)
         {
-            WorkflowDeliveryAcceptancePolicies.BudgetVarianceMonitor => JsonSerializer.Serialize(new
-            {
-                period_label = ISOWeek.GetYear(runDateValue).ToString("D4", CultureInfo.InvariantCulture) +
-                    "-W" + ISOWeek.GetWeekOfYear(runDateValue).ToString("D2", CultureInfo.InvariantCulture),
-                run_date = runDate,
-                submit = false,
-            }),
-            WorkflowDeliveryAcceptancePolicies.AttendanceFillReminder => JsonSerializer.Serialize(new
-            {
-                period_label = periodLabel,
-                days_left = "0",
-                submit = false,
-            }),
-            WorkflowDeliveryAcceptancePolicies.MonthlyAttendanceApproval => JsonSerializer.Serialize(new
-            {
-                period_label = periodLabel,
-                run_date = runDate,
-                month_end_only = false,
-                submit = false,
-            }),
-            WorkflowDeliveryAcceptancePolicies.OnboardingEmailApproval => JsonSerializer.Serialize(new
-            {
-                lark_name = "Aevatar Delivery Preview",
-                department = "Workflow Delivery",
-                onboarding_date = runDateValue.AddDays(7).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                email_username = "aevatar.delivery.preview." +
-                    runDateValue.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
-                operator_id = operatorId,
-                run_date = runDate,
-                submit = false,
-            }),
-            WorkflowDeliveryAcceptancePolicies.InvoicePrecheckApproval => JsonSerializer.Serialize(new
-            {
-                run_date = runDate,
-                submit = false,
-            }),
-            _ => throw new WorkflowDeliveryException(
+            throw new WorkflowDeliveryException(
                 "UNSUPPORTED_DELIVERY_PACKAGE",
-                "The workflow package has no registered acceptance input contract."),
-        };
+                "The workflow package has no acceptance policy.");
+        }
+
+        WorkflowDeliveryAcceptancePolicies.EnsureInputDeclared(package.AcceptancePolicy);
+
+        return installation.AcceptanceInput?.Clone() ?? throw new WorkflowDeliveryException(
+            WorkflowDeliveryAcceptancePolicies.InputMigrationRequiredCode,
+            "The owning legacy workflow delivery must be revoked and recreated from a typed package, and the customer must reinstall it.");
     }
 
     private static AuthenticatedAuthorizationOwnerContext RequireOwner(

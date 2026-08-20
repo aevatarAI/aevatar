@@ -193,6 +193,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             if (string.IsNullOrWhiteSpace(authenticatedOwner.VerifiedBindingId))
                 throw new UnauthorizedAccessException("authenticated_authorization_owner_binding_missing");
 
+            var prompt = RenderWorkflowInput(request);
             var intent = BuildScheduleProvisioningIntent(
                 normalizedScopeId,
                 teamId,
@@ -201,7 +202,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 acceptedWorkflowId,
                 acceptedRevisionId,
                 displayName,
-                request.Prompt ?? string.Empty,
+                prompt,
                 authenticatedOwner,
                 bindReceipt.BindingRunId,
                 request);
@@ -579,6 +580,16 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             NormalizeOptional(bindingRunId),
             scheduleOperationId,
             NormalizeOptional(request.ScheduleIdempotencyKey));
+    }
+
+    private static string RenderWorkflowInput(ProvisionWorkflowRequest request)
+    {
+        var acceptanceInput = request.AcceptanceInput;
+        if (acceptanceInput == null)
+            return request.Prompt ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(request.Prompt))
+            throw new InvalidOperationException("workflow provisioning input is ambiguous");
+        return JsonFormatter.Default.Format(acceptanceInput);
     }
 
     private static string BuildScheduleProvisioningId(

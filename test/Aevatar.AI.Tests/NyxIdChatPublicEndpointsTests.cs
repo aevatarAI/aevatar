@@ -147,26 +147,26 @@ public sealed class NyxIdChatPublicEndpointsTests
         context.Response.Body = new MemoryStream();
         var rawPart = new NyxIdChatEndpoints.ContentPartDto(
             Type: "image",
-            DataBase64: "c3ludGhldGljLWludm9pY2U=",
+            DataBase64: "c2FtcGxlLWltYWdl",
             MediaType: "image/png",
-            Name: "synthetic-invoice.png");
+            Name: "sample-image.png");
 
         await NyxIdChatEndpoints.HandlePublicChatAsync(context, Parse("""
             {
               "type": "text",
-              "clientRequestId": "invoice-request",
-              "prompt": "Review this invoice",
+              "clientRequestId": "image-request",
+              "prompt": "Review this image",
               "inputParts": [{
                 "type": "image",
-                "dataBase64": "c3ludGhldGljLWludm9pY2U=",
+                "dataBase64": "c2FtcGxlLWltYWdl",
                 "mediaType": "image/png",
-                "name": "synthetic-invoice.png"
+                "name": "sample-image.png"
               }]
             }
             """));
 
         var request = ingress.Requests.Should().ContainSingle().Which;
-        request.Content.ToArray().Should().Equal("synthetic-invoice"u8.ToArray());
+        request.Content.ToArray().Should().Equal("sample-image"u8.ToArray());
         request.SourceKind.Should().Be(FileArtifactSourceKind.ChatInput);
         request.OwnerScopeId.Should().Be("scope-alpha");
 
@@ -204,13 +204,13 @@ public sealed class NyxIdChatPublicEndpointsTests
     }
 
     [Fact]
-    public void CommandEnvelope_WithCase13MultimodalPrompt_ShouldCarryExactSkillRecovery()
+    public void CommandEnvelope_WithNamedSkillMultimodalPrompt_ShouldCarryExactSkillRecovery()
     {
         const string prompt =
-            "请从这张合成发票图片中提取字段、归一化金额和日期，并检查历史重复。" +
-            "请先通过 Ornn 搜索确认并使用精确名称为 invoice-ocr-policy-review 的 skill，" +
+            "请从这张合成项目状态图中提取标签并返回结构化摘要。" +
+            "请先通过 Ornn 搜索确认并使用精确名称为 project-summary 的 skill，" +
             "把其中的 workflow 挂载到当前 scope 后实际运行；禁止直接用模型视觉回答，" +
-            "禁止创建审批，结果只以 typed artifact 为准。";
+            "结果只以 typed artifact 为准。";
         var command = new NyxIdChatCommand(
             "conversation-alpha",
             "scope-alpha",
@@ -219,9 +219,9 @@ public sealed class NyxIdChatPublicEndpointsTests
             "delegated-token",
             [new NyxIdChatEndpoints.ContentPartDto(
                 Type: "image",
-                DataBase64: "c3ludGhldGljLWludm9pY2U=",
+                DataBase64: "c2FtcGxlLWltYWdl",
                 MediaType: "image/png",
-                Name: "synthetic-invoice.png").ToProto()],
+                Name: "sample-image.png").ToProto()],
             Metadata: null,
             OwnerSubject: "user-alpha");
 
@@ -238,7 +238,7 @@ public sealed class NyxIdChatPublicEndpointsTests
         var recovery = AgentToolExecutionContextMapper.FromPayload(start.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
         recovery.RequireOrnnSearchOnBlocker.Should().BeTrue();
-        recovery.PrimarySkillName.Should().Be("invoice-ocr-policy-review");
+        recovery.PrimarySkillName.Should().Be("project-summary");
         recovery.OriginalCommand.Should().Be(prompt);
         recovery.CommandArguments.Should().Be(prompt);
     }

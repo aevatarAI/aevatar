@@ -28,9 +28,45 @@ export default [
   },
   {
     path: "/chat",
-    name: "Chat",
-    component: "./chat",
-    menuGroupKey: "chat",
+    component: "./ai/legacy-chat",
+    hideInMenu: true,
+    parentKeys: ["/ai"],
+  },
+  {
+    path: "/ai/chat",
+    component: "./ai/chat",
+    hideInMenu: true,
+    parentKeys: ["/ai"],
+  },
+  {
+    path: "/ai/agents",
+    component: "./ai/agents",
+    hideInMenu: true,
+    parentKeys: ["/ai"],
+  },
+  {
+    path: "/ai/models",
+    component: "./ai/models",
+    hideInMenu: true,
+    parentKeys: ["/ai"],
+  },
+  {
+    path: "/ai/activity/runs/:runId",
+    component: "./ai/activity/run-detail",
+    hideInMenu: true,
+    parentKeys: ["/ai"],
+  },
+  {
+    path: "/ai/activity",
+    component: "./ai/activity",
+    hideInMenu: true,
+    parentKeys: ["/ai"],
+  },
+  {
+    path: "/ai",
+    name: "AI",
+    component: "./ai",
+    menuGroupKey: "ai",
     hideInMenu: false,
   },
   {

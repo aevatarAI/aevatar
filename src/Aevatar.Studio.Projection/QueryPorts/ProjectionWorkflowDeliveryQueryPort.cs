@@ -17,6 +17,11 @@ using ApplicationInstallationStatus = Aevatar.Studio.Application.Studio.Abstract
 using ApplicationConnectionSlotDefinition = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryConnectionSlotDefinition;
 using ApplicationAcceptanceMode = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceMode;
 using ApplicationAcceptancePolicy = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptancePolicy;
+using ApplicationAcceptanceDateProjection = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceDateProjection;
+using ApplicationAcceptanceInputBinding = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceInputBinding;
+using ApplicationAcceptanceInputRecipe = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceInputRecipe;
+using ApplicationInstallationCreatedAtUtcInput = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryInstallationCreatedAtUtcInput;
+using ApplicationAuthenticatedOwnerExternalUserIdInput = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput;
 using ApplicationConfirmationReference = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryConfirmationReference;
 using ApplicationAcceptanceRunEvidence = Aevatar.Studio.Application.Studio.Abstractions.WorkflowAcceptanceRunReadinessEvidence;
 using ApplicationArtifactEvidence = Aevatar.Studio.Application.Studio.Abstractions.WorkflowInstallationArtifactEvidence;
@@ -38,6 +43,9 @@ using ProtoTriggerKind = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryTrigge
 using ProtoVariableKind = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryVariableKind;
 using ProtoInstallationStatus = Aevatar.GAgents.WorkflowDelivery.WorkflowInstallationStatus;
 using ProtoAcceptanceMode = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceMode;
+using ProtoAcceptanceDateProjection = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceDateProjection;
+using ProtoAcceptanceInputBinding = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputBinding;
+using ProtoAcceptanceInputRecipe = Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryAcceptanceInputRecipe;
 
 namespace Aevatar.Studio.Projection.QueryPorts;
 
@@ -235,8 +243,63 @@ public sealed class ProjectionWorkflowDeliveryQueryPort : IWorkflowDeliveryQuery
         };
         if (mode == ApplicationAcceptanceMode.Unspecified)
             throw InvalidDocument("package acceptance_policy mode is unspecified");
-        return new ApplicationAcceptancePolicy(mode, NormalizeOptional(value.Limitation));
+        return new ApplicationAcceptancePolicy(
+            mode,
+            NormalizeOptional(value.Limitation),
+            value.Input == null
+                ? new ApplicationAcceptanceInputRecipe(new Struct(), [])
+                : MapAcceptanceInput(value.Input),
+            InputDeclared: value.Input != null);
     }
+
+    private static ApplicationAcceptanceInputRecipe MapAcceptanceInput(
+        ProtoAcceptanceInputRecipe value)
+    {
+        try
+        {
+            WorkflowDeliveryConventions.ValidateAcceptanceInput(value);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new InvalidOperationException(
+                "Projected workflow delivery document package acceptance_policy input is invalid.",
+                exception);
+        }
+
+        return new ApplicationAcceptanceInputRecipe(
+            value.Literals.Clone(),
+            value.Bindings.Select(MapAcceptanceInputBinding).ToArray());
+    }
+
+    private static ApplicationAcceptanceInputBinding MapAcceptanceInputBinding(
+        ProtoAcceptanceInputBinding value) =>
+        new(
+            value.Key,
+            value.Prefix,
+            value.Suffix,
+            value.SourceCase switch
+            {
+                ProtoAcceptanceInputBinding.SourceOneofCase.InstallationCreatedAtUtc =>
+                    new ApplicationInstallationCreatedAtUtcInput(
+                        value.InstallationCreatedAtUtc.DateProjection switch
+                        {
+                            ProtoAcceptanceDateProjection.UtcDate =>
+                                ApplicationAcceptanceDateProjection.UtcDate,
+                            ProtoAcceptanceDateProjection.UtcYearMonth =>
+                                ApplicationAcceptanceDateProjection.UtcYearMonth,
+                            ProtoAcceptanceDateProjection.UtcIsoWeek =>
+                                ApplicationAcceptanceDateProjection.UtcIsoWeek,
+                            ProtoAcceptanceDateProjection.UtcCompactDate =>
+                                ApplicationAcceptanceDateProjection.UtcCompactDate,
+                            _ => throw InvalidDocument(
+                                "package acceptance_policy input date projection is unsupported"),
+                        },
+                        value.InstallationCreatedAtUtc.DayOffset),
+                ProtoAcceptanceInputBinding.SourceOneofCase.AuthenticatedOwnerExternalUserId =>
+                    new ApplicationAuthenticatedOwnerExternalUserIdInput(),
+                _ => throw InvalidDocument(
+                    "package acceptance_policy input binding source is unsupported"),
+            });
 
     private static ApplicationVariableDefinition MapVariable(
         Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryVariableDefinition value) =>
@@ -288,6 +351,7 @@ public sealed class ProjectionWorkflowDeliveryQueryPort : IWorkflowDeliveryQuery
             value.CapabilityAdmissionPlan?.Clone() ??
                 throw InvalidDocument("installation capability_admission_plan is missing"),
             MapAuthenticatedOwner(value.AuthenticatedOwner),
+            value.AcceptanceInput?.Clone(),
             NormalizeRequired(value.OperationId, "projected installation operation_id"),
             MapInstallationStatus(value.Status),
             value.Stage,

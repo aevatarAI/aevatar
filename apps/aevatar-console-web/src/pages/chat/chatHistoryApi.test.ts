@@ -92,6 +92,42 @@ describe("chatHistoryApi", () => {
     );
   });
 
+  it("accepts null actor attention fields for conversations without active attention", () => {
+    expect(
+      decodeChatHistoryIndex({
+        conversations: [
+          {
+            activeStepSummary: null,
+            attentionKind: null,
+            attentionSince: null,
+            createdAt: "2026-08-04T02:30:00+00:00",
+            id: "conversation-idle",
+            messageCount: 2,
+            taskStatus: null,
+            title: "Idle conversation",
+            updatedAt: "2026-08-04T02:35:00+00:00",
+          },
+        ],
+        nextCursor: null,
+      })
+    ).toEqual({
+      conversations: [
+        {
+          activeStepSummary: null,
+          attentionKind: null,
+          attentionSince: null,
+          createdAt: "2026-08-04T02:30:00+00:00",
+          id: "conversation-idle",
+          messageCount: 2,
+          taskStatus: null,
+          title: "Idle conversation",
+          updatedAt: "2026-08-04T02:35:00+00:00",
+        },
+      ],
+      nextCursor: null,
+    });
+  });
+
   it("loads the canonical transcript and conditional current state", async () => {
     const transcript = {
       messages: [],

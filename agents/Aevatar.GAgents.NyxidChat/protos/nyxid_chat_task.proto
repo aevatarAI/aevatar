@@ -415,6 +415,8 @@ message NyxIdChatApprovalStepSource {
 message NyxIdChatWebStepSource {}
 
 message NyxIdChatNumericConditionState {
+  reserved 11;
+  reserved "source_evidence_id";
   string condition_id = 1;
   string source_input_request_id = 2;
   int64 suggested_threshold = 3;
@@ -425,7 +427,6 @@ message NyxIdChatNumericConditionState {
   NyxIdChatConditionOutcome outcome = 8;
   google.protobuf.Timestamp evaluated_at = 9;
   string guarded_tool_name = 10;
-  string source_evidence_id = 11;
 }
 
 message NyxIdChatConditionStepSource {
@@ -547,109 +548,9 @@ message NyxIdChatPlanRevisionRecord {
   repeated string cancelled_step_ids = 5;
 }
 
-// Exact decimal money as supplied by the task producer. The minor-unit form
-// avoids locale parsing and floating-point drift in actor-owned evidence.
-message NyxIdChatMoneyValue {
-  string currency_code = 1;
-  int64 minor_units = 2;
-  uint32 fraction_digits = 3;
-}
-
-message NyxIdChatInvoiceEvidence {
-  int32 source_ordinal = 1;
-  string vendor = 2;
-  string invoice_number = 3;
-  string invoice_date = 4;
-  NyxIdChatMoneyValue amount = 5;
-}
-
-message NyxIdChatInvoiceDuplicateEvidence {
-  int32 duplicate_source_ordinal = 1;
-  int32 retained_source_ordinal = 2;
-}
-
-// Actor-validated reimbursement facts. Raw provider arguments are not part of
-// this contract and remain transient at the connected-service boundary.
-message NyxIdChatReimbursementEvidence {
-  string evidence_id = 1;
-  string source_input_request_id = 2;
-  string expense_category = 3;
-  string cost_center = 4;
-  string reimbursement_currency_instruction = 5;
-  repeated NyxIdChatInvoiceEvidence source_invoices = 6;
-  repeated int32 retained_source_ordinals = 7;
-  repeated NyxIdChatInvoiceDuplicateEvidence duplicate_invoices = 8;
-  google.protobuf.Timestamp committed_at = 9;
-  string guarded_tool_name = 10;
-}
-
-message NyxIdChatCandidateRubricCriterion {
-  string criterion_id = 1;
-  string title = 2;
-  int32 maximum_points = 3;
-}
-
-message NyxIdChatCandidateCriterionScore {
-  string criterion_id = 1;
-  int32 awarded_points = 2;
-  string evidence = 3;
-}
-
-// User-authored rubric plus the model's bounded, evidence-linked score. The
-// actor validates totals and binds condition evaluation to evidence_id.
-message NyxIdChatCandidateScreeningEvidence {
-  string evidence_id = 1;
-  string source_input_request_id = 2;
-  string candidate_name = 3;
-  string role_title = 4;
-  repeated NyxIdChatCandidateRubricCriterion rubric = 5;
-  repeated NyxIdChatCandidateCriterionScore scores = 6;
-  int32 total_score = 7;
-  string tracker_table = 8;
-  string tracker_table_id = 9;
-  string stage = 10;
-  string guarded_tool_name = 11;
-  google.protobuf.Timestamp committed_at = 12;
-}
-
-message NyxIdChatTaskDomainState {
-  oneof domain {
-    NyxIdChatReimbursementEvidence reimbursement = 1;
-    NyxIdChatCandidateScreeningEvidence candidate_screening = 2;
-  }
-}
-
-message NyxIdChatReimbursementArtifact {
-  string provider_instance_id = 1;
-  string cost_center = 2;
-  int32 retained_item_count = 3;
-  int32 duplicate_item_count = 4;
-}
-
-message NyxIdChatCandidateTrackerArtifact {
-  string provider_record_id = 1;
-  string candidate_name = 2;
-  int32 score = 3;
-  int64 threshold = 4;
-  string tracker_table = 5;
-  string tracker_table_id = 6;
-  string stage = 7;
-}
-
-// Artifact truth is created only by a matching admitted read-back. Assistant
-// prose and transport acceptance cannot populate this state.
-message NyxIdChatVerifiedArtifactState {
-  string check_name = 1;
-  google.protobuf.Timestamp verified_at = 2;
-  oneof artifact {
-    NyxIdChatReimbursementArtifact reimbursement = 3;
-    NyxIdChatCandidateTrackerArtifact candidate_tracker = 4;
-  }
-}
-
 message NyxIdChatTaskState {
-  reserved 16;
-  reserved "gate";
+  reserved 16, 19, 20;
+  reserved "gate", "domain", "artifact";
   string task_id = 1;
   string turn_id = 2;
   NyxIdChatTaskStatus status = 3;
@@ -667,8 +568,6 @@ message NyxIdChatTaskState {
   string title = 15;
   repeated NyxIdChatPlanRevisionRecord plan_revisions = 17;
   int32 plan_revision_history_start = 18;
-  NyxIdChatTaskDomainState domain = 19;
-  NyxIdChatVerifiedArtifactState artifact = 20;
 }
 
 // Public TaskPlan projection shared by live AGUI frames and current-state
@@ -724,8 +623,8 @@ message NyxIdChatTaskPlanStep {
 }
 
 message NyxIdChatTaskPlan {
-  reserved 16;
-  reserved "gate";
+  reserved 16, 19, 20;
+  reserved "gate", "domain", "artifact";
   string task_id = 1;
   string turn_id = 2;
   NyxIdChatTaskStatus status = 3;
@@ -743,8 +642,6 @@ message NyxIdChatTaskPlan {
   string title = 15;
   repeated NyxIdChatPlanRevisionRecord plan_revisions = 17;
   int32 plan_revision_history_start = 18;
-  NyxIdChatTaskDomainState domain = 19;
-  NyxIdChatVerifiedArtifactState artifact = 20;
 }
 
 message NyxIdChatTaskStepChanged {
@@ -1602,14 +1499,6 @@ message NyxIdChatConditionContinuationInput {
   NyxIdChatNumericConditionState condition = 2;
 }
 
-message NyxIdChatDomainContinuationInput {
-  string tool_call_id = 1;
-  oneof evidence {
-    NyxIdChatReimbursementEvidence reimbursement = 2;
-    NyxIdChatCandidateScreeningEvidence candidate_screening = 3;
-  }
-}
-
 message NyxIdChatToolApprovalContinuationInput {
   string approval_request_id = 1;
   bool approved = 2;
@@ -1624,8 +1513,8 @@ message NyxIdChatToolApprovalContinuationInput {
 }
 
 message NyxIdChatOperationDispatchCommand {
-  reserved 15;
-  reserved "plan_gate_continuation";
+  reserved 15, 18;
+  reserved "plan_gate_continuation", "domain_continuation";
   NyxIdChatOperationKey key = 1;
   oneof input {
     NyxIdChatLLMOperationInput llm = 10;
@@ -1635,7 +1524,6 @@ message NyxIdChatOperationDispatchCommand {
     NyxIdChatToolApprovalContinuationInput tool_approval_continuation = 14;
     NyxIdChatToolVerificationInput tool_verification = 16;
     NyxIdChatConditionContinuationInput condition_continuation = 17;
-    NyxIdChatDomainContinuationInput domain_continuation = 18;
   }
 }
 

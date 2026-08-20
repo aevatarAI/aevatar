@@ -26,14 +26,24 @@ import React, {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import { isNyxIdChatWireInspectorEnabled } from '@/shared/config/consoleFeatures';
 import { t } from '@/shared/i18n/messages';
-import { history } from '@/shared/navigation/history';
+import { AI_CHAT_ROUTE } from '@/shared/navigation/aiRoutes';
+import {
+  getLocationSnapshot,
+  history,
+  subscribeToLocationChanges,
+} from '@/shared/navigation/history';
 import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
 } from '@/shared/navigation/teamRoutes';
+import {
+  aiWorkspaceQueryKeys,
+  readAIWorkspaceSessionAuthority,
+} from '@/shared/query/aiWorkspaceQueryKeys';
 import { studioApi } from '@/shared/studio/api';
 import { AevatarPageShell } from '@/shared/ui/aevatarPageShells';
 import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
@@ -128,6 +138,21 @@ function readChatQueryValue(
   search = typeof window === 'undefined' ? '' : window.location.search,
 ): string {
   return new URLSearchParams(search).get(key)?.trim() ?? '';
+}
+
+export function buildChatConversationRouteHref(
+  conversationId?: string | null,
+  search = typeof window === 'undefined' ? '' : window.location.search,
+): string {
+  const query = new URLSearchParams(search);
+  const normalizedConversationId = conversationId?.trim() ?? '';
+  if (normalizedConversationId) {
+    query.set('conversationId', normalizedConversationId);
+  } else {
+    query.delete('conversationId');
+  }
+  const serialized = query.toString();
+  return `${AI_CHAT_ROUTE}${serialized ? `?${serialized}` : ''}`;
 }
 
 function createClientId(): string {
@@ -436,6 +461,8 @@ const ChatPage: React.FC = () => {
   const streamControllerRef = useRef<AbortController | null>(null);
   const controlControllerRef = useRef<AbortController | null>(null);
   const detailRequestRef = useRef('');
+  const restoringConversationIdentityRef = useRef('');
+  const routedConversationRef = useRef('');
   const scopeIdentityRef = useRef('');
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const [activeConversation, setActiveConversation] =
@@ -460,16 +487,33 @@ const ChatPage: React.FC = () => {
   const [controlBusy, setControlBusy] = useState(false);
   const [diagnosticWire, setDiagnosticWire] = useState<unknown>(undefined);
   const wireInspectorEnabled = isNyxIdChatWireInspectorEnabled();
+  const queryAuthority = readAIWorkspaceSessionAuthority();
 
   const authSessionQuery = useQuery({
-    queryKey: ['chat', 'auth-session'],
+    queryKey: [
+      'chat',
+      'auth-session',
+      queryAuthority.principalId,
+      queryAuthority.sessionExpiresAt,
+    ],
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
-  const routeSearch =
-    typeof window === 'undefined' ? '' : window.location.search;
+  const locationSnapshot = useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    getLocationSnapshot,
+  );
+  const routeSearch = useMemo(
+    () => new URL(locationSnapshot || '/', 'http://aevatar.local').search,
+    [locationSnapshot],
+  );
   const routeScopeId = useMemo(
     () => readChatQueryValue('scopeId', routeSearch),
+    [routeSearch],
+  );
+  const routeConversationId = useMemo(
+    () => readChatQueryValue('conversationId', routeSearch),
     [routeSearch],
   );
   const resolvedScope = useMemo(
@@ -491,13 +535,48 @@ const ChatPage: React.FC = () => {
       authSessionQuery.data.authenticated === true &&
       scopeId,
   );
+  const syncConversationRoute = useCallback(
+    (conversationId: string | undefined, mode: 'push' | 'replace') => {
+      const normalizedConversationId = conversationId?.trim() ?? '';
+      const href = buildChatConversationRouteHref(
+        normalizedConversationId,
+        routeSearch,
+      );
+      const currentHref =
+        typeof window === 'undefined'
+          ? ''
+          : `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      routedConversationRef.current =
+        scopeId && normalizedConversationId
+          ? `${scopeId}:${normalizedConversationId}`
+          : '';
+      if (href === currentHref) {
+        return;
+      }
+
+      if (mode === 'replace') {
+        history.replace(href);
+      } else {
+        history.push(href);
+      }
+    },
+    [routeSearch, scopeId],
+  );
   const chatCreationUnavailable = Boolean(
     authSessionQuery.isSuccess && authSessionQuery.data?.enabled === false,
+  );
+  const conversationsQueryKey = useMemo(
+    () =>
+      aiWorkspaceQueryKeys.conversations({
+        ...queryAuthority,
+        scopeId,
+      }),
+    [queryAuthority.principalId, queryAuthority.sessionExpiresAt, scopeId],
   );
   const conversationsQuery = useQuery({
     enabled: canStartChat,
     queryFn: () => chatHistoryApi.listConversationMetas(),
-    queryKey: ['chat-conversations', scopeId],
+    queryKey: conversationsQueryKey,
     retry: false,
   });
   const conversations = conversationsQuery.data ?? [];
@@ -551,6 +630,7 @@ const ChatPage: React.FC = () => {
     streamControllerRef.current?.abort();
     controlControllerRef.current?.abort();
     detailRequestRef.current = createClientId();
+    restoringConversationIdentityRef.current = '';
     activeConversationRef.current = null;
     setActiveConversation(null);
     applyProjection(null);
@@ -703,6 +783,9 @@ const ChatPage: React.FC = () => {
   const restoreConversation = useCallback(
     async (conversationId: string) => {
       if (!canStartChat || isStreaming) return;
+      const restoreIdentity = `${scopeId}:${conversationId}`;
+      if (restoringConversationIdentityRef.current === restoreIdentity) return;
+      restoringConversationIdentityRef.current = restoreIdentity;
       streamControllerRef.current?.abort();
       const meta = conversations.find((item) => item.id === conversationId);
       const requestId = createClientId();
@@ -751,6 +834,10 @@ const ChatPage: React.FC = () => {
         if (detailRequestRef.current === requestId) {
           setDetailLoadState({ message: errorMessage(error), status: 'error' });
         }
+      } finally {
+        if (restoringConversationIdentityRef.current === restoreIdentity) {
+          restoringConversationIdentityRef.current = '';
+        }
       }
     },
     [
@@ -758,12 +845,14 @@ const ChatPage: React.FC = () => {
       canStartChat,
       conversations,
       isStreaming,
+      scopeId,
       wireInspectorEnabled,
     ],
   );
 
-  const handleNewChat = useCallback(() => {
-    if (isStreaming) return;
+  const resetConversationToDraft = useCallback(() => {
+    detailRequestRef.current = createClientId();
+    restoringConversationIdentityRef.current = '';
     const current = activeConversationRef.current;
     if (current?.status === 'draft' && current.messages.length === 0) {
       setHistoryDrawerOpen(false);
@@ -779,7 +868,39 @@ const ChatPage: React.FC = () => {
     setNotice(null);
     setPrompt('');
     setDiagnosticWire(undefined);
-  }, [applyProjection, isStreaming]);
+  }, [applyProjection]);
+
+  const handleNewChat = useCallback(() => {
+    if (isStreaming) return;
+    syncConversationRoute(undefined, 'push');
+    resetConversationToDraft();
+  }, [isStreaming, resetConversationToDraft, syncConversationRoute]);
+
+  useEffect(() => {
+    if (!scopeId || isStreaming) return;
+
+    const routeIdentity = routeConversationId
+      ? `${scopeId}:${routeConversationId}`
+      : '';
+    if (routedConversationRef.current === routeIdentity) return;
+
+    if (!routeConversationId) {
+      routedConversationRef.current = '';
+      resetConversationToDraft();
+      return;
+    }
+    if (!conversationsQuery.isSuccess) return;
+
+    routedConversationRef.current = routeIdentity;
+    void restoreConversation(routeConversationId);
+  }, [
+    conversationsQuery.isSuccess,
+    isStreaming,
+    resetConversationToDraft,
+    restoreConversation,
+    routeConversationId,
+    scopeId,
+  ]);
 
   const handleDeleteConversation = useCallback(async () => {
     if (!deleteTarget || deletingConversation || isStreaming) return;
@@ -796,14 +917,20 @@ const ChatPage: React.FC = () => {
       });
       setDeleteTarget(null);
       await queryClient.invalidateQueries({
-        queryKey: ['chat-conversations', scopeId],
+        queryKey: conversationsQueryKey,
       });
     } catch (error) {
       setDeleteError(errorMessage(error));
     } finally {
       setDeletingConversation(false);
     }
-  }, [deleteTarget, deletingConversation, isStreaming, queryClient, scopeId]);
+  }, [
+    conversationsQueryKey,
+    deleteTarget,
+    deletingConversation,
+    isStreaming,
+    queryClient,
+  ]);
 
   const streamCommand = useCallback(
     async (
@@ -903,6 +1030,7 @@ const ChatPage: React.FC = () => {
             }
             authoritativeConversationId = conversationId;
             authoritativeTurnId = turnId;
+            syncConversationRoute(conversationId, 'replace');
             if (actorState.actorId && actorState.actorId !== conversationId) {
               throw new Error(
                 t(
@@ -984,7 +1112,7 @@ const ChatPage: React.FC = () => {
         activeConversationRef.current = final;
         setActiveConversation(final);
         await queryClient.invalidateQueries({
-          queryKey: ['chat-conversations', scopeId],
+          queryKey: conversationsQueryKey,
         });
         try {
           actorState = await loadActorState(
@@ -1028,10 +1156,11 @@ const ChatPage: React.FC = () => {
     [
       applyProjection,
       canStartChat,
+      conversationsQueryKey,
       isStreaming,
       loadActorState,
       queryClient,
-      scopeId,
+      syncConversationRoute,
       wireInspectorEnabled,
     ],
   );
@@ -1567,8 +1696,10 @@ const ChatPage: React.FC = () => {
                     onClick={() => {
                       setHistoryDrawerOpen(false);
                       if (
-                        activeConversation?.conversationId !== conversation.id
+                        activeConversationRef.current?.conversationId !==
+                        conversation.id
                       ) {
+                        syncConversationRoute(conversation.id, 'push');
                         void restoreConversation(conversation.id);
                       }
                     }}
@@ -1696,7 +1827,10 @@ const ChatPage: React.FC = () => {
         >
           {historyRail}
         </aside>
-        <main
+        <section
+          aria-label={
+            activeConversation?.title || t('pages.chat.index.title', 'Chat')
+          }
           className="aevatar-chat-main"
           style={{
             background: token.colorBgContainer,
@@ -1977,7 +2111,7 @@ const ChatPage: React.FC = () => {
               value={prompt}
             />
           </div>
-        </main>
+        </section>
       </div>
 
       <Drawer

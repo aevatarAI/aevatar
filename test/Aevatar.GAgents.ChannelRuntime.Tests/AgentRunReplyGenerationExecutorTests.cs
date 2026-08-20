@@ -32,18 +32,18 @@ public sealed class AgentRunReplyGenerationExecutorTests
     public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasNoSuccessfulMutatingReceipt_ShouldPassMutationClaimConstraint()
     {
         var provider = new RecordingProvider();
-        var executor = CreateToolEnabledExecutor(new CountingTool("submit_invoice"), provider);
+        var executor = CreateToolEnabledExecutor(new CountingTool("submit_record"), provider);
         var workItem = BuildToolEnabledWorkItem(
             new AgentToolReceipt
             {
                 Status = AgentToolReceiptStatus.Error,
-                SideEffectKind = "invoice.submit",
+                SideEffectKind = "record.submit",
             });
 
         await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var request = provider.Requests.Should().ContainSingle().Subject;
-        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_invoice");
+        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_record");
         request.Messages.Should().ContainSingle(message =>
             message.Role == "system" &&
             message.Content != null &&
@@ -56,7 +56,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var provider = new RecordingProvider();
         var dispatchPort = Substitute.For<IActorDispatchPort>();
         var executor = CreateToolEnabledExecutor(
-            new CountingTool("submit_invoice"),
+            new CountingTool("submit_record"),
             provider,
             actorDispatchPort: dispatchPort,
             relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
@@ -67,7 +67,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var workItem = BuildToolEnabledWorkItem(new AgentToolReceipt
         {
             CallId = "call-submit",
-            ToolName = "submit_invoice",
+            ToolName = "submit_record",
             Status = AgentToolReceiptStatus.Error,
             Effect = AgentToolReceiptEffect.Mutating,
         });
@@ -163,19 +163,19 @@ public sealed class AgentRunReplyGenerationExecutorTests
     public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasSuccessfulMutatingReceipt_ShouldKeepGroundingConstraint()
     {
         var provider = new RecordingProvider();
-        var executor = CreateToolEnabledExecutor(new CountingTool("submit_invoice"), provider);
+        var executor = CreateToolEnabledExecutor(new CountingTool("submit_record"), provider);
         var workItem = BuildToolEnabledWorkItem(
             new AgentToolReceipt
             {
                 Status = AgentToolReceiptStatus.Success,
-                SideEffectKind = "invoice.submit",
+                SideEffectKind = "record.submit",
                 Effect = AgentToolReceiptEffect.Mutating,
             });
 
         await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var request = provider.Requests.Should().ContainSingle().Subject;
-        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_invoice");
+        request.Tools.Should().ContainSingle().Which.Name.Should().Be("submit_record");
         request.Messages.Should().NotContain(message =>
             message.Role == "system" &&
             message.Content != null &&
@@ -391,11 +391,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var recovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "invoice-ocr-policy-review",
-            OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-            PrimarySkillName: "invoice-ocr-policy-review",
+            CommandName: "project-summary",
+            OriginalCommand: "使用精确名称为 project-summary 的 skill",
+            PrimarySkillName: "project-summary",
             MaxOrnnSearchAttempts: 2,
-            CommandArguments: "提取发票并运行 workflow");
+            CommandArguments: "生成项目摘要并运行 workflow");
         var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
         var executor = CreateToolEnabledExecutor([useSkill, searchSkills], provider, toolContext: toolContext);
         var workItem = BuildToolEnabledWorkItem();
@@ -404,7 +404,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         {
             Id = "prior-use-skill",
             Name = "use_skill",
-            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+            ArgumentsJson = "{\"skill\":\"project-summary\"}",
         };
         workItem.StepState.Messages.Insert(0, AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -419,7 +419,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         provider.Requests.Should().BeEmpty();
         var call = execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle().Which;
         call.Name.Should().Be("ornn_search_skills");
-        call.ArgumentsJson.Should().Contain("invoice-ocr-policy-review");
+        call.ArgumentsJson.Should().Contain("project-summary");
         execution.AuthorizedToolStep.Should().NotBeNull();
         execution.AuthorizedToolCallSafeties.Should().ContainSingle()
             .Which.ToolName.Should().Be("ornn_search_skills");
@@ -437,9 +437,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: true,
                 RequireOrnnSearchOnBlocker: true,
-                CommandName: "invoice-ocr-policy-review",
-                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-                PrimarySkillName: "invoice-ocr-policy-review",
+                CommandName: "project-summary",
+                OriginalCommand: "使用精确名称为 project-summary 的 skill",
+                PrimarySkillName: "project-summary",
                 MaxOrnnSearchAttempts: 2),
         };
         var executor = CreateToolEnabledExecutor(
@@ -468,9 +468,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: false,
                 RequireOrnnSearchOnBlocker: true,
-                CommandName: "invoice-ocr-policy-review",
-                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-                PrimarySkillName: "invoice-ocr-policy-review",
+                CommandName: "project-summary",
+                OriginalCommand: "使用精确名称为 project-summary 的 skill",
+                PrimarySkillName: "project-summary",
                 MaxOrnnSearchAttempts: 2),
         };
         var executor = CreateToolEnabledExecutor(
@@ -483,7 +483,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         {
             Id = "call-use-skill",
             Name = "use_skill",
-            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+            ArgumentsJson = "{\"skill\":\"project-summary\"}",
         };
         var useSkillMessage = AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -533,9 +533,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: false,
                 RequireOrnnSearchOnBlocker: true,
-                CommandName: "invoice-ocr-policy-review",
-                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-                PrimarySkillName: "invoice-ocr-policy-review",
+                CommandName: "project-summary",
+                OriginalCommand: "使用精确名称为 project-summary 的 skill",
+                PrimarySkillName: "project-summary",
                 MaxOrnnSearchAttempts: 2),
         };
         var executor = CreateToolEnabledExecutor(
@@ -548,7 +548,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         {
             Id = "call-use-skill",
             Name = "use_skill",
-            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+            ArgumentsJson = "{\"skill\":\"project-summary\"}",
         };
         var useSkillMessage = AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -593,11 +593,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var recovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: false,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "invoice-ocr-policy-review",
-            OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-            PrimarySkillName: "invoice-ocr-policy-review",
+            CommandName: "project-summary",
+            OriginalCommand: "使用精确名称为 project-summary 的 skill",
+            PrimarySkillName: "project-summary",
             MaxOrnnSearchAttempts: 2,
-            CommandArguments: "提取发票并运行 workflow");
+            CommandArguments: "生成项目摘要并运行 workflow");
         var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
         var executor = CreateToolEnabledExecutor(
             [useSkill, searchSkills],
@@ -607,9 +607,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
         workItem.StepState.ToolContext = toolContext.ToPayload();
         var call = new ToolCall
         {
-            Id = "call-load-invoice-skill",
+            Id = "call-load-project-skill",
             Name = "use_skill",
-            ArgumentsJson = "{\"skill\":\"invoice-ocr-policy-review\"}",
+            ArgumentsJson = "{\"skill\":\"project-summary\"}",
         };
         var assistant = AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -619,7 +619,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var result = AgentRunReplyStepMappers.ToProto(ToolCallLoop.BuildToolResultMessage(
             call.Id,
             call.Name,
-            "# invoice-ocr-policy-review\n\nIf extraction failed, return a typed error artifact."));
+            "# project-summary\n\nIf summarization failed, return a typed error artifact."));
         workItem.StepState.Messages.Add(assistant);
         workItem.StepState.Messages.Add(result);
         workItem.StepState.PendingHistoryMessages.Add(assistant.Clone());
@@ -645,20 +645,20 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var recovery = new AgentSkillRecoveryContext(
             RequireInitialOrnnSearch: true,
             RequireOrnnSearchOnBlocker: true,
-            CommandName: "invoice-review",
-            OriginalCommand: "查找并运行发票审核 skill",
+            CommandName: "project-review",
+            OriginalCommand: "查找并运行项目评审 skill",
             PrimarySkillName: null,
             MaxOrnnSearchAttempts: 2,
-            CommandArguments: "提取发票并运行 workflow");
+            CommandArguments: "评审项目并运行 workflow");
         var toolContext = AgentToolExecutionContext.Empty with { SkillRecovery = recovery };
         var executor = CreateToolEnabledExecutor(useSkill, provider, toolContext: toolContext);
         var workItem = BuildToolEnabledWorkItem();
         workItem.StepState.ToolContext = toolContext.ToPayload();
         var call = new ToolCall
         {
-            Id = "call-search-invoice-skill",
+            Id = "call-search-project-skill",
             Name = "ornn_search_skills",
-            ArgumentsJson = "{\"query\":\"invoice\",\"scope\":\"mixed\"}",
+            ArgumentsJson = "{\"query\":\"project\",\"scope\":\"mixed\"}",
         };
         var assistant = AgentRunReplyStepMappers.ToProto(new ChatMessage
         {
@@ -669,7 +669,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             call.Id,
             call.Name,
             """
-            {"result_type":"skill_search","status":"success","matches":[{"skill_name":"invoice-ocr-policy-review","description":"Review invoices","is_private":false,"category":"finance","tags":["invoice"]}],"http_status":200,"text":"one match"}
+            {"result_type":"skill_search","status":"success","matches":[{"skill_name":"project-summary","description":"Summarize projects","is_private":false,"category":"productivity","tags":["summary"]}],"http_status":200,"text":"one match"}
             """));
         workItem.StepState.Messages.Add(assistant);
         workItem.StepState.Messages.Add(result);
@@ -680,26 +680,26 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var search = roundTripped.ToolResultView!.SkillSearch!;
         search.Status.Should().Be(ToolResultViewStatus.Success);
         search.HttpStatus.Should().Be(200);
-        search.Matches.Should().ContainSingle().Which.SkillName.Should().Be("invoice-ocr-policy-review");
+        search.Matches.Should().ContainSingle().Which.SkillName.Should().Be("project-summary");
 
         var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         provider.Requests.Should().BeEmpty();
         var planned = execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle().Which;
         planned.Name.Should().Be("use_skill");
-        planned.ArgumentsJson.Should().Contain("invoice-ocr-policy-review");
+        planned.ArgumentsJson.Should().Contain("project-summary");
         execution.AuthorizedToolStep.Should().NotBeNull();
         var presentation = execution.AuthorizedToolCallSafeties.Should()
             .ContainSingle().Which.Presentation;
         presentation.Should().NotBeNull();
         presentation!.Kind.Should().Be(ToolPresentationKind.Skill);
-        presentation.Skill.SkillName.Should().Be("invoice-ocr-policy-review");
+        presentation.Skill.SkillName.Should().Be("project-summary");
     }
 
     [Fact]
     public async Task NyxIdChatTurnExecutor_UseSkillAfterPreamble_ShouldPublishOneExactSkillStart()
     {
-        const string skillName = "invoice-ocr-policy-review";
+        const string skillName = "project-summary";
         const string preamble = "I will load the requested workflow skill.";
         var useSkill = new UseSkillTool(new LocalSkillCatalog());
         var generationExecutor = CreateToolEnabledExecutor(
@@ -728,7 +728,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 {
                     Request = new ChatRequestEvent
                     {
-                        Prompt = "load the invoice skill",
+                        Prompt = "load the project summary skill",
                         SessionId = "turn-1",
                     },
                 },
@@ -807,9 +807,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             SkillRecovery = new AgentSkillRecoveryContext(
                 RequireInitialOrnnSearch: true,
                 RequireOrnnSearchOnBlocker: true,
-                CommandName: "invoice-ocr-policy-review",
-                OriginalCommand: "使用精确名称为 invoice-ocr-policy-review 的 skill",
-                PrimarySkillName: "invoice-ocr-policy-review",
+                CommandName: "project-summary",
+                OriginalCommand: "使用精确名称为 project-summary 的 skill",
+                PrimarySkillName: "project-summary",
                 MaxOrnnSearchAttempts: 2),
         };
         var generationExecutor = CreateToolEnabledExecutor(
@@ -827,7 +827,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 {
                     Request = new ChatRequestEvent
                     {
-                        Prompt = "提取发票并运行 workflow",
+                        Prompt = "生成项目摘要并运行 workflow",
                         SessionId = "turn-1",
                         ToolContext = toolContext.ToPayload(),
                     },
