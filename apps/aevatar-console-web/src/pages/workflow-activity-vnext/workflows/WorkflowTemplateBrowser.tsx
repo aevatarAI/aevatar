@@ -289,39 +289,6 @@ function TemplateDetailBody({
     [detail],
   );
 
-  const steps = (
-    <ol className="wa-vnext__template-steps">
-      {detail.definition.steps.map((step, index) => (
-        <li key={step.id}>
-          <div>
-            <strong>
-              {step.id ||
-                t(
-                  'workflowActivityVNext.new.templateBrowser.stepNumber',
-                  'Step {number}',
-                  {
-                    number: index + 1,
-                  },
-                )}
-            </strong>
-            <span>{step.type}</span>
-          </div>
-          {step.targetRole ? (
-            <small>
-              {t(
-                'workflowActivityVNext.new.templateBrowser.role',
-                'Role: {role}',
-                {
-                  role: step.targetRole,
-                },
-              )}
-            </small>
-          ) : null}
-        </li>
-      ))}
-    </ol>
-  );
-
   return (
     <div className="wa-vnext__template-detail">
       <div className="wa-vnext__template-preview-heading">
@@ -382,18 +349,6 @@ function TemplateDetailBody({
           )}
         </Typography.Text>
       </div>
-
-      {detail.definition.steps.length > 0 ? (
-        <details className="wa-vnext__template-step-details">
-          <summary>
-            {t(
-              'workflowActivityVNext.new.templateBrowser.stepDetails',
-              'Step details',
-            )}
-          </summary>
-          {steps}
-        </details>
-      ) : null}
     </div>
   );
 }

@@ -503,6 +503,7 @@ describe('New workflow save-target recovery', () => {
       screen.queryByRole('tab', { name: 'Overview' }),
     ).not.toBeInTheDocument();
     expect(screen.getByTitle('classify')).toBeInTheDocument();
+    expect(screen.queryByText('Step details')).not.toBeInTheDocument();
     expect(mockStudioApi.instantiateWorkflowTemplate).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Use this template' }));

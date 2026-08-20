@@ -256,13 +256,6 @@ export const workflowActivityVNextCss = `
 .wa-vnext__template-preview-empty { align-items: center; border: 1px solid var(--wa-line); border-radius: var(--wa-radius); color: var(--wa-muted); display: flex; justify-content: center; min-height: 220px; padding: 24px; text-align: center; }
 .wa-vnext__template-description { border-bottom: 1px solid var(--wa-line); padding-bottom: 14px; }
 .wa-vnext__template-description p { line-height: 19px; margin-bottom: 6px; }
-.wa-vnext__template-step-details { border-bottom: 1px solid var(--wa-line); padding-bottom: 12px; }
-.wa-vnext__template-step-details summary { cursor: pointer; font-size: 12px; font-weight: 650; line-height: 18px; padding: 2px 0; }
-.wa-vnext__template-step-details[open] summary { margin-bottom: 12px; }
-.wa-vnext__template-steps { display: grid; gap: 8px; list-style: decimal; margin: 0; padding-left: 24px; }
-.wa-vnext__template-steps li { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); display: grid; gap: 4px; padding: 10px 12px; }
-.wa-vnext__template-steps li > div { align-items: baseline; display: flex; gap: 8px; min-width: 0; }
-.wa-vnext__template-steps li span, .wa-vnext__template-steps li small { color: var(--wa-muted); overflow-wrap: anywhere; }
 .wa-vnext__form-title { font-size: 16px; font-weight: 700; line-height: 22px; margin: 0; }
 .wa-vnext__editor-toolbar { flex-wrap: nowrap; justify-content: flex-end; min-width: 0; overflow: visible; }
 .wa-vnext__editor-toolbar > * { flex: 0 1 auto; min-width: 0; }

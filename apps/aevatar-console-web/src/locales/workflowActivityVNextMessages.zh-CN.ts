@@ -352,7 +352,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateBrowser.viewNamed': '查看 {name}',
     'workflowActivityVNext.new.templateBrowser.use': '使用模板',
     'workflowActivityVNext.new.templateBrowser.useNamed': '使用模板 {name}',
-    'workflowActivityVNext.new.templateBrowser.stepNumber': '步骤 {number}',
     'workflowActivityVNext.new.templateBrowser.reads': '读取',
     'workflowActivityVNext.new.templateBrowser.connection': '连接',
     'workflowActivityVNext.new.templateBrowser.does': '执行',
@@ -378,10 +377,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '共 {count} 个步骤及其执行路径。',
     'workflowActivityVNext.new.templateBrowser.noPreviewSteps':
       '该模板未提供可预览的工作流步骤。',
-    'workflowActivityVNext.new.templateBrowser.stepDetails': '步骤详情',
     'workflowActivityVNext.new.templateBrowser.source':
       '来源：公开工作流模板 · 版本 {version}',
-    'workflowActivityVNext.new.templateBrowser.role': '角色：{role}',
     'workflowActivityVNext.new.templateBrowser.cancel': '取消',
     'workflowActivityVNext.new.templateBrowser.useThis': '使用此模板',
     'workflowActivityVNext.new.templateBrowser.templateOutOfDate': '模板已更新',

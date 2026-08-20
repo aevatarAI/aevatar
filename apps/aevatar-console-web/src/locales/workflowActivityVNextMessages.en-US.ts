@@ -374,7 +374,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.templateBrowser.viewNamed': 'View {name}',
   'workflowActivityVNext.new.templateBrowser.use': 'Use template',
   'workflowActivityVNext.new.templateBrowser.useNamed': 'Use template {name}',
-  'workflowActivityVNext.new.templateBrowser.stepNumber': 'Step {number}',
   'workflowActivityVNext.new.templateBrowser.reads': 'Reads',
   'workflowActivityVNext.new.templateBrowser.connection': 'Connection',
   'workflowActivityVNext.new.templateBrowser.does': 'Does',
@@ -399,10 +398,8 @@ const workflowActivityVNextMessages = {
     '{count} {unit} and the paths between them.',
   'workflowActivityVNext.new.templateBrowser.noPreviewSteps':
     'This template does not expose any workflow steps.',
-  'workflowActivityVNext.new.templateBrowser.stepDetails': 'Step details',
   'workflowActivityVNext.new.templateBrowser.source':
     'Source: public workflow template · version {version}',
-  'workflowActivityVNext.new.templateBrowser.role': 'Role: {role}',
   'workflowActivityVNext.new.templateBrowser.cancel': 'Cancel',
   'workflowActivityVNext.new.templateBrowser.useThis': 'Use this template',
   'workflowActivityVNext.new.templateBrowser.templateOutOfDate':
