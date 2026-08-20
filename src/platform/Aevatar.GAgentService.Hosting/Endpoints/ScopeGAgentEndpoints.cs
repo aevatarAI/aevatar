@@ -129,7 +129,7 @@ public static class ScopeGAgentEndpoints
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.GAgentService.Hosting.ScopeGAgentEndpoints");
-        var session = new DraftRunSseSession(http.Response);
+        await using var session = new DraftRunSseSession(http.Response);
 
         try
         {
@@ -584,23 +584,27 @@ public static class ScopeGAgentEndpoints
         };
     }
 
-    private sealed class DraftRunSseSession(HttpResponse response)
+    private sealed class DraftRunSseSession(HttpResponse response) : IAsyncDisposable
     {
         private readonly HttpResponse _response = response ?? throw new ArgumentNullException(nameof(response));
         private readonly AGUISseWriter _writer = new(response);
 
-        public bool ResponseStarted { get; private set; }
+        public bool ResponseStarted => _writer.ResponseStarted;
 
         public async ValueTask EmitAsync(AGUIEvent aguiEvent, CancellationToken ct)
         {
-            await EnsureStartedAsync(ct);
             await _writer.WriteAsync(aguiEvent, ct);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _writer.DisposeAsync();
         }
 
         public async ValueTask WriteAcceptedAsync(GAgentDraftRunAcceptedReceipt receipt, CancellationToken ct)
         {
             _response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
-            await EnsureStartedAsync(ct);
+            await _writer.StartAsync(ct);
             await _writer.WriteAsync(
                 new AGUIEvent
                 {
@@ -618,7 +622,7 @@ public static class ScopeGAgentEndpoints
 
         public async Task WriteRunErrorAsync(string message, string? code, CancellationToken ct)
         {
-            await EnsureStartedAsync(ct);
+            await _writer.StartAsync(ct);
             await _writer.WriteAsync(
                 new AGUIEvent
                 {
@@ -629,19 +633,6 @@ public static class ScopeGAgentEndpoints
                     },
                 },
                 ct);
-        }
-
-        private async Task EnsureStartedAsync(CancellationToken ct)
-        {
-            if (ResponseStarted)
-                return;
-
-            _response.StatusCode = StatusCodes.Status200OK;
-            _response.Headers.ContentType = "text/event-stream; charset=utf-8";
-            _response.Headers.CacheControl = "no-store";
-            _response.Headers["X-Accel-Buffering"] = "no";
-            await _response.StartAsync(ct);
-            ResponseStarted = true;
         }
     }
 
