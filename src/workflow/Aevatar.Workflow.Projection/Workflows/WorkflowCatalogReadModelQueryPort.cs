@@ -6,6 +6,8 @@ namespace Aevatar.Workflow.Projection.Workflows;
 
 public sealed class WorkflowCatalogReadModelQueryPort : IWorkflowCatalogPort
 {
+    private const int CatalogDocumentPageSize = 1000;
+
     private readonly IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string> _catalogReader;
     private readonly WorkflowCatalogReadModelMapper _mapper;
 
@@ -44,12 +46,41 @@ public sealed class WorkflowCatalogReadModelQueryPort : IWorkflowCatalogPort
             : _mapper.ToCatalogItemDetail(document);
     }
 
+    public async Task<IReadOnlyList<WorkflowCatalogItem>> ListPublicWorkflowCatalogAsync(CancellationToken ct = default)
+    {
+        var catalog = await ListWorkflowCatalogAsync(ct);
+        return catalog
+            .Where(static item => item.ShowInLibrary)
+            .ToList();
+    }
+
+    public async Task<WorkflowCatalogItemDetail?> GetPublicWorkflowDetailAsync(
+        string templateId,
+        CancellationToken ct = default)
+    {
+        var detail = await GetWorkflowDetailAsync(templateId, ct);
+        return detail?.Catalog.ShowInLibrary == true
+            ? detail
+            : null;
+    }
+
     public async Task<IReadOnlyList<WorkflowCatalogCurrentStateDocument>> QueryCatalogDocumentsAsync(CancellationToken ct)
     {
-        var result = await _catalogReader.QueryAsync(new ProjectionDocumentQuery
+        var documents = new List<WorkflowCatalogCurrentStateDocument>();
+        string? cursor = null;
+
+        do
         {
-            Take = 1000,
-        }, ct);
-        return result.Items;
+            var result = await _catalogReader.QueryAsync(new ProjectionDocumentQuery
+            {
+                Take = CatalogDocumentPageSize,
+                Cursor = cursor,
+            }, ct);
+            documents.AddRange(result.Items);
+            cursor = result.NextCursor;
+        }
+        while (!string.IsNullOrWhiteSpace(cursor));
+
+        return documents;
     }
 }
