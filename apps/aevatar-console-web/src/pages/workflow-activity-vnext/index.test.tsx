@@ -18,6 +18,7 @@ import {
   renderWithQueryClient,
 } from '../../../tests/reactQueryTestUtils';
 import WorkflowActivityVNextPage from './index';
+import { workflowActivityVNextCss } from './styles';
 
 type SerializableWorkflowDocument = {
   readonly name?: string;
@@ -576,6 +577,36 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(
       screen.getByRole('option', { name: 'Show archived workflows' }),
     ).toBeInTheDocument();
+  });
+
+  it('reserves a stable action column for published workflow schedules', async () => {
+    mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
+      createCatalogueResponse([
+        createCatalogueRow({
+          workflowId: 'wf-published',
+          name: 'Published workflow',
+          committed: {
+            serviceKey: 'svc-published',
+            workflowName: 'published_workflow',
+            actorId: 'actor-published',
+            activeRevisionId: 'revision-published',
+            deploymentId: 'deployment-published',
+            deploymentStatus: 'Running',
+          },
+        }),
+      ]),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const table = await screen.findByRole('table');
+    const columns = table.querySelectorAll('col');
+    expect(table).toHaveClass('wa-vnext__table--workflow-catalogue');
+    expect(columns).toHaveLength(4);
+    expect(columns[3]).toHaveStyle({ width: '500px' });
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__table--workflow-catalogue { min-width: 1160px; }',
+    );
   });
 
   it('refreshes the workflow catalogue when returning from the editor', async () => {

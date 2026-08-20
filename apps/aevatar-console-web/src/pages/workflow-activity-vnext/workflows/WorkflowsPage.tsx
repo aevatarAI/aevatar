@@ -676,7 +676,13 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         <TableScrollRegion
           ariaLabel={t('workflowActivityVNext.workflows.title', 'Workflows')}
         >
-          <table className="wa-vnext__table">
+          <table className="wa-vnext__table wa-vnext__table--workflow-catalogue">
+            <colgroup>
+              <col />
+              <col style={{ width: '120px' }} />
+              <col style={{ width: '190px' }} />
+              <col style={{ width: '500px' }} />
+            </colgroup>
             <thead>
               <tr>
                 <th>
