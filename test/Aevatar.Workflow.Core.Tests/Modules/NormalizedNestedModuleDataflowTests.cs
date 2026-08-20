@@ -548,6 +548,51 @@ public sealed class NormalizedNestedModuleDataflowTests
     }
 
     [Fact]
+    public async Task Cache_ShouldCarryCompiledExternalInvocationToSynthesizedChild()
+    {
+        const string runId = "run-cache-external";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "cache-external-workflow",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "cached_tool",
+                    Type = "cache",
+                    Parameters =
+                    {
+                        ["cache_key"] = "external-key",
+                        ["child_step_type"] = "tool_call",
+                        ["sub_param_tool"] = "nyxid_proxy",
+                        ["sub_param_arguments"] = "{\"path_params\":{\"item_id\":\"alpha\"}}",
+                    },
+                },
+            ],
+        };
+        var harness = NormalizedHarness.Create(workflow, runId, new CacheModule());
+
+        var parentRequest = await harness.StartAsync("seed-input");
+        parentRequest.ExternalInvocation.Should().NotBeNull();
+        parentRequest.ExternalInvocation!.CallSiteId.Should()
+            .Be("cache-external-workflow/cached_tool/sub-step");
+
+        var childRequest = (await harness.DispatchThroughBridgeAsync(parentRequest))
+            .Should().ContainSingle().Subject;
+
+        childRequest.StepType.Should().Be("tool_call");
+        childRequest.Parameters.Should().Contain("tool", "nyxid_proxy");
+        childRequest.Parameters.Should().Contain(
+            "arguments",
+            "{\"path_params\":{\"item_id\":\"alpha\"}}");
+        childRequest.ExternalInvocation.Should().NotBeNull();
+        childRequest.ExternalInvocation!.CallSiteId.Should()
+            .Be("cache-external-workflow/cached_tool/sub-step");
+        childRequest.ExternalInvocation.ToolName.Should().Be("nyxid_proxy");
+    }
+
+    [Fact]
     public async Task OnErrorSkip_ShouldCaptureDefaultOutputOnceAndForwardItWithoutDanglingReferences()
     {
         const string runId = "run-on-error-skip";

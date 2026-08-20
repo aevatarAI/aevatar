@@ -277,7 +277,7 @@ steps:
 ### `cache`
 
 - 作用：按 key 缓存子步骤结果，命中直接返回，未命中执行子步骤。
-- 常用参数：`cache_key`、`ttl_seconds`、`child_step_type`、`child_target_role`。
+- 常用参数：`cache_key`、`ttl_seconds`、`child_step_type`、`child_target_role`，以及传给子步骤的 `sub_param_*`。
 
 ```yaml
 steps:
@@ -286,8 +286,9 @@ steps:
     parameters:
       cache_key: "$input"
       ttl_seconds: "600"
-      child_step_type: "llm_call"
-      child_target_role: "assistant"
+      child_step_type: "tool_call"
+      sub_param_tool: "summarize"
+      sub_param_arguments: '{"text":"${input}"}'
 ```
 
 ## 3. Control 原语

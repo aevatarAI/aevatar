@@ -777,6 +777,102 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
         }
 
         [Fact]
+        public async Task CacheModule_OnMiss_ShouldForwardSynthesizedChildContract()
+        {
+            var module = new CacheModule();
+            var ctx = CreateContext();
+            var invocation = new ExternalToolInvocationSpec
+            {
+                CallSiteId = "cache-workflow/cached-tool/sub-step",
+                ToolName = "nyxid_proxy",
+            };
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "cached-tool",
+                    StepType = "cache",
+                    RunId = "run-cache-contract",
+                    ExecutionId = "exec-cache-parent",
+                    Input = "input-value",
+                    InputValueId = "value-cache-input",
+                    ExternalInvocation = invocation,
+                    Parameters =
+                    {
+                        ["cache_key"] = "cache-contract-key",
+                        ["child_step_type"] = "tool_call",
+                        ["child_target_role"] = "worker",
+                        ["sub_param_tool"] = "nyxid_proxy",
+                        ["sub_param_arguments"] = "{\"path_params\":{\"item_id\":\"input-value\"}}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var child = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+            child.StepType.Should().Be("tool_call");
+            child.TargetRole.Should().Be("worker");
+            child.ExecutionId.Should().NotBeNullOrWhiteSpace();
+            child.InputValueId.Should().Be("value-cache-input");
+            child.Parameters.Should().Contain("tool", "nyxid_proxy");
+            child.Parameters.Should().Contain(
+                "arguments",
+                "{\"path_params\":{\"item_id\":\"input-value\"}}");
+            child.Parameters.Should().NotContainKey("cache_key");
+            child.ExternalInvocation.Should().NotBeSameAs(invocation);
+            child.ExternalInvocation.Should().BeEquivalentTo(invocation);
+        }
+
+        [Fact]
+        public async Task CacheModule_ToolChild_ShouldExecuteForwardedParametersAndCompleteParent()
+        {
+            var cache = new CacheModule();
+            var tool = new CountingFakeAgentTool("cache_echo", static arguments => arguments);
+            var toolCall = CreateToolCallModule([new CountingToolSource([tool])]);
+            var ctx = CreateContext();
+
+            await cache.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "cache-tool-parent",
+                    StepType = "cache",
+                    RunId = "run-cache-tool",
+                    ExecutionId = "exec-cache-tool-parent",
+                    Input = "ignored-input",
+                    Parameters =
+                    {
+                        ["cache_key"] = "cache-tool-key",
+                        ["child_step_type"] = "tool_call",
+                        ["sub_param_tool"] = "cache_echo",
+                        ["sub_param_arguments"] = "{\"value\":\"from-cache\"}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var child = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+            ctx.Published.Clear();
+
+            await ExecuteToolCallToCompletionAsync(toolCall, child, ctx);
+
+            tool.ExecuteCalls.Should().Be(1);
+            var childCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
+                .Single(x => x.StepId == child.StepId);
+            childCompletion.Success.Should().BeTrue();
+            childCompletion.Output.Should().Be("{\"value\":\"from-cache\"}");
+            ctx.Published.Clear();
+
+            await cache.HandleAsync(Envelope(childCompletion), ctx, CancellationToken.None);
+
+            var parentCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            parentCompletion.StepId.Should().Be("cache-tool-parent");
+            parentCompletion.ExecutionId.Should().Be("exec-cache-tool-parent");
+            parentCompletion.Success.Should().BeTrue();
+            parentCompletion.Output.Should().Be("{\"value\":\"from-cache\"}");
+            parentCompletion.Annotations["cache.hit"].Should().Be("false");
+        }
+
+        [Fact]
         public async Task CacheModule_WhenSecondCallerJoinsPending_ShouldFanOutCompletionAndNotCacheFailures()
         {
             var module = new CacheModule();
