@@ -156,39 +156,36 @@ function decodeWorkflowTemplateDefinition(
       `${label}.closedWorldMode`,
     ),
     roles: expectArray(record.roles, `${label}.roles`, (entry, roleLabel) => {
-      const role = expectRecord(entry, roleLabel);
+      const rolePath = roleLabel ?? `${label}.roles`;
+      const role = expectRecord(entry, rolePath);
       return {
-        id: expectString(role.id, `${roleLabel}.id`),
-        name: expectString(role.name, `${roleLabel}.name`),
-        connectors: expectStringArray(
-          role.connectors,
-          `${roleLabel}.connectors`,
-        ),
+        id: expectString(role.id, `${rolePath}.id`),
+        name: expectString(role.name, `${rolePath}.name`),
+        connectors: expectStringArray(role.connectors, `${rolePath}.connectors`),
       };
     }),
     steps: expectArray(record.steps, `${label}.steps`, (entry, stepLabel) => {
-      const step = expectRecord(entry, stepLabel);
+      const stepPath = stepLabel ?? `${label}.steps`;
+      const step = expectRecord(entry, stepPath);
       return {
-        id: expectString(step.id, `${stepLabel}.id`),
-        type: expectString(step.type, `${stepLabel}.type`),
-        targetRole: expectString(step.targetRole, `${stepLabel}.targetRole`),
-        parameters: expectStringRecord(
-          step.parameters,
-          `${stepLabel}.parameters`,
-        ),
-        next: expectString(step.next, `${stepLabel}.next`),
-        branches: expectStringRecord(step.branches, `${stepLabel}.branches`),
+        id: expectString(step.id, `${stepPath}.id`),
+        type: expectString(step.type, `${stepPath}.type`),
+        targetRole: expectString(step.targetRole, `${stepPath}.targetRole`),
+        parameters: expectStringRecord(step.parameters, `${stepPath}.parameters`),
+        next: expectString(step.next, `${stepPath}.next`),
+        branches: expectStringRecord(step.branches, `${stepPath}.branches`),
         children: expectArray(
           step.children,
-          `${stepLabel}.children`,
+          `${stepPath}.children`,
           (childEntry, childLabel) => {
-            const child = expectRecord(childEntry, childLabel);
+            const childPath = childLabel ?? `${stepPath}.children`;
+            const child = expectRecord(childEntry, childPath);
             return {
-              id: expectString(child.id, `${childLabel}.id`),
-              type: expectString(child.type, `${childLabel}.type`),
+              id: expectString(child.id, `${childPath}.id`),
+              type: expectString(child.type, `${childPath}.type`),
               targetRole: expectString(
                 child.targetRole,
-                `${childLabel}.targetRole`,
+                `${childPath}.targetRole`,
               ),
             };
           },
@@ -214,11 +211,12 @@ function decodeWorkflowTemplateDetail(
       `${label}.definition`,
     ),
     edges: expectArray(record.edges, `${label}.edges`, (entry, edgeLabel) => {
-      const edge = expectRecord(entry, edgeLabel);
+      const edge = expectRecord(entry, edgeLabel ?? `${label}.edges.entry`);
+      const edgePath = edgeLabel ?? `${label}.edges.entry`;
       return {
-        from: expectString(edge.from, `${edgeLabel}.from`),
-        to: expectString(edge.to, `${edgeLabel}.to`),
-        label: expectString(edge.label, `${edgeLabel}.label`),
+        from: expectString(edge.from, `${edgePath}.from`),
+        to: expectString(edge.to, `${edgePath}.to`),
+        label: expectString(edge.label, `${edgePath}.label`),
       };
     }),
     authorityStateVersion: expectNumber(

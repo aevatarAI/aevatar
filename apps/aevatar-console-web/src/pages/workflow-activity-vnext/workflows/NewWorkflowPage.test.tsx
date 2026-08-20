@@ -433,7 +433,7 @@ describe('New workflow save-target recovery', () => {
     );
   });
 
-  it('creates and opens an independently named template copy', async () => {
+  it('navigates to the template browser from the creation chooser', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
 
     renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
@@ -629,6 +629,80 @@ describe('New workflow save-target recovery', () => {
         templateId: 'template-incident-triage',
       }),
     );
+  });
+
+  it('keeps stale template submission disabled when detail refresh fails', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockIsStudioApiErrorCode.mockImplementation(
+      (_error: unknown, status: number, code: string) =>
+        status === 409 && code === 'WORKFLOW_TEMPLATE_VERSION_CONFLICT',
+    );
+    const detailVersion7 = {
+      template: {
+        templateId: 'template-incident-triage',
+        displayName: 'Incident triage',
+        description: 'Classify an incident.',
+        defaultDraftName: 'Incident triage',
+        authorityStateVersion: 7,
+        stepCount: 1,
+        requiredConnections: [],
+        requiresLlmProvider: false,
+        freshness: {
+          projectionWatermark: '2026-08-18T00:00:00Z',
+          lastEventId: 'event-template-7',
+          versionSemantics: 'workflow-catalog-authority-state-version',
+        },
+      },
+      yaml: 'name: incident_triage\nsteps: []\n',
+      definition: {
+        name: 'incident_triage',
+        description: 'Classify an incident.',
+        closedWorldMode: true,
+        roles: [],
+        steps: [],
+      },
+      edges: [],
+      authorityStateVersion: 7,
+      freshness: {
+        projectionWatermark: '2026-08-18T00:00:00Z',
+        lastEventId: 'event-template-7',
+        versionSemantics: 'workflow-catalog-authority-state-version',
+      },
+    };
+    mockRuntimeCatalogApi.getWorkflowTemplate
+      .mockResolvedValueOnce(detailVersion7)
+      .mockRejectedValueOnce(new Error('Catalog refresh unavailable'));
+    mockStudioApi.instantiateWorkflowTemplate.mockRejectedValueOnce({
+      status: 409,
+      code: 'WORKFLOW_TEMPLATE_VERSION_CONFLICT',
+    });
+
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Incident triage' }),
+    );
+
+    const dialog = await screen.findByRole('dialog');
+    const useThisTemplate = within(dialog).getByRole('button', {
+      name: 'Use this template',
+    });
+    await waitFor(() => expect(useThisTemplate).toBeEnabled());
+    fireEvent.click(useThisTemplate);
+    expect(
+      await within(dialog).findByText('Template is out of date'),
+    ).toBeVisible();
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Refresh catalog' }),
+    );
+    await waitFor(() =>
+      expect(mockRuntimeCatalogApi.getWorkflowTemplate).toHaveBeenCalledTimes(
+        2,
+      ),
+    );
+    expect(
+      within(dialog).getByRole('button', { name: 'Use this template' }),
+    ).toBeDisabled();
   });
 
   it.each([

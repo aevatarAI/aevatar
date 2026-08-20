@@ -237,7 +237,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__template-list { border-top: 1px solid var(--wa-line); display: grid; }
 .wa-vnext__template-row { align-items: stretch; border-bottom: 1px solid var(--wa-line); display: grid; gap: 20px; grid-template-columns: minmax(220px, 1.2fr) minmax(280px, 1.4fr) auto; padding: 18px 0; }
 .wa-vnext__template-identity { min-width: 0; }
-.wa-vnext__template-identity h4 { font-size: 15px; line-height: 20px; margin: 0; overflow-wrap: anywhere; }
+.wa-vnext__template-identity h2 { font-size: 15px; line-height: 20px; margin: 0; overflow-wrap: anywhere; }
 .wa-vnext__template-identity p { color: var(--wa-muted); line-height: 18px; margin: 6px 0 8px; overflow-wrap: anywhere; }
 .wa-vnext__template-meta { color: var(--wa-faint); display: block; font-size: 11px; line-height: 16px; }
 .wa-vnext__template-facts { align-items: stretch; display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); min-width: 0; }
@@ -746,6 +746,8 @@ export const workflowActivityVNextCss = `
 }
 @media (max-width: 360px) {
   .wa-vnext__settings-actions.ant-space { grid-template-columns: 1fr; }
+  .wa-vnext__state--compact .ant-alert { align-items: flex-start; }
+  .wa-vnext__state--compact .ant-alert-action { margin-inline-start: 0; margin-top: 8px; }
 }
 @media (prefers-reduced-motion: reduce) { .wa-vnext *, .wa-vnext *::before, .wa-vnext *::after { scroll-behavior: auto !important; transition: none !important; } }
 `;

@@ -18,7 +18,7 @@ const WorkflowTemplatesPage: React.FC<{ readonly scopeId: string }> = ({
     )}
     headerActions={
       <Button
-        icon={<ArrowLeftOutlined />}
+        icon={<ArrowLeftOutlined aria-hidden="true" />}
         onClick={() => history.push(buildWorkflowActivityNewHref(scopeId))}
       >
         {t(

@@ -104,7 +104,7 @@ function TemplateRow({
   return (
     <article className="wa-vnext__template-row">
       <div className="wa-vnext__template-identity">
-        <Typography.Title level={4}>{template.displayName}</Typography.Title>
+        <Typography.Title level={2}>{template.displayName}</Typography.Title>
         <p>
           {template.description ||
             t(
@@ -442,13 +442,19 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
   };
 
   const refreshTemplate = async () => {
-    await Promise.all([
+    const [listResult, detailResult] = await Promise.all([
       listQuery.refetch(),
       failure?.templateId === selectedTemplateId
         ? detailQuery.refetch()
-        : Promise.resolve(),
+        : Promise.resolve(null),
     ]);
-    setFailure(null);
+    if (
+      !listResult.isError &&
+      (detailResult === null ||
+        (!detailResult.isError && Boolean(detailResult.data)))
+    ) {
+      setFailure(null);
+    }
   };
 
   return (
@@ -488,7 +494,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
               ) : undefined
             }
             description={browserFailure.message}
-            message={
+            title={
               browserFailure.stale
                 ? t(
                     'workflowActivityVNext.new.templateBrowser.templateOutOfDate',
@@ -649,7 +655,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                       )
                     : errorMessage(listQuery.error)
               }
-              message={t(
+              title={t(
                 hasStatus(listQuery.error, 404)
                   ? 'workflowActivityVNext.new.templateBrowser.unavailable'
                   : 'workflowActivityVNext.new.templateBrowser.loadFailed',
@@ -711,7 +717,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
           <Space>
             <Button
               disabled={cursorHistory.length === 0 || creationPending}
-              icon={<LeftOutlined />}
+              icon={<LeftOutlined aria-hidden="true" />}
               onClick={goToPreviousPage}
             >
               {t(
@@ -721,7 +727,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
             </Button>
             <Button
               disabled={!nextCursor || creationPending}
-              icon={<RightOutlined />}
+              icon={<RightOutlined aria-hidden="true" />}
               onClick={goToNextPage}
             >
               {t('workflowActivityVNext.new.templateBrowser.next', 'Next')}
@@ -745,6 +751,8 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                 !detail ||
                 creationPending ||
                 detailQuery.isFetching ||
+                detailQuery.isError ||
+                detailQuery.isRefetchError ||
                 Boolean(modalFailure?.stale)
               }
               loading={Boolean(
@@ -786,7 +794,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
               ) : undefined
             }
             description={modalFailure.message}
-            message={
+            title={
               modalFailure.stale
                 ? t(
                     'workflowActivityVNext.new.templateBrowser.templateOutOfDate',
@@ -824,7 +832,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                   )
                 : errorMessage(detailQuery.error)
             }
-            message={t(
+            title={t(
               'workflowActivityVNext.new.templateBrowser.detailFailed',
               'Template details could not be loaded',
             )}
