@@ -11,6 +11,7 @@ export type StudioWorkflowRoleDocument = Record<string, unknown> & {
   systemPrompt?: string;
   provider?: string | null;
   model?: string | null;
+  toolSets?: string[] | null;
   connectors?: unknown[];
 };
 
@@ -20,6 +21,7 @@ export type StudioWorkflowStepDocument = Record<string, unknown> & {
   originalType?: string;
   targetRole?: string | null;
   target_role?: string | null;
+  toolSets?: string[] | null;
   parameters?: Record<string, unknown> | null;
   next?: string | null;
   branches?: Record<string, string> | null;

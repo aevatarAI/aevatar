@@ -2206,6 +2206,61 @@ describe('Workflow Activity vNext editor', () => {
     ).toHaveTextContent('Saved at 2026-08-04 10:01:00 UTC');
   });
 
+  it('preserves template tool set scopes through serialize and save', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source?source=template';
+    const parsedDocument = {
+      name: 'committed_source',
+      roles: [
+        {
+          id: 'studio',
+          toolSets: ['studio.local', 'nyxid.connected_services'],
+        },
+      ],
+      steps: [
+        {
+          id: 'reply',
+          type: 'llm_call',
+          targetRole: 'studio',
+          toolSets: ['nyxid.connected_services'],
+        },
+      ],
+    };
+    mockStudioApi.parseYaml.mockResolvedValueOnce({
+      document: parsedDocument,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockImplementationOnce(
+      async ({ document }) => ({
+        yaml: 'name: committed_source\nroles:\n  - id: studio\n    tool_sets: [studio.local, nyxid.connected_services]\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: studio\n    tool_sets: [nyxid.connected_services]\n',
+        document,
+        findings: [],
+      }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const saveWorkflowButton = await screen.findByRole('button', {
+      name: 'Save workflow',
+    });
+    fireEvent.click(saveWorkflowButton);
+
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+        document: parsedDocument,
+      }),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          yaml: expect.stringContaining(
+            'tool_sets: [nyxid.connected_services]',
+          ),
+        }),
+      ),
+    );
+  });
+
   it('publishes a saved workflow in one click and waits for observed evidence before showing Published', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
