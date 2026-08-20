@@ -220,25 +220,30 @@ function decodeWorkflowScheduleDetail(value: unknown): WorkflowScheduleDetail {
       ['recentFires', 'RecentFires'],
       'WorkflowScheduleDetail.recentFires',
       (entry, label) => {
-        const fire = expectRecord(entry, label);
+        const entryLabel = label ?? 'WorkflowScheduleDetail.recentFires[]';
+        const fire = expectRecord(entry, entryLabel);
         return {
           scheduledFireAt: readDateTimeString(
             fire,
             ['scheduledFireAt', 'ScheduledFireAt'],
-            `${label}.scheduledFireAt`,
+            `${entryLabel}.scheduledFireAt`,
           ),
           completedAt: readDateTimeString(
             fire,
             ['completedAt', 'CompletedAt'],
-            `${label}.completedAt`,
+            `${entryLabel}.completedAt`,
           ),
           idempotencyKey: readString(
             fire,
             ['idempotencyKey', 'IdempotencyKey'],
-            `${label}.idempotencyKey`,
+            `${entryLabel}.idempotencyKey`,
           ),
-          error: readString(fire, ['error', 'Error'], `${label}.error`),
-          manual: readBoolean(fire, ['manual', 'Manual'], `${label}.manual`),
+          error: readString(fire, ['error', 'Error'], `${entryLabel}.error`),
+          manual: readBoolean(
+            fire,
+            ['manual', 'Manual'],
+            `${entryLabel}.manual`,
+          ),
         };
       },
     ),

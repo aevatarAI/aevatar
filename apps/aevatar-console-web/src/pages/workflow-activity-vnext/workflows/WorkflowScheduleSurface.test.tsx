@@ -18,6 +18,8 @@ jest.mock('@/shared/api/workflowScheduleApi', () => ({
   },
 }));
 
+const mockedWorkflowScheduleApi = jest.mocked(workflowScheduleApi);
+
 const mockToast = {
   error: jest.fn(),
   info: jest.fn(),
@@ -53,12 +55,12 @@ function renderSurface(available: boolean) {
 describe('WorkflowScheduleSurface', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (workflowScheduleApi.list as jest.Mock).mockResolvedValue({
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
       items: [],
       nextCursor: null,
       totalCount: 0,
     });
-    (workflowScheduleApi.create as jest.Mock).mockResolvedValue({
+    mockedWorkflowScheduleApi.create.mockResolvedValue({
       scheduleId: 'schedule-alpha',
       scheduleActorId: 'schedule-actor-alpha',
       accepted: true,
@@ -107,16 +109,16 @@ describe('WorkflowScheduleSurface', () => {
         }),
       ),
     );
-    expect(workflowScheduleApi.create.mock.calls[0][2]).not.toHaveProperty(
-      'owner',
-    );
-    expect(workflowScheduleApi.create.mock.calls[0][2]).not.toHaveProperty(
-      'workflowChatTarget',
-    );
+    expect(
+      mockedWorkflowScheduleApi.create.mock.calls[0][2],
+    ).not.toHaveProperty('owner');
+    expect(
+      mockedWorkflowScheduleApi.create.mock.calls[0][2],
+    ).not.toHaveProperty('workflowChatTarget');
     await waitFor(() =>
-      expect(workflowScheduleApi.list.mock.calls.length).toBeGreaterThanOrEqual(
-        2,
-      ),
+      expect(
+        mockedWorkflowScheduleApi.list.mock.calls.length,
+      ).toBeGreaterThanOrEqual(2),
     );
   });
 });
