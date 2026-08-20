@@ -667,6 +667,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-section h3 { color: var(--wa-ink); font-size: 13px; line-height: 18px; margin: 0; }
 .wa-vnext__schedule-repeat-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) minmax(120px, .7fr) minmax(0, 1fr); }
 .wa-vnext__schedule-repeat-grid .ant-select { width: 100%; }
+.wa-vnext__schedule-repeat-detail { grid-column: 1 / -1; max-width: 260px; }
 .wa-vnext__schedule-cron-toggle { justify-self: start; padding-inline: 0; }
 .wa-vnext__schedule-cron-field { max-width: 420px; }
 .wa-vnext__schedule-server-preview { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; display: grid; gap: 4px; padding: 10px 12px; }

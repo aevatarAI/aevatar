@@ -65,6 +65,14 @@ function renderSurface(
   };
 }
 
+function findScheduleOption(label: string): HTMLElement {
+  const option = Array.from(
+    document.querySelectorAll<HTMLElement>('.ant-select-item-option'),
+  ).find((element) => element.textContent?.trim() === label);
+  if (!option) throw new Error(`Schedule option not found: ${label}`);
+  return option;
+}
+
 describe('WorkflowScheduleSurface', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -306,7 +314,7 @@ describe('WorkflowScheduleSurface', () => {
     view.unmount();
   });
 
-  it('synchronizes a custom cron back to the repeat builder before review', async () => {
+  it('synchronizes a custom weekly cron back to the repeat builder before review', async () => {
     renderSurface(true);
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
@@ -327,18 +335,111 @@ describe('WorkflowScheduleSurface', () => {
       expect(workflowScheduleApi.preview).toHaveBeenCalledWith(
         'scope-alpha',
         'wf-alpha',
-        expect.objectContaining({ cronExpression: '0 9 * * 1-5' }),
+        expect.objectContaining({ cronExpression: '15 14 * * 2' }),
       ),
     );
     expect(screen.getAllByRole('definition')[2]).toHaveTextContent(
-      'Weekdays at 09:00',
+      'Every Tuesday at 14:15',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
     await waitFor(() =>
       expect(workflowScheduleApi.create).toHaveBeenCalledWith(
         'scope-alpha',
         'wf-alpha',
-        expect.objectContaining({ cronExpression: '0 9 * * 1-5' }),
+        expect.objectContaining({ cronExpression: '15 14 * * 2' }),
+      ),
+    );
+  });
+
+  it('offers hourly, daily, weekday, weekly, and monthly repeat presets', async () => {
+    renderSurface(true);
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Repeat' }));
+
+    for (const option of [
+      'Every hour',
+      'Every day',
+      'Weekdays',
+      'Every week',
+      'Every month',
+    ]) {
+      await waitFor(() =>
+        expect(findScheduleOption(option)).toBeInTheDocument(),
+      );
+    }
+  });
+
+  it('builds a weekly cron from the selected day', async () => {
+    renderSurface(true);
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Repeat' }));
+    fireEvent.click(screen.getByText('Every week'));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Day of week' }));
+    fireEvent.click(screen.getByText('Wednesday'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
+      target: { value: 'Weekly workflow run' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
+
+    await waitFor(() =>
+      expect(workflowScheduleApi.preview).toHaveBeenCalledWith(
+        'scope-alpha',
+        'wf-alpha',
+        expect.objectContaining({ cronExpression: '0 9 * * 3' }),
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText('Review schedule', { selector: '.ant-modal-title' }),
+      ).toBeVisible(),
+    );
+    expect(screen.getAllByRole('definition')[2]).toHaveTextContent(
+      'Every Wednesday at 09:00',
+    );
+  });
+
+  it('builds a monthly cron from the selected day and fixes hourly cadence', async () => {
+    renderSurface(true);
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Repeat' }));
+    fireEvent.click(findScheduleOption('Every month'));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Day of month' }));
+    fireEvent.click(findScheduleOption('5'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
+      target: { value: 'Monthly workflow run' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
+
+    await waitFor(() =>
+      expect(workflowScheduleApi.preview).toHaveBeenCalledWith(
+        'scope-alpha',
+        'wf-alpha',
+        expect.objectContaining({ cronExpression: '0 9 5 * *' }),
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText('Review schedule', { selector: '.ant-modal-title' }),
+      ).toBeVisible(),
+    );
+    expect(screen.getAllByRole('definition')[2]).toHaveTextContent(
+      'Every month on day 5 at 09:00',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Repeat' }));
+    fireEvent.click(findScheduleOption('Every hour'));
+    await waitFor(() => expect(screen.getByLabelText('Time')).toBeDisabled());
+    fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
+      target: { value: 'Hourly workflow run' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
+
+    await waitFor(() =>
+      expect(workflowScheduleApi.preview).toHaveBeenLastCalledWith(
+        'scope-alpha',
+        'wf-alpha',
+        expect.objectContaining({ cronExpression: '0 * * * *' }),
       ),
     );
   });

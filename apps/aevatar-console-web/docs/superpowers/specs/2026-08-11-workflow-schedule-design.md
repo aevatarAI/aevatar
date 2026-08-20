@@ -101,6 +101,18 @@ flow.
 The first release supports recurring five-field cron only. It does not expose
 one-shot fields even if lower layers contain them.
 
+The human repeat builder covers the recurring presets users commonly need:
+
+- Every hour (at minute `0` of each hour)
+- Every day (with a time)
+- Weekdays (with a time)
+- Every week (with a weekday and time)
+- Every month (with a day of month and time)
+
+Weekly and monthly selections are still serialized as ordinary five-field cron
+expressions. More advanced expressions remain available through the explicit
+`write it as cron instead` disclosure.
+
 ### Preview
 
 `Review schedule` validates the local form and calls:

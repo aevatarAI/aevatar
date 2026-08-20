@@ -50,7 +50,14 @@ type ScheduleForm = {
 
 type CreationStep = 'configure' | 'previewing' | 'review' | 'accepted';
 type ScheduleSurfaceView = 'list' | 'form';
-type RepeatPreset = 'daily' | 'weekdays';
+type RepeatPreset = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly';
+
+const weekdayValues = ['1', '2', '3', '4', '5', '6', '0'] as const;
+type WeekdayValue = (typeof weekdayValues)[number];
+
+const monthlyDayValues = Array.from({ length: 31 }, (_, index) =>
+  String(index + 1),
+);
 
 const scheduleQueryKey = (scopeId: string, workflowId: string) => [
   'workflow-activity-vnext',
@@ -63,23 +70,87 @@ function defaultTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
-function cronFromRepeat(preset: RepeatPreset, time: string): string {
+function cronFromRepeat(
+  preset: RepeatPreset,
+  time: string,
+  weeklyDay: WeekdayValue,
+  monthlyDay: string,
+): string {
   const [hour = '9', minute = '0'] = time.split(':');
-  return `${Number(minute)} ${Number(hour)} * * ${preset === 'weekdays' ? '1-5' : '*'}`;
+  if (preset === 'hourly') return '0 * * * *';
+  if (preset === 'weekdays') {
+    return `${Number(minute)} ${Number(hour)} * * 1-5`;
+  }
+  if (preset === 'weekly') {
+    return `${Number(minute)} ${Number(hour)} * * ${weeklyDay}`;
+  }
+  if (preset === 'monthly') {
+    return `${Number(minute)} ${Number(hour)} ${Number(monthlyDay)} * *`;
+  }
+  return `${Number(minute)} ${Number(hour)} * * *`;
 }
 
 function repeatFromCron(cronExpression: string): {
   readonly preset: RepeatPreset;
   readonly time: string;
+  readonly weeklyDay: WeekdayValue;
+  readonly monthlyDay: string;
 } | null {
-  const match = cronExpression.match(/^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5)$/);
+  const normalized = cronExpression.trim().replace(/\s+/g, ' ');
+  if (normalized === '0 * * * *') {
+    return {
+      preset: 'hourly',
+      time: '09:00',
+      weeklyDay: '1',
+      monthlyDay: '1',
+    };
+  }
+  const match = normalized.match(
+    /^(\d{1,2}) (\d{1,2}) (\*|\d{1,2}) (\*|\d{1,2}) (\*|1-5|[0-7])$/,
+  );
   if (!match) return null;
   const minute = Number(match[1]);
   const hour = Number(match[2]);
   if (minute > 59 || hour > 23) return null;
+  const dayOfMonth = match[3];
+  const month = match[4];
+  const dayOfWeek = match[5];
+  if (month !== '*' || (dayOfMonth !== '*' && dayOfWeek !== '*')) {
+    return null;
+  }
+  if (dayOfWeek === '1-5') {
+    return {
+      preset: 'weekdays',
+      time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+      weeklyDay: '1',
+      monthlyDay: '1',
+    };
+  }
+  if (dayOfMonth !== '*') {
+    const parsedDay = Number(dayOfMonth);
+    if (parsedDay < 1 || parsedDay > 31 || dayOfWeek !== '*') return null;
+    return {
+      preset: 'monthly',
+      time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+      weeklyDay: '1',
+      monthlyDay: String(parsedDay),
+    };
+  }
+  if (dayOfWeek !== '*') {
+    const parsedDay = dayOfWeek === '7' ? '0' : dayOfWeek;
+    if (!weekdayValues.includes(parsedDay as WeekdayValue)) return null;
+    return {
+      preset: 'weekly',
+      time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+      weeklyDay: parsedDay as WeekdayValue,
+      monthlyDay: '1',
+    };
+  }
   return {
-    preset: match[3] === '1-5' ? 'weekdays' : 'daily',
+    preset: 'daily',
     time: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+    weeklyDay: '1',
+    monthlyDay: '1',
   };
 }
 
@@ -145,6 +216,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   const [repeatPreset, setRepeatPreset] =
     React.useState<RepeatPreset>('weekdays');
   const [repeatTime, setRepeatTime] = React.useState('09:00');
+  const [weeklyDay, setWeeklyDay] = React.useState<WeekdayValue>('1');
+  const [monthlyDay, setMonthlyDay] = React.useState('1');
   const [cronMode, setCronMode] = React.useState(false);
   const [preview, setPreview] = React.useState<WorkflowSchedulePreview | null>(
     null,
@@ -188,6 +261,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setForm(emptyForm());
     setRepeatPreset('weekdays');
     setRepeatTime('09:00');
+    setWeeklyDay('1');
+    setMonthlyDay('1');
     setCronMode(false);
     setPreview(null);
     setAcceptedMessage(null);
@@ -215,6 +290,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setForm(emptyForm());
     setRepeatPreset('weekdays');
     setRepeatTime('09:00');
+    setWeeklyDay('1');
+    setMonthlyDay('1');
     setCronMode(false);
     setPreview(null);
     setCreationStep('configure');
@@ -227,6 +304,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setForm(formFromSchedule(schedule));
     setRepeatPreset(repeat?.preset ?? 'weekdays');
     setRepeatTime(repeat?.time ?? '09:00');
+    setWeeklyDay(repeat?.weeklyDay ?? '1');
+    setMonthlyDay(repeat?.monthlyDay ?? '1');
     setCronMode(!repeat);
     setPreview(null);
     setCreationStep('configure');
@@ -245,13 +324,25 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setPreview(null);
   };
 
-  const updateHumanRepeat = (nextPreset: RepeatPreset, nextTime: string) => {
+  const updateHumanRepeat = (
+    nextPreset: RepeatPreset,
+    nextTime: string,
+    nextWeeklyDay = weeklyDay,
+    nextMonthlyDay = monthlyDay,
+  ) => {
     setRepeatPreset(nextPreset);
     setRepeatTime(nextTime);
+    setWeeklyDay(nextWeeklyDay);
+    setMonthlyDay(nextMonthlyDay);
     setPreview(null);
     setForm((current) => ({
       ...current,
-      cronExpression: cronFromRepeat(nextPreset, nextTime),
+      cronExpression: cronFromRepeat(
+        nextPreset,
+        nextTime,
+        nextWeeklyDay,
+        nextMonthlyDay,
+      ),
     }));
   };
 
@@ -381,24 +472,57 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     }
   };
 
+  const weekdayLabel = (value: WeekdayValue) =>
+    t(`workflowActivityVNext.schedule.weekday.${value}`, value);
+
   const recurrenceSummary = cronMode
     ? t('workflowActivityVNext.schedule.cronSummary', 'Cron: {cron}', {
         cron: form.cronExpression,
       })
-    : t('workflowActivityVNext.schedule.repeatSummary', '{repeat} at {time}', {
-        repeat:
-          repeatPreset === 'weekdays'
-            ? t('workflowActivityVNext.schedule.weekdays', 'Weekdays')
-            : t('workflowActivityVNext.schedule.daily', 'Every day'),
-        time: repeatTime,
-      });
+    : repeatPreset === 'hourly'
+      ? t('workflowActivityVNext.schedule.hourly', 'Every hour')
+      : repeatPreset === 'weekly'
+        ? t(
+            'workflowActivityVNext.schedule.weeklySummary',
+            'Every {day} at {time}',
+            { day: weekdayLabel(weeklyDay), time: repeatTime },
+          )
+        : repeatPreset === 'monthly'
+          ? t(
+              'workflowActivityVNext.schedule.monthlySummary',
+              'Every month on day {day} at {time}',
+              { day: monthlyDay, time: repeatTime },
+            )
+          : t(
+              'workflowActivityVNext.schedule.repeatSummary',
+              '{repeat} at {time}',
+              {
+                repeat:
+                  repeatPreset === 'weekdays'
+                    ? t('workflowActivityVNext.schedule.weekdays', 'Weekdays')
+                    : t('workflowActivityVNext.schedule.daily', 'Every day'),
+                time: repeatTime,
+              },
+            );
 
   const toggleCronMode = () => {
     setPreview(null);
     if (cronMode) {
+      const repeat = repeatFromCron(form.cronExpression);
+      if (repeat) {
+        setRepeatPreset(repeat.preset);
+        setRepeatTime(repeat.time);
+        setWeeklyDay(repeat.weeklyDay);
+        setMonthlyDay(repeat.monthlyDay);
+      }
       setForm((current) => ({
         ...current,
-        cronExpression: cronFromRepeat(repeatPreset, repeatTime),
+        cronExpression: cronFromRepeat(
+          repeat?.preset ?? repeatPreset,
+          repeat?.time ?? repeatTime,
+          repeat?.weeklyDay ?? weeklyDay,
+          repeat?.monthlyDay ?? monthlyDay,
+        ),
       }));
     }
     setCronMode((current) => !current);
@@ -478,24 +602,97 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
               options={[
                 {
                   label: t(
+                    'workflowActivityVNext.schedule.hourly',
+                    'Every hour',
+                  ),
+                  value: 'hourly',
+                },
+                {
+                  label: t('workflowActivityVNext.schedule.daily', 'Every day'),
+                  value: 'daily',
+                },
+                {
+                  label: t(
                     'workflowActivityVNext.schedule.weekdays',
                     'Weekdays',
                   ),
                   value: 'weekdays',
                 },
                 {
-                  label: t('workflowActivityVNext.schedule.daily', 'Every day'),
-                  value: 'daily',
+                  label: t(
+                    'workflowActivityVNext.schedule.weekly',
+                    'Every week',
+                  ),
+                  value: 'weekly',
+                },
+                {
+                  label: t(
+                    'workflowActivityVNext.schedule.monthly',
+                    'Every month',
+                  ),
+                  value: 'monthly',
                 },
               ]}
               value={repeatPreset}
             />
           </label>
+          {repeatPreset === 'weekly' ? (
+            <label
+              className="wa-vnext__modal-field wa-vnext__schedule-repeat-detail"
+              htmlFor="schedule-weekday"
+            >
+              <span>
+                {t('workflowActivityVNext.schedule.dayOfWeek', 'Day of week')}
+              </span>
+              <Select
+                aria-label={t(
+                  'workflowActivityVNext.schedule.dayOfWeek',
+                  'Day of week',
+                )}
+                disabled={cronMode}
+                id="schedule-weekday"
+                onChange={(day: WeekdayValue) =>
+                  updateHumanRepeat(repeatPreset, repeatTime, day)
+                }
+                options={weekdayValues.map((day) => ({
+                  label: weekdayLabel(day),
+                  value: day,
+                }))}
+                value={weeklyDay}
+              />
+            </label>
+          ) : null}
+          {repeatPreset === 'monthly' ? (
+            <label
+              className="wa-vnext__modal-field wa-vnext__schedule-repeat-detail"
+              htmlFor="schedule-monthday"
+            >
+              <span>
+                {t('workflowActivityVNext.schedule.dayOfMonth', 'Day of month')}
+              </span>
+              <Select
+                aria-label={t(
+                  'workflowActivityVNext.schedule.dayOfMonth',
+                  'Day of month',
+                )}
+                disabled={cronMode}
+                id="schedule-monthday"
+                onChange={(day: string) =>
+                  updateHumanRepeat(repeatPreset, repeatTime, weeklyDay, day)
+                }
+                options={monthlyDayValues.map((day) => ({
+                  label: day,
+                  value: day,
+                }))}
+                value={monthlyDay}
+              />
+            </label>
+          ) : null}
           <label className="wa-vnext__modal-field" htmlFor="schedule-time">
             <span>{t('workflowActivityVNext.schedule.time', 'Time')}</span>
             <Input
               aria-label={t('workflowActivityVNext.schedule.time', 'Time')}
-              disabled={cronMode}
+              disabled={cronMode || repeatPreset === 'hourly'}
               id="schedule-time"
               onChange={(event) =>
                 updateHumanRepeat(repeatPreset, event.target.value)
