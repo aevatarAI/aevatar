@@ -130,7 +130,7 @@
 
   Verify the direct catalogue quick modal, configure/review transition, mobile stacking if available, and editor panel reuse against the Schedule PNG baseline.
 
-- [ ] **Step 4: Review, stage only current-task files, commit, push, and update PR #3498**
+- [x] **Step 4: Review, stage only current-task files, commit, push, and update PR #3498**
 
   Commit message: `Align workflow schedule creation with design`
 
