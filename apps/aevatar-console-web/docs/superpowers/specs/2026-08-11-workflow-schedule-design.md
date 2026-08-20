@@ -117,7 +117,10 @@ The human repeat builder covers the recurring presets users commonly need:
 
 Weekly and monthly selections are still serialized as ordinary five-field cron
 expressions. More advanced expressions remain available through the explicit
-`write it as cron instead` disclosure.
+`write it as cron instead` disclosure. The two input modes are mutually
+exclusive: raw Cron mode replaces the Repeat, weekday/day-of-month, and Time
+controls with Cron expression while keeping Time zone editable. Returning to
+the repeat builder restores the human-readable controls from the Cron value.
 
 ### Preview
 

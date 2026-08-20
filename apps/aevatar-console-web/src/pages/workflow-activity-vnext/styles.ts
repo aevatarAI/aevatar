@@ -665,10 +665,10 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-section:last-of-type { border-bottom: 0; padding-bottom: 0; }
 .wa-vnext__schedule-section h3 { color: var(--wa-ink); font-size: 13px; line-height: 18px; margin: 0; }
 .wa-vnext__schedule-repeat-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) minmax(120px, .7fr) minmax(0, 1fr); }
+.wa-vnext__schedule-cron-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 .wa-vnext__schedule-repeat-grid .ant-select { width: 100%; }
 .wa-vnext__schedule-repeat-detail { grid-column: 1 / -1; max-width: 260px; }
 .wa-vnext__schedule-cron-toggle { justify-self: start; padding-inline: 0; }
-.wa-vnext__schedule-cron-field { max-width: 420px; }
 .wa-vnext__schedule-previewing { color: #166534; font-size: 12px; font-weight: 650; }
 .wa-vnext__schedule-footer { align-items: center; border-top: 1px solid var(--wa-line); display: flex; gap: 8px; justify-content: flex-end; padding-top: 14px; }
 .wa-vnext__schedule-review-panel { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; display: grid; gap: 16px; padding: 16px; }
@@ -776,7 +776,7 @@ export const workflowActivityVNextCss = `
 }
 @media (max-width: 767px) {
   .wa-vnext-schedule-modal .ant-modal-content { padding: 18px; }
-  .wa-vnext__schedule-repeat-grid, .wa-vnext__schedule-review-details { grid-template-columns: 1fr; }
+  .wa-vnext__schedule-repeat-grid, .wa-vnext__schedule-cron-grid, .wa-vnext__schedule-review-details { grid-template-columns: 1fr; }
   .wa-vnext__schedule-context { align-items: flex-start; flex-direction: column; }
   .wa-vnext__schedule-context strong { text-align: left; }
   .wa-vnext__schedule-footer { align-items: stretch; flex-direction: column-reverse; }

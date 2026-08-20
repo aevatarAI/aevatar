@@ -356,6 +356,45 @@ describe('WorkflowScheduleSurface', () => {
     );
   });
 
+  it('renders only the controls for the active cadence mode', () => {
+    renderSurface(true);
+
+    expect(
+      screen.getByRole('combobox', { name: 'Repeat' }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Time')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('textbox', { name: 'Cron expression' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'write it as cron instead' }),
+    );
+
+    expect(
+      screen.queryByRole('combobox', { name: 'Repeat' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Time')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('textbox', { name: 'Cron expression' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('textbox', { name: 'Timezone' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'use the repeat builder' }),
+    );
+
+    expect(
+      screen.getByRole('combobox', { name: 'Repeat' }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Time')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('textbox', { name: 'Cron expression' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('offers hourly, daily, weekday, weekly, and monthly repeat presets', async () => {
     renderSurface(true);
 

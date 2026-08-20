@@ -557,6 +557,24 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     </div>
   );
 
+  const timezoneField = (
+    <label className="wa-vnext__modal-field" htmlFor="schedule-timezone">
+      <span>{t('workflowActivityVNext.schedule.timezone', 'Timezone')}</span>
+      <Input
+        aria-label={t('workflowActivityVNext.schedule.timezone', 'Timezone')}
+        id="schedule-timezone"
+        onChange={(event) => {
+          setPreview(null);
+          setForm((current) => ({
+            ...current,
+            timezone: event.target.value,
+          }));
+        }}
+        value={form.timezone}
+      />
+    </label>
+  );
+
   const formFields = (
     <>
       {workflowContext}
@@ -586,139 +604,130 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       </section>
       <section className="wa-vnext__schedule-section">
         <h3>{t('workflowActivityVNext.schedule.howOften', 'How often')}</h3>
-        <div className="wa-vnext__schedule-repeat-grid">
-          <label className="wa-vnext__modal-field" htmlFor="schedule-repeat">
-            <span>{t('workflowActivityVNext.schedule.repeat', 'Repeat')}</span>
-            <Select
-              aria-label={t('workflowActivityVNext.schedule.repeat', 'Repeat')}
-              disabled={cronMode}
-              id="schedule-repeat"
-              onChange={(preset: RepeatPreset) =>
-                updateHumanRepeat(preset, repeatTime)
-              }
-              options={[
-                {
-                  label: t(
-                    'workflowActivityVNext.schedule.hourly',
-                    'Every hour',
-                  ),
-                  value: 'hourly',
-                },
-                {
-                  label: t('workflowActivityVNext.schedule.daily', 'Every day'),
-                  value: 'daily',
-                },
-                {
-                  label: t(
-                    'workflowActivityVNext.schedule.weekdays',
-                    'Weekdays',
-                  ),
-                  value: 'weekdays',
-                },
-                {
-                  label: t(
-                    'workflowActivityVNext.schedule.weekly',
-                    'Every week',
-                  ),
-                  value: 'weekly',
-                },
-                {
-                  label: t(
-                    'workflowActivityVNext.schedule.monthly',
-                    'Every month',
-                  ),
-                  value: 'monthly',
-                },
-              ]}
-              value={repeatPreset}
-            />
-          </label>
-          {repeatPreset === 'weekly' ? (
-            <label
-              className="wa-vnext__modal-field wa-vnext__schedule-repeat-detail"
-              htmlFor="schedule-weekday"
-            >
+        {!cronMode ? (
+          <div className="wa-vnext__schedule-repeat-grid">
+            <label className="wa-vnext__modal-field" htmlFor="schedule-repeat">
               <span>
-                {t('workflowActivityVNext.schedule.dayOfWeek', 'Day of week')}
+                {t('workflowActivityVNext.schedule.repeat', 'Repeat')}
               </span>
               <Select
                 aria-label={t(
-                  'workflowActivityVNext.schedule.dayOfWeek',
-                  'Day of week',
+                  'workflowActivityVNext.schedule.repeat',
+                  'Repeat',
                 )}
-                disabled={cronMode}
-                id="schedule-weekday"
-                onChange={(day: WeekdayValue) =>
-                  updateHumanRepeat(repeatPreset, repeatTime, day)
+                id="schedule-repeat"
+                onChange={(preset: RepeatPreset) =>
+                  updateHumanRepeat(preset, repeatTime)
                 }
-                options={weekdayValues.map((day) => ({
-                  label: weekdayLabel(day),
-                  value: day,
-                }))}
-                value={weeklyDay}
+                options={[
+                  {
+                    label: t(
+                      'workflowActivityVNext.schedule.hourly',
+                      'Every hour',
+                    ),
+                    value: 'hourly',
+                  },
+                  {
+                    label: t(
+                      'workflowActivityVNext.schedule.daily',
+                      'Every day',
+                    ),
+                    value: 'daily',
+                  },
+                  {
+                    label: t(
+                      'workflowActivityVNext.schedule.weekdays',
+                      'Weekdays',
+                    ),
+                    value: 'weekdays',
+                  },
+                  {
+                    label: t(
+                      'workflowActivityVNext.schedule.weekly',
+                      'Every week',
+                    ),
+                    value: 'weekly',
+                  },
+                  {
+                    label: t(
+                      'workflowActivityVNext.schedule.monthly',
+                      'Every month',
+                    ),
+                    value: 'monthly',
+                  },
+                ]}
+                value={repeatPreset}
               />
             </label>
-          ) : null}
-          {repeatPreset === 'monthly' ? (
-            <label
-              className="wa-vnext__modal-field wa-vnext__schedule-repeat-detail"
-              htmlFor="schedule-monthday"
-            >
-              <span>
-                {t('workflowActivityVNext.schedule.dayOfMonth', 'Day of month')}
-              </span>
-              <Select
-                aria-label={t(
-                  'workflowActivityVNext.schedule.dayOfMonth',
-                  'Day of month',
-                )}
-                disabled={cronMode}
-                id="schedule-monthday"
-                onChange={(day: string) =>
-                  updateHumanRepeat(repeatPreset, repeatTime, weeklyDay, day)
+            {repeatPreset === 'weekly' ? (
+              <label
+                className="wa-vnext__modal-field wa-vnext__schedule-repeat-detail"
+                htmlFor="schedule-weekday"
+              >
+                <span>
+                  {t('workflowActivityVNext.schedule.dayOfWeek', 'Day of week')}
+                </span>
+                <Select
+                  aria-label={t(
+                    'workflowActivityVNext.schedule.dayOfWeek',
+                    'Day of week',
+                  )}
+                  id="schedule-weekday"
+                  onChange={(day: WeekdayValue) =>
+                    updateHumanRepeat(repeatPreset, repeatTime, day)
+                  }
+                  options={weekdayValues.map((day) => ({
+                    label: weekdayLabel(day),
+                    value: day,
+                  }))}
+                  value={weeklyDay}
+                />
+              </label>
+            ) : null}
+            {repeatPreset === 'monthly' ? (
+              <label
+                className="wa-vnext__modal-field wa-vnext__schedule-repeat-detail"
+                htmlFor="schedule-monthday"
+              >
+                <span>
+                  {t(
+                    'workflowActivityVNext.schedule.dayOfMonth',
+                    'Day of month',
+                  )}
+                </span>
+                <Select
+                  aria-label={t(
+                    'workflowActivityVNext.schedule.dayOfMonth',
+                    'Day of month',
+                  )}
+                  id="schedule-monthday"
+                  onChange={(day: string) =>
+                    updateHumanRepeat(repeatPreset, repeatTime, weeklyDay, day)
+                  }
+                  options={monthlyDayValues.map((day) => ({
+                    label: day,
+                    value: day,
+                  }))}
+                  value={monthlyDay}
+                />
+              </label>
+            ) : null}
+            <label className="wa-vnext__modal-field" htmlFor="schedule-time">
+              <span>{t('workflowActivityVNext.schedule.time', 'Time')}</span>
+              <Input
+                aria-label={t('workflowActivityVNext.schedule.time', 'Time')}
+                disabled={repeatPreset === 'hourly'}
+                id="schedule-time"
+                onChange={(event) =>
+                  updateHumanRepeat(repeatPreset, event.target.value)
                 }
-                options={monthlyDayValues.map((day) => ({
-                  label: day,
-                  value: day,
-                }))}
-                value={monthlyDay}
+                type="time"
+                value={repeatTime}
               />
             </label>
-          ) : null}
-          <label className="wa-vnext__modal-field" htmlFor="schedule-time">
-            <span>{t('workflowActivityVNext.schedule.time', 'Time')}</span>
-            <Input
-              aria-label={t('workflowActivityVNext.schedule.time', 'Time')}
-              disabled={cronMode || repeatPreset === 'hourly'}
-              id="schedule-time"
-              onChange={(event) =>
-                updateHumanRepeat(repeatPreset, event.target.value)
-              }
-              type="time"
-              value={repeatTime}
-            />
-          </label>
-          <label className="wa-vnext__modal-field" htmlFor="schedule-timezone">
-            <span>
-              {t('workflowActivityVNext.schedule.timezone', 'Timezone')}
-            </span>
-            <Input
-              aria-label={t(
-                'workflowActivityVNext.schedule.timezone',
-                'Timezone',
-              )}
-              id="schedule-timezone"
-              onChange={(event) => {
-                setPreview(null);
-                setForm((current) => ({
-                  ...current,
-                  timezone: event.target.value,
-                }));
-              }}
-              value={form.timezone}
-            />
-          </label>
-        </div>
+            {timezoneField}
+          </div>
+        ) : null}
         <Button
           className="wa-vnext__schedule-cron-toggle"
           onClick={toggleCronMode}
@@ -735,29 +744,32 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
               )}
         </Button>
         {cronMode ? (
-          <label
-            className="wa-vnext__modal-field wa-vnext__schedule-cron-field"
-            htmlFor="workflow-schedule-cron"
-          >
-            <span>
-              {t('workflowActivityVNext.schedule.cron', 'Cron expression')}
-            </span>
-            <Input
-              aria-label={t(
-                'workflowActivityVNext.schedule.cron',
-                'Cron expression',
-              )}
-              id="workflow-schedule-cron"
-              onChange={(event) => {
-                setPreview(null);
-                setForm((current) => ({
-                  ...current,
-                  cronExpression: event.target.value,
-                }));
-              }}
-              value={form.cronExpression}
-            />
-          </label>
+          <div className="wa-vnext__schedule-cron-grid">
+            <label
+              className="wa-vnext__modal-field"
+              htmlFor="workflow-schedule-cron"
+            >
+              <span>
+                {t('workflowActivityVNext.schedule.cron', 'Cron expression')}
+              </span>
+              <Input
+                aria-label={t(
+                  'workflowActivityVNext.schedule.cron',
+                  'Cron expression',
+                )}
+                id="workflow-schedule-cron"
+                onChange={(event) => {
+                  setPreview(null);
+                  setForm((current) => ({
+                    ...current,
+                    cronExpression: event.target.value,
+                  }));
+                }}
+                value={form.cronExpression}
+              />
+            </label>
+            {timezoneField}
+          </div>
         ) : null}
         {previewing ? (
           <div className="wa-vnext__schedule-previewing" role="status">
