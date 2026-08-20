@@ -284,6 +284,57 @@ public sealed class EditorControllerSerializationTests
     }
 
     [Fact]
+    public async Task ParseAndSerializeYaml_ShouldPreserveToolSetsInDocumentJson()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+
+        using var parseResponse = await client.PostAsJsonAsync("/api/editor/parse-yaml", new
+        {
+            yaml = """
+                   name: tool_set_scope
+                   roles:
+                     - id: planner
+                       tool_sets: [studio.local, nyxid.connected_services]
+                     - id: isolated
+                       tool_sets: []
+                   steps:
+                     - id: scoped
+                       type: llm_call
+                       target_role: planner
+                       tool_sets: [nyxid.connected_services]
+                     - id: no_tool_sets
+                       type: llm_call
+                       target_role: isolated
+                       tool_sets: []
+                   """,
+            availableStepTypes = new[] { "llm_call" },
+        });
+
+        var parseBody = await parseResponse.Content.ReadAsStringAsync();
+        parseResponse.StatusCode.Should().Be(HttpStatusCode.OK, parseBody);
+        parseBody.Should().NotContain("\"code\":\"unknown_field\"");
+        parseBody.Should().Contain("\"toolSets\":[\"studio.local\",\"nyxid.connected_services\"]");
+        parseBody.Should().Contain("\"toolSets\":[\"nyxid.connected_services\"]");
+        parseBody.Should().Contain("\"toolSets\":[]");
+
+        using var parsedJson = JsonDocument.Parse(parseBody);
+        var document = parsedJson.RootElement.GetProperty("document").Clone();
+        using var serializeResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", new
+        {
+            document,
+            availableStepTypes = new[] { "llm_call" },
+        });
+
+        var serializeBody = await serializeResponse.Content.ReadAsStringAsync();
+        serializeResponse.StatusCode.Should().Be(HttpStatusCode.OK, serializeBody);
+        serializeBody.Should().Contain("tool_sets:");
+        serializeBody.Should().Contain("- studio.local");
+        serializeBody.Should().Contain("- nyxid.connected_services");
+        serializeBody.Should().Contain("tool_sets: []");
+    }
+
+    [Fact]
     public async Task ParseAndSerializeYaml_ShouldPreserveTypedNyxIdCapabilitiesRecursively()
     {
         using var host = await StartHostAsync();

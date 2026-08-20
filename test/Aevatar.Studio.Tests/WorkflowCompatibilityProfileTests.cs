@@ -197,6 +197,64 @@ public sealed class WorkflowCompatibilityProfileTests
     }
 
     [Fact]
+    public void Parse_WhenRuntimeToolSetsFieldsDeclared_ShouldAcceptTypedFieldsAndRoundTripToRuntime()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        var yaml = """
+            name: tool_set_scope
+            roles:
+              - id: planner
+                tool_sets: [studio.local, nyxid.connected_services]
+              - id: isolated
+                tool_sets: []
+              - id: inherited
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: planner
+                tool_sets: [nyxid.connected_services]
+              - id: no_tool_sets
+                type: llm_call
+                target_role: isolated
+                tool_sets: []
+              - id: inherited_tool_sets
+                type: llm_call
+                target_role: inherited
+            """;
+
+        var studioParse = service.Parse(yaml);
+
+        studioParse.Findings.Should().NotContain(finding =>
+            string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase));
+        studioParse.Document.Should().NotBeNull();
+
+        var serialized = service.Serialize(studioParse.Document!);
+        serialized.Should().Contain("tool_sets:");
+        serialized.Should().Contain("tool_sets: []");
+
+        var runtimeRoundTrip = new WorkflowParser().Parse(serialized);
+        var plannerScope = runtimeRoundTrip.Roles[0].AgentToolScope;
+        var isolatedRoleScope = runtimeRoundTrip.Roles[1].AgentToolScope;
+        var scopedStepScope = runtimeRoundTrip.Steps[0].AgentToolScope;
+        var isolatedStepScope = runtimeRoundTrip.Steps[1].AgentToolScope;
+        plannerScope.Should().NotBeNull();
+        isolatedRoleScope.Should().NotBeNull();
+        scopedStepScope.Should().NotBeNull();
+        isolatedStepScope.Should().NotBeNull();
+        plannerScope!.ToolSetRefs.Should()
+            .Equal("studio.local", "nyxid.connected_services");
+        plannerScope.RestrictToolSets.Should().BeTrue();
+        isolatedRoleScope!.ToolSetRefs.Should().BeEmpty();
+        isolatedRoleScope.RestrictToolSets.Should().BeTrue();
+        runtimeRoundTrip.Roles[2].AgentToolScope.Should().BeNull();
+        scopedStepScope!.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        scopedStepScope.RestrictToolSets.Should().BeTrue();
+        isolatedStepScope!.ToolSetRefs.Should().BeEmpty();
+        isolatedStepScope.RestrictToolSets.Should().BeTrue();
+        runtimeRoundTrip.Steps[2].AgentToolScope.Should().BeNull();
+    }
+
+    [Fact]
     public void Parse_WhenAllowedToolsScalarContainsNonRuntimeDelimiters_ShouldPreserveRuntimeTokenization()
     {
         var service = new YamlWorkflowDocumentService(_profile);

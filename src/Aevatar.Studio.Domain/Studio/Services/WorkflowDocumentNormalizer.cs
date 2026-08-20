@@ -37,7 +37,8 @@ public sealed class WorkflowDocumentNormalizer
             Model = NormalizeText(role.Model),
             EventModules = NormalizeText(role.EventModules),
             EventRoutes = NormalizeText(role.EventRoutes),
-            AllowedTools = NormalizeAllowedTools(role.AllowedTools),
+            AllowedTools = NormalizeOptionalStringList(role.AllowedTools),
+            ToolSets = NormalizeOptionalStringList(role.ToolSets),
             Connectors = role.Connectors
                 .SelectMany(SplitConnectorValue)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -80,7 +81,8 @@ public sealed class WorkflowDocumentNormalizer
             OriginalType = canonicalType,
             TargetRole = NormalizeText(step.TargetRole),
             UsedRoleAlias = false,
-            AllowedTools = NormalizeAllowedTools(step.AllowedTools),
+            AllowedTools = NormalizeOptionalStringList(step.AllowedTools),
+            ToolSets = NormalizeOptionalStringList(step.ToolSets),
             Capability = NormalizeCapability(step.Capability),
             Parameters = normalizedParameters,
             Next = NormalizeText(step.Next),
@@ -196,10 +198,10 @@ public sealed class WorkflowDocumentNormalizer
     private static string? NormalizeText(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private static List<string>? NormalizeAllowedTools(IReadOnlyList<string>? allowedTools) =>
-        allowedTools is null
+    private static List<string>? NormalizeOptionalStringList(IReadOnlyList<string>? values) =>
+        values is null
             ? null
-            : allowedTools
+            : values
                 .Select(NormalizeText)
                 .Where(value => value is not null)
                 .Select(value => value!)

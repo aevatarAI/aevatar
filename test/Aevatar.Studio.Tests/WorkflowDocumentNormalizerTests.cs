@@ -75,6 +75,36 @@ public sealed class WorkflowDocumentNormalizerTests
     }
 
     [Fact]
+    public void NormalizeForExport_ShouldNormalizeToolSetsWithoutCollapsingPresence()
+    {
+        var doc = new WorkflowDocument
+        {
+            Name = "wf",
+            Roles =
+            [
+                new RoleModel { Id = "r1", ToolSets = [" studio.local ", " ", "nyxid.connected_services"] },
+                new RoleModel { Id = "r2", ToolSets = [] },
+                new RoleModel { Id = "r3" },
+            ],
+            Steps =
+            [
+                new StepModel { Id = "s1", Type = "llm_call", ToolSets = [" nyxid.connected_services ", ""] },
+                new StepModel { Id = "s2", Type = "llm_call", ToolSets = [] },
+                new StepModel { Id = "s3", Type = "llm_call" },
+            ],
+        };
+
+        var result = _normalizer.NormalizeForExport(doc);
+
+        result.Roles[0].ToolSets.Should().Equal("studio.local", "nyxid.connected_services");
+        result.Roles[1].ToolSets.Should().BeEmpty();
+        result.Roles[2].ToolSets.Should().BeNull();
+        result.Steps[0].ToolSets.Should().Equal("nyxid.connected_services");
+        result.Steps[1].ToolSets.Should().BeEmpty();
+        result.Steps[2].ToolSets.Should().BeNull();
+    }
+
+    [Fact]
     public void NormalizeForExport_ShouldCanonicalizeStepType()
     {
         var doc = new WorkflowDocument
