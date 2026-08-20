@@ -1,5 +1,6 @@
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
+import { type Edge, MarkerType } from '@xyflow/react';
 import {
   Alert,
   Button,
@@ -8,11 +9,11 @@ import {
   Modal,
   Select,
   Space,
-  Tabs,
   Typography,
 } from 'antd';
 import React from 'react';
 import { runtimeCatalogApi } from '@/shared/api/runtimeCatalogApi';
+import GraphCanvas from '@/shared/graphs/GraphCanvas';
 import { t } from '@/shared/i18n/messages';
 import type {
   WorkflowTemplateDetail,
@@ -20,6 +21,7 @@ import type {
 } from '@/shared/models/runtime/workflowTemplates';
 import { history } from '@/shared/navigation/history';
 import { isStudioApiErrorCode, studioApi } from '@/shared/studio/api';
+import { buildStudioGraphElements } from '@/shared/studio/graph';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useDraftMaterialization } from '../hooks/useDraftMaterialization';
 import { buildWorkflowActivityEditorHref } from '../navigation';
@@ -186,61 +188,103 @@ function TemplateRow({
   );
 }
 
+export function buildTemplatePreviewGraph(detail: WorkflowTemplateDetail) {
+  const stepIds = new Set(detail.definition.steps.map((step) => step.id));
+  const validEdges = detail.edges.flatMap((edge, index) =>
+    stepIds.has(edge.from) && stepIds.has(edge.to) ? [{ edge, index }] : [],
+  );
+  if (validEdges.length === 0) {
+    return buildStudioGraphElements(detail.definition);
+  }
+
+  const outgoingEdgesByStepId = new Map<string, typeof validEdges>();
+  validEdges.forEach((entry) => {
+    const outgoing = outgoingEdgesByStepId.get(entry.edge.from) ?? [];
+    outgoing.push(entry);
+    outgoingEdgesByStepId.set(entry.edge.from, outgoing);
+  });
+
+  const layoutDefinition = {
+    ...detail.definition,
+    steps: detail.definition.steps.map((step) => {
+      const outgoing = outgoingEdgesByStepId.get(step.id) ?? [];
+      return {
+        ...step,
+        next: outgoing[0]?.edge.to ?? '',
+        branches: Object.fromEntries(
+          outgoing
+            .slice(1)
+            .map(({ edge, index }) => [`__template_edge_${index}`, edge.to]),
+        ),
+      };
+    }),
+  };
+  const baseGraph = buildStudioGraphElements(layoutDefinition);
+
+  const sourceStepById = new Map(
+    detail.definition.steps.map((step) => [step.id, step]),
+  );
+  const nodeIdByStepId = new Map(
+    baseGraph.nodes.map((node) => [String(node.data.stepId), node.id]),
+  );
+  const authoritativeEdges = validEdges.map<Edge>(({ edge, index }) => {
+    const source = nodeIdByStepId.get(edge.from);
+    const target = nodeIdByStepId.get(edge.to);
+
+    const label = edge.label.trim();
+    const sourceStep = sourceStepById.get(edge.from);
+    const isChildEdge =
+      label === 'child' &&
+      sourceStep?.children.some((child) => child.id === edge.to);
+    const isBranchEdge = Boolean(
+      !isChildEdge &&
+        label &&
+        (sourceStep?.branches[edge.label] ?? sourceStep?.branches[label]) ===
+          edge.to,
+    );
+    const color = isBranchEdge ? '#8B5CF6' : '#2F6FEC';
+    return {
+      id: `template-edge:${index}:${edge.from}:${edge.to}`,
+      source: source as string,
+      target: target as string,
+      type: 'smoothstep',
+      label: label || undefined,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 11,
+        height: 11,
+        color,
+      },
+      style: { stroke: color, strokeWidth: 2.5 },
+      labelStyle: label ? { fill: '#6B7280', fontSize: 12 } : undefined,
+      zIndex: 4,
+    };
+  });
+  const nodes = baseGraph.nodes.map((node) => ({
+    ...node,
+    data: {
+      ...node.data,
+      branchCount: Object.keys(
+        sourceStepById.get(node.data.stepId)?.branches ?? {},
+      ).length,
+    },
+  }));
+
+  return {
+    ...baseGraph,
+    nodes,
+    edges: authoritativeEdges,
+  };
+}
+
 function TemplateDetailBody({
   detail,
 }: {
   readonly detail: WorkflowTemplateDetail;
 }) {
-  const overview = (
-    <div className="wa-vnext__template-overview">
-      <div className="wa-vnext__template-detail-summary">
-        <TemplateFact
-          label={t('workflowActivityVNext.new.templateBrowser.reads', 'Reads')}
-          value={t(
-            'workflowActivityVNext.new.templateBrowser.workflowInputs',
-            'Workflow inputs',
-          )}
-        />
-        <TemplateFact
-          label={t(
-            'workflowActivityVNext.new.templateBrowser.connection',
-            'Connection',
-          )}
-          value={formatConnections(detail.template)}
-        />
-        <TemplateFact
-          label={t('workflowActivityVNext.new.templateBrowser.does', 'Does')}
-          value={t(
-            'workflowActivityVNext.new.templateBrowser.runsSteps',
-            'Runs {count} {unit}',
-            {
-              count: detail.template.stepCount,
-              unit: t(
-                detail.template.stepCount === 1
-                  ? 'workflowActivityVNext.new.templateBrowser.step'
-                  : 'workflowActivityVNext.new.templateBrowser.steps',
-                detail.template.stepCount === 1 ? 'step' : 'steps',
-              ),
-            },
-          )}
-        />
-      </div>
-      <Typography.Paragraph>
-        {detail.definition.description ||
-          detail.template.description ||
-          t(
-            'workflowActivityVNext.new.templateBrowser.fallbackDescription',
-            'A ready-made workflow for your workspace.',
-          )}
-      </Typography.Paragraph>
-      <Typography.Text type="secondary">
-        {t(
-          'workflowActivityVNext.new.templateBrowser.source',
-          'Source: public workflow template · version {version}',
-          { version: detail.authorityStateVersion },
-        )}
-      </Typography.Text>
-    </div>
+  const graph = React.useMemo(
+    () => buildTemplatePreviewGraph(detail),
+    [detail],
   );
 
   const steps = (
@@ -277,27 +321,78 @@ function TemplateDetailBody({
   );
 
   return (
-    <Tabs
-      items={[
-        {
-          key: 'overview',
-          label: t(
-            'workflowActivityVNext.new.templateBrowser.overview',
-            'Overview',
-          ),
-          children: overview,
-        },
-        {
-          key: 'steps',
-          label: t(
-            'workflowActivityVNext.new.templateBrowser.stepsTab',
-            'The {count} steps',
-            { count: detail.definition.steps.length },
-          ),
-          children: steps,
-        },
-      ]}
-    />
+    <div className="wa-vnext__template-detail">
+      <div className="wa-vnext__template-preview-heading">
+        <strong>
+          {t(
+            'workflowActivityVNext.new.templateBrowser.preview',
+            'Workflow preview',
+          )}
+        </strong>
+        <span>
+          {t(
+            'workflowActivityVNext.new.templateBrowser.previewDescription',
+            '{count} {unit} and the paths between them.',
+            {
+              count: detail.definition.steps.length,
+              unit: t(
+                detail.definition.steps.length === 1
+                  ? 'workflowActivityVNext.new.templateBrowser.step'
+                  : 'workflowActivityVNext.new.templateBrowser.steps',
+                detail.definition.steps.length === 1 ? 'step' : 'steps',
+              ),
+            },
+          )}
+        </span>
+      </div>
+
+      {graph.nodes.length > 0 ? (
+        <GraphCanvas
+          autoFitKey={`${detail.template.templateId}:${detail.authorityStateVersion}`}
+          edges={graph.edges}
+          height="clamp(300px, 48vh, 430px)"
+          nodes={graph.nodes}
+          variant="studio"
+        />
+      ) : (
+        <div className="wa-vnext__template-preview-empty">
+          {t(
+            'workflowActivityVNext.new.templateBrowser.noPreviewSteps',
+            'This template does not expose any workflow steps.',
+          )}
+        </div>
+      )}
+
+      <div className="wa-vnext__template-description">
+        <Typography.Paragraph>
+          {detail.definition.description ||
+            detail.template.description ||
+            t(
+              'workflowActivityVNext.new.templateBrowser.fallbackDescription',
+              'A ready-made workflow for your workspace.',
+            )}
+        </Typography.Paragraph>
+        <Typography.Text type="secondary">
+          {t(
+            'workflowActivityVNext.new.templateBrowser.source',
+            'Source: public workflow template · version {version}',
+            { version: detail.authorityStateVersion },
+          )}
+        </Typography.Text>
+      </div>
+
+      {detail.definition.steps.length > 0 ? (
+        <details className="wa-vnext__template-step-details">
+          <summary>
+            {t(
+              'workflowActivityVNext.new.templateBrowser.stepDetails',
+              'Step details',
+            )}
+          </summary>
+          {steps}
+        </details>
+      ) : null}
+    </div>
   );
 }
 
@@ -578,48 +673,54 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
             )}
             value={search}
           />
-          <Select
-            aria-label={t(
-              'workflowActivityVNext.new.templateBrowser.sort',
-              'Sort templates',
-            )}
-            onChange={(value) => {
-              setSort(value);
-              setCursor(null);
-              setCursorHistory([]);
-            }}
-            options={[
-              {
-                label: t(
-                  'workflowActivityVNext.new.templateBrowser.sort.recent',
-                  'Recently updated',
-                ),
-                value: '-updated',
-              },
-              {
-                label: t(
-                  'workflowActivityVNext.new.templateBrowser.sort.nameAsc',
-                  'Name A–Z',
-                ),
-                value: 'displayName',
-              },
-              {
-                label: t(
-                  'workflowActivityVNext.new.templateBrowser.sort.nameDesc',
-                  'Name Z–A',
-                ),
-                value: '-displayName',
-              },
-              {
-                label: t(
-                  'workflowActivityVNext.new.templateBrowser.sort.oldest',
-                  'Oldest updated',
-                ),
-                value: 'updated',
-              },
-            ]}
-            value={sort}
-          />
+          <div className="wa-vnext__template-sort">
+            <span className="wa-vnext__template-sort-label">
+              {t('workflowActivityVNext.new.templateBrowser.sortBy', 'Sort by')}
+            </span>
+            <Select
+              aria-label={t(
+                'workflowActivityVNext.new.templateBrowser.sort',
+                'Sort templates',
+              )}
+              onChange={(value) => {
+                setSort(value);
+                setCursor(null);
+                setCursorHistory([]);
+              }}
+              options={[
+                {
+                  label: t(
+                    'workflowActivityVNext.new.templateBrowser.sort.recent',
+                    'Last updated: newest first',
+                  ),
+                  value: '-updated',
+                },
+                {
+                  label: t(
+                    'workflowActivityVNext.new.templateBrowser.sort.nameAsc',
+                    'Name: A to Z',
+                  ),
+                  value: 'displayName',
+                },
+                {
+                  label: t(
+                    'workflowActivityVNext.new.templateBrowser.sort.nameDesc',
+                    'Name: Z to A',
+                  ),
+                  value: '-displayName',
+                },
+                {
+                  label: t(
+                    'workflowActivityVNext.new.templateBrowser.sort.oldest',
+                    'Last updated: oldest first',
+                  ),
+                  value: 'updated',
+                },
+              ]}
+              popupMatchSelectWidth={280}
+              value={sort}
+            />
+          </div>
         </div>
 
         {listQuery.isPending ? (
@@ -776,7 +877,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
           detail?.template.displayName ??
           t('workflowActivityVNext.new.templateBrowser.view', 'View template')
         }
-        width={720}
+        width={1040}
       >
         {modalFailure ? (
           <Alert

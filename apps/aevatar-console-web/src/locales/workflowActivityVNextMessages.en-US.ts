@@ -344,10 +344,13 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.templateBrowser.changeMethod': 'Change method',
   'workflowActivityVNext.new.templateBrowser.search': 'Search templates',
   'workflowActivityVNext.new.templateBrowser.sort': 'Sort templates',
-  'workflowActivityVNext.new.templateBrowser.sort.recent': 'Recently updated',
-  'workflowActivityVNext.new.templateBrowser.sort.nameAsc': 'Name A–Z',
-  'workflowActivityVNext.new.templateBrowser.sort.nameDesc': 'Name Z–A',
-  'workflowActivityVNext.new.templateBrowser.sort.oldest': 'Oldest updated',
+  'workflowActivityVNext.new.templateBrowser.sortBy': 'Sort by',
+  'workflowActivityVNext.new.templateBrowser.sort.recent':
+    'Last updated: newest first',
+  'workflowActivityVNext.new.templateBrowser.sort.nameAsc': 'Name: A to Z',
+  'workflowActivityVNext.new.templateBrowser.sort.nameDesc': 'Name: Z to A',
+  'workflowActivityVNext.new.templateBrowser.sort.oldest':
+    'Last updated: oldest first',
   'workflowActivityVNext.new.templateBrowser.page': 'Page {page}',
   'workflowActivityVNext.new.templateBrowser.templatesOnPage':
     '{count} templates on this page',
@@ -391,8 +394,12 @@ const workflowActivityVNextMessages = {
     'Template details could not be loaded',
   'workflowActivityVNext.new.templateBrowser.noLongerAvailable':
     'This template is no longer available.',
-  'workflowActivityVNext.new.templateBrowser.overview': 'Overview',
-  'workflowActivityVNext.new.templateBrowser.stepsTab': 'The {count} steps',
+  'workflowActivityVNext.new.templateBrowser.preview': 'Workflow preview',
+  'workflowActivityVNext.new.templateBrowser.previewDescription':
+    '{count} {unit} and the paths between them.',
+  'workflowActivityVNext.new.templateBrowser.noPreviewSteps':
+    'This template does not expose any workflow steps.',
+  'workflowActivityVNext.new.templateBrowser.stepDetails': 'Step details',
   'workflowActivityVNext.new.templateBrowser.source':
     'Source: public workflow template · version {version}',
   'workflowActivityVNext.new.templateBrowser.role': 'Role: {role}',

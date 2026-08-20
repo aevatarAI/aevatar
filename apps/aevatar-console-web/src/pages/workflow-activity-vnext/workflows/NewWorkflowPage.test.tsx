@@ -498,9 +498,11 @@ describe('New workflow save-target recovery', () => {
       await screen.findByRole('button', { name: 'View Incident triage' }),
     );
 
+    expect(await screen.findByText('Workflow preview')).toBeInTheDocument();
     expect(
-      await screen.findByRole('tab', { name: 'Overview' }),
-    ).toBeInTheDocument();
+      screen.queryByRole('tab', { name: 'Overview' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTitle('classify')).toBeInTheDocument();
     expect(mockStudioApi.instantiateWorkflowTemplate).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Use this template' }));
@@ -511,6 +513,22 @@ describe('New workflow save-target recovery', () => {
         templateId: 'template-incident-triage',
       }),
     );
+  });
+
+  it('uses clear sort labels instead of exposing backend sort syntax', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
+
+    const sort = await screen.findByRole('combobox', {
+      name: 'Sort templates',
+    });
+    fireEvent.mouseDown(sort);
+
+    expect(screen.getByText('Sort by')).toBeInTheDocument();
+    expect(await screen.findByText('Name: A to Z')).toBeInTheDocument();
+    expect(screen.getByText('Name: Z to A')).toBeInTheDocument();
+    expect(screen.getByText('Last updated: oldest first')).toBeInTheDocument();
   });
 
   it('refreshes stale modal details before retrying template instantiation', async () => {

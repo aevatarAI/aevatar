@@ -234,6 +234,9 @@ export const workflowActivityVNextCss = `
 .wa-vnext__template-page-status { color: var(--wa-muted); font-size: 12px; padding-top: 8px; white-space: nowrap; }
 .wa-vnext__template-toolbar { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }
 .wa-vnext__template-search { flex: 1 1 320px; max-width: 560px; }
+.wa-vnext__template-sort { align-items: center; display: flex; flex: 0 0 auto; gap: 8px; }
+.wa-vnext__template-sort-label { color: var(--wa-muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.wa-vnext__template-sort .ant-select { min-width: 224px; }
 .wa-vnext__template-list { border-top: 1px solid var(--wa-line); display: grid; }
 .wa-vnext__template-row { align-items: stretch; border-bottom: 1px solid var(--wa-line); display: grid; gap: 20px; grid-template-columns: minmax(220px, 1.2fr) minmax(280px, 1.4fr) auto; padding: 18px 0; }
 .wa-vnext__template-identity { min-width: 0; }
@@ -246,8 +249,16 @@ export const workflowActivityVNextCss = `
 .wa-vnext__template-fact strong { font-size: 12px; font-weight: 600; line-height: 17px; overflow-wrap: anywhere; }
 .wa-vnext__template-actions { align-items: center; display: flex; gap: 8px; justify-content: flex-end; min-width: 184px; }
 .wa-vnext__template-pagination { align-items: center; display: flex; justify-content: space-between; min-height: 34px; }
-.wa-vnext__template-detail-summary { border-bottom: 1px solid var(--wa-line); display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 18px; padding-bottom: 16px; }
-.wa-vnext__template-overview p { line-height: 19px; }
+.wa-vnext__template-detail { display: grid; gap: 16px; padding-top: 4px; }
+.wa-vnext__template-preview-heading { display: grid; gap: 3px; }
+.wa-vnext__template-preview-heading strong { font-size: 14px; line-height: 20px; }
+.wa-vnext__template-preview-heading span { color: var(--wa-muted); font-size: 12px; line-height: 18px; }
+.wa-vnext__template-preview-empty { align-items: center; border: 1px solid var(--wa-line); border-radius: var(--wa-radius); color: var(--wa-muted); display: flex; justify-content: center; min-height: 220px; padding: 24px; text-align: center; }
+.wa-vnext__template-description { border-bottom: 1px solid var(--wa-line); padding-bottom: 14px; }
+.wa-vnext__template-description p { line-height: 19px; margin-bottom: 6px; }
+.wa-vnext__template-step-details { border-bottom: 1px solid var(--wa-line); padding-bottom: 12px; }
+.wa-vnext__template-step-details summary { cursor: pointer; font-size: 12px; font-weight: 650; line-height: 18px; padding: 2px 0; }
+.wa-vnext__template-step-details[open] summary { margin-bottom: 12px; }
 .wa-vnext__template-steps { display: grid; gap: 8px; list-style: decimal; margin: 0; padding-left: 24px; }
 .wa-vnext__template-steps li { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); display: grid; gap: 4px; padding: 10px 12px; }
 .wa-vnext__template-steps li > div { align-items: baseline; display: flex; gap: 8px; min-width: 0; }
@@ -735,8 +746,9 @@ export const workflowActivityVNextCss = `
   .wa-vnext__template-browser-heading { flex-direction: column; gap: 8px; }
   .wa-vnext__template-toolbar { align-items: stretch; flex-direction: column; }
   .wa-vnext__template-search { flex-basis: auto; max-width: none; width: 100%; }
-  .wa-vnext__template-toolbar .ant-select { width: 100%; }
-  .wa-vnext__template-facts, .wa-vnext__template-detail-summary { grid-template-columns: 1fr; }
+  .wa-vnext__template-sort { align-items: stretch; display: grid; gap: 6px; width: 100%; }
+  .wa-vnext__template-sort .ant-select { min-width: 0; width: 100%; }
+  .wa-vnext__template-facts { grid-template-columns: 1fr; }
   .wa-vnext__template-actions { width: 100%; }
   .wa-vnext__template-actions .ant-btn { flex: 1 1 0; }
   .wa-vnext__template-pagination { align-items: stretch; flex-direction: column; gap: 10px; }

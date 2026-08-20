@@ -323,10 +323,13 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateBrowser.changeMethod': '更换创建方式',
     'workflowActivityVNext.new.templateBrowser.search': '搜索模板',
     'workflowActivityVNext.new.templateBrowser.sort': '模板排序',
-    'workflowActivityVNext.new.templateBrowser.sort.recent': '最近更新',
-    'workflowActivityVNext.new.templateBrowser.sort.nameAsc': '名称 A–Z',
-    'workflowActivityVNext.new.templateBrowser.sort.nameDesc': '名称 Z–A',
-    'workflowActivityVNext.new.templateBrowser.sort.oldest': '最早更新',
+    'workflowActivityVNext.new.templateBrowser.sortBy': '排序方式',
+    'workflowActivityVNext.new.templateBrowser.sort.recent':
+      '更新时间：最新优先',
+    'workflowActivityVNext.new.templateBrowser.sort.nameAsc': '名称：A 到 Z',
+    'workflowActivityVNext.new.templateBrowser.sort.nameDesc': '名称：Z 到 A',
+    'workflowActivityVNext.new.templateBrowser.sort.oldest':
+      '更新时间：最早优先',
     'workflowActivityVNext.new.templateBrowser.page': '第 {page} 页',
     'workflowActivityVNext.new.templateBrowser.templatesOnPage':
       '本页 {count} 个模板',
@@ -370,8 +373,12 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '无法加载模板详情',
     'workflowActivityVNext.new.templateBrowser.noLongerAvailable':
       '该模板已不可用。',
-    'workflowActivityVNext.new.templateBrowser.overview': '概览',
-    'workflowActivityVNext.new.templateBrowser.stepsTab': '共 {count} 个步骤',
+    'workflowActivityVNext.new.templateBrowser.preview': '工作流预览',
+    'workflowActivityVNext.new.templateBrowser.previewDescription':
+      '共 {count} 个步骤及其执行路径。',
+    'workflowActivityVNext.new.templateBrowser.noPreviewSteps':
+      '该模板未提供可预览的工作流步骤。',
+    'workflowActivityVNext.new.templateBrowser.stepDetails': '步骤详情',
     'workflowActivityVNext.new.templateBrowser.source':
       '来源：公开工作流模板 · 版本 {version}',
     'workflowActivityVNext.new.templateBrowser.role': '角色：{role}',
