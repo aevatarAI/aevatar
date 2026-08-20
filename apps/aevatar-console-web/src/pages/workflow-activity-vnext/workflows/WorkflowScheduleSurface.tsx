@@ -543,9 +543,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
 
   const workflowContext = (
     <div className="wa-vnext__schedule-context">
-      <span>
-        {t('workflowActivityVNext.schedule.contextLabel', 'WORKFLOW SCHEDULE')}
-      </span>
       <strong>
         {workflowName} ·{' '}
         {t('workflowActivityVNext.schedule.published', 'Published')}
@@ -762,20 +759,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
             />
           </label>
         ) : null}
-        <div className="wa-vnext__schedule-server-preview">
-          <strong>
-            {t(
-              'workflowActivityVNext.schedule.serverPreviewTitle',
-              'Previewed by the server',
-            )}
-          </strong>
-          <span>
-            {t(
-              'workflowActivityVNext.schedule.serverPreviewDescription',
-              'The next five fire times are calculated when you review.',
-            )}
-          </span>
-        </div>
         {previewing ? (
           <div className="wa-vnext__schedule-previewing" role="status">
             {t(
@@ -786,9 +769,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         ) : null}
       </section>
       <section className="wa-vnext__schedule-section">
-        <h3>
-          {t('workflowActivityVNext.schedule.whatItNeeds', 'What it needs')}
-        </h3>
         <label
           className="wa-vnext__modal-field"
           htmlFor="workflow-schedule-prompt"
@@ -812,25 +792,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
             value={form.prompt}
           />
         </label>
-      </section>
-      <section className="wa-vnext__schedule-section">
-        <h3>
-          {t(
-            'workflowActivityVNext.schedule.whatWillHappen',
-            'What will happen',
-          )}
-        </h3>
-        <p className="wa-vnext__schedule-explanation">
-          {editingSchedule
-            ? t(
-                'workflowActivityVNext.schedule.updateExplanation',
-                'The updated schedule will keep its current enabled state.',
-              )
-            : t(
-                'workflowActivityVNext.schedule.createExplanation',
-                'This Workflow will receive the configured input on each scheduled fire.',
-              )}
-        </p>
         {!editingSchedule ? (
           <label
             className="wa-vnext__schedule-enabled"

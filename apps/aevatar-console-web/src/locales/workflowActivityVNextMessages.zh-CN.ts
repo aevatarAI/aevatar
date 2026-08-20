@@ -67,6 +67,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.activity.workflowFilterUnavailableTitle':
       '活动筛选不可用',
     'workflowActivityVNext.brand.subtitle': '自动化账本',
+    'workflowActivityVNext.common.back': '返回',
     'workflowActivityVNext.common.cancel': '取消',
     'workflowActivityVNext.common.close': '关闭',
     'workflowActivityVNext.common.empty': '空',
@@ -525,13 +526,10 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '请求正在后台继续处理，关闭此视图不会取消请求。',
     'workflowActivityVNext.schedule.backToSchedules': '返回计划任务',
     'workflowActivityVNext.schedule.create': '创建计划任务',
-    'workflowActivityVNext.schedule.createExplanation':
-      '工作流将在每次计划触发时收到已配置的输入。',
     'workflowActivityVNext.schedule.createTitle': '创建计划任务',
     'workflowActivityVNext.schedule.created': '计划任务创建请求已受理',
     'workflowActivityVNext.schedule.cron': 'Cron 表达式',
     'workflowActivityVNext.schedule.cronSummary': 'Cron：{cron}',
-    'workflowActivityVNext.schedule.contextLabel': '工作流计划任务',
     'workflowActivityVNext.schedule.hourly': '每小时',
     'workflowActivityVNext.schedule.daily': '每天',
     'workflowActivityVNext.schedule.deleteAccepted':
@@ -588,17 +586,12 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.requestAccepted': '计划任务请求已受理',
     'workflowActivityVNext.schedule.refreshingSchedules':
       '正在刷新工作流计划任务',
-    'workflowActivityVNext.schedule.serverPreviewDescription':
-      '复核时由服务端计算接下来的五次触发时间。',
-    'workflowActivityVNext.schedule.serverPreviewTitle': '服务端预览',
     'workflowActivityVNext.schedule.subtitle': '为 {name} 创建周期性运行',
     'workflowActivityVNext.schedule.time': '时间',
     'workflowActivityVNext.schedule.timezone': '时区',
     'workflowActivityVNext.schedule.title': '计划任务',
     'workflowActivityVNext.schedule.updateAccepted':
       '计划任务更新请求已受理，正在刷新工作流计划任务。',
-    'workflowActivityVNext.schedule.updateExplanation':
-      '更新计划任务会保留当前启用状态。',
     'workflowActivityVNext.schedule.useRepeatBuilder': '使用重复规则构建器',
     'workflowActivityVNext.schedule.unavailableDescription':
       '请先发布可运行的工作流，再创建周期性计划任务。',
@@ -606,8 +599,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '工作流发布后才能使用计划任务',
     'workflowActivityVNext.schedule.updated': '计划任务更新请求已受理',
     'workflowActivityVNext.schedule.weekdays': '工作日',
-    'workflowActivityVNext.schedule.whatItNeeds': '所需内容',
-    'workflowActivityVNext.schedule.whatWillHappen': '执行说明',
     'workflowActivityVNext.schedule.writeCron': '改用 Cron 表达式',
     'workflowActivityVNext.schedule.workflow': '工作流',
     'workflowActivityVNext.schedule.enabledAfterCreation': '创建后启用',

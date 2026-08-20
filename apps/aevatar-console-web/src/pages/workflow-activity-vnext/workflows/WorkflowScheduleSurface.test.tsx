@@ -113,11 +113,16 @@ describe('WorkflowScheduleSurface', () => {
     renderSurface(true);
 
     await waitFor(() => expect(screen.getByText('New schedule')).toBeVisible());
-    expect(screen.getByText('WORKFLOW SCHEDULE')).toBeVisible();
     expect(screen.getByText('Weekly review · Published')).toBeVisible();
     expect(screen.getByText('How often')).toBeVisible();
-    expect(screen.getByText('What it needs')).toBeVisible();
-    expect(screen.getByText('What will happen')).toBeVisible();
+    expect(screen.getByText('Run input (optional)')).toBeVisible();
+    expect(screen.getByText('Enabled after creation')).toBeVisible();
+    expect(screen.queryByText('WORKFLOW SCHEDULE')).not.toBeInTheDocument();
+    expect(screen.queryByText('What it needs')).not.toBeInTheDocument();
+    expect(screen.queryByText('What will happen')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Previewed by the server'),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Review schedule' }),
     ).toBeVisible();

@@ -660,7 +660,6 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-preview-list li { margin: 3px 0; }
 .wa-vnext__schedule-create, .wa-vnext__schedule-review, .wa-vnext__schedule-accepted { display: grid; gap: 18px; min-width: 0; }
 .wa-vnext__schedule-context { align-items: center; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; display: flex; gap: 10px; justify-content: space-between; padding: 12px 14px; }
-.wa-vnext__schedule-context span { color: #1d4ed8; font-size: 11px; font-weight: 650; text-transform: uppercase; }
 .wa-vnext__schedule-context strong { color: #172554; font-size: 13px; overflow-wrap: anywhere; text-align: right; }
 .wa-vnext__schedule-section { border-bottom: 1px solid var(--wa-line); display: grid; gap: 12px; padding-bottom: 18px; }
 .wa-vnext__schedule-section:last-of-type { border-bottom: 0; padding-bottom: 0; }
@@ -670,9 +669,6 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-repeat-detail { grid-column: 1 / -1; max-width: 260px; }
 .wa-vnext__schedule-cron-toggle { justify-self: start; padding-inline: 0; }
 .wa-vnext__schedule-cron-field { max-width: 420px; }
-.wa-vnext__schedule-server-preview { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; display: grid; gap: 4px; padding: 10px 12px; }
-.wa-vnext__schedule-server-preview strong { color: #166534; font-size: 12px; }
-.wa-vnext__schedule-server-preview span, .wa-vnext__schedule-explanation { color: #475467; font-size: 12px; line-height: 18px; margin: 0; }
 .wa-vnext__schedule-previewing { color: #166534; font-size: 12px; font-weight: 650; }
 .wa-vnext__schedule-footer { align-items: center; border-top: 1px solid var(--wa-line); display: flex; gap: 8px; justify-content: flex-end; padding-top: 14px; }
 .wa-vnext__schedule-review-panel { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; display: grid; gap: 16px; padding: 16px; }

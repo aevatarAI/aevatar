@@ -63,6 +63,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.activity.workflowFilterUnavailableTitle':
     'Activity filtering is unavailable',
   'workflowActivityVNext.brand.subtitle': 'AUTOMATION LEDGER',
+  'workflowActivityVNext.common.back': 'Back',
   'workflowActivityVNext.common.cancel': 'Cancel',
   'workflowActivityVNext.common.close': 'Close',
   'workflowActivityVNext.common.empty': 'Empty',
@@ -563,13 +564,10 @@ const workflowActivityVNextMessages = {
     'The request is continuing in the background. Closing this view will not cancel it.',
   'workflowActivityVNext.schedule.backToSchedules': 'Back to schedules',
   'workflowActivityVNext.schedule.create': 'Create schedule',
-  'workflowActivityVNext.schedule.createExplanation':
-    'This Workflow will receive the configured input on each scheduled fire.',
   'workflowActivityVNext.schedule.createTitle': 'Create schedule',
   'workflowActivityVNext.schedule.created': 'Schedule creation accepted',
   'workflowActivityVNext.schedule.cron': 'Cron expression',
   'workflowActivityVNext.schedule.cronSummary': 'Cron: {cron}',
-  'workflowActivityVNext.schedule.contextLabel': 'WORKFLOW SCHEDULE',
   'workflowActivityVNext.schedule.hourly': 'Every hour',
   'workflowActivityVNext.schedule.daily': 'Every day',
   'workflowActivityVNext.schedule.deleteAccepted':
@@ -627,18 +625,12 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.requestAccepted': 'Schedule request accepted',
   'workflowActivityVNext.schedule.refreshingSchedules':
     'Refreshing Workflow schedules',
-  'workflowActivityVNext.schedule.serverPreviewDescription':
-    'The next five fire times are calculated when you review.',
-  'workflowActivityVNext.schedule.serverPreviewTitle':
-    'Previewed by the server',
   'workflowActivityVNext.schedule.subtitle': 'Recurring runs for {name}',
   'workflowActivityVNext.schedule.time': 'Time',
   'workflowActivityVNext.schedule.timezone': 'Timezone',
   'workflowActivityVNext.schedule.title': 'Schedules',
   'workflowActivityVNext.schedule.updateAccepted':
     'Schedule update accepted. Refreshing Workflow schedules.',
-  'workflowActivityVNext.schedule.updateExplanation':
-    'The updated schedule will keep its current enabled state.',
   'workflowActivityVNext.schedule.useRepeatBuilder': 'use the repeat builder',
   'workflowActivityVNext.schedule.unavailableDescription':
     'Publish a runnable Workflow before creating a recurring schedule.',
@@ -646,8 +638,6 @@ const workflowActivityVNextMessages = {
     'Schedule is unavailable until this Workflow is published',
   'workflowActivityVNext.schedule.updated': 'Schedule update accepted',
   'workflowActivityVNext.schedule.weekdays': 'Weekdays',
-  'workflowActivityVNext.schedule.whatItNeeds': 'What it needs',
-  'workflowActivityVNext.schedule.whatWillHappen': 'What will happen',
   'workflowActivityVNext.schedule.writeCron': 'write it as cron instead',
   'workflowActivityVNext.schedule.workflow': 'Workflow',
   'workflowActivityVNext.schedule.enabledAfterCreation':

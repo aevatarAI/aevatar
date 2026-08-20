@@ -660,8 +660,9 @@ describe('Workflow Activity vNext catalogue', () => {
     );
 
     await waitFor(() => expect(screen.getByText('New schedule')).toBeVisible());
-    expect(screen.getByText('WORKFLOW SCHEDULE')).toBeVisible();
     expect(screen.getByText('Published workflow · Published')).toBeVisible();
+    expect(screen.queryByText('WORKFLOW SCHEDULE')).not.toBeInTheDocument();
+    expect(screen.queryByText('What will happen')).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Review schedule' }),
     ).toBeVisible();

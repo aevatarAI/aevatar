@@ -94,6 +94,12 @@ The primary form order is:
 | Prompt | `prompt` | Optional; empty means no fixed prompt |
 | Enabled after creation | `enabled` | Explicit create request state |
 
+The configure surface keeps only user-actionable labels. The workflow identity
+strip shows the exact workflow name and publication state without a generic
+category banner. Run input is labeled directly, and the enabled switch sits
+beside it without a separate explanatory section. Backend implementation notes
+such as where preview times are calculated are not shown in the product UI.
+
 `headers` is supported by the API but is not a primary first-release field.
 The UI can add it later under an advanced surface without changing the core
 flow.
