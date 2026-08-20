@@ -182,6 +182,7 @@ public sealed class ScopeWorkflowApplicationServicesTests
 
         var service = new ScopeWorkflowQueryApplicationService(
             queryPort,
+            queryPort,
             bindingReader,
             Options.Create(options));
 
@@ -250,6 +251,7 @@ public sealed class ScopeWorkflowApplicationServicesTests
             ExternalCapabilityExecutionMode.Durable);
 
         var service = new ScopeWorkflowQueryApplicationService(
+            queryPort,
             queryPort,
             bindingReader,
             Options.Create(options));
@@ -356,7 +358,7 @@ public sealed class ScopeWorkflowApplicationServicesTests
             Task.FromResult(WorkflowInlineYamlBundleParseResult.Invalid("Not used by this test."));
     }
 
-    private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
+    private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort, IServiceServingQueryPort
     {
         public readonly Queue<ServiceCatalogSnapshot?> GetServiceResults = new();
         public IReadOnlyList<ServiceCatalogSnapshot> ListServicesResult { get; set; } = [];
@@ -403,6 +405,50 @@ public sealed class ScopeWorkflowApplicationServicesTests
                     service.UpdatedAt)],
                 service.UpdatedAt));
         }
+
+        public async Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default)
+        {
+            var deployments = await GetServiceDeploymentsAsync(identity, ct);
+            if (deployments == null)
+                return null;
+
+            return new ServiceServingSetSnapshot(
+                deployments.ServiceKey,
+                Generation: 1,
+                ActiveRolloutId: string.Empty,
+                Targets: deployments.Deployments
+                    .Where(deployment => string.Equals(
+                        deployment.Status,
+                        ServiceDeploymentStatus.Active.ToString(),
+                        StringComparison.OrdinalIgnoreCase))
+                    .Select(deployment => new ServiceServingTargetSnapshot(
+                        deployment.DeploymentId,
+                        deployment.RevisionId,
+                        deployment.PrimaryActorId,
+                        AllocationWeight: 100,
+                        ServiceServingState.Active.ToString(),
+                        EnabledEndpointIds: []))
+                    .ToArray(),
+                UpdatedAt: deployments.UpdatedAt);
+        }
+
+        public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutSnapshot?>(null);
+
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
+
+        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
 
         public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
     }

@@ -31,8 +31,9 @@ public sealed class ProjectionScopeActorRuntimeTests
             "user-agent-catalog-read-model",
             ProjectionRuntimeMode.DurableMaterialization);
 
-        await sut.EnsureExistsAsync(scopeKey, CancellationToken.None);
+        var result = await sut.EnsureExistsAsync(scopeKey, CancellationToken.None);
 
+        result.ExpectedKindProven.Should().BeTrue();
         var actorId = ProjectionScopeActorId.Build(scopeKey);
         runtime.CreatedActorIds.Should().Equal(actorId);
         runtime.CreatedByKind.Should().Equal(("test.projection-scope", actorId));
@@ -59,12 +60,36 @@ public sealed class ProjectionScopeActorRuntimeTests
             streamPubSubMaintenance: null,
             logger: NullLogger<ProjectionScopeActorRuntime<DummyAgent>>.Instance);
 
-        await sut.EnsureExistsAsync(new ProjectionRuntimeScopeKey(
+        var result = await sut.EnsureExistsAsync(new ProjectionRuntimeScopeKey(
             "agent-registry-store",
             "user-agent-catalog-read-model",
             ProjectionRuntimeMode.DurableMaterialization),
             CancellationToken.None);
 
+        result.ExpectedKindProven.Should().BeTrue();
+        runtime.CreatedActorIds.Should().BeEmpty();
+        runtime.DestroyedActorIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EnsureExistsAsync_ShouldReportUnverified_WhenExistingActorHasNoKindVerifier()
+    {
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "agent-registry-store",
+            "user-agent-catalog-read-model",
+            ProjectionRuntimeMode.DurableMaterialization);
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        var runtime = new RecordingRuntime([]);
+        runtime.SeedExisting(actorId);
+        var sut = new ProjectionScopeActorRuntime<DummyAgent>(
+            runtime,
+            new NoopDispatchPort(),
+            agentKindVerifier: null,
+            BuildRegistry());
+
+        var result = await sut.EnsureExistsAsync(scopeKey, CancellationToken.None);
+
+        result.ExpectedKindProven.Should().BeFalse();
         runtime.CreatedActorIds.Should().BeEmpty();
         runtime.DestroyedActorIds.Should().BeEmpty();
     }

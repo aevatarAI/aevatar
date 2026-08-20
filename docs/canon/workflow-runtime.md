@@ -82,6 +82,54 @@ BindWorkflowDefinition(yaml)
        WorkflowExecutionBridgeModule: 接入 Foundation 事件管线
 ```
 
+### Normalized execution state rollout
+
+`workflow.run` 的 state schema v1 把执行值的引用身份从 legacy string map 中分离出来；schema v2 在此基础上增加 author-directed value lifecycle、digest replay evidence 与 release tombstone。`WorkflowExecutionKernelState.normalized_values` 是否存在是完整的 legacy/normalized 判别；业务 state 不再复制 runtime schema version，版本轴只来自 `RuntimeActorIdentity.state_schema_version`。
+
+Normalized state 包含四类 actor-owned fact：
+
+1. `canonical_values`：每个被接受的生产实例都有唯一 `value_id`，即使文本内容相同也不合并；同时记录 producer step 与 execution id。
+2. `bindings`：expression-visible key 到 canonical value 的 typed alias，并区分 step output、current input、assigned value 与 internal output。
+3. `completed_steps`：显式完成 ledger，保存 output/assigned value 引用、success/error、branch/next step、annotations、usage 与 JSON alias 来源；不再用“任意非保留 variable key”猜完成态。
+4. `next_value_sequence` 与 `current_step_input_value_id`：保证新引用单调分配，并让 retry/continuation 复用精确输入实例。
+
+legacy `variables/current_step_input` 字段继续用于未采用 v1 的 run 与兼容读取，但不承载 normalized 引用身份。v0 -> v1 migration 只 clone 原 Protobuf state 并写入 runtime adoption receipt，不从历史字符串制造 provenance；因此已存在的 legacy run 仍按 legacy representation 读取。采用 receipt 之后，每个新的 logical run/fork mutation 都必须重新通过 live `WorkflowNormalizedStateWritesV1` fleet gate；gate 撤销不会破坏已提交 normalized state 的读取，也不会阻断 active-run resume 或 duplicate redelivery。
+
+schema v2 的 author contract 是 step-level typed sub-message，不进入 `parameters` 或其他 bag：
+
+```yaml
+steps:
+  - id: reduce
+    type: transform
+    value_lifecycle:
+      release_variables_after_success:
+        - raw_pages
+```
+
+`release_variables_after_success` 只允许顶层 step 声明非空、去重的 author-owned variable name；`input`、step id、`steps.*`、`workflow.usage.*`、`workflow_call.*` 等 engine-owned key 均在 definition validation 阶段拒绝。legacy run/fork、nested lifecycle 与 dynamic definition replacement 不得 opt in 或静默降级。新 lifecycle run/fork 必须同时具备 schema-v2 immutable adoption receipt 和 reader contract v2 的 live fleet admission；v1 receipt 只继续授权原 normalized-state 语义。`WorkflowRunStateV1ToV2Migration` 通过连续 migration chain 为既有 accepted/inherited completion 建立 SHA-256 + UTF-8 byte-size evidence，并删除只被 replay ledger 引用的历史 raw payload；它不猜测 author release 或 value identity。
+
+release 在 successful completion、usage 与 compensation facts 已接受后、下一 step dispatch intent 建立前执行。runtime 只通过 typed binding `variable name -> value_id` 解析目标：同一 identity 的全部 alias 一次性失效，同文本但不同 `value_id` 的值不受影响。active current value、pending output reference、pending internal dispatch 与 actor-owned compensation ledger 都是 pin；任一目标缺失、仍 live 或被 compensation pin 时，整组 release 不产生部分变更。相同 step/execution 的 redelivery 幂等；直接读取已释放 author alias 或 `steps.<id>.*` 返回 typed lifecycle failure，变量枚举跳过 tombstone。显式 request override 可以用新 canonical identity 恢复同名 author variable，但不能复活旧 identity。
+
+authoritative state 保留 canonical/alias tombstone，并清空 raw `value`；accepted/inherited completion 以 typed digest、provenance 与 control fields 完成 exact replay 校验。digest evidence 与它允许的 raw payload 裁剪同属 schema v2 事实：kernel 只在 runtime schema context 持有 exact v2 adoption receipt 时才写入 completion digest（`WorkflowValueReplayEvidence.Digest`）；仍是 v1 identity 的 actor 保持 raw canonical value 供 v1 reader 精确 replay（`WorkflowValueReplayEvidence.RawValue`），不得由本地 flag 或 wire 字段推断。normalized fork seed 原样 round-trip tombstone 与 digest，兼容 variable expansion 不恢复 released raw alias。digest 仅是 actor-authoritative control evidence：`WorkflowRunCommittedStateRedactionHook` 对 committed `state_event` 和完整 `state_root` 都移除 authoritative digest bytes/size，只保留 typed redacted/released outcome；current-state projector/query DTO 仅暴露 terminal `WorkflowValueLifecycleFailureKind`，不暴露 digest。`CommittedStateEventPublished.state_root` 仍是完整 current-state snapshot，本机制不引入 delta publication 或 query-time replay。
+
+补偿完成采用两段 durable handoff。`WorkflowExecutionKernel` 在调用 run actor 前先写入 `PendingCompensationOutcome`，保存 exact `StepCompletedEvent + compensation execution id`；`WorkflowRunGAgent` 提交 `CompensationStepCompletedEvent` 时同步写入 actor-owned `PendingCompensationCompletion`，直到下一条 `CompensationRequestEvent`、`WorkflowCompensationCompletedEvent` 或 `WorkflowCompensationFailedEvent` 提交后才清除。actor 返回后，kernel 必须先把结果保存为 typed continuation oneof（next compensation request、terminal completion 或 completed-without-continuation），再执行 self publish 或 terminal cleanup。这样同时覆盖“actor outcome 已提交但 kernel continuation 尚未保存”和“continuation 已保存但 publish/terminal handoff 尚未完成”两个 crash window。
+
+activation 先恢复 kernel 的 pending compensation outcome，并使用 actor pending completion、当前 cursor/execution fence 与已提交 terminal fact 对账；不得重新 dispatch 已完成的 physical compensation step。多 entry ledger 必须复用 actor 已提交的下一条 execution id、idempotency key 与 canonical captured-value provenance。transport 仍允许 at-least-once delivery，但同一 compensation completion domain fact 只能提交一次；terminal cleanup 必须在同一次 state save 中清除已完成 step 的 compensation execution fence。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    WR["WorkflowRunGAgent committed state"] -->|"Normalized values present"| CP["Current-state projector"]
+    CP -->|"Typed normalized_fork_seed"| RM["Workflow current-state read model"]
+    RM -->|"Expand compatibility variables for query DTO"| Q["Fork seed query"]
+    RM -->|"Preserve typed seed; keep overrides separate"| FC["Fork command"]
+    FC -->|"Validate references and restore"| NR["New logical run"]
+    WR -->|"Normalized values absent"| LP["Legacy variables + completed-step inference"]
+    LP --> Q
+```
+
+Projection/fork 边界不通过相等的字符串内容重建 value identity：current-state projector 原样携带 typed `normalized_fork_seed`；query mapper 只为旧 application DTO 展开兼容 variable view 与 completed step ids；真正的 fork handoff 保留 normalized seed，并把 caller overrides 单独传递。目标 run 拒绝同时携带 normalized seed 与 expanded legacy variables，校验所有 canonical reference 后恢复 state；override 会移除同名 typed binding，再创建 `RequestOverride` canonical value 并写入新的 typed binding，不回写 flat literal variable。legacy read model 没有 normalized seed 时，继续走原有 variables/completed-step path。
+
 ### External operation admission proof handoff
 
 NyxID external operation 使用一条 actor-owned proof 主链，step selector 是 `PublishedEndpoint(endpoint_id)` 或 `AuthoredRequest(request_contract_digest)`。`PublishedEndpoint` 持久化 `NyxIdOperationSelector { user_service_id, endpoint_id }`；definition admission 读取 NyxID `/api/v1/mcp/config`，shared typed adapter 只接受 exact non-generic UserService endpoint，并生成 server-owned service slug、method、path template、parameter/body contract、typed response policy、source stamp 与 digest。`AuthoredRequest` 持久化 typed request contract proposal；definition admission 只读取 exact UserService inventory，且必须由 authenticated binder 确认当前 digest 与 risk，actor 才能持久化 `NyxIdExplicitRequestGrant` 并提交 proof。NyxID `catalog_digest` 是 `PublishedEndpoint` 的 normalized descriptor revision；Aevatar 不保存另一份 UserService/OpenAPI catalog，也不以 observation time 或本地 counter 冒充 revision。
@@ -473,7 +521,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
   ├── WorkflowExecutionKernel 收到 StepCompletedEvent
   │     ├── 有下一步 → 再发 StepRequestEvent（循环）
   │     ├── 有补偿 ledger 的终止失败 → 发布 CompensationRequestEvent 并进入补偿相位
-  │     └── 无下一步 → 发布 WorkflowCompletedEvent
+  │     └── 无下一步 → 持久化 pending workflow completion → self 发布 WorkflowCompletedEvent
   │
   ├── run actor envelope 流进入统一 Projection Pipeline（一对多分发）
   │     ├── WorkflowExecutionCurrentStateProjector / WorkflowRunInsightReportArtifactProjector / WorkflowRunTimelineArtifactProjector / WorkflowRunGraphArtifactProjector: 按消费场景物化 current-state + durable artifacts
@@ -496,6 +544,12 @@ Workflow step 可以通过 `compensation` 声明一个已存在的 step id。静
 补偿相位本身也有 actor-owned durable deadline。第一次进入补偿相位或 crash/reactivation 后重发当前 `CompensationRequestEvent` 时，`WorkflowExecutionKernel` 通过 `ScheduleSelfDurableTimeoutAsync` 安排 `WorkflowCompensationPhaseDeadlineFiredEvent`，相对超时为 `CompensationPhaseDeadlineMs = 300000`。deadline fired 后若 run 仍处于当前补偿相位且 callback lease 匹配，kernel 只向 `WorkflowRunGAgent` 报告 deadline exceeded；仍由 run actor 依据权威 `compensation_cursor` 提交 `WorkflowCompensationFailedEvent`，进入 `COMPENSATION_DEAD_LETTER` 并复用失败 `WorkflowCompletedEvent` 通知 caller。补偿正常完成或 dead-letter 终态会清理并取消 phase deadline lease；终态后迟到的 deadline fired event 会被忽略。
 
 run actor 会把触发补偿的原始失败 step 持久化为 `compensation_origin_failed_step_id`，后续每个 `CompensationRequestEvent.failed_step_id` 都复用这个 actor-owned fact，不从当前 compensation cursor 反推。`terminal_workflow_completion_recorded` 是 `WorkflowCompletedEvent` redelivery 的幂等门禁；补偿 dead-letter 可以先把 run 标为 failed，但不会阻止第一次最终 completion fact 落账。
+
+所有成功与失败终态共用同一条 durable completion outbox。`WorkflowExecutionKernel` 在清理运行态或 self-publish 之前，先把完整强类型 `WorkflowCompletedEvent` 写入 actor-owned `pending_workflow_completion`；只有根 run actor 提交该 `WorkflowCompletedEvent`、把外层 status 推进为 terminal 后，reducer 才能清除 intent。首次 publish 失败、进程退出或 activation rollover 不会再留下“kernel 已 inactive、外层仍 running”的空窗：activation 与 committed-publication recovery 会从 kernel state 重发同一 intent，重复交付由 `terminal_workflow_completion_recorded` 幂等收敛。
+
+部署不会主动激活历史 run actor。workflow terminal recovery reconciler 只从 current-state readmodel 逐页发现长时间未更新的 `running` 候选，并投递 typed reconcile command 来唤醒对应 actor；scanner 不读取 write state，也不决定 success/failure。actor 收到命令后先恢复已有 pending completion；权威 state 若证明 kernel 已 inactive、无 active compensation 且不存在 pending completion，才把历史不可能继续推进的 cleanup gap 收敛为明确失败。active kernel 只允许恢复当前同 run、同 step、同 execution attempt 的 `foreach` 已提交失败事实：`ForEachParentState.collected` 中至少一个 typed failed item 会先生成 durable parent `StepCompletedEvent`，再由 kernel 的 typed failure 主链收敛，scanner 不直接伪造 workflow 终态。旧版 `run:step` parent 只有在当前 step 尚未进入 retry、现存 parent 唯一，并且 parent/outbox/child 中所有非空 run、step、execution identity 均与当前 attempt 兼容时才允许迁移；任何冲突 identity 都必须拒绝，不能改写后冒充当前 attempt。部分 fan-out 的 `OutcomeUncertain` 会跳过 retry/on_error 并直接进入 compensation/terminal failure；完整收敛且 callee-confirmed 的失败保留既有 retry/on_error 语义，child 明确 `RetryDisposition=Forbidden` 时父级仍必须禁止重试。没有已提交失败事实的 active execution，以及 delay/signal/human-input 等合法等待，均不得被 scanner 推断为终态；query path 也不得借此 prime actor。
+
+`foreach` 默认采用失败即终止的父级语义。直接 child failure 必须与 collected result、队列停止和 parent completion outbox 在同一个 actor checkpoint 中持久化；未 admission 的队列不得继续派发。已经进入 durable `PendingDispatches` 的 intent 可能处于“publish 已逃逸但 ACK 未返回”的不确定窗口，失败收敛时必须按 potentially-published sibling 保留共享 backpressure slot，不能把进程内 acceptance cache 当成事实源；只有对应迟到 completion 才能幂等结算该 slot。只要还有未收敛 sibling，父失败必须标记 `FailureOutcome=OutcomeUncertain` 且 `RetryDisposition=Forbidden`，避免整批重试重复已成功 sibling 的外部副作用。父 completion 发布成功后仍需保留 run/parent/child execution identity tombstone；迟到 child 即使来自不回传 `execution_id` 的旧 primitive，也只能在 `run + child step` 唯一命中 attempt 时结算，且必须被 kernel fencing，不能写入后续 variables 或再次发布父 completion。
 
 `workflow_call` child run 失败时先由 child run 自己完成补偿，再向 parent actor 发送 `SubWorkflowInvocationCompletedEvent(success=false, compensated=true)`。`compensated` 只表达 child compensation outcome；parent 侧仍把该 child failure 转成普通 `StepCompletedEvent(success=false)` 推进本 run，是否补偿 parent 的 `workflow_call` step 由 parent 自己的 ledger 决定。
 

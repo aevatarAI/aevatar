@@ -77,6 +77,7 @@ public sealed class ScriptNativeGraphProjectorTests
             CancellationToken.None);
 
         graphWriter.LastUpsert.Should().NotBeNull();
+        graphWriter.LastProjectionKind.Should().Be(context.ProjectionKind);
         var graphReadModel = graphWriter.LastUpsert!;
         var graph = graphMaterializer.Materialize(graphReadModel);
         graphReadModel.SchemaId.Should().Be("claim_case");
@@ -511,10 +512,16 @@ public sealed class ScriptNativeGraphProjectorTests
     {
         public ScriptNativeGraphReadModel? LastUpsert { get; private set; }
 
-        public Task UpsertAsync(ScriptNativeGraphReadModel readModel, CancellationToken ct = default)
+        public string? LastProjectionKind { get; private set; }
+
+        public Task UpsertAsync(
+            ScriptNativeGraphReadModel readModel,
+            string projectionKind,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastUpsert = readModel.Clone();
+            LastProjectionKind = projectionKind;
             return Task.CompletedTask;
         }
     }

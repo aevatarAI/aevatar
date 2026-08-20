@@ -27,6 +27,9 @@ public sealed class AgentToolReceiptContractTests
         ((int)AgentToolReceiptMutationStage.Unspecified).Should().Be(0);
         ((int)AgentToolReceiptMutationStage.Accepted).Should().Be(1);
         ((int)AgentToolReceiptMutationStage.ReadModelObserved).Should().Be(2);
+        ((int)AgentToolFailureOutcome.Unspecified).Should().Be(0);
+        ((int)AgentToolFailureOutcome.CalleeConfirmed).Should().Be(1);
+        ((int)AgentToolFailureOutcome.OutcomeUncertain).Should().Be(2);
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
@@ -53,7 +56,8 @@ public sealed class AgentToolReceiptContractTests
                 (20, "nyx_id_approval_decision_mode"),
                 (21, "mutation_stage"),
                 (22, "nyx_id_approval_terminal_outcome"),
-                (23, "exact_service_approval"));
+                (23, "exact_service_approval"),
+                (24, "failure_outcome"));
 
         ((int)NyxIdApprovalDecisionMode.Unspecified).Should().Be(0);
         ((int)NyxIdApprovalDecisionMode.PerRequest).Should().Be(1);

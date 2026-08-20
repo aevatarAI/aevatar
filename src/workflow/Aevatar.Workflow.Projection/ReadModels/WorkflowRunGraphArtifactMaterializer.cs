@@ -156,7 +156,7 @@ public sealed class WorkflowRunGraphArtifactMaterializer
         return edges.Values.ToList();
     }
 
-    private static ProjectionGraphNode CreateActorNode(
+    internal static ProjectionGraphNode CreateActorNode(
         string nodeId,
         string? actorId,
         string? workflowName,
@@ -177,7 +177,7 @@ public sealed class WorkflowRunGraphArtifactMaterializer
         };
     }
 
-    private static ProjectionGraphEdge CreateEdge(
+    internal static ProjectionGraphEdge CreateEdge(
         string relationType,
         string fromNodeId,
         string toNodeId,
@@ -187,7 +187,12 @@ public sealed class WorkflowRunGraphArtifactMaterializer
         var normalizedFromNodeId = NormalizeToken(fromNodeId);
         var normalizedToNodeId = NormalizeToken(toNodeId);
         var normalizedEdgeType = NormalizeToken(relationType);
-        var edgeId = BuildEdgeId(normalizedEdgeType, normalizedFromNodeId, normalizedToNodeId);
+        var edgeId = string.Equals(
+            normalizedEdgeType,
+            WorkflowExecutionGraphConstants.EdgeTypeNext,
+            StringComparison.Ordinal)
+            ? BuildNextEdgeId(normalizedFromNodeId)
+            : BuildEdgeId(normalizedEdgeType, normalizedFromNodeId, normalizedToNodeId);
         return new ProjectionGraphEdge
         {
             Scope = WorkflowExecutionGraphConstants.Scope,
@@ -200,14 +205,14 @@ public sealed class WorkflowRunGraphArtifactMaterializer
         };
     }
 
-    private static string BuildRunNodeId(string rootActorId, string commandId)
+    internal static string BuildRunNodeId(string rootActorId, string commandId)
     {
         var normalizedRootActorId = NormalizeToken(rootActorId);
         var normalizedCommandId = NormalizeToken(commandId);
         return $"run:{normalizedRootActorId}:{normalizedCommandId}";
     }
 
-    private static string BuildStepNodeId(string rootActorId, string commandId, string stepId)
+    internal static string BuildStepNodeId(string rootActorId, string commandId, string stepId)
     {
         var normalizedRootActorId = NormalizeToken(rootActorId);
         var normalizedCommandId = NormalizeToken(commandId);
@@ -215,7 +220,7 @@ public sealed class WorkflowRunGraphArtifactMaterializer
         return $"step:{normalizedRootActorId}:{normalizedCommandId}:{normalizedStepId}";
     }
 
-    private static string BuildTopologyActorNodeId(string rootActorId, string commandId, string actorId)
+    internal static string BuildTopologyActorNodeId(string rootActorId, string commandId, string actorId)
     {
         var normalizedRootActorId = NormalizeToken(rootActorId);
         var normalizedActorId = NormalizeToken(actorId);
@@ -226,12 +231,15 @@ public sealed class WorkflowRunGraphArtifactMaterializer
         return $"actor:{normalizedRootActorId}:{normalizedCommandId}:{normalizedActorId}";
     }
 
-    private static string BuildEdgeId(string relationType, string fromNodeId, string toNodeId)
+    internal static string BuildEdgeId(string relationType, string fromNodeId, string toNodeId)
     {
         var payload = $"{relationType}|{fromNodeId}|{toNodeId}";
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
         return $"{relationType}:{Convert.ToHexString(hash.AsSpan(0, 8))}";
     }
+
+    internal static string BuildNextEdgeId(string fromNodeId) =>
+        BuildEdgeId(WorkflowExecutionGraphConstants.EdgeTypeNext, fromNodeId, "next");
 
     private static string NormalizeToken(string? token)
     {

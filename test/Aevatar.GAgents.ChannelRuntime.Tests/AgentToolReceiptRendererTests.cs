@@ -155,7 +155,7 @@ public sealed class AgentToolReceiptRendererTests
                 new AgentToolReceipt
                 {
                     CallId = "call-shared",
-                    ToolName = "submit_invoice",
+                    ToolName = "submit_record",
                     Status = AgentToolReceiptStatus.Error,
                     ErrorMessage = "Submission failed.",
                 },
@@ -164,8 +164,8 @@ public sealed class AgentToolReceiptRendererTests
                 new AgentRunToolCall
                 {
                     Id = "call-shared",
-                    Name = "submit_invoice",
-                    ArgumentsJson = """{"name":"invoice-42"}""",
+                    Name = "submit_record",
+                    ArgumentsJson = """{"name":"record-42"}""",
                 },
                 new AgentRunToolCall
                 {
@@ -175,7 +175,7 @@ public sealed class AgentToolReceiptRendererTests
                 },
             ]);
 
-        rendered.Should().Contain("[tool receipt] Failed: invoice-42");
+        rendered.Should().Contain("[tool receipt] Failed: record-42");
         rendered.Should().NotContain("unrelated-probe");
     }
 

@@ -564,8 +564,12 @@ public sealed class WorkflowRunObservatoryQueryService
         if (normalizedScopeId.Length == 0 || normalizedRunId.Length == 0)
             return null;
 
-        var snapshot = await _currentStateQueryPort.GetWorkflowActorCurrentStateAsync(normalizedRunId, ct);
-        if (snapshot == null)
+        var snapshot = await _currentStateQueryPort.GetWorkflowRunCurrentStateForScopeAsync(
+            normalizedScopeId,
+            normalizedRunId,
+            ct);
+        if (snapshot == null ||
+            !string.Equals(snapshot.RunId?.Trim(), normalizedRunId, StringComparison.Ordinal))
             return null;
 
         return string.Equals(snapshot.ScopeId, normalizedScopeId, StringComparison.Ordinal)
@@ -581,18 +585,25 @@ public sealed class WorkflowRunObservatoryQueryService
         if (normalizedRunId.Length == 0)
             return null;
 
-        return await _currentStateQueryPort.GetWorkflowActorCurrentStateAsync(normalizedRunId, ct);
+        var snapshot = await _currentStateQueryPort.GetWorkflowRunCurrentStateAsync(normalizedRunId, ct);
+        return snapshot != null &&
+               string.Equals(snapshot.RunId?.Trim(), normalizedRunId, StringComparison.Ordinal)
+            ? snapshot
+            : null;
     }
 
     private static ObservatoryRunSummary ToRunSummary(WorkflowActorSnapshot snapshot)
     {
         return new ObservatoryRunSummary
         {
-            RunId = snapshot.ActorId,
+            RunId = snapshot.RunId,
+            WorkflowId = snapshot.WorkflowId,
             WorkflowName = snapshot.WorkflowName,
             Status = MapStatus(snapshot.CompletionStatus),
             Success = snapshot.LastSuccess,
             StartedAtUtc = snapshot.StartedAtUtc?.ToDateTimeOffset(),
+            CompletedAtUtc = snapshot.CompletedAtUtc?.ToDateTimeOffset(),
+            DurationMs = snapshot.HasDurationMs ? snapshot.DurationMs : null,
             UpdatedAtUtc = snapshot.LastUpdatedAt,
             StateVersion = snapshot.StateVersion,
             ScopeId = snapshot.ScopeId,

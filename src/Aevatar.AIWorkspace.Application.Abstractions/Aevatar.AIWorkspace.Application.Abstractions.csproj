@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.AIWorkspace.Application.Abstractions</AssemblyName>
+    <RootNamespace>Aevatar.AIWorkspace.Application.Abstractions</RootNamespace>
+  </PropertyGroup>
+</Project>

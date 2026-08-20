@@ -445,6 +445,12 @@ enum AgentToolReceiptMutationStage {
   AGENT_TOOL_RECEIPT_MUTATION_STAGE_READ_MODEL_OBSERVED = 2;
 }
 
+enum AgentToolFailureOutcome {
+  AGENT_TOOL_FAILURE_OUTCOME_UNSPECIFIED = 0;
+  AGENT_TOOL_FAILURE_OUTCOME_CALLEE_CONFIRMED = 1;
+  AGENT_TOOL_FAILURE_OUTCOME_OUTCOME_UNCERTAIN = 2;
+}
+
 enum NyxIdApprovalDecisionMode {
   NYX_ID_APPROVAL_DECISION_MODE_UNSPECIFIED = 0;
   NYX_ID_APPROVAL_DECISION_MODE_PER_REQUEST = 1;
@@ -508,6 +514,42 @@ message AgentToolReceipt {
   AgentToolReceiptMutationStage mutation_stage = 21;
   NyxIdApprovalTerminalOutcome nyx_id_approval_terminal_outcome = 22;
   NyxIdExactServiceApprovalAuthority exact_service_approval = 23;
+  AgentToolFailureOutcome failure_outcome = 24;
+}
+
+enum AgentToolCancellationAuditOutcomeKind {
+  AGENT_TOOL_CANCELLATION_AUDIT_OUTCOME_KIND_UNSPECIFIED = 0;
+  AGENT_TOOL_CANCELLATION_AUDIT_OUTCOME_KIND_EXECUTED = 1;
+  AGENT_TOOL_CANCELLATION_AUDIT_OUTCOME_KIND_FAILED = 2;
+}
+
+enum AgentToolCancellationAuditFailureStage {
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_UNSPECIFIED = 0;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_NONE = 1;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_REQUEST_VALIDATION = 2;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_CLASSIFICATION = 3;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_CREDENTIAL_POLICY = 4;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_APPROVAL = 5;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_ADMISSION = 6;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_TERMINAL_EXECUTION = 7;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_TERMINAL_AUDIT = 8;
+}
+
+// Adapter-owned payload persisted opaquely by the workflow actor. It freezes every
+// tool/audit semantic that must survive callback redelivery without re-running the provider.
+message AgentToolCancellationAuditIntentPayload {
+  string result_json = 1;
+  AgentToolReceipt receipt = 2;
+  bool is_mutation = 3;
+  string failure_code = 4;
+  string safe_message = 5;
+  bool terminal_invoked = 6;
+  bool retryable = 7;
+  optional bool requires_approval = 8;
+  bool is_read_only = 9;
+  bool is_destructive = 10;
+  AgentToolCancellationAuditOutcomeKind outcome_kind = 11;
+  AgentToolCancellationAuditFailureStage failure_stage = 12;
 }
 
 message ManagedWorkflowHandoffReceipt {

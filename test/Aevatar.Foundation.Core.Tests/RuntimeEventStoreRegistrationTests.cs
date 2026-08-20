@@ -25,7 +25,7 @@ public class RuntimeEventStoreRegistrationTests
             var behaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<CounterState>>();
 
             eventStore.ShouldBeOfType<FileEventStore>();
-            snapshotStore.ShouldBeOfType<FileEventSourcingSnapshotStore<CounterState>>();
+            snapshotStore.GetType().Name.ShouldStartWith("LocalActorRuntimeEnvelopeSnapshotStore");
             publicationStore.ShouldBeOfType<FileCommittedStatePublicationStateStore>();
             behaviorFactory.ShouldBeOfType<DefaultEventSourcingBehaviorFactory<CounterState>>();
         }

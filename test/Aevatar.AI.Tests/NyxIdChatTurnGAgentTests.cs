@@ -2547,9 +2547,9 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 {
                     Presentation = ToolPresentationDescriptors.Skill(
                         "use_skill",
-                        "synthetic-invoice-review",
+                        "sample-workflow",
                         "Load the exact workflow skill.",
-                        "synthetic-invoice-review",
+                        "sample-workflow",
                         "remote"),
                 })
                 .ToArray(),
@@ -2588,7 +2588,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         start.CallId.Should().Be("call-alpha");
         start.ToolName.Should().Be("use_skill");
         start.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
-        start.Presentation.Skill.SkillName.Should().Be("synthetic-invoice-review");
+        start.Presentation.Skill.SkillName.Should().Be("sample-workflow");
         start.Presentation.Skill.Source.Should().Be("remote");
     }
 

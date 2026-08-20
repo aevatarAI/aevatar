@@ -23,6 +23,8 @@ public sealed class WorkflowActorCurrentStateListQuery
     // Run status string as materialized on the current-state document (running/completed/failed/...).
     public string Status { get; init; } = string.Empty;
 
+    public string RunId { get; init; } = string.Empty;
+
     public string WorkflowId { get; init; } = string.Empty;
 
     public string SearchText { get; init; } = string.Empty;
@@ -52,6 +54,57 @@ public interface IWorkflowExecutionCurrentStateQueryPort
     Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(
         string actorId,
         CancellationToken ct = default);
+
+    async Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateAsync(
+        string runId,
+        CancellationToken ct = default)
+    {
+        var normalizedRunId = runId?.Trim() ?? string.Empty;
+        if (normalizedRunId.Length == 0)
+            return null;
+
+        var page = await PageWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 2,
+                RunId = normalizedRunId,
+            },
+            ct);
+        var exactMatches = page.Items
+            .Where(snapshot => string.Equals(snapshot.RunId?.Trim(), normalizedRunId, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+
+        return exactMatches.Length == 1 ? exactMatches[0] : null;
+    }
+
+    async Task<WorkflowActorSnapshot?> GetWorkflowRunCurrentStateForScopeAsync(
+        string scopeId,
+        string runId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = scopeId?.Trim() ?? string.Empty;
+        var normalizedRunId = runId?.Trim() ?? string.Empty;
+        if (normalizedScopeId.Length == 0 || normalizedRunId.Length == 0)
+            return null;
+
+        var page = await PageWorkflowActorCurrentStatesAsync(
+            new WorkflowActorCurrentStateListQuery
+            {
+                Take = 2,
+                ScopeId = normalizedScopeId,
+                RunId = normalizedRunId,
+            },
+            ct);
+        var exactMatches = page.Items
+            .Where(snapshot =>
+                string.Equals(snapshot.ScopeId?.Trim(), normalizedScopeId, StringComparison.Ordinal) &&
+                string.Equals(snapshot.RunId?.Trim(), normalizedRunId, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+
+        return exactMatches.Length == 1 ? exactMatches[0] : null;
+    }
 
     Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(
         int take = 200,

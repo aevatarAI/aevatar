@@ -65,14 +65,14 @@ Readability targets:
 | AEVATAR MISSION WALL       Live  Running  Waiting  Failed  Retrying  Avg Latency  Freshness     |
 +------------------------------+-----------------------------------------------------------------+
 | LIVE RUN WINDOW              | WORKFLOW STEP GRAPH + LIVE EXECUTION                           |
-| [Risk Review] running        | Focus: waiting for release approval · 2m                        |
+| [Workflow Alpha] running     | Focus: waiting for human approval · 2m                          |
 |   Collect evidence           | retrieve_facts -> llm_call -> connector_call                    |
 |   8/12 steps · 02:31         |        completed      active        completed                   |
 |                              |                 -> human_approval(waiting)                     |
-| [Customer Onboarding] wait   |                 -> emit/projected(run v42)                     |
+| [Workflow Beta] wait         |                 -> emit/projected(run v42)                     |
 |   Approval gate              | Uses existing @xyflow/react GraphCanvas + run audit overlay     |
 |   6/9 steps · 05:12          | Animated edges show live message flow                           |
-| [Invoice Classifier] done    | Nodes show durable state from readmodels                        |
+| [Workflow Gamma] done        | Nodes show durable state from readmodels                        |
 |   Completed 18s ago          | Detail timeline/messages/events open in Run Inspector           |
 +------------------------------+-----------------------------------------------------------------+
 +------------------------------------------------------------------------------------------------+
@@ -123,8 +123,8 @@ Card content:
 
 | Field | Example |
 |---|---|
-| workflowName | `Risk Review` |
-| teamName | `RiskOps` |
+| workflowName | `Workflow Alpha` |
+| teamName | `Team Alpha` |
 | status | `running`, `completed 18s ago`, `failed pinned` |
 | currentStep | `Collect evidence` |
 | progress | `8 / 12 steps` |
@@ -139,22 +139,22 @@ Wireframe:
 | LIVE RUN WINDOW              |
 |                              |
 | +--------------------------+ |
-| | Risk Review        LIVE  | |
-| | RiskOps                  | |
+| | Workflow Alpha     LIVE  | |
+| | Team Alpha               | |
 | | Collect evidence         | |
 | | 8/12 steps        02:31  | |
 | +--------------------------+ |
 |                              |
 | +--------------------------+ |
-| | Customer Onboarding WAIT | |
-| | Growth Team              | |
+| | Workflow Beta      WAIT  | |
+| | Team Beta                | |
 | | Approval gate            | |
 | | 6/9 steps         05:12  | |
 | +--------------------------+ |
 |                              |
 | +--------------------------+ |
-| | Invoice Classifier DONE  | |
-| | Finance Ops              | |
+| | Workflow Gamma     DONE  | |
+| | Team Gamma               | |
 | | Completed 18s ago        | |
 | | 5/5 steps         00:08  | |
 | +--------------------------+ |

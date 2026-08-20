@@ -142,15 +142,16 @@ function decodeConversationMeta(value: unknown, path: string): ConversationMeta 
     updatedAt: readString(record, "updatedAt", path),
   } as ConversationMeta & Record<string, unknown>;
 
+  for (const key of ["serviceId", "serviceKind"] as const) {
+    assignOptional(meta, key, readOptionalString(record, key, path));
+  }
   for (const key of [
     "activeStepSummary",
     "attentionKind",
     "attentionSince",
-    "serviceId",
-    "serviceKind",
     "taskStatus",
   ] as const) {
-    assignOptional(meta, key, readOptionalString(record, key, path));
+    assignOptional(meta, key, readOptionalNullableString(record, key, path));
   }
   assignOptional(
     meta,

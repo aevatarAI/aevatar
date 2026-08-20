@@ -93,10 +93,14 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
                 string.Equals(candidate.AuditId, sanitizedDocument.AuditId, StringComparison.Ordinal));
             if (existing is not null)
             {
-                return Task.FromResult(string.Equals(
+                var isDuplicate = string.Equals(
                     existing.ContentHash,
                     sanitizedDocument.ContentHash,
-                    StringComparison.Ordinal)
+                    StringComparison.Ordinal) ||
+                    existing.Record is not null &&
+                    sanitizedDocument.Record is not null &&
+                    AuditRecordSemanticComparer.AreEquivalent(existing.Record, sanitizedDocument.Record);
+                return Task.FromResult(isDuplicate
                     ? AuditTrailArtifactWriteResult.Duplicate()
                     : AuditTrailArtifactWriteResult.Conflict());
             }

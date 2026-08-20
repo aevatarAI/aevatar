@@ -39,7 +39,7 @@ public sealed class NyxIdCodeExecutionPortTests
                 """));
         var port = CreatePort(handler);
 
-        var outcome = await port.ExecuteAsync(Request(userServiceId: null));
+        var outcome = await port.ExecuteAsync(Request(userServiceId: null, timeoutSeconds: 300));
 
         outcome.Failure.Should().BeNull();
         outcome.Result.Should().Be(new CodeExecutionResult("42\n", "", 0, "diag-code-1", 17));
@@ -61,9 +61,10 @@ public sealed class NyxIdCodeExecutionPortTests
         handler.Requests.Should().OnlyContain(request => request.ApiKeys.Count == 0);
         using var body = JsonDocument.Parse(handler.Requests[2].Body!);
         body.RootElement.EnumerateObject().Select(static property => property.Name)
-            .Should().Equal("language", "script");
+            .Should().Equal("language", "script", "timeout_secs");
         body.RootElement.GetProperty("language").GetString().Should().Be("python");
         body.RootElement.GetProperty("script").GetString().Should().Be("print(42)");
+        body.RootElement.GetProperty("timeout_secs").GetInt32().Should().Be(300);
     }
 
     [Fact]
@@ -336,6 +337,27 @@ public sealed class NyxIdCodeExecutionPortTests
         var port = CreatePort(handler);
 
         var outcome = await port.ExecuteAsync(Request(CodeServiceId) with { Language = language });
+
+        outcome.Failure.Should().BeEquivalentTo(new
+        {
+            Kind = CodeExecutionFailureKind.AdmissionDenied,
+            Code = "code_execution_request_invalid",
+        });
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(601)]
+    public async Task ExecuteAsync_WhenTimeoutIsOutsideContract_FailsBeforeNyxIdCall(int timeoutSeconds)
+    {
+        var handler = new SequenceHandler();
+        var port = CreatePort(handler);
+
+        var outcome = await port.ExecuteAsync(Request(CodeServiceId) with
+        {
+            TimeoutSeconds = timeoutSeconds,
+        });
 
         outcome.Failure.Should().BeEquivalentTo(new
         {
@@ -1134,10 +1156,12 @@ public sealed class NyxIdCodeExecutionPortTests
     private static CodeExecutionRequest Request(
         string? userServiceId,
         string executionBearerToken = ExecutionBearerToken,
-        string? sourceReadableBearerToken = SourceReadableBearerToken) =>
+        string? sourceReadableBearerToken = SourceReadableBearerToken,
+        int timeoutSeconds = CodeExecutionContract.DefaultTimeoutSeconds) =>
         new(
             CodeExecutionLanguage.Python,
             "print(42)",
+            timeoutSeconds,
             new CodeExecutionRouteIdentity(
                 "chrono-sandbox",
                 userServiceId,

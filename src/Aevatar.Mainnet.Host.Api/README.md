@@ -142,6 +142,43 @@ ASPNETCORE_ENVIRONMENT=PersistentLocal dotnet run --project src/Aevatar.Mainnet.
 
 `Aevatar.Mainnet.Host.Api` 现在是 `aevatar app` 的唯一后端 API 面。当前用户面 contract 已经收敛为 `scope-first`，默认认为一个 `scope` 对应一个对外 service binding；内核仍保留 `service` 级别接口，作为未来扩展到多 service 的基础。
 
+`/ai` 是与 `/admin` 平行、由 Mainnet Host 自己拥有的独立 AI 应用。Host 将 `AI/ai.html`
+作为 embedded resource 编译并注入 OIDC 配置，只在 `GET|HEAD /ai` 返回。页面使用
+`/ai#/overview`、`/ai#/agents`、`/ai#/models`、`/ai#/activity` hash routes，不依赖或构建
+`apps/aevatar-console-web`，也不接管 `/login`、`/auth/callback`、`/chat`、`/settings` 或
+`/scopes/**`。`/admin` 的 route、asset 和原有功能保持不变。
+
+未登录时 `ai.html` 渲染 Aevatar AI 自己的登录画面，并通过共享 OIDC/PKCE 基础设施和
+`/auto/callback` 完成 NyxID 登录。所有 `/api/ai/*` 都要求认证，只从验证过的 principal
+解析唯一授权分区；浏览器不能通过 route、query 或 body 自报该 identity，页面也不展示或拼接它。
+当前 facade 提供：
+
+- `GET /api/ai/context`
+- `GET /api/ai/overview`
+- `GET /api/ai/agents`
+- `POST /api/ai/agents`
+- `GET /api/ai/agents/editor-options`
+- `GET /api/ai/agents/{profileSlug}`
+- `PUT /api/ai/agents/{profileSlug}/draft`
+- `POST /api/ai/agents/{profileSlug}:validate`
+- `POST /api/ai/agents/{profileSlug}:publish`
+- `GET|PUT|DELETE /api/ai/agents/default/{agentKind}`
+- `GET /api/ai/models`
+- `GET|PUT /api/ai/models/personal-default`
+- `GET|PUT|DELETE /api/ai/models/catalog`
+- `GET /api/ai/models/catalog/candidates`
+- `GET /api/ai/models/catalog/candidates/{userServiceId}/models`
+- `GET /api/ai/activity`
+- `GET /api/ai/activity/conversations`
+- `GET /api/ai/activity/runs`
+- `GET /api/ai/activity/runs/{runId}`
+
+这些 query 和 command facade 复用 Agent Profile、UserConfig、LLM model catalog、Conversation 和
+Workflow Observatory 的既有 Application authority；各来源独立暴露可用性、版本与刷新时间，不会在
+Host 或浏览器内伪造统一版本、统一排序或第二份事实状态。Overview、Agents、Models 和 Activity 已接入
+真实 API；Chat、Channels 与 Capabilities 在形成独立契约和可用页面前不进入导航。完整边界见
+[`docs/canon/ai-workspace.md`](../../docs/canon/ai-workspace.md)。
+
 Backend Admin 的 Studio 从 `/admin#/studio` 进入。Admin shell 通过 Mainnet-owned
 `/admin/studio` 页面路由装载 canonical Studio 静态资源，并在嵌入时移除 Studio 自带顶栏；
 `/workflow/studio` 仅保留为独立 Studio surface，不再是 Admin 导航的目标。

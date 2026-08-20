@@ -131,7 +131,7 @@ function workflowBoardMember(input: {
 }): StudioWorkflowBoardSnapshot["teams"][number]["members"][number] {
   const currentNodeName =
     input.currentNodeStatus === "waiting" || input.executionStatus === "waiting"
-      ? "risk_gate"
+      ? "approval_gate"
       : "Current";
 
   return {
@@ -164,8 +164,8 @@ function workflowBoardMember(input: {
         ? [
             {
               failedAt: input.lastNodeUpdatedAt,
-              name: "invoice_match",
-              nodeId: "invoice_match",
+              name: "record_validation",
+              nodeId: "record_validation",
             },
           ]
         : [],
@@ -175,8 +175,8 @@ function workflowBoardMember(input: {
       input.currentNodeStatus === "waiting" || input.executionStatus === "waiting"
         ? [
             {
-              name: "risk_gate",
-              nodeId: "risk_gate",
+              name: "approval_gate",
+              nodeId: "approval_gate",
               reason: "waiting for input",
               status: "waiting",
             },
@@ -194,19 +194,19 @@ function workflowBoardMember(input: {
 }
 
 describe("MissionWallPage", () => {
-  const riskMember = workflowMember({
-    displayName: "Risk desk member",
-    memberId: "m-risk",
-    publishedServiceId: "svc-risk",
+  const alphaMember = workflowMember({
+    displayName: "Alpha member",
+    memberId: "m-alpha",
+    publishedServiceId: "svc-alpha",
     teamId: "team-alpha",
-    workflowId: "wf-risk-draft",
+    workflowId: "wf-alpha-draft",
   });
-  const billingMember = workflowMember({
-    displayName: "Billing member",
-    memberId: "m-billing",
-    publishedServiceId: "svc-billing",
+  const betaMember = workflowMember({
+    displayName: "Beta member",
+    memberId: "m-beta",
+    publishedServiceId: "svc-beta",
     teamId: "team-alpha",
-    workflowId: "wf-billing-draft",
+    workflowId: "wf-beta-draft",
   });
   const idleMember = workflowMember({
     displayName: "Idle member",
@@ -230,25 +230,25 @@ describe("MissionWallPage", () => {
     (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockResolvedValue(
       workflowBoardSnapshot([
         workflowBoardMember({
-          actorId: "actor-risk-run",
+          actorId: "actor-alpha-run",
           completedSteps: 1,
           currentNodeStatus: "waiting",
           executionStatus: "running",
           lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
-          member: riskMember,
-          runId: "run-risk",
+          member: alphaMember,
+          runId: "run-alpha",
           totalSteps: 3,
-          workflowName: "Live Risk Workflow",
+          workflowName: "Workflow Alpha",
         }),
         workflowBoardMember({
-          actorId: "actor-billing-run",
+          actorId: "actor-beta-run",
           completedSteps: 2,
           executionStatus: "failed",
           lastNodeUpdatedAt: "2026-06-29T21:53:00.000Z",
-          member: billingMember,
-          runId: "run-billing",
+          member: betaMember,
+          runId: "run-beta",
           totalSteps: 3,
-          workflowName: "Billing Workflow",
+          workflowName: "Workflow Beta",
         }),
         {
           actorId: undefined,
@@ -299,7 +299,7 @@ describe("MissionWallPage", () => {
 
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Switch language" }),
     ).toBeInTheDocument();
@@ -325,7 +325,7 @@ describe("MissionWallPage", () => {
 
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
     const actions = document.querySelector(".mission-wall-header-actions");
     expect(actions).toBeInstanceOf(HTMLElement);
     expect(actions).toHaveAttribute(
@@ -352,8 +352,8 @@ describe("MissionWallPage", () => {
   it("loads one latest execution row per workflow member from the backend snapshot", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
-    expect(screen.getByText("Billing Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
+    expect(screen.getByText("Workflow Beta")).toBeInTheDocument();
     expect(screen.queryByText("Script member")).not.toBeInTheDocument();
 
     await waitFor(() => {
@@ -373,7 +373,7 @@ describe("MissionWallPage", () => {
   it("does not render a refresh freshness metric in the fullscreen header", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
     const topStrip = document.querySelector(".mission-wall-top-strip");
     expect(topStrip).toBeInstanceOf(HTMLElement);
     expect(within(topStrip as HTMLElement).queryByText("Fresh")).toBeNull();
@@ -382,12 +382,12 @@ describe("MissionWallPage", () => {
   it("does not expand multiple service catalog runs into duplicate member rows", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
 
     const list = screen.getByTestId("mission-wall-run-list");
-    expect(within(list).getAllByText("Live Risk Workflow")).toHaveLength(1);
-    expect(within(list).queryByText("Older Risk Workflow")).toBeNull();
-    expect(within(list).queryByText("run-risk-old")).toBeNull();
+    expect(within(list).getAllByText("Workflow Alpha")).toHaveLength(1);
+    expect(within(list).queryByText("Older Workflow Alpha")).toBeNull();
+    expect(within(list).queryByText("run-alpha-old")).toBeNull();
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
   });
 
@@ -400,7 +400,7 @@ describe("MissionWallPage", () => {
 
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
 
     await waitFor(() => {
       expect(studioApi.getWorkflowBoardSnapshot).toHaveBeenCalledWith(
@@ -416,9 +416,9 @@ describe("MissionWallPage", () => {
   it("keeps ellipsized mission wall labels passive without full-text reveal affordances", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
     expect(
-      await screen.findByText(/Live Risk Workflow · Step Flow/),
+      await screen.findByText(/Workflow Alpha · Step Flow/),
     ).toBeInTheDocument();
 
     const root = document.querySelector(".mission-wall");
@@ -453,24 +453,24 @@ describe("MissionWallPage", () => {
   it("does not repeat team and member context inside run cards", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    const riskCard = (await screen.findByText("Live Risk Workflow")).closest(
+    const alphaCard = (await screen.findByText("Workflow Alpha")).closest(
       "button",
     );
-    expect(riskCard).toBeTruthy();
-    expect(riskCard).not.toHaveTextContent("Alpha Team · Risk desk member");
+    expect(alphaCard).toBeTruthy();
+    expect(alphaCard).not.toHaveTextContent("Alpha Team · Alpha member");
     expect(
-      riskCard!.querySelector(".mission-wall-run-card__team"),
+      alphaCard!.querySelector(".mission-wall-run-card__team"),
     ).not.toBeInTheDocument();
   });
 
   it("highlights the selected run card without adding another shadow layer", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    const riskCard = (await screen.findByText("Live Risk Workflow")).closest(
+    const alphaCard = (await screen.findByText("Workflow Alpha")).closest(
       "button",
     );
-    expect(riskCard).toBeTruthy();
-    expect(riskCard).toHaveClass("mission-wall-run-card--focus");
+    expect(alphaCard).toBeTruthy();
+    expect(alphaCard).toHaveClass("mission-wall-run-card--focus");
 
     const missionWallStyle = Array.from(document.querySelectorAll("style"))
       .map((style) => style.textContent ?? "")
@@ -493,31 +493,31 @@ describe("MissionWallPage", () => {
       workflowId: "wf-fresh-draft",
     });
     let includeFreshMember = false;
-    let riskExecutionStatus: "running" | "completed" = "running";
+    let alphaExecutionStatus: "running" | "completed" = "running";
     (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockImplementation(
       async () =>
         workflowBoardSnapshot([
           workflowBoardMember({
-            actorId: "actor-risk-run",
-            completedSteps: riskExecutionStatus === "completed" ? 3 : 1,
+            actorId: "actor-alpha-run",
+            completedSteps: alphaExecutionStatus === "completed" ? 3 : 1,
             currentNodeStatus:
-              riskExecutionStatus === "completed" ? "completed" : "waiting",
-            executionStatus: riskExecutionStatus,
+              alphaExecutionStatus === "completed" ? "completed" : "waiting",
+            executionStatus: alphaExecutionStatus,
             lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
-            member: riskMember,
-            runId: "run-risk",
+            member: alphaMember,
+            runId: "run-alpha",
             totalSteps: 3,
-            workflowName: "Live Risk Workflow",
+            workflowName: "Workflow Alpha",
           }),
           workflowBoardMember({
-            actorId: "actor-billing-run",
+            actorId: "actor-beta-run",
             completedSteps: 2,
             executionStatus: "failed",
             lastNodeUpdatedAt: "2026-06-29T21:53:00.000Z",
-            member: billingMember,
-            runId: "run-billing",
+            member: betaMember,
+            runId: "run-beta",
             totalSteps: 3,
-            workflowName: "Billing Workflow",
+            workflowName: "Workflow Beta",
           }),
           ...(includeFreshMember
             ? [
@@ -540,7 +540,7 @@ describe("MissionWallPage", () => {
       React.createElement(MissionWallPage),
     );
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
     expect(screen.queryByText("Fresh Workflow")).not.toBeInTheDocument();
 
     includeFreshMember = true;
@@ -559,7 +559,7 @@ describe("MissionWallPage", () => {
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
 
-    riskExecutionStatus = "completed";
+    alphaExecutionStatus = "completed";
     await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
 
     expect(
@@ -579,15 +579,15 @@ describe("MissionWallPage", () => {
             })
           : workflowBoardSnapshot([
               workflowBoardMember({
-                actorId: "actor-risk-run",
+                actorId: "actor-alpha-run",
                 completedSteps: 1,
                 currentNodeStatus: "waiting",
                 executionStatus: "running",
                 lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
-                member: riskMember,
-                runId: "run-risk",
+                member: alphaMember,
+                runId: "run-alpha",
                 totalSteps: 3,
-                workflowName: "Live Risk Workflow",
+                workflowName: "Workflow Alpha",
               }),
             ]),
     );
@@ -596,18 +596,18 @@ describe("MissionWallPage", () => {
       React.createElement(MissionWallPage),
     );
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
-    expect(await screen.findAllByText("risk_gate")).not.toHaveLength(0);
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
+    expect(await screen.findAllByText("approval_gate")).not.toHaveLength(0);
 
     returnEmptySnapshot = true;
     await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
-    expect(await screen.findAllByText("risk_gate")).not.toHaveLength(0);
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
+    expect(await screen.findAllByText("approval_gate")).not.toHaveLength(0);
     expect(screen.getByText("Live").closest(".mission-wall-metric"))
       .toHaveTextContent("Degraded");
     expect(screen.getByTestId("mission-wall-run-list"))
-      .toHaveTextContent("Live Risk Workflow");
+      .toHaveTextContent("Workflow Alpha");
     expect(screen.queryByText("No focus run")).not.toBeInTheDocument();
   });
 
@@ -625,15 +625,15 @@ describe("MissionWallPage", () => {
 
         return workflowBoardSnapshot([
           workflowBoardMember({
-            actorId: "actor-risk-run",
+            actorId: "actor-alpha-run",
             completedSteps: 1,
             currentNodeStatus: "waiting",
             executionStatus: "running",
             lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
-            member: riskMember,
-            runId: "run-risk",
+            member: alphaMember,
+            runId: "run-alpha",
             totalSteps: 3,
-            workflowName: "Live Risk Workflow",
+            workflowName: "Workflow Alpha",
           }),
         ]);
       },
@@ -643,14 +643,14 @@ describe("MissionWallPage", () => {
       React.createElement(MissionWallPage),
     );
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
 
     failSnapshot = true;
     nowMs += 1_000;
     jest.setSystemTime(nowMs);
     await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
 
     nowMs += MISSION_WALL_STALE_SNAPSHOT_FALLBACK_MS + 1_000;
     jest.setSystemTime(nowMs);
@@ -658,7 +658,7 @@ describe("MissionWallPage", () => {
       MISSION_WALL_STALE_SNAPSHOT_FALLBACK_MS + 1_000,
     );
     await waitFor(() => {
-      expect(screen.queryByText("Live Risk Workflow")).not.toBeInTheDocument();
+      expect(screen.queryByText("Workflow Alpha")).not.toBeInTheDocument();
     });
     expect(screen.getByText("Live").closest(".mission-wall-metric"))
       .toHaveTextContent("Disconnected");
@@ -677,15 +677,15 @@ describe("MissionWallPage", () => {
       async () =>
         workflowBoardSnapshot([
           workflowBoardMember({
-            actorId: "actor-risk-run",
+            actorId: "actor-alpha-run",
             completedSteps: 1,
             currentNodeStatus: "waiting",
             executionStatus: "running",
             lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
-            member: riskMember,
-            runId: "run-risk",
+            member: alphaMember,
+            runId: "run-alpha",
             totalSteps: 3,
-            workflowName: "Live Risk Workflow",
+            workflowName: "Workflow Alpha",
           }),
           ...(includeFreshMember
             ? [
@@ -710,7 +710,7 @@ describe("MissionWallPage", () => {
     );
 
     expect(
-      await screen.findByText(/Live Risk Workflow · Step Flow/),
+      await screen.findByText(/Workflow Alpha · Step Flow/),
     ).toBeInTheDocument();
 
     includeFreshMember = true;
@@ -740,15 +740,15 @@ describe("MissionWallPage", () => {
       async () =>
         workflowBoardSnapshot([
           workflowBoardMember({
-            actorId: "actor-risk-run",
+            actorId: "actor-alpha-run",
             completedSteps: 1,
             currentNodeStatus: "waiting",
             executionStatus: "running",
             lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
-            member: riskMember,
-            runId: "run-risk",
+            member: alphaMember,
+            runId: "run-alpha",
             totalSteps: 3,
-            workflowName: "Live Risk Workflow",
+            workflowName: "Workflow Alpha",
           }),
           ...(includeFreshMember
             ? [
@@ -772,48 +772,48 @@ describe("MissionWallPage", () => {
       React.createElement(MissionWallPage),
     );
 
-    const riskCard = (await screen.findByText("Live Risk Workflow")).closest(
+    const alphaCard = (await screen.findByText("Workflow Alpha")).closest(
       "button",
     );
-    expect(riskCard).toBeTruthy();
-    fireEvent.click(riskCard as HTMLButtonElement);
+    expect(alphaCard).toBeTruthy();
+    fireEvent.click(alphaCard as HTMLButtonElement);
 
     includeFreshMember = true;
     await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
 
     expect(await screen.findByText("Fresh Workflow")).toBeInTheDocument();
     expect(
-      await screen.findByText(/Live Risk Workflow · Step Flow/),
+      await screen.findByText(/Workflow Alpha · Step Flow/),
     ).toBeInTheDocument();
-    expect(riskCard).toHaveAttribute("aria-pressed", "true");
+    expect(alphaCard).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows the selected member snapshot nodes in the right workflow graph", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    const riskCard = (await screen.findByText("Live Risk Workflow")).closest(
+    const alphaCard = (await screen.findByText("Workflow Alpha")).closest(
       "button",
     );
-    expect(riskCard).toBeTruthy();
+    expect(alphaCard).toBeTruthy();
 
-    fireEvent.click(riskCard as HTMLButtonElement);
-
-    expect(
-      await screen.findByText(/Live Risk Workflow · Step Flow/),
-    ).toBeInTheDocument();
-    expect(await screen.findAllByText("risk_gate")).not.toHaveLength(0);
-
-    const billingCard = screen.getByText("Billing Workflow").closest("button");
-    expect(billingCard).toBeTruthy();
-
-    fireEvent.click(billingCard as HTMLButtonElement);
+    fireEvent.click(alphaCard as HTMLButtonElement);
 
     expect(
-      await screen.findByText(/Billing Workflow · Step Flow/),
+      await screen.findByText(/Workflow Alpha · Step Flow/),
     ).toBeInTheDocument();
-    expect(await screen.findAllByText("invoice_match")).not.toHaveLength(0);
-    expect(billingCard).toHaveTextContent("2 / 3 steps");
-    expect(billingCard).not.toHaveTextContent("0 / 0 steps");
+    expect(await screen.findAllByText("approval_gate")).not.toHaveLength(0);
+
+    const betaCard = screen.getByText("Workflow Beta").closest("button");
+    expect(betaCard).toBeTruthy();
+
+    fireEvent.click(betaCard as HTMLButtonElement);
+
+    expect(
+      await screen.findByText(/Workflow Beta · Step Flow/),
+    ).toBeInTheDocument();
+    expect(await screen.findAllByText("record_validation")).not.toHaveLength(0);
+    expect(betaCard).toHaveTextContent("2 / 3 steps");
+    expect(betaCard).not.toHaveTextContent("0 / 0 steps");
     expect(scopeRuntimeApi.getServiceRunAudit).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
   });
@@ -827,27 +827,27 @@ describe("MissionWallPage", () => {
           durationMs: 8000,
           executionStatus: "completed",
           lastNodeUpdatedAt: "2026-06-30T04:58:36.000Z",
-          member: riskMember,
+          member: alphaMember,
           runId: "run-probe",
           totalSteps: 5,
           workflowName: "Mission Wall Probe",
         }),
         workflowBoardMember({
-          actorId: "actor-billing-run",
+          actorId: "actor-beta-run",
           completedSteps: 2,
           executionStatus: "failed",
           lastNodeUpdatedAt: "2026-06-29T21:53:00.000Z",
-          member: billingMember,
-          runId: "run-billing",
+          member: betaMember,
+          runId: "run-beta",
           totalSteps: 3,
-          workflowName: "Billing Workflow",
+          workflowName: "Workflow Beta",
         }),
       ]),
     );
     window.history.replaceState(
       {},
       "",
-      "/runtime/mission-wall?focusRunId=run-billing",
+      "/runtime/mission-wall?focusRunId=run-beta",
     );
 
     renderWithQueryClient(React.createElement(MissionWallPage));
@@ -858,7 +858,7 @@ describe("MissionWallPage", () => {
     expect(probeCard).toBeTruthy();
     expect(probeCard).toHaveAttribute("aria-pressed", "false");
     expect(
-      await screen.findByText(/Billing Workflow · Step Flow/),
+      await screen.findByText(/Workflow Beta · Step Flow/),
     ).toBeInTheDocument();
 
     expect(probeCard).toHaveTextContent("5 / 5 steps");
@@ -876,7 +876,7 @@ describe("MissionWallPage", () => {
       currentNode: null,
       executionStatus: "completed",
       lastNodeUpdatedAt: "2026-07-07T12:58:22.000Z",
-      member: riskMember,
+      member: alphaMember,
       runId: "run-probe",
       totalSteps: 5,
       workflowName: "weekly_report_five_nodes",
@@ -906,7 +906,7 @@ describe("MissionWallPage", () => {
           durationMs: 1000,
           executionStatus: "completed",
           lastNodeUpdatedAt: "2026-06-30T04:58:36.000Z",
-          member: riskMember,
+          member: alphaMember,
           runId: "run-extract",
           totalSteps: 1,
           workflowName: "Document Extract Run",
@@ -917,7 +917,7 @@ describe("MissionWallPage", () => {
           durationMs: 24_000,
           executionStatus: "completed",
           lastNodeUpdatedAt: "2026-06-30T04:58:40.000Z",
-          member: billingMember,
+          member: betaMember,
           runId: "run-probe",
           totalSteps: 15,
           workflowName: "Mission Wall Probe",
@@ -970,40 +970,40 @@ describe("MissionWallPage", () => {
     (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockResolvedValue(
       workflowBoardSnapshot([
         workflowBoardMember({
-          actorId: "actor-risk-run",
+          actorId: "actor-alpha-run",
           completedSteps: 7,
           currentNodeStatus: "waiting",
           executionStatus: "running",
           lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
-          member: riskMember,
-          runId: "run-risk",
+          member: alphaMember,
+          runId: "run-alpha",
           totalSteps: 8,
-          workflowName: "Live Risk Workflow",
+          workflowName: "Workflow Alpha",
         }),
         workflowBoardMember({
-          actorId: "actor-billing-run",
+          actorId: "actor-beta-run",
           completedSteps: 2,
           executionStatus: "failed",
           lastNodeUpdatedAt: "2026-06-29T21:53:00.000Z",
-          member: billingMember,
-          runId: "run-billing",
+          member: betaMember,
+          runId: "run-beta",
           totalSteps: 3,
-          workflowName: "Billing Workflow",
+          workflowName: "Workflow Beta",
         }),
       ]),
     );
 
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    const riskCard = (await screen.findByText("Live Risk Workflow")).closest(
+    const alphaCard = (await screen.findByText("Workflow Alpha")).closest(
       "button",
     );
-    expect(riskCard).toBeTruthy();
+    expect(alphaCard).toBeTruthy();
 
-    fireEvent.click(riskCard as HTMLButtonElement);
+    fireEvent.click(alphaCard as HTMLButtonElement);
 
     expect(
-      await screen.findByText(/Live Risk Workflow · Step Flow/),
+      await screen.findByText(/Workflow Alpha · Step Flow/),
     ).toBeInTheDocument();
 
     const graph = screen.getByTestId("mission-wall-graph");
@@ -1017,10 +1017,10 @@ describe("MissionWallPage", () => {
   it("keeps published workflow members visible even when their latest run is outside the focus window", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
 
     const list = screen.getByTestId("mission-wall-run-list");
-    expect(within(list).getByText("Billing Workflow")).toBeInTheDocument();
+    expect(within(list).getByText("Workflow Beta")).toBeInTheDocument();
     expect(within(list).getByText("Idle member")).toBeInTheDocument();
     expect(
       screen.getByText("Failed").closest(".mission-wall-metric"),
@@ -1048,20 +1048,20 @@ describe("MissionWallPage", () => {
   it("renders the published run window as one stable manually scrollable list", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
-    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findByText("Workflow Alpha")).toBeInTheDocument();
 
     const viewport = screen.getByTestId("mission-wall-run-window-viewport");
     const list = screen.getByTestId("mission-wall-run-list");
 
     expect(viewport.className).toContain("mission-wall-run-window__viewport");
     expect(list.className).toContain("mission-wall-run-list");
-    expect(within(list).getAllByText("Live Risk Workflow")).toHaveLength(1);
-    expect(within(list).getAllByText("Billing Workflow")).toHaveLength(1);
+    expect(within(list).getAllByText("Workflow Alpha")).toHaveLength(1);
+    expect(within(list).getAllByText("Workflow Beta")).toHaveLength(1);
     expect(within(list).getAllByText("Idle member")).toHaveLength(1);
 
     const cards = within(list).getAllByRole("button");
-    expect(cards[0]).toHaveTextContent("Live Risk Workflow");
-    expect(cards[1]).toHaveTextContent("Billing Workflow");
+    expect(cards[0]).toHaveTextContent("Workflow Alpha");
+    expect(cards[1]).toHaveTextContent("Workflow Beta");
     expect(cards[2]).toHaveTextContent("Idle member");
   });
 });

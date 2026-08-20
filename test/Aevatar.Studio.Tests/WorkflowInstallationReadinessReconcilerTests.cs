@@ -10,6 +10,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Tests;
 
@@ -638,6 +639,7 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
                 string.Empty,
                 "user-alpha",
                 "binding-alpha"),
+            AcceptanceInput: new Struct(),
             OperationId: InstallationId,
             WorkflowInstallationStatus.ProvisioningAccepted,
             "provisioning_accepted",
@@ -684,7 +686,8 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
                 [],
                 new WorkflowDeliveryAcceptancePolicy(
                     WorkflowDeliveryAcceptanceMode.AutomaticPreview,
-                    null),
+                    null,
+                    new WorkflowDeliveryAcceptanceInputRecipe(new Struct(), [])),
                 "admin-alpha",
                 now),
             ScopeId,

@@ -15,7 +15,8 @@ internal static class AutoConsoleCallbackEndpoints
         Assembly: typeof(AutoConsoleCallbackEndpoints).Assembly,
         ResourceSuffix: "BackendConsole.auto-callback.html",
         ContentType: "text/html",
-        InjectHostConfiguration: true);
+        InjectHostConfiguration: true,
+        ConfigurationProfile: BackendConsoleAssetConfigurationProfile.AuthenticationCallback);
 
     public static IEndpointRouteBuilder MapAutoConsoleCallbackEndpoints(this IEndpointRouteBuilder app)
     {

@@ -3,6 +3,7 @@ using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
@@ -18,6 +19,10 @@ public sealed class LocalActor : IActor
     private readonly IStreamProvider _streams;
     private readonly ILogger _logger;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
+    private readonly RuntimeActorIdentity? _identity;
+    private readonly IRuntimeActorStateSchemaContextBinder? _stateSchemaContextBinder;
+    private readonly IRuntimeFleetReconcileDeliveryVerifier? _fleetReconcileVerifier;
+    private readonly IRuntimeFleetReconcileDeliveryAttestationBinder? _fleetReconcileAttestationBinder;
     private Task? _mailboxPump;
     private IAsyncDisposable? _selfSubscription;
     private string? _parentId;
@@ -27,13 +32,21 @@ public sealed class LocalActor : IActor
         string id,
         IStreamProvider streams,
         ILogger logger,
-        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null)
+        IActorDeactivationHookDispatcher? deactivationHookDispatcher = null,
+        RuntimeActorIdentity? identity = null,
+        IRuntimeActorStateSchemaContextBinder? stateSchemaContextBinder = null,
+        IRuntimeFleetReconcileDeliveryVerifier? fleetReconcileVerifier = null,
+        IRuntimeFleetReconcileDeliveryAttestationBinder? fleetReconcileAttestationBinder = null)
     {
         Agent = agent;
         Id = id;
         _streams = streams;
         _logger = logger;
         _deactivationHookDispatcher = deactivationHookDispatcher;
+        _identity = identity?.Clone();
+        _stateSchemaContextBinder = stateSchemaContextBinder;
+        _fleetReconcileVerifier = fleetReconcileVerifier;
+        _fleetReconcileAttestationBinder = fleetReconcileAttestationBinder;
     }
 
     public string Id { get; }
@@ -104,6 +117,7 @@ public sealed class LocalActor : IActor
             // Down/Both events are not handled on self-stream unless forwarded by stream-layer routing.
         }, ct);
 
+        using var schemaContext = BindStateSchemaContext();
         await Agent.ActivateAsync(ct);
     }
 
@@ -113,6 +127,7 @@ public sealed class LocalActor : IActor
         _mailbox.Writer.TryComplete();
         if (_mailboxPump != null)
             await _mailboxPump.WaitAsync(ct);
+        using var schemaContext = BindStateSchemaContext();
         await Agent.DeactivateAsync(ct);
         TriggerDeactivationHook();
     }
@@ -190,6 +205,15 @@ public sealed class LocalActor : IActor
         {
             scope = EventHandleScope.Begin(_logger, Id, item.Envelope, Agent.GetType().FullName ?? Agent.GetType().Name);
             scopeCreated = true;
+            // Verify asynchronously, but bind the attestation synchronously in this frame:
+            // an AsyncLocal assigned inside an awaited helper does not flow back to the
+            // caller, so the actor handler would observe no attestation and fail closed.
+            var reconcileAttestation = await VerifyFleetReconcileAttestationAsync(
+                item.Envelope);
+            using var reconcileAttestationBinding = reconcileAttestation == null
+                ? null
+                : _fleetReconcileAttestationBinder!.Bind(reconcileAttestation);
+            using var schemaContext = BindStateSchemaContext();
             await Agent.HandleEventAsync(item.Envelope);
             item.Completion.SetResult();
         }
@@ -225,5 +249,36 @@ public sealed class LocalActor : IActor
             return;
 
         _ = _deactivationHookDispatcher.DispatchAsync(Id, CancellationToken.None);
+    }
+
+    private IDisposable? BindStateSchemaContext() =>
+        _identity == null ? null : _stateSchemaContextBinder?.Bind(_identity);
+
+    private async Task<RuntimeFleetReconcileDeliveryAttestation?> VerifyFleetReconcileAttestationAsync(
+        EventEnvelope envelope)
+    {
+        if (envelope.Payload?.Is(RuntimeFleetReconcileRequested.Descriptor) != true)
+            return null;
+        if (!string.Equals(
+                Id,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal) ||
+            _fleetReconcileVerifier == null ||
+            _fleetReconcileAttestationBinder == null)
+        {
+            throw new InvalidOperationException(
+                "Runtime fleet reconcile callback reached an invalid runtime ingress.");
+        }
+
+        var attestation = await _fleetReconcileVerifier.VerifyAsync(
+            envelope,
+            CancellationToken.None);
+        if (attestation == null)
+        {
+            throw new InvalidOperationException(
+                "Runtime fleet reconcile callback delivery is not current in scheduler-owned state.");
+        }
+
+        return attestation;
     }
 }

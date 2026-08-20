@@ -123,6 +123,7 @@ public sealed class AevatarInvocationToolSourceTests
             .GetProperty("properties")
             .GetProperty("workflow_id");
         workflowId.GetProperty("description").GetString().Should().Contain("Never guess");
+        doc.RootElement.GetProperty("properties").TryGetProperty("actor_id", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -855,7 +856,7 @@ public sealed class AevatarInvocationToolSourceTests
                       "source_kind": 3,
                       "source_message_id": "om_lark_1",
                       "source_resource_key": "file_key_1",
-                      "file_name": "invoice.pdf",
+                      "file_name": "document.pdf",
                       "media_type": "application/pdf",
                       "size_bytes": 1234
                     }
@@ -902,7 +903,7 @@ public sealed class AevatarInvocationToolSourceTests
         fileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
         fileRef.SourceMessageId.Should().Be("om_lark_1");
         fileRef.SourceResourceKey.Should().Be("file_key_1");
-        fileRef.FileName.Should().Be("invoice.pdf");
+        fileRef.FileName.Should().Be("document.pdf");
         fileRef.MediaType.Should().Be("application/pdf");
         fileRef.SizeBytes.Should().Be(1234);
         harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
@@ -950,7 +951,7 @@ public sealed class AevatarInvocationToolSourceTests
             {
               "team_id": "team-1",
               "endpoint_id": "chat",
-              "payload": { "prompt": "process ambient invoice" },
+              "payload": { "prompt": "process ambient document" },
               "wait": "stream"
             }
             """);
@@ -1015,7 +1016,7 @@ public sealed class AevatarInvocationToolSourceTests
             """
             {
               "member_id": "m-alpha",
-              "payload": { "prompt": "process ambient invoice" },
+              "payload": { "prompt": "process ambient document" },
               "wait": "stream"
             }
             """);
@@ -1091,7 +1092,7 @@ public sealed class AevatarInvocationToolSourceTests
                 "team_id": "team-1",
                 "endpoint_id": "chat",
                 "payload": {
-                  "prompt": "process explicit invoice",
+                  "prompt": "process explicit document",
                   "input_parts": [
                     {
                       "kind": "file",
@@ -1112,7 +1113,7 @@ public sealed class AevatarInvocationToolSourceTests
               {
                 "member_id": "m-alpha",
                 "payload": {
-                  "prompt": "process explicit invoice",
+                  "prompt": "process explicit document",
                   "input_parts": [
                     {
                       "kind": "file",
@@ -1431,7 +1432,7 @@ public sealed class AevatarInvocationToolSourceTests
                       "source_kind": 3,
                       "source_message_id": "om_static_1",
                       "source_resource_key": "file_key_static_1",
-                      "file_name": "invoice.pdf",
+                      "file_name": "document.pdf",
                       "media_type": "application/pdf",
                       "size_bytes": 1234
                     }
@@ -1457,7 +1458,7 @@ public sealed class AevatarInvocationToolSourceTests
         inputPart.FileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
         inputPart.FileRef.SourceMessageId.Should().Be("om_static_1");
         inputPart.FileRef.SourceResourceKey.Should().Be("file_key_static_1");
-        inputPart.FileRef.FileName.Should().Be("invoice.pdf");
+        inputPart.FileRef.FileName.Should().Be("document.pdf");
         inputPart.FileRef.MediaType.Should().Be("application/pdf");
         inputPart.FileRef.SizeBytes.Should().Be(1234);
         harness.WorkflowDispatch.Command.Should().BeNull();
@@ -1828,7 +1829,7 @@ public sealed class AevatarInvocationToolSourceTests
                       "source_kind": "chat_file_source_kind_connected_service_resource",
                       "source_message_id": "om_lark_1",
                       "source_resource_key": "file_key_1",
-                      "file_name": "invoice.pdf",
+                      "file_name": "document.pdf",
                       "media_type": "application/pdf",
                       "size_bytes": 1234
                     }
@@ -1857,7 +1858,7 @@ public sealed class AevatarInvocationToolSourceTests
         fileRef.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
         fileRef.SourceMessageId.Should().Be("om_lark_1");
         fileRef.SourceResourceKey.Should().Be("file_key_1");
-        fileRef.FileName.Should().Be("invoice.pdf");
+        fileRef.FileName.Should().Be("document.pdf");
         fileRef.MediaType.Should().Be("application/pdf");
         fileRef.SizeBytes.Should().Be(1234);
         harness.WorkflowDispatch.Command.Metadata.Should().Contain("x-workflow", "yes");
@@ -2122,16 +2123,16 @@ public sealed class AevatarInvocationToolSourceTests
         harness.ScopeWorkflowQuery.Workflows["98a81d707d4f4294b9b06f61a9fa8ac0"] = new ScopeWorkflowSummary(
             "scope-1",
             "98a81d707d4f4294b9b06f61a9fa8ac0",
-            "Invoice PDF Workflow",
+            "Document Workflow",
             "scope-1:aevatar:workflows:98a81d707d4f4294b9b06f61a9fa8ac0",
-            "invoice_pdf_workflow",
+            "document_workflow",
             "workflow-definition-actor-98a81d707d4f4294b9b06f61a9fa8ac0",
             "revision-1",
             "deployment-1",
             "Active",
             DateTimeOffset.UtcNow);
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
-            .Success(new WorkflowChatRunAcceptedReceipt("workflow-run-actor", "invoice_pdf_workflow", "wf-command", "wf-correlation"));
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-run-actor", "document_workflow", "wf-command", "wf-correlation"));
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
 
         using var _ = PushContext(callId: "call-scope-workflow");
@@ -2150,7 +2151,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
         harness.WorkflowDispatch.Command.Source.ActorId.Should()
             .Be("workflow-definition-actor-98a81d707d4f4294b9b06f61a9fa8ac0");
-        harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("invoice_pdf_workflow");
+        harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("document_workflow");
     }
 
     [Fact]
@@ -2162,18 +2163,18 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(callId: "call-scope-workflow-missing");
         var output = await tool.ExecuteAsync("""
             {
-              "workflow_id": "invoice-pdf-extraction-workflow",
+              "workflow_id": "document-file-extraction-workflow",
               "inputs": { "prompt": "process pdf" },
               "wait": "stream"
             }
             """);
 
         ErrorCode(output).Should().Be("scope_workflow_not_found");
-        ErrorMessage(output).Should().Contain("invoice-pdf-extraction-workflow");
+        ErrorMessage(output).Should().Contain("document-file-extraction-workflow");
         ErrorMessage(output).Should().Contain("scope-1");
         ErrorMessage(output).Should().Contain("service_catalog_missing");
         harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
-            .Which.Should().Be(("scope-1", "invoice-pdf-extraction-workflow"));
+            .Which.Should().Be(("scope-1", "document-file-extraction-workflow"));
         harness.WorkflowDispatch.Command.Should().BeNull();
     }
 
@@ -2187,17 +2188,17 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(callId: "call-scope-workflow-lookup-failed");
         var output = await tool.ExecuteAsync("""
             {
-              "workflow_id": "invoice-pdf-extraction-workflow",
+              "workflow_id": "document-file-extraction-workflow",
               "inputs": { "prompt": "process pdf" },
               "wait": "stream"
             }
             """);
 
         ErrorCode(output).Should().Be("scope_workflow_lookup_failed");
-        ErrorMessage(output).Should().Contain("invoice-pdf-extraction-workflow");
+        ErrorMessage(output).Should().Contain("document-file-extraction-workflow");
         ErrorMessage(output).Should().Contain("scope-1");
         harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
-            .Which.Should().Be(("scope-1", "invoice-pdf-extraction-workflow"));
+            .Which.Should().Be(("scope-1", "document-file-extraction-workflow"));
         harness.WorkflowDispatch.Command.Should().BeNull();
     }
 
@@ -3429,7 +3430,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task aevatar_start_workflow_with_actor_id_and_wait_ack_reserves_channel_delivery()
+    public async Task StartWorkflow_LegacyActorIdCannotOverrideScopeWorkflowTarget()
     {
         var harness = new Harness();
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
@@ -3449,7 +3450,9 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
-        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor");
+        harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
+            .Which.Should().Be(("scope-1", "wf-main"));
+        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor-wf-main");
         harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.CommandIdSeed.Should().Be("call-workflow-actor");
         harness.WorkflowDispatch.Command.CorrelationIdSeed.Should().Be("request-1");
@@ -3471,7 +3474,6 @@ public sealed class AevatarInvocationToolSourceTests
         var output = await tool.ExecuteAsync("""
             {
               "workflow_id": " wf-main ",
-              "actor_id": " workflow-definition-actor ",
               "workflow_yamls": [
                 "  name: first\nsteps: []  ",
                 "   ",
@@ -3488,7 +3490,7 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
-        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor");
+        harness.WorkflowDispatch.Command.Source.ActorId.Should().BeNull();
         harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.Source.WorkflowYamls.Should().Equal(
             "name: first\nsteps: []",
@@ -3776,15 +3778,6 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Theory]
-    [InlineData(
-        """
-        {
-          "workflow_id": "child-flow",
-          "actor_id": "definition-actor",
-          "inputs": { "prompt": "run child" }
-        }
-        """,
-        "actor_id")]
     [InlineData(
         """
         {
@@ -4413,7 +4406,7 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowQuery.Report = new WorkflowRunReport
         {
             RootActorId = "workflow-run-actor",
-            WorkflowName = "invoice-pdf-extraction-workflow",
+            WorkflowName = "document-file-extraction-workflow",
             CommandId = "run-1",
             CompletionStatus = WorkflowRunCompletionStatus.Completed,
             StateVersion = 17,

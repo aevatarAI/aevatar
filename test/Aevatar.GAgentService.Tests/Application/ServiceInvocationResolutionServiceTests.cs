@@ -371,8 +371,8 @@ public sealed class ServiceInvocationResolutionServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
-                    WorkflowName = "invoice_file_extract",
-                    WorkflowYaml = "name: invoice_file_extract\nsteps: []",
+                    WorkflowName = "document_file_extract",
+                    WorkflowYaml = "name: document_file_extract\nsteps: []",
                     ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                     CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                     {

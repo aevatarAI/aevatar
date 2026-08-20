@@ -428,129 +428,6 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         enabled.ReportReader.GetCalls.Should().Be(1);
     }
 
-    [Fact]
-    public async Task ArtifactQueryPort_WhenEnabled_ShouldForwardGraphOptionsToGraphStore()
-    {
-        var now = DateTimeOffset.UtcNow;
-        var harness = CreateHarness(
-            new WorkflowExecutionProjectionOptions
-            {
-                Enabled = true,
-                WorkflowArtifactQueryEnabled = true,
-            },
-            graphStore: new RecordingProjectionGraphStore
-            {
-                GraphEdgesResult =
-                [
-                    new ProjectionGraphEdge
-                    {
-                        Scope = WorkflowExecutionGraphConstants.Scope,
-                        EdgeId = "edge-1",
-                        FromNodeId = "actor-1",
-                        ToNodeId = "actor-2",
-                        EdgeType = "CHILD_OF",
-                        UpdatedAt = now,
-                    },
-                ],
-                GraphSubgraphResult = new ProjectionGraphSubgraph
-                {
-                    Nodes =
-                    [
-                        new ProjectionGraphNode
-                        {
-                            Scope = WorkflowExecutionGraphConstants.Scope,
-                            NodeId = "actor-1",
-                            NodeType = "Actor",
-                        },
-                        new ProjectionGraphNode
-                        {
-                            Scope = WorkflowExecutionGraphConstants.Scope,
-                            NodeId = "run:actor-1:cmd-1",
-                            NodeType = WorkflowExecutionGraphConstants.RunNodeType,
-                            Properties = new Dictionary<string, string>(StringComparer.Ordinal)
-                            {
-                                [WorkflowExecutionGraphConstants.RootActorIdPropertyKey] = "actor-1",
-                                [WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey] = "12",
-                            },
-                        },
-                    ],
-                },
-            },
-            reportReader: new RecordingDocumentReader<WorkflowRunInsightReportDocument>
-            {
-                Item = new WorkflowRunInsightReportDocument
-                {
-                    Id = "actor-1",
-                    StateVersion = 12,
-                },
-            },
-            currentStateReader: new RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>
-            {
-                Item = new WorkflowExecutionCurrentStateDocument
-                {
-                    Id = "actor-1",
-                    RootActorId = "actor-1",
-                    StateVersion = 12,
-                    LastEventId = "evt-12",
-                    UpdatedAt = now,
-                    WorkflowName = "wf",
-                },
-            });
-
-        var options = new WorkflowRunGraphExportQueryOptions
-        {
-            Direction = WorkflowRunGraphExportDirection.Inbound,
-            EdgeTypes = ["CHILD_OF"],
-        };
-
-        var edges = await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("actor-1", take: 7, options: options);
-        var subgraph = await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1", depth: 4, take: 11, options: options);
-
-        edges.Should().ContainSingle(x => x.EdgeId == "edge-1");
-        subgraph.RootNodeId.Should().Be("actor-1");
-        subgraph.SourceStateVersion.Should().Be(12);
-
-        harness.GraphStore.LastGraphEdgesQuery.Should().NotBeNull();
-        harness.GraphStore.LastGraphEdgesQuery!.RootNodeId.Should().Be("actor-1");
-        harness.GraphStore.LastGraphEdgesQuery.Take.Should().Be(7);
-        harness.GraphStore.LastGraphEdgesQuery.Direction.Should().Be(ProjectionGraphDirection.Inbound);
-        harness.GraphStore.LastGraphEdgesQuery.EdgeTypes.Should().Equal("CHILD_OF");
-
-        harness.GraphStore.LastSubgraphQuery.Should().NotBeNull();
-        harness.GraphStore.LastSubgraphQuery!.RootNodeId.Should().Be("actor-1");
-        harness.GraphStore.LastSubgraphQuery.Depth.Should().Be(4);
-        harness.GraphStore.LastSubgraphQuery.Take.Should().Be(11);
-    }
-
-    [Fact]
-    public async Task ArtifactQueryPort_ShouldNormalizeBlankEdgeTypes_AndDefaultDirectionToBoth()
-    {
-        var harness = CreateHarness(new WorkflowExecutionProjectionOptions
-        {
-            Enabled = true,
-            WorkflowArtifactQueryEnabled = true,
-        });
-
-        var options = new WorkflowRunGraphExportQueryOptions
-        {
-            Direction = (WorkflowRunGraphExportDirection)99,
-            EdgeTypes = [" CHILD_OF ", "", "CHILD_OF", "  ", "OWNS"],
-        };
-
-        await harness.ArtifactPort.GetWorkflowRunGraphExportEdgesAsync("actor-1", take: 0, options: options);
-        await harness.ArtifactPort.GetWorkflowRunGraphExportSubgraphAsync("actor-1", depth: 99, take: 5001, options: options);
-
-        harness.GraphStore.LastGraphEdgesQuery.Should().NotBeNull();
-        harness.GraphStore.LastGraphEdgesQuery!.Direction.Should().Be(ProjectionGraphDirection.Both);
-        harness.GraphStore.LastGraphEdgesQuery.EdgeTypes.Should().Equal("CHILD_OF", "OWNS");
-        harness.GraphStore.LastGraphEdgesQuery.Take.Should().Be(1);
-
-        harness.GraphStore.LastSubgraphQuery.Should().NotBeNull();
-        harness.GraphStore.LastSubgraphQuery!.Direction.Should().Be(ProjectionGraphDirection.Both);
-        harness.GraphStore.LastSubgraphQuery.Depth.Should().Be(8);
-        harness.GraphStore.LastSubgraphQuery.Take.Should().Be(2000);
-    }
-
     private static QueryPortHarness CreateHarness(
         WorkflowExecutionProjectionOptions options,
         RecordingDocumentReader<WorkflowExecutionCurrentStateDocument>? currentStateReader = null,
@@ -568,7 +445,6 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             new WorkflowExecutionArtifactQueryPort(
                 reportReader,
                 new WorkflowExecutionReadModelMapper(),
-                graphStore,
                 options),
             currentStateReader,
             reportReader,

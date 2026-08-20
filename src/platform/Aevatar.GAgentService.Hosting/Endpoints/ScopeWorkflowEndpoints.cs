@@ -515,7 +515,7 @@ public static class ScopeWorkflowEndpoints
                 return Results.BadRequest(new
                 {
                     code = "INVALID_WORKFLOW_CATALOGUE_REQUEST",
-                    message = "view must be either 'all' or 'drafts'.",
+                    message = "view must be either 'all', 'drafts', or 'archived'.",
                 });
             }
 
@@ -739,22 +739,6 @@ public static class ScopeWorkflowEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(request);
 
-        var started = false;
-
-        async Task StartAsync(CancellationToken token)
-        {
-            if (started)
-                return;
-
-            started = true;
-            http.Response.StatusCode = StatusCodes.Status200OK;
-            http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-            http.Response.Headers.CacheControl = "no-store";
-            http.Response.Headers.Pragma = "no-cache";
-            http.Response.Headers["X-Accel-Buffering"] = "no";
-            await http.Response.StartAsync(token);
-        }
-
         await using var writer = new AGUISseWriter(http.Response, ScopeWorkflowAguiEventMapper.TypeRegistry);
 
         try
@@ -766,7 +750,7 @@ public static class ScopeWorkflowEndpoints
                     if (!ScopeWorkflowAguiEventMapper.TryMap(frame, out var aguiEvent) || aguiEvent == null)
                         return;
 
-                    await StartAsync(token);
+                    await writer.StartAsync(token);
                     await writer.WriteAsync(aguiEvent, token);
                 },
                 async (receipt, token) =>
@@ -774,12 +758,12 @@ public static class ScopeWorkflowEndpoints
                     if (!string.IsNullOrWhiteSpace(receipt.Run.CorrelationId))
                         http.Response.Headers["X-Correlation-Id"] = receipt.Run.CorrelationId;
 
-                    await StartAsync(token);
+                    await writer.StartAsync(token);
                     await writer.WriteAsync(ScopeWorkflowAguiEventMapper.BuildRunContextEvent(receipt.Run), token);
                 },
                 ct);
 
-            if (!result.Succeeded && !started)
+            if (!result.Succeeded && !writer.ResponseStarted)
             {
                 if (result.FailureDetail?.ExternalCapabilityReadiness is not null)
                 {
@@ -800,7 +784,7 @@ public static class ScopeWorkflowEndpoints
         }
         catch (Exception ex)
         {
-            if (!started)
+            if (!writer.ResponseStarted)
             {
                 await WriteJsonErrorResponseAsync(
                     http,
@@ -950,6 +934,12 @@ public static class ScopeWorkflowEndpoints
         if (string.Equals(rawValue, "drafts", StringComparison.OrdinalIgnoreCase))
         {
             view = ScopeWorkflowCatalogueView.Drafts;
+            return true;
+        }
+
+        if (string.Equals(rawValue, "archived", StringComparison.OrdinalIgnoreCase))
+        {
+            view = ScopeWorkflowCatalogueView.Archived;
             return true;
         }
 

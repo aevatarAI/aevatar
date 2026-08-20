@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Delivery;
 using Aevatar.Studio.Application.Provisioning;
@@ -8,7 +7,10 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using ApplicationAcceptanceDateProjection = Aevatar.Studio.Application.Studio.Abstractions.WorkflowDeliveryAcceptanceDateProjection;
+using ProtobufValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Studio.Tests;
 
@@ -35,13 +37,8 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         request.CapabilityAdmission.NyxIdCallerCredential.Should().NotBeNull();
         request.ProvisioningBearerToken.Should().Be("token-alpha");
         request.ScheduleOperationId.Should().Be("installation-alpha:provision:a2");
-        request.Prompt.Should().NotBeNullOrWhiteSpace();
-        using (var prompt = JsonDocument.Parse(request.Prompt))
-        {
-            prompt.RootElement.GetProperty("period_label").GetString().Should().Be("2026-W33");
-            prompt.RootElement.GetProperty("run_date").GetString().Should().Be("2026-08-16");
-            prompt.RootElement.GetProperty("submit").GetBoolean().Should().BeFalse();
-        }
+        request.Prompt.Should().BeNull();
+        request.AcceptanceInput.Should().BeEquivalentTo(delivery.Installation!.AcceptanceInput);
         commands.ProvisioningAccepted.Should().ContainSingle();
         commands.ProvisioningAccepted[0].Attempt.Should().Be(2);
         commands.ProvisioningAccepted[0].OperationId.Should().Be("installation-alpha:provision:a2");
@@ -250,76 +247,136 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         commands.Failed.Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData(WorkflowDeliveryAcceptancePolicies.BudgetVarianceMonitor)]
-    [InlineData(WorkflowDeliveryAcceptancePolicies.AttendanceFillReminder)]
-    [InlineData(WorkflowDeliveryAcceptancePolicies.MonthlyAttendanceApproval)]
-    public async Task ExecuteAsync_WhenPackageSupportsAutomaticAcceptance_ShouldUsePackageSpecificPreviewInput(
-        string workflowName)
+    [Fact]
+    public async Task ExecuteAsync_WhenPackageSupportsAutomaticAcceptance_ShouldForwardTypedPackageInput()
     {
         var provisioning = new RecordingProvisioningService();
         var executor = NewExecutor(
             provisioning,
             new RecordingCommandPort(),
             new RecordingAccessTokenProvider());
-        var delivery = Delivery(
-            WorkflowInstallationStatus.Accepted,
-            workflowName: workflowName);
+        var delivery = Delivery(WorkflowInstallationStatus.Accepted);
 
         var result = await executor.ExecuteAsync(delivery, "worker-alpha");
 
         result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.ProvisioningAccepted);
         var request = provisioning.Requests.Should().ContainSingle().Which;
-        request.Prompt.Should().NotBeNullOrWhiteSpace();
-        using var prompt = JsonDocument.Parse(request.Prompt);
-        var root = prompt.RootElement;
-        root.GetProperty("submit").GetBoolean().Should().BeFalse();
-        switch (workflowName)
+        request.Prompt.Should().BeNull();
+        request.AcceptanceInput!.Fields["dry_run"].BoolValue.Should().BeTrue();
+        request.AcceptanceInput.Fields["limit"].NumberValue.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLegacyPackageHasNoAcceptanceInput_ShouldRequireMigration()
+    {
+        var provisioning = new RecordingProvisioningService();
+        var commands = new RecordingCommandPort();
+        var tokens = new RecordingAccessTokenProvider();
+        var executor = NewExecutor(
+            provisioning,
+            commands,
+            tokens);
+        var delivery = Delivery(WorkflowInstallationStatus.Accepted);
+        delivery = delivery with
         {
-            case WorkflowDeliveryAcceptancePolicies.BudgetVarianceMonitor:
-                root.GetProperty("period_label").GetString().Should().Be("2026-W33");
-                root.GetProperty("run_date").GetString().Should().Be("2026-08-16");
-                break;
-            case WorkflowDeliveryAcceptancePolicies.AttendanceFillReminder:
-                root.GetProperty("period_label").GetString().Should().Be("2026-08");
-                root.GetProperty("days_left").GetString().Should().Be("0");
-                break;
-            case WorkflowDeliveryAcceptancePolicies.MonthlyAttendanceApproval:
-                root.GetProperty("period_label").GetString().Should().Be("2026-08");
-                root.GetProperty("run_date").GetString().Should().Be("2026-08-16");
-                root.GetProperty("month_end_only").GetBoolean().Should().BeFalse();
-                break;
-        }
+            Package = delivery.Package with
+            {
+                AcceptancePolicy = delivery.Package.AcceptancePolicy with
+                {
+                    Input = new WorkflowDeliveryAcceptanceInputRecipe(new Struct(), []),
+                    InputDeclared = false,
+                },
+            },
+        };
+
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
+
+        result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.Failed);
+        result.ErrorCode.Should().Be("DELIVERY_ACCEPTANCE_INPUT_MIGRATION_REQUIRED");
+        provisioning.Requests.Should().BeEmpty();
+        tokens.Authorities.Should().BeEmpty();
+        var failed = commands.Failed.Should().ContainSingle().Which;
+        failed.ErrorCode.Should().Be("DELIVERY_ACCEPTANCE_INPUT_MIGRATION_REQUIRED");
+        failed.ErrorMessage.Should().Contain("revoked");
+        failed.ErrorMessage.Should().Contain("recreated");
+        failed.ErrorMessage.Should().Contain("reinstall");
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenOnboardingPackageIsAccepted_ShouldUseDurableOwnerInSafeInlinePreviewInput()
+    public async Task ExecuteAsync_WhenInstallationHasNoCommittedAcceptanceInput_ShouldRequireMigration()
+    {
+        var provisioning = new RecordingProvisioningService();
+        var commands = new RecordingCommandPort();
+        var tokens = new RecordingAccessTokenProvider();
+        var executor = NewExecutor(provisioning, commands, tokens);
+        var delivery = Delivery(WorkflowInstallationStatus.Accepted);
+        delivery = delivery with
+        {
+            Installation = delivery.Installation! with { AcceptanceInput = null },
+        };
+
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
+
+        result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.Failed);
+        result.ErrorCode.Should().Be("DELIVERY_ACCEPTANCE_INPUT_MIGRATION_REQUIRED");
+        provisioning.Requests.Should().BeEmpty();
+        tokens.Authorities.Should().BeEmpty();
+        var failed = commands.Failed.Should().ContainSingle().Which;
+        failed.ErrorCode.Should().Be("DELIVERY_ACCEPTANCE_INPUT_MIGRATION_REQUIRED");
+        failed.ErrorMessage.Should().Contain("revoked");
+        failed.ErrorMessage.Should().Contain("recreated");
+        failed.ErrorMessage.Should().Contain("reinstall");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldForwardCommittedInputWithoutReevaluatingPackageRecipe()
     {
         var provisioning = new RecordingProvisioningService();
         var executor = NewExecutor(
             provisioning,
             new RecordingCommandPort(),
             new RecordingAccessTokenProvider());
+        var committed = new Struct
+        {
+            Fields =
+            {
+                ["reference"] = ProtobufValue.ForString("run-20261231"),
+            },
+        };
         var delivery = Delivery(
             WorkflowInstallationStatus.Accepted,
-            workflowName: WorkflowDeliveryAcceptancePolicies.OnboardingEmailApproval);
+            acceptanceInput: committed);
+        delivery = delivery with
+        {
+            Package = delivery.Package with
+            {
+                AcceptancePolicy = delivery.Package.AcceptancePolicy with
+                {
+                    Input = new WorkflowDeliveryAcceptanceInputRecipe(
+                        new Struct(),
+                        [
+                            new WorkflowDeliveryAcceptanceInputBinding(
+                                "reference",
+                                "changed-",
+                                string.Empty,
+                                new WorkflowDeliveryInstallationCreatedAtUtcInput(
+                                    ApplicationAcceptanceDateProjection.UtcDate,
+                                    1)),
+                        ]),
+                },
+            },
+        };
 
-        await executor.ExecuteAsync(delivery, "worker-alpha");
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
 
+        result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.ProvisioningAccepted);
         var request = provisioning.Requests.Should().ContainSingle().Which;
-        using var prompt = JsonDocument.Parse(request.Prompt);
-        var root = prompt.RootElement;
-        root.GetProperty("lark_name").GetString().Should().Be("Aevatar Delivery Preview");
-        root.GetProperty("department").GetString().Should().Be("Workflow Delivery");
-        root.GetProperty("email_username").GetString().Should().Be("aevatar.delivery.preview.20260816");
-        root.GetProperty("operator_id").GetString().Should().Be("user-alpha");
-        root.GetProperty("run_date").GetString().Should().Be("2026-08-16");
-        root.GetProperty("onboarding_date").GetString().Should().Be("2026-08-23");
-        root.GetProperty("submit").GetBoolean().Should().BeFalse();
+        request.AcceptanceInput.Should().BeEquivalentTo(committed);
+        request.AcceptanceInput.Should().NotBeSameAs(delivery.Installation!.AcceptanceInput);
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenInvoiceIsPublishedWithoutAutomaticRun_ShouldKeepSafePreviewInput()
+    public async Task ExecuteAsync_WhenRecipeWasExplicitlyEmpty_ShouldForwardEmptyInput()
     {
         var provisioning = new RecordingProvisioningService();
         var executor = NewExecutor(
@@ -328,7 +385,26 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             new RecordingAccessTokenProvider());
         var delivery = Delivery(
             WorkflowInstallationStatus.Accepted,
-            workflowName: WorkflowDeliveryAcceptancePolicies.InvoicePrecheckApproval);
+            acceptanceInput: new Struct());
+
+        var result = await executor.ExecuteAsync(delivery, "worker-alpha");
+
+        result.Status.Should().Be(WorkflowDeliveryProvisioningExecutionStatus.ProvisioningAccepted);
+        provisioning.Requests.Should().ContainSingle().Which.AcceptanceInput!.Fields.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenManualPackageIsPublishedWithoutAutomaticRun_ShouldForwardTypedInput()
+    {
+        var provisioning = new RecordingProvisioningService();
+        var executor = NewExecutor(
+            provisioning,
+            new RecordingCommandPort(),
+            new RecordingAccessTokenProvider());
+        var delivery = Delivery(
+            WorkflowInstallationStatus.Accepted,
+            acceptanceMode: WorkflowDeliveryAcceptanceMode.Manual,
+            acceptanceLimitation: "An external acceptance run is required.");
         delivery = delivery with
         {
             Installation = delivery.Installation! with
@@ -347,16 +423,15 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         var request = provisioning.Requests.Should().ContainSingle().Which;
         request.RunImmediately.Should().BeFalse();
         request.Cron.Should().BeNull();
-        using var prompt = JsonDocument.Parse(request.Prompt);
-        prompt.RootElement.GetProperty("run_date").GetString().Should().Be("2026-08-16");
-        prompt.RootElement.GetProperty("submit").GetBoolean().Should().BeFalse();
+        request.Prompt.Should().BeNull();
+        request.AcceptanceInput.Should().BeEquivalentTo(delivery.Installation!.AcceptanceInput);
     }
 
     [Theory]
-    [InlineData(WorkflowDeliveryAcceptancePolicies.InvoicePrecheckApproval, "AUTOMATIC_ACCEPTANCE_UNSUPPORTED")]
-    [InlineData("unknown_delivery_workflow", "UNSUPPORTED_DELIVERY_PACKAGE")]
-    public async Task ExecuteAsync_WhenPackageCannotRunAutomaticAcceptance_ShouldFailClosed(
-        string workflowName,
+    [InlineData(WorkflowDeliveryAcceptanceMode.Manual, "AUTOMATIC_ACCEPTANCE_UNSUPPORTED")]
+    [InlineData(WorkflowDeliveryAcceptanceMode.Unspecified, "UNSUPPORTED_DELIVERY_PACKAGE")]
+    public async Task ExecuteAsync_WhenPolicyCannotRunAutomaticAcceptance_ShouldFailClosed(
+        WorkflowDeliveryAcceptanceMode acceptanceMode,
         string expectedCode)
     {
         var provisioning = new RecordingProvisioningService();
@@ -365,7 +440,10 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         var executor = NewExecutor(provisioning, commands, tokens);
         var delivery = Delivery(
             WorkflowInstallationStatus.Accepted,
-            workflowName: workflowName);
+            acceptanceMode: acceptanceMode,
+            acceptanceLimitation: acceptanceMode == WorkflowDeliveryAcceptanceMode.Manual
+                ? "An external acceptance run is required."
+                : null);
 
         var result = await executor.ExecuteAsync(delivery, "worker-alpha");
 
@@ -391,7 +469,10 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
         WorkflowInstallationStatus status,
         int attempt = 1,
         string? pageSuffix = null,
-        string workflowName = WorkflowDeliveryAcceptancePolicies.BudgetVarianceMonitor,
+        string workflowName = "workflow-alpha",
+        WorkflowDeliveryAcceptanceMode acceptanceMode = WorkflowDeliveryAcceptanceMode.AutomaticPreview,
+        string? acceptanceLimitation = null,
+        Struct? acceptanceInput = null,
         bool includeContinuationClaim = true,
         string claimantId = "worker-alpha",
         DateTimeOffset? claimAtUtc = null,
@@ -438,6 +519,7 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             [],
             plan,
             owner,
+            acceptanceInput?.Clone() ?? DefaultAcceptanceInput(),
             operationId,
             status,
             status == WorkflowInstallationStatus.Accepted ? "accepted" : "provisioning_accepted",
@@ -484,7 +566,12 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
                 [],
                 string.Empty,
                 [],
-                WorkflowDeliveryAcceptancePolicies.Resolve(workflowName),
+                new WorkflowDeliveryAcceptancePolicy(
+                    acceptanceMode,
+                    acceptanceLimitation,
+                    new WorkflowDeliveryAcceptanceInputRecipe(
+                        acceptanceInput?.Clone() ?? DefaultAcceptanceInput(),
+                        [])),
                 "admin-alpha",
                 now),
             "scope-alpha",
@@ -501,6 +588,16 @@ public sealed class WorkflowDeliveryProvisioningExecutorTests
             4,
             now);
     }
+
+    private static Struct DefaultAcceptanceInput() =>
+        new()
+        {
+            Fields =
+            {
+                ["dry_run"] = ProtobufValue.ForBool(true),
+                ["limit"] = ProtobufValue.ForNumber(5),
+            },
+        };
 
     private static WorkflowDeliverySnapshot RetriedDelivery(WorkflowDeliveryTriggerKind triggerKind)
     {

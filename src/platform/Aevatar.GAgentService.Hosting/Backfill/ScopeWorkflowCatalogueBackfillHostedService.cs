@@ -96,6 +96,7 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundSe
 
         var existingDraftSourcesByScope = BuildExistingSourcesByScope(catalogueSources, ScopeWorkflowCatalogueSourceDocument.DraftSourceKind);
         var existingServiceSourcesByScope = BuildExistingSourcesByScope(catalogueSources, ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind);
+        var currentServiceSourcesById = BuildExistingSourcesById(catalogueSources, ScopeWorkflowCatalogueSourceDocument.ServiceSourceKind);
         var currentDraftSourceIds = new HashSet<string>(StringComparer.Ordinal);
         var currentServiceSourceIds = new HashSet<string>(StringComparer.Ordinal);
         var draftCleanupAuthorities = new Dictionary<string, DraftCleanupAuthority>(StringComparer.Ordinal);
@@ -113,11 +114,11 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundSe
             }
 
             if (!deploymentCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var deploymentCatalog) ||
-                ResolveDeployment(serviceCatalog, deploymentCatalog) is not { } deployment ||
+                ResolveCatalogueVisibleDeployment(serviceCatalog, deploymentCatalog) is not { } catalogueVisibleDeployment ||
                 !revisionCatalogsByServiceKey.TryGetValue(serviceCatalog.Id, out var revisionCatalog) ||
                 !TryResolveWorkflowRevision(
                     revisionCatalog,
-                    deployment.RevisionId,
+                    catalogueVisibleDeployment.RevisionId,
                     serviceCatalog.ServiceId,
                     out var revision,
                     out var workflowId))
@@ -125,9 +126,18 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundSe
                 continue;
             }
 
-            var serviceSource = ToServiceSource(serviceCatalog, deploymentCatalog, revision, deployment, workflowId);
+            var serviceSource = ToServiceSource(serviceCatalog, deploymentCatalog, revision, catalogueVisibleDeployment, workflowId);
+            var existingServiceSource = await ResolveKnownServiceSourceAsync(
+                currentServiceSourcesById,
+                serviceSource.Id,
+                cancellationToken);
+            serviceSource = PrepareServiceSource(serviceSource, existingServiceSource);
             currentServiceSourceIds.Add(serviceSource.Id);
+            if (ShouldSkipDeactivatedServiceSource(existingServiceSource, serviceSource))
+                continue;
+
             await _catalogueWriteDispatcher.UpsertAsync(serviceSource, cancellationToken);
+            currentServiceSourcesById[serviceSource.Id] = serviceSource;
             await RefreshRowAsync(
                 serviceCatalog.TenantId,
                 workflowId,
@@ -246,6 +256,59 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundSe
             .GroupBy(static source => source.ScopeId, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.ToArray(), StringComparer.Ordinal);
 
+    private static Dictionary<string, ScopeWorkflowCatalogueSourceDocument> BuildExistingSourcesById(
+        IReadOnlyList<ScopeWorkflowCatalogueSourceDocument> catalogueSources,
+        string sourceKind) =>
+        catalogueSources
+            .Where(source => string.Equals(source.SourceKind, sourceKind, StringComparison.Ordinal) &&
+                             !string.IsNullOrWhiteSpace(source.Id))
+            .GroupBy(static source => source.Id, StringComparer.Ordinal)
+            .ToDictionary(static group => group.Key, static group => group.Last(), StringComparer.Ordinal);
+
+    private async Task<ScopeWorkflowCatalogueSourceDocument?> ResolveKnownServiceSourceAsync(
+        IReadOnlyDictionary<string, ScopeWorkflowCatalogueSourceDocument> currentServiceSourcesById,
+        string sourceId,
+        CancellationToken ct)
+    {
+        currentServiceSourcesById.TryGetValue(sourceId, out var trackedSource);
+        var storedSource = await _catalogueSourceReader.GetAsync(sourceId, ct);
+        if (trackedSource == null)
+            return storedSource;
+
+        if (storedSource == null)
+            return trackedSource;
+
+        return storedSource.StateVersion > trackedSource.StateVersion ? storedSource : trackedSource;
+    }
+
+    private static ScopeWorkflowCatalogueSourceDocument PrepareServiceSource(
+        ScopeWorkflowCatalogueSourceDocument candidate,
+        ScopeWorkflowCatalogueSourceDocument? existingSource)
+    {
+        if (existingSource == null ||
+            !string.Equals(candidate.DeploymentStatus, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal) ||
+            !string.Equals(existingSource.DeploymentStatus, ServiceDeploymentStatus.Deactivated.ToString(), StringComparison.Ordinal) ||
+            string.Equals(existingSource.PublishedServiceId, candidate.PublishedServiceId, StringComparison.Ordinal))
+        {
+            return candidate;
+        }
+
+        candidate.StateVersion = Math.Max(candidate.StateVersion, NextStateVersion(existingSource.StateVersion));
+        return candidate;
+    }
+
+    private static bool ShouldSkipDeactivatedServiceSource(
+        ScopeWorkflowCatalogueSourceDocument? existingSource,
+        ScopeWorkflowCatalogueSourceDocument candidate)
+    {
+        if (!string.Equals(candidate.DeploymentStatus, ServiceDeploymentStatus.Deactivated.ToString(), StringComparison.Ordinal))
+            return false;
+
+        return existingSource != null &&
+               string.Equals(existingSource.DeploymentStatus, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal) &&
+               !string.Equals(existingSource.PublishedServiceId, candidate.PublishedServiceId, StringComparison.Ordinal);
+    }
+
     private async Task<int> DeleteStaleSourcesAsync(
         IReadOnlyDictionary<string, ScopeWorkflowCatalogueSourceDocument[]> existingSourcesByScope,
         HashSet<string> currentSourceIds,
@@ -259,12 +322,16 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundSe
                 if (currentSourceIds.Contains(existingSource.Id))
                     continue;
 
-                await DeleteSourceAsync(existingSource, ct);
+                var latestSource = await _catalogueSourceReader.GetAsync(existingSource.Id, ct) ?? existingSource;
+                if (ShouldSkipServiceSourceDelete(existingSource.PublishedServiceId, latestSource))
+                    continue;
+
+                await DeleteSourceAsync(latestSource, ct);
                 await RefreshRowAsync(
-                    existingSource.ScopeId,
-                    existingSource.WorkflowId,
-                    existingSource.LastEventId,
-                    existingSource.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+                    latestSource.ScopeId,
+                    latestSource.WorkflowId,
+                    latestSource.LastEventId,
+                    latestSource.UpdatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                     ct);
                 staleCount++;
             }
@@ -272,6 +339,12 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundSe
 
         return staleCount;
     }
+
+    private static bool ShouldSkipServiceSourceDelete(
+        string cleanupPublishedServiceId,
+        ScopeWorkflowCatalogueSourceDocument existingSource) =>
+        string.Equals(existingSource.DeploymentStatus, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal) &&
+        !string.Equals(existingSource.PublishedServiceId, cleanupPublishedServiceId, StringComparison.Ordinal);
 
     private Task DeleteSourceAsync(
         ScopeWorkflowCatalogueSourceDocument source,
@@ -300,8 +373,11 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundSe
         ScopeWorkflowCatalogueSourceDocument source,
         DateTimeOffset updatedAt) =>
         Math.Max(
-            source.StateVersion == long.MaxValue ? long.MaxValue : source.StateVersion + 1,
+            NextStateVersion(source.StateVersion),
             ScopeWorkflowCatalogueRowMaterializer.BuildSourceDeleteStateVersion(updatedAt));
+
+    private static long NextStateVersion(long stateVersion) =>
+        stateVersion == long.MaxValue ? long.MaxValue : stateVersion + 1;
 
     private async Task RefreshRowAsync(
         string scopeId,
@@ -330,12 +406,18 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundSe
         }
     }
 
-    private static ServiceDeploymentReadModel? ResolveDeployment(
+    private static ServiceDeploymentReadModel? ResolveCatalogueVisibleDeployment(
         ServiceCatalogReadModel serviceCatalog,
-        ServiceDeploymentCatalogReadModel deploymentCatalog) =>
-        ResolveDefaultDeployment(deploymentCatalog.Deployments, serviceCatalog.DefaultServingRevisionId)
-        ?? ResolveActiveDeployment(deploymentCatalog.Deployments)
-        ?? ResolveFallbackDeployment(deploymentCatalog.Deployments);
+        ServiceDeploymentCatalogReadModel deploymentCatalog)
+    {
+        var eligibleDeployments = deploymentCatalog.Deployments
+            .Where(static deployment => IsActiveDeployment(deployment) || IsDeactivatedDeployment(deployment))
+            .ToArray();
+
+        return ResolveDefaultDeployment(eligibleDeployments, serviceCatalog.DefaultServingRevisionId)
+               ?? ResolveActiveDeployment(eligibleDeployments)
+               ?? ResolveLatestDeployment(eligibleDeployments, ServiceDeploymentStatus.Deactivated);
+    }
 
     private static ServiceDeploymentReadModel? ResolveDefaultDeployment(
         IEnumerable<ServiceDeploymentReadModel> deployments,
@@ -361,14 +443,20 @@ internal sealed class ScopeWorkflowCatalogueBackfillHostedService : BackgroundSe
             .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
             .FirstOrDefault();
 
-    private static ServiceDeploymentReadModel? ResolveFallbackDeployment(IEnumerable<ServiceDeploymentReadModel> deployments) =>
+    private static ServiceDeploymentReadModel? ResolveLatestDeployment(
+        IEnumerable<ServiceDeploymentReadModel> deployments,
+        ServiceDeploymentStatus status) =>
         deployments
+            .Where(deployment => string.Equals(deployment.Status, status.ToString(), StringComparison.Ordinal))
             .OrderByDescending(static deployment => deployment.UpdatedAt)
             .ThenBy(static deployment => deployment.DeploymentId, StringComparer.Ordinal)
             .FirstOrDefault();
 
     private static bool IsActiveDeployment(ServiceDeploymentReadModel deployment) =>
         string.Equals(deployment.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal);
+
+    private static bool IsDeactivatedDeployment(ServiceDeploymentReadModel deployment) =>
+        string.Equals(deployment.Status, ServiceDeploymentStatus.Deactivated.ToString(), StringComparison.Ordinal);
 
     private static DateTimeOffset ResolveDeploymentActivationTime(ServiceDeploymentReadModel deployment) =>
         deployment.ActivatedAt ?? deployment.UpdatedAt;

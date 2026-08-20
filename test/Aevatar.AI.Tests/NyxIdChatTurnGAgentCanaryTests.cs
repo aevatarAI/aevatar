@@ -144,9 +144,11 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var command = EligibleCanaryCommand();
         var sourceLlmCompleted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowSourceLlmCompletionDispatch = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var fallbackAttempted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var actorDispatch = new RecordingDispatchPort((_, envelope) =>
+        var actorDispatch = new RecordingDispatchPort(async (_, envelope) =>
         {
             if (envelope.Payload.Is(NyxIdChatCanaryEffectFaultTriggeredSignal.Descriptor))
                 throw new InvalidOperationException("simulated canary signal outage");
@@ -161,15 +163,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
                         StringComparison.Ordinal))
                 {
                     sourceLlmCompleted.TrySetResult();
-                    return Task.CompletedTask;
+                    await allowSourceLlmCompletionDispatch.Task;
+                    return;
                 }
 
                 fallbackAttempted.TrySetResult();
                 if (fallbackDispatchAlsoFails)
                     throw new InvalidOperationException("simulated persistent actor dispatch outage");
             }
-
-            return Task.CompletedTask;
         });
         var port = new NyxIdChatTurnOperationDispatchPort(
             new CanarySessionOperationExecutor(),
@@ -195,6 +196,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
             "correlation-alpha",
             CancellationToken.None);
         await fallbackAttempted.Task;
+        allowSourceLlmCompletionDispatch.TrySetResult();
 
         actorDispatch.Calls.Select(call => call.Envelope.Payload.TypeUrl).Should().Equal(
             Any.Pack(new NyxIdChatCanaryEffectFaultTriggeredSignal()).TypeUrl,
@@ -212,9 +214,11 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new CanarySessionOperationExecutor();
         var sourceLlmCompleted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowSourceLlmCompletionDispatch = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var dispatched = new TaskCompletionSource<EventEnvelope>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var actorDispatch = new RecordingDispatchPort((actorId, envelope) =>
+        var actorDispatch = new RecordingDispatchPort(async (actorId, envelope) =>
         {
             if (envelope.Payload.Is(NyxIdChatTurnOperationExecutionCompletedSignal.Descriptor))
             {
@@ -226,13 +230,13 @@ public sealed partial class NyxIdChatTurnGAgentTests
                         StringComparison.Ordinal))
                 {
                     sourceLlmCompleted.TrySetResult();
-                    return Task.CompletedTask;
+                    await allowSourceLlmCompletionDispatch.Task;
+                    return;
                 }
             }
 
             if (actorId == "turn-actor-alpha")
                 dispatched.TrySetResult(envelope.Clone());
-            return Task.CompletedTask;
         });
         var port = new NyxIdChatTurnOperationDispatchPort(
             executor,
@@ -259,6 +263,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
             CancellationToken.None);
 
         var envelope = await dispatched.Task;
+        allowSourceLlmCompletionDispatch.TrySetResult();
         envelope.Payload.Is(NyxIdChatCanaryEffectFaultTriggeredSignal.Descriptor).Should().BeTrue();
         var fault = envelope.Payload.Unpack<NyxIdChatCanaryEffectFaultTriggeredSignal>();
         fault.ArmId.Should().Be("arm-alpha");

@@ -461,7 +461,6 @@ public sealed class AevatarInvocationDispatcher
                 .Select(static item => item.Trim())
                 .ToArray();
         var workflowName = request.WorkflowId!.Trim();
-        var actorId = string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim();
         if (isManagedWorkflowRuntime)
         {
             var managedScope = ResolveCallerScope(requireOwner: false);
@@ -524,7 +523,6 @@ public sealed class AevatarInvocationDispatcher
         var sourceResolution = await ResolveWorkflowStartSourceAsync(
                 scope.ScopeId,
                 workflowName,
-                actorId,
                 workflowYamls,
                 ct)
             .ConfigureAwait(false);
@@ -554,17 +552,12 @@ public sealed class AevatarInvocationDispatcher
     private async ValueTask<WorkflowStartSourceResolution> ResolveWorkflowStartSourceAsync(
         string scopeId,
         string workflowName,
-        string? actorId,
         string[]? workflowYamls,
         CancellationToken ct)
     {
         if (workflowYamls is { Length: > 0 })
             return WorkflowStartSourceResolution.Success(
-                WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId));
-
-        if (!string.IsNullOrWhiteSpace(actorId))
-            return WorkflowStartSourceResolution.Success(
-                WorkflowChatSource.DefinitionActor(actorId, workflowName));
+                WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName));
 
         var scopeWorkflow = await TryResolveScopeWorkflowAsync(scopeId, workflowName, ct).ConfigureAwait(false);
         if (scopeWorkflow.Error != null)
@@ -786,15 +779,6 @@ public sealed class AevatarInvocationDispatcher
         AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(request.ActorId))
-        {
-            var actorIdError = Error(
-                "invalid_arguments",
-                "actor_id is not accepted when a workflow runtime context manages child workflow start.",
-                "actor_id");
-            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(actorIdError), actorIdError);
-        }
-
         var parentActorId = workflowRuntimeContext.ParentActorId!.Trim();
         var parentRunId = workflowRuntimeContext.ParentRunId!.Trim();
         var parentStepId = workflowRuntimeContext.ParentStepId!.Trim();

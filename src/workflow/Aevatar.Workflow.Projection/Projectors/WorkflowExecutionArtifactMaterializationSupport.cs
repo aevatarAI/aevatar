@@ -229,7 +229,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         StepRequestEvent evt,
         DateTimeOffset observedAt)
     {
-        var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        var step = GetOrCreateStep(readModel, evt.StepId);
         if (step.Outcome == WorkflowExecutionStepOutcomeReadModel.Failed)
             step.LatestFailedAttempt = SnapshotFailedAttempt(step);
         ResetCurrentAttempt(step);
@@ -259,7 +259,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         StepCompletedEvent evt,
         DateTimeOffset observedAt)
     {
-        var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        var step = GetOrCreateStep(readModel, evt.StepId);
         step.StepId = evt.StepId ?? string.Empty;
         step.CompletedAt = observedAt;
         step.Success = evt.Success;
@@ -318,7 +318,7 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
         WorkflowSuspendedEvent evt,
         DateTimeOffset observedAt)
     {
-        var step = GetOrCreateStep(readModel.Steps, evt.StepId);
+        var step = GetOrCreateStep(readModel, evt.StepId);
         step.SuspensionType = evt.SuspensionType ?? string.Empty;
         step.SuspensionPrompt = SanitizeAuditText(evt.Prompt);
         step.SuspensionContent = evt.Secure
@@ -769,20 +769,57 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
     }
 
     private static WorkflowExecutionStepTrace GetOrCreateStep(
-        IList<WorkflowExecutionStepTrace> steps,
+        WorkflowRunInsightReportDocument readModel,
         string? stepId)
     {
         var normalizedStepId = stepId ?? string.Empty;
-        var existing = steps.FirstOrDefault(x => string.Equals(x.StepId, normalizedStepId, StringComparison.Ordinal));
-        if (existing != null)
-            return existing;
+        if (TryGetIndexedStep(readModel, normalizedStepId, out var indexed))
+            return indexed;
 
-        existing = new WorkflowExecutionStepTrace
+        if (readModel.StepIndexById.Count == 0 && readModel.Steps.Count > 0)
+            RebuildStepIndex(readModel);
+
+        if (TryGetIndexedStep(readModel, normalizedStepId, out indexed))
+            return indexed;
+
+        var existing = new WorkflowExecutionStepTrace
         {
             StepId = normalizedStepId,
         };
-        steps.Add(existing);
+        readModel.StepIndexById[normalizedStepId] = readModel.Steps.Count;
+        readModel.Steps.Add(existing);
         return existing;
+    }
+
+    internal static bool TryGetIndexedStep(
+        WorkflowRunInsightReportDocument readModel,
+        string? stepId,
+        out WorkflowExecutionStepTrace step)
+    {
+        ArgumentNullException.ThrowIfNull(readModel);
+        var normalizedStepId = stepId ?? string.Empty;
+        if (readModel.StepIndexById.TryGetValue(normalizedStepId, out var index) &&
+            index >= 0 &&
+            index < readModel.Steps.Count &&
+            string.Equals(readModel.Steps[index].StepId, normalizedStepId, StringComparison.Ordinal))
+        {
+            step = readModel.Steps[index];
+            return true;
+        }
+
+        step = null!;
+        return false;
+    }
+
+    private static void RebuildStepIndex(WorkflowRunInsightReportDocument readModel)
+    {
+        readModel.StepIndexById.Clear();
+        for (var index = 0; index < readModel.Steps.Count; index++)
+        {
+            var stepId = readModel.Steps[index].StepId ?? string.Empty;
+            if (!readModel.StepIndexById.ContainsKey(stepId))
+                readModel.StepIndexById[stepId] = index;
+        }
     }
 
     private static string BuildTypeUrl(MessageDescriptor descriptor)

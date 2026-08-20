@@ -36,6 +36,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Projection.Runtime;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
@@ -114,7 +115,10 @@ public sealed class MainnetHostCompositionTests
         builder.Services.Should().Contain(descriptor => descriptor.ServiceType == typeof(MeterProvider));
         builder.Services.Should().Contain(descriptor => descriptor.ServiceType == typeof(TracerProvider));
         AevatarHostObservabilityExtensions.CoreMeterNames.Should().Contain("Aevatar.CQRS.Projection");
+        AevatarHostObservabilityExtensions.CoreMeterNames.Should()
+            .Contain("Aevatar.CQRS.Projection.Providers.Neo4j");
         AevatarHostObservabilityExtensions.CoreMeterNames.Should().Contain("Aevatar.Kafka.Transport");
+        AevatarHostObservabilityExtensions.DefaultProjectionLatencyBucketsMs.Should().Contain(60000d);
     }
 
     [Fact]
@@ -337,9 +341,14 @@ public sealed class MainnetHostCompositionTests
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(18);
+        readModelDescriptors.Should().HaveCount(19);
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
+        readModelDescriptors.Should()
+            .ContainSingle(static descriptor => descriptor.Name == "runtime-fleet-capability-authority-current-state");
+        app.Services.GetRequiredService<IProjectionDocumentReader<RuntimeFleetCapabilityAuthorityCurrentStateDocument, string>>()
+            .Should()
+            .NotBeNull();
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "user-agent-api-key-revocation");
         readModelDescriptors.Should()
@@ -775,7 +784,6 @@ public sealed class MainnetHostCompositionTests
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
-            typeof(DomainEvidenceAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(OrnnSearchAgentToolSource),
             typeof(StartWorkflowToolSource),
@@ -828,7 +836,6 @@ public sealed class MainnetHostCompositionTests
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
-            typeof(DomainEvidenceAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(OrnnSearchAgentToolSource),
             typeof(StartWorkflowToolSource),
@@ -861,14 +868,6 @@ public sealed class MainnetHostCompositionTests
         var conditionTool = nyxIdChatConditionTools.Should().ContainSingle().Which;
         conditionTool.Name.Should().Be("condition_evaluate");
         conditionTool.IsReadOnly.Should().BeTrue();
-        var domainEvidenceTools = await nyxIdChatProfile.Sources
-            .OfType<DomainEvidenceAgentToolSource>()
-            .Single()
-            .DiscoverToolsAsync();
-        domainEvidenceTools.Select(static tool => tool.Name).Should().Equal(
-            "reimbursement_evidence_commit",
-            "candidate_screening_evidence_commit");
-        domainEvidenceTools.Should().OnlyContain(static tool => tool.IsReadOnly);
         var nyxIdChatOrnnTools = await nyxIdChatProfile.Sources
             .OfType<OrnnSearchAgentToolSource>()
             .Single()
@@ -1908,7 +1907,7 @@ public sealed class MainnetHostCompositionTests
     private static Dictionary<string, string?> BuildWorkflowFileSubmitTargetConfiguration() =>
         new()
         {
-            ["WorkflowConnectedServiceFileSubmit:Targets:0:Target"] = "submit_invoice",
+            ["WorkflowConnectedServiceFileSubmit:Targets:0:Target"] = "submit_record",
             ["WorkflowConnectedServiceFileSubmit:Targets:0:Provider"] = "nyxid_connected_service",
             ["WorkflowConnectedServiceFileSubmit:Targets:0:OutputField"] = "document_id",
             ["WorkflowConnectedServiceFileSubmit:Targets:0:MaxFileBytes"] = "1024",

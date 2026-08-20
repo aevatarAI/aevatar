@@ -145,11 +145,11 @@ public sealed class SkillInvocationTriggerParserTests
     [Fact]
     public void TryParse_WhenChineseTextExplicitlyNamesSkill_ShouldReturnNaturalLanguageTrigger()
     {
-        var text = "请先搜索并使用精确名称为 invoice-ocr-policy-review 的 skill，然后实际运行。";
+        var text = "请先搜索并使用精确名称为 project-summary 的 skill，然后实际运行。";
 
         SkillInvocationTriggerParser.TryParse(text, "cli", out var trigger).Should().BeTrue();
 
-        trigger.Name.Should().Be("invoice-ocr-policy-review");
+        trigger.Name.Should().Be("project-summary");
         trigger.Arguments.Should().Be(text);
         trigger.OriginalText.Should().Be(text);
         trigger.TriggerToken.Should().Be("natural-language-skill");
@@ -171,13 +171,13 @@ public sealed class SkillInvocationTriggerParserTests
     }
 
     [Theory]
-    [InlineData("Please use skill invoice-ocr-policy-review for this request.")]
-    [InlineData("Please load the exact invoice-ocr-policy-review skill for this request.")]
+    [InlineData("Please use skill project-summary for this request.")]
+    [InlineData("Please load the exact project-summary skill for this request.")]
     public void TryParse_WhenEnglishTextExplicitlyNamesSkill_ShouldReturnNaturalLanguageTrigger(string text)
     {
         SkillInvocationTriggerParser.TryParse(text, "web", out var trigger).Should().BeTrue();
 
-        trigger.Name.Should().Be("invoice-ocr-policy-review");
+        trigger.Name.Should().Be("project-summary");
         trigger.Arguments.Should().Be(text);
         trigger.TriggerToken.Should().Be("natural-language-skill");
         trigger.MountWorkflowsRequested.Should().BeFalse();
@@ -196,9 +196,9 @@ public sealed class SkillInvocationTriggerParserTests
     }
 
     [Theory]
-    [InlineData("The invoice-ocr-policy-review skill is available.")]
-    [InlineData("Do not use skill invoice-ocr-policy-review for this request.")]
-    [InlineData("不要使用精确名称为 invoice-ocr-policy-review 的 skill。")]
+    [InlineData("The project-summary skill is available.")]
+    [InlineData("Do not use skill project-summary for this request.")]
+    [InlineData("不要使用精确名称为 project-summary 的 skill。")]
     [InlineData("不要使用 lark-contact-batch-resolution。")]
     [InlineData("不要使用已挂载的 lark-contact-batch-resolution。")]
     [InlineData("不要挂载 lark-contact-batch-resolution skill。")]

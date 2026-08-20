@@ -311,125 +311,6 @@ public sealed class NyxIdChatNeedsYouContinuationTests
     }
 
     [Fact]
-    public async Task ConditionContinuation_WhenSourceEvidenceIdentityIsTampered_ShouldFailClosed()
-    {
-        var generation = new ConditionGenerationExecutor("candidate-evidence-alpha");
-        var executor = new NyxIdChatTurnOperationExecutor(generation);
-        var session = new NyxIdChatTransientExecutionSession();
-        await executor.ExecuteAsync(
-            InitialLlmCommand(),
-            session,
-            static (_, _) => Task.CompletedTask,
-            CancellationToken.None);
-        var continuation = ConditionContinuation();
-        continuation.ConditionContinuation.Condition.SourceEvidenceId =
-            "candidate-evidence-tampered";
-
-        var execution = await executor.ExecuteAsync(
-            continuation,
-            session,
-            static (_, _) => Task.CompletedTask,
-            CancellationToken.None);
-
-        execution.Result.ResultCase.Should().Be(
-            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
-        execution.Result.Failure.FailureCode.Should().Be(
-            NyxIdChatTurnOperationExecutor.ToolCapabilityLostCode);
-        execution.Result.Failure.ExternalEffect.Should().Be(
-            NyxIdChatEffectEvidence.NotStarted);
-        generation.LlmStates.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task DomainContinuation_ShouldInjectActorCommittedEvidenceAndContinueExactSession()
-    {
-        var generation = new DomainEvidenceGenerationExecutor();
-        var executor = new NyxIdChatTurnOperationExecutor(generation);
-        var session = new NyxIdChatTransientExecutionSession();
-        await executor.ExecuteAsync(
-            InitialLlmCommand(),
-            session,
-            static (_, _) => Task.CompletedTask,
-            CancellationToken.None);
-        NyxIdChatDomainEvidenceContract.TryParseReimbursement(
-            DomainReimbursementArguments(),
-            out var evidence).Should().BeTrue();
-        evidence.EvidenceId = "reimbursement-evidence-alpha";
-        evidence.CommittedAt = Now();
-
-        var execution = await executor.ExecuteAsync(
-            new NyxIdChatOperationDispatchCommand
-            {
-                Key = Key("step-domain-continuation", "operation-domain-continuation"),
-                DomainContinuation = new NyxIdChatDomainContinuationInput
-                {
-                    ToolCallId = "call-domain-evidence-alpha",
-                    Reimbursement = evidence,
-                },
-            },
-            session,
-            static (_, _) => Task.CompletedTask,
-            CancellationToken.None);
-
-        execution.Result.ResultCase.Should().Be(
-            NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
-        generation.LlmStates.Should().HaveCount(2);
-        var continued = generation.LlmStates[1];
-        continued.PendingToolCalls.Should().BeEmpty();
-        var toolMessage = continued.Messages.Should().ContainSingle(message =>
-            message.Role == "tool" &&
-            message.ToolCallId == "call-domain-evidence-alpha").Which;
-        using var response = JsonDocument.Parse(toolMessage.Content);
-        response.RootElement.GetProperty("type").GetString().Should()
-            .Be("domain_evidence_committed");
-        response.RootElement.GetProperty("evidence").GetProperty("evidenceId")
-            .GetString().Should().Be("reimbursement-evidence-alpha");
-        response.RootElement.GetProperty("evidence").GetProperty("costCenter")
-            .GetString().Should().Be("cc-42");
-    }
-
-    [Fact]
-    public async Task DomainContinuation_WhenActorEvidenceIsTampered_ShouldFailClosed()
-    {
-        var generation = new DomainEvidenceGenerationExecutor();
-        var executor = new NyxIdChatTurnOperationExecutor(generation);
-        var session = new NyxIdChatTransientExecutionSession();
-        await executor.ExecuteAsync(
-            InitialLlmCommand(),
-            session,
-            static (_, _) => Task.CompletedTask,
-            CancellationToken.None);
-        NyxIdChatDomainEvidenceContract.TryParseReimbursement(
-            DomainReimbursementArguments(),
-            out var evidence).Should().BeTrue();
-        evidence.EvidenceId = "reimbursement-evidence-alpha";
-        evidence.CommittedAt = Now();
-        evidence.CostCenter = "cc-tampered";
-
-        var execution = await executor.ExecuteAsync(
-            new NyxIdChatOperationDispatchCommand
-            {
-                Key = Key("step-domain-continuation", "operation-domain-continuation"),
-                DomainContinuation = new NyxIdChatDomainContinuationInput
-                {
-                    ToolCallId = "call-domain-evidence-alpha",
-                    Reimbursement = evidence,
-                },
-            },
-            session,
-            static (_, _) => Task.CompletedTask,
-            CancellationToken.None);
-
-        execution.Result.ResultCase.Should().Be(
-            NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
-        execution.Result.Failure.FailureCode.Should().Be(
-            NyxIdChatTurnOperationExecutor.ToolCapabilityLostCode);
-        execution.Result.Failure.ExternalEffect.Should().Be(
-            NyxIdChatEffectEvidence.NotStarted);
-        generation.LlmStates.Should().ContainSingle();
-    }
-
-    [Fact]
     public async Task InputContinuationWithoutReplacementCredentials_ShouldFailClosed()
     {
         var generation = new AskUserGenerationExecutor();
@@ -871,25 +752,6 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         },
     };
 
-    private static string DomainReimbursementArguments() => """
-        {
-          "source_input_request_id": "input-domain",
-          "expense_category": "travel",
-          "cost_center": "cc-42",
-          "reimbursement_currency_instruction": "Submit in SGD",
-          "guarded_tool_name": "approval_instance_create",
-          "source_invoices": [
-            {"source_ordinal":1,"vendor":"Northwind Air","invoice_number":"INV-001","invoice_date":"2026-08-01","amount":{"currency_code":"SGD","minor_units":12500,"fraction_digits":2}},
-            {"source_ordinal":2,"vendor":"Contoso Hotel","invoice_number":"INV-002","invoice_date":"2026-08-02","amount":{"currency_code":"SGD","minor_units":24000,"fraction_digits":2}},
-            {"source_ordinal":3,"vendor":"Northwind Air","invoice_number":"INV-001","invoice_date":"2026-08-01","amount":{"currency_code":"SGD","minor_units":12500,"fraction_digits":2}}
-          ],
-          "retained_source_ordinals": [1, 2],
-          "duplicate_invoices": [
-            {"duplicate_source_ordinal":3,"retained_source_ordinal":1}
-          ]
-        }
-        """;
-
     private static NyxIdChatNeedsYouDecision<NyxIdChatApprovalResolutionState> ResolveApproval(
         bool approved) =>
         NyxIdChatNeedsYouDecisions.ResolveApproval(
@@ -1299,8 +1161,7 @@ public sealed class NyxIdChatNeedsYouContinuationTests
         }
     }
 
-    private sealed class ConditionGenerationExecutor(string? sourceEvidenceId = null)
-        : GenerationExecutorBase
+    private sealed class ConditionGenerationExecutor : GenerationExecutorBase
     {
         public List<AgentRunReplyStepState> LlmStates { get; } = [];
 
@@ -1326,48 +1187,10 @@ public sealed class NyxIdChatNeedsYouContinuationTests
                 {
                     Id = "call-condition-alpha",
                     Name = NyxIdChatConditionEvaluateContract.ToolName,
-                    ArgumentsJson = sourceEvidenceId is null
-                        ? "{\"source_input_request_id\":\"input-threshold\"," +
-                          "\"observed_value\":80," +
-                          "\"guarded_tool_name\":\"repository_update\"}"
-                        : $$"""{"source_input_request_id":"input-threshold","source_evidence_id":"{{sourceEvidenceId}}","observed_value":80,"guarded_tool_name":"repository_update"}""",
-                });
-            }
-            return Task.FromResult(new AgentRunLlmStepExecution(
-                LlmContinuation(request, result),
-                AuthorizedToolStep: null));
-        }
-    }
-
-    private sealed class DomainEvidenceGenerationExecutor : GenerationExecutorBase
-    {
-        public List<AgentRunReplyStepState> LlmStates { get; } = [];
-
-        public override Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
-            AgentRunReplyStepExecutionRequest request,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            LlmStates.Add(request.StepState.Clone());
-            var firstRound = request.StepState.Round == 0;
-            var result = new AgentRunLlmStepResult
-            {
-                Content = firstRound
-                    ? "normalize reimbursement evidence"
-                    : "continued after domain evidence",
-                AccumulatedText = firstRound
-                    ? "normalize reimbursement evidence"
-                    : "continued after domain evidence",
-                FinishReason = firstRound ? "tool_calls" : "stop",
-                HasStreamedTextContent = true,
-            };
-            if (firstRound)
-            {
-                result.ToolCalls.Add(new AgentRunToolCall
-                {
-                    Id = "call-domain-evidence-alpha",
-                    Name = NyxIdChatDomainEvidenceContract.ReimbursementToolName,
-                    ArgumentsJson = DomainReimbursementArguments(),
+                    ArgumentsJson =
+                        "{\"source_input_request_id\":\"input-threshold\"," +
+                        "\"observed_value\":80," +
+                        "\"guarded_tool_name\":\"repository_update\"}",
                 });
             }
             return Task.FromResult(new AgentRunLlmStepExecution(

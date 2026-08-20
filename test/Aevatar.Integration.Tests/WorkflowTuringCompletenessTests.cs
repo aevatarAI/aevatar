@@ -195,7 +195,6 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         var reportStore = new RecordingReportStore();
         var reportProjector = new WorkflowRunInsightReportArtifactProjector(
             reportStore,
-            reportStore,
             reportStore);
         await reportProjector.ProjectAsync(
             new WorkflowExecutionMaterializationContext
@@ -587,6 +586,7 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
     private sealed class RecordingReportStore :
         IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>,
         IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>,
+        IProjectionDocumentMutator<WorkflowRunInsightReportDocument, string>,
         IProjectionGraphWriter<WorkflowRunInsightReportDocument>
     {
         public WorkflowRunInsightReportDocument? Document { get; private set; }
@@ -616,8 +616,25 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             throw new NotSupportedException("This regression does not delete projected runs.");
 
+        public Task<ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>> MutateAsync(
+            string key,
+            Func<WorkflowRunInsightReportDocument?, WorkflowRunInsightReportDocument> reducer,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var incoming = reducer(Document?.Clone());
+            var result = ProjectionWriteResultEvaluator.Evaluate(Document, incoming);
+            if (result.IsApplied)
+                Document = incoming.Clone();
+
+            return Task.FromResult(new ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>(
+                result,
+                Document?.Clone()));
+        }
+
         Task IProjectionGraphWriter<WorkflowRunInsightReportDocument>.UpsertAsync(
             WorkflowRunInsightReportDocument readModel,
+            string projectionKind,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();

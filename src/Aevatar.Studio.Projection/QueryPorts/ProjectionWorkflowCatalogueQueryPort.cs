@@ -13,6 +13,7 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
     private const int MaxTake = 100;
     private const int MaxQueryLength = 128;
     private const int RowReadTake = 10_000;
+    private const string DeactivatedDeploymentStatus = "Deactivated";
 
     private static readonly ScopeWorkflowCatalogueSearchContract SearchContract = new(
         ["name", "description", "workflowId"],
@@ -47,7 +48,7 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
             : rowDocuments.Max(static document => document.SourceWatermarkUtc);
         var rows = rowDocuments
             .Select(BuildRow)
-            .Where(row => query.View != ScopeWorkflowCatalogueView.Drafts || row.HasDraftSource)
+            .Where(row => MatchesView(row, query.View))
             .Where(row => Matches(row, normalizedSearch))
             .OrderByDescending(static row => row.UpdatedAtUtc)
             .ThenBy(static row => row.WorkflowId, StringComparer.Ordinal)
@@ -110,7 +111,7 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
             document.HasPublishedSource,
             updatedAtUtc,
             document.UpdatedAtSource,
-            BuildCapabilities(document.HasDraftSource, document.HasPublishedSource),
+            BuildCapabilities(document.HasDraftSource, document.HasPublishedSource, IsArchived(document.DeploymentStatus)),
             document.SourceWatermarkUtc,
             document.HasPublishedSource
                 ? new ScopeWorkflowCatalogueCommittedFacts(
@@ -126,9 +127,31 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
             PublishedServiceId: ResolveOptional(document.PublishedServiceId));
     }
 
+    private static bool MatchesView(
+        ScopeWorkflowCatalogueRow row,
+        ScopeWorkflowCatalogueView view) =>
+        view switch
+        {
+            ScopeWorkflowCatalogueView.All => !IsArchived(row),
+            ScopeWorkflowCatalogueView.Drafts => row.HasDraftSource && !IsArchived(row),
+            ScopeWorkflowCatalogueView.Archived => IsArchived(row),
+            _ => !IsArchived(row),
+        };
+
+    private static bool IsArchived(ScopeWorkflowCatalogueRow row) =>
+        row.Committed is { DeploymentStatus: { Length: > 0 } deploymentStatus } &&
+        IsArchived(deploymentStatus);
+
+    private static bool IsArchived(string deploymentStatus) =>
+        string.Equals(
+            deploymentStatus.Trim(),
+            DeactivatedDeploymentStatus,
+            StringComparison.OrdinalIgnoreCase);
+
     private static ScopeWorkflowCatalogueRowCapabilities BuildCapabilities(
         bool hasDraftSource,
-        bool hasPublishedSource) =>
+        bool hasPublishedSource,
+        bool isArchived) =>
         new(
             Open: new ScopeWorkflowCatalogueActionCapability(
                 hasDraftSource || hasPublishedSource,
@@ -140,8 +163,8 @@ public sealed class ProjectionWorkflowCatalogueQueryPort : IWorkflowCatalogueQue
                 hasDraftSource,
                 hasDraftSource ? null : "draft_source_missing"),
             Delete: new ScopeWorkflowCatalogueActionCapability(
-                hasDraftSource,
-                hasDraftSource ? null : "draft_source_missing"));
+                hasDraftSource && !isArchived,
+                isArchived ? "workflow_archived" : hasDraftSource ? null : "draft_source_missing"));
 
     private static string ResolveName(ScopeWorkflowCatalogueRowDocument document)
     {

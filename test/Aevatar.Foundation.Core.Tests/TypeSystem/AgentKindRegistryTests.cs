@@ -1,7 +1,9 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using FluentAssertions;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Foundation.Core.Tests.TypeSystem;
@@ -239,6 +241,41 @@ public class AgentKindRegistryTests
         snapshot.Should().ContainSingle(r => r.Kind == "test.subscription");
     }
 
+    [Fact]
+    public void StateMigrationApply_ShouldUseAnIsolatedMigrationInstancePerInvocation()
+    {
+        var registry = BuildRegistry(
+            new AgentKindRegistryBuilder()
+                .ScanAssemblies(typeof(MigrationIsolationAgent).Assembly));
+        var step = registry.Resolve("test.migration-isolation")
+            .StateMigrations.Should().ContainSingle().Subject;
+        var input = new EventEnvelope { Id = "actor-state" }.ToByteArray();
+
+        var first = EventEnvelope.Parser.ParseFrom(step.Apply(input));
+        var second = EventEnvelope.Parser.ParseFrom(step.Apply(input));
+
+        first.Id.Should().Be("actor-state:1");
+        second.Id.Should().Be("actor-state:1");
+    }
+
+    [Fact]
+    public void BuildImplementation_RejectsStateMigrationDeclaredForAnotherAgentKind()
+    {
+        var registration = new AgentRegistration(
+            Kind: "test.wrong-migration-owner",
+            ImplementationType: typeof(MigrationIsolationAgent),
+            StateContractType: typeof(EventEnvelope),
+            StateSchemaVersion: 1,
+            StateMigrationTypes: [typeof(StatefulMigrationIsolationFixture)]);
+
+        var act = () => registration.BuildImplementation();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage(
+                "*declares agent kind 'test.migration-isolation', " +
+                "but is registered for agent kind 'test.wrong-migration-owner'*");
+    }
+
     private static IAgentKindRegistry BuildRegistry(AgentKindRegistryBuilder builder)
     {
         var services = new ServiceCollection();
@@ -295,4 +332,30 @@ internal abstract class KindRegistryFixtureAgentBase : IAgent
 
 internal sealed class UnregisteredAgent : KindRegistryFixtureAgentBase
 {
+}
+
+[GAgent("test.migration-isolation", StateSchemaVersion = 1)]
+internal sealed class MigrationIsolationAgent : KindRegistryFixtureAgentBase, IAgent<EventEnvelope>
+{
+    public EventEnvelope State { get; } = new();
+}
+
+[ActorStateMigration(
+    "test.migration-isolation",
+    RequiredCapability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+    RequiredContractId = "test.migration-isolation.v1",
+    RequiredContractVersion = 1)]
+internal sealed class StatefulMigrationIsolationFixture : IActorStateMigration<EventEnvelope>
+{
+    private int _applyCount;
+
+    public int FromStateVersion => 0;
+
+    public int ToStateVersion => 1;
+
+    public EventEnvelope Apply(EventEnvelope state)
+    {
+        state.Id = $"{state.Id}:{++_applyCount}";
+        return state;
+    }
 }

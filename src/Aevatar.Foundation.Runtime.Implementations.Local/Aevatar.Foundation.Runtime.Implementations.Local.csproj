@@ -12,6 +12,9 @@
     <ProjectReference Include="..\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.Foundation.Runtime.Hosting.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />

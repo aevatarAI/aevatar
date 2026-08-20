@@ -7,8 +7,10 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.WorkflowDelivery;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using ProtobufValue = Google.Protobuf.WellKnownTypes.Value;
 
 namespace Aevatar.Studio.Tests;
 
@@ -47,6 +49,63 @@ public sealed class WorkflowDeliveryGAgentTests
 
         await action.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*package hash does not match*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Create_WhenAcceptanceModeIsUnknown_ShouldRejectBeforeCommit()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var command = CreateCommand("delivery-alpha");
+        command.Package.AcceptancePolicy.Mode = (WorkflowDeliveryAcceptanceMode)99;
+        ResealPackage(command.Package);
+
+        var action = () => agent.HandleCreateAsync(command);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*acceptance policy is required*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Create_WhenAcceptanceBindingHasNoTypedSource_ShouldRejectBeforeCommit()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var command = CreateCommand("delivery-alpha");
+        command.Package.AcceptancePolicy.Input.Bindings.Add(
+            new WorkflowDeliveryAcceptanceInputBinding { Key = "period" });
+        ResealPackage(command.Package);
+
+        var action = () => agent.HandleCreateAsync(command);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*binding source is unsupported*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Create_WhenAcceptanceBindingsAreNotCanonicallyOrdered_ShouldRejectBeforeCommit()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var command = CreateCommand("delivery-alpha");
+        command.Package.AcceptancePolicy.Input.Bindings.Add(new WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = "zulu",
+            AuthenticatedOwnerExternalUserId =
+                new WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput(),
+        });
+        command.Package.AcceptancePolicy.Input.Bindings.Add(new WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = "alpha",
+            AuthenticatedOwnerExternalUserId =
+                new WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput(),
+        });
+        ResealPackage(command.Package);
+
+        var action = () => agent.HandleCreateAsync(command);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*stable key ordering*");
         agent.EventSourcing!.CurrentVersion.Should().Be(0);
     }
 
@@ -99,6 +158,147 @@ public sealed class WorkflowDeliveryGAgentTests
         agent.State.Installation.Attempt.Should().Be(1);
         agent.State.Installation.OperationId.Should().Be("installation-alpha:provision:a1");
         agent.State.Installation.CapabilityAdmissionPlan.Should().NotBeNull();
+        agent.State.Installation.AcceptanceInput.Should().NotBeNull();
+        agent.State.Installation.AcceptanceInput.Fields.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DuplicateInstallationStart_WithClockDrift_ShouldKeepFirstResolvedInput()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var create = CreateCommand("delivery-alpha");
+        create.ExpiresAtUtc = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-18T00:00:00Z"));
+        create.Package.AcceptancePolicy.Input.Bindings.Add(new WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = "installation_date",
+            InstallationCreatedAtUtc = new WorkflowDeliveryInstallationCreatedAtUtcInput
+            {
+                DateProjection = WorkflowDeliveryAcceptanceDateProjection.UtcDate,
+            },
+        });
+        ResealPackage(create.Package);
+        await agent.HandleCreateAsync(create);
+        var first = StartInstallationCommand();
+        first.RequestedAtUtc = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-16T23:59:00Z"));
+        var duplicate = first.Clone();
+        duplicate.RequestedAtUtc = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-17T00:01:00Z"));
+
+        await agent.HandleStartInstallationAsync(first);
+        await agent.HandleStartInstallationAsync(duplicate);
+
+        agent.EventSourcing!.CurrentVersion.Should().Be(2);
+        agent.State.Installation.CreatedAtUtc.Should().Be(first.RequestedAtUtc);
+        agent.State.Installation.AcceptanceInput.Fields["installation_date"].StringValue
+            .Should().Be("2026-08-16");
+    }
+
+    [Fact]
+    public async Task StartInstallation_ShouldResolveAndPersistGenericAcceptanceInputFromCommittedContext()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var create = CreateCommand("delivery-alpha");
+        create.ExpiresAtUtc = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2027-01-02T00:00:00Z"));
+        create.Package.AcceptancePolicy.Input.Literals.Fields.Add(
+            "dry_run",
+            ProtobufValue.ForBool(true));
+        create.Package.AcceptancePolicy.Input.Bindings.Add(new WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = "compact_reference",
+            Prefix = "run-",
+            InstallationCreatedAtUtc = new WorkflowDeliveryInstallationCreatedAtUtcInput
+            {
+                DateProjection = WorkflowDeliveryAcceptanceDateProjection.UtcCompactDate,
+                DayOffset = 1,
+            },
+        });
+        create.Package.AcceptancePolicy.Input.Bindings.Add(new WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = "iso_period",
+            InstallationCreatedAtUtc = new WorkflowDeliveryInstallationCreatedAtUtcInput
+            {
+                DateProjection = WorkflowDeliveryAcceptanceDateProjection.UtcIsoWeek,
+            },
+        });
+        create.Package.AcceptancePolicy.Input.Bindings.Add(new WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = "owner_reference",
+            Prefix = "owner-",
+            AuthenticatedOwnerExternalUserId =
+                new WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput(),
+        });
+        ResealPackage(create.Package);
+        await agent.HandleCreateAsync(create);
+        var start = StartInstallationCommand();
+        start.RequestedAtUtc = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2027-01-01T00:30:00+02:00"));
+        start.AuthenticatedOwner = AuthorizationOwnerContext();
+
+        await agent.HandleStartInstallationAsync(start);
+
+        var input = agent.State.Installation.AcceptanceInput;
+        input.Should().NotBeNull();
+        input.Fields["dry_run"].BoolValue.Should().BeTrue();
+        input.Fields["compact_reference"].StringValue.Should().Be("run-20270101");
+        input.Fields["iso_period"].StringValue.Should().Be("2026-W53");
+        input.Fields["owner_reference"].StringValue.Should().Be("owner-user-alpha");
+        agent.State.Installation.CreatedAtUtc.Should().Be(start.RequestedAtUtc);
+    }
+
+    [Fact]
+    public async Task StartInstallation_WhenResolvedDynamicStringExceedsLimit_ShouldRejectBeforeCommit()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var create = CreateCommand("delivery-alpha");
+        create.Package.AcceptancePolicy.Input.Bindings.Add(new WorkflowDeliveryAcceptanceInputBinding
+        {
+            Key = "owner_reference",
+            Prefix = "x",
+            AuthenticatedOwnerExternalUserId =
+                new WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput(),
+        });
+        ResealPackage(create.Package);
+        await agent.HandleCreateAsync(create);
+        var start = StartInstallationCommand();
+        start.AuthenticatedOwner = AuthorizationOwnerContext();
+        start.AuthenticatedOwner.SubjectExternalUserId = new string('u', 4096);
+
+        var action = () => agent.HandleStartInstallationAsync(start);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*resolved acceptance input string is too long*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(1);
+        agent.State.Installation.Should().BeNull();
+    }
+
+    [Fact]
+    public void AcceptanceInputProtoPresence_ShouldDistinguishLegacyFromExplicitEmptyRecipe()
+    {
+        WorkflowDeliveryAcceptancePolicy.InputFieldNumber.Should().Be(3);
+        WorkflowInstallationState.AcceptanceInputFieldNumber.Should().Be(34);
+        var declared = new WorkflowDeliveryAcceptancePolicy
+        {
+            Mode = WorkflowDeliveryAcceptanceMode.AutomaticPreview,
+            Input = new WorkflowDeliveryAcceptanceInputRecipe
+            {
+                Literals = new Struct(),
+            },
+        };
+
+        var roundTrip = WorkflowDeliveryAcceptancePolicy.Parser.ParseFrom(declared.ToByteArray());
+        var legacy = WorkflowDeliveryAcceptancePolicy.Parser.ParseFrom(
+            new WorkflowDeliveryAcceptancePolicy
+            {
+                Mode = WorkflowDeliveryAcceptanceMode.AutomaticPreview,
+            }.ToByteArray());
+
+        roundTrip.Input.Should().NotBeNull();
+        roundTrip.Input.Literals.Should().NotBeNull();
+        roundTrip.Input.Literals.Fields.Should().BeEmpty();
+        legacy.Input.Should().BeNull();
     }
 
     [Fact]
@@ -531,6 +731,7 @@ public sealed class WorkflowDeliveryGAgentTests
         agent.State.Installation.Attempt.Should().Be(2);
         agent.State.Installation.OperationId.Should().Be("installation-alpha:provision:a2");
         agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
+        agent.State.Installation.AcceptanceInput.Should().NotBeNull();
 
         var wrongOperation = () => agent.HandleInstallationFailedAsync(
             FailedCommand(
@@ -1012,6 +1213,10 @@ public sealed class WorkflowDeliveryGAgentTests
             AcceptancePolicy = new WorkflowDeliveryAcceptancePolicy
             {
                 Mode = WorkflowDeliveryAcceptanceMode.AutomaticPreview,
+                Input = new WorkflowDeliveryAcceptanceInputRecipe
+                {
+                    Literals = new Struct(),
+                },
             },
             CreatedBy = "admin-alpha",
             CreatedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt),
@@ -1030,6 +1235,15 @@ public sealed class WorkflowDeliveryGAgentTests
             CreatedBy = "admin-alpha",
             CreatedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt),
         };
+    }
+
+    private static void ResealPackage(WorkflowPackageVersionSnapshot package)
+    {
+        package.PackageHash = WorkflowDeliveryConventions.ComputePackageHash(package);
+        package.Version = package.PackageHash[..16];
+        package.PackageVersionId = WorkflowDeliveryConventions.BuildPackageVersionId(
+            package.WorkflowName,
+            package.PackageHash);
     }
 
     private static CreateWorkflowDeliveryCommand CreateCommandWithConnectionSlot()

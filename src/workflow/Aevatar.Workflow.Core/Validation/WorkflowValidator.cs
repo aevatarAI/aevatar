@@ -5,6 +5,7 @@
 
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Agreement;
+using Aevatar.Workflow.Core.Execution;
 
 namespace Aevatar.Workflow.Core.Validation;
 
@@ -64,6 +65,8 @@ public static class WorkflowValidator
             roleIds.Add(role.Id);
         }
 
+        ValidateValueLifecycles(wf.Steps, stepIds, nested: false, errors);
+
         foreach (var step in allSteps)
         {
             if (!string.IsNullOrWhiteSpace(step.TargetRole) &&
@@ -91,6 +94,58 @@ public static class WorkflowValidator
         ValidateNestedCompensationTargets(allSteps, errors);
 
         return errors;
+    }
+
+    private static void ValidateValueLifecycles(
+        IEnumerable<StepDefinition> steps,
+        ISet<string> stepIds,
+        bool nested,
+        List<string> errors)
+    {
+        foreach (var step in steps)
+        {
+            var lifecycle = step.ValueLifecycle;
+            if (lifecycle != null)
+            {
+                if (nested)
+                {
+                    errors.Add($"步骤 '{step.Id}' 的 value_lifecycle 只允许声明在顶层步骤");
+                }
+
+                if (lifecycle.ReleaseVariablesAfterSuccess.Count == 0)
+                {
+                    errors.Add(
+                        $"步骤 '{step.Id}' 的 value_lifecycle.release_variables_after_success 不能为空");
+                }
+
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var rawName in lifecycle.ReleaseVariablesAfterSuccess)
+                {
+                    var name = rawName?.Trim() ?? string.Empty;
+                    if (name.Length == 0)
+                    {
+                        errors.Add($"步骤 '{step.Id}' 的 value_lifecycle 包含空变量名");
+                        continue;
+                    }
+
+                    if (!names.Add(name))
+                    {
+                        errors.Add($"步骤 '{step.Id}' 的 value_lifecycle 重复释放变量 '{name}'");
+                        continue;
+                    }
+
+                    if (!WorkflowExecutionValueStore.IsLifecycleReleaseVariableKey(name) ||
+                        stepIds.Contains(name))
+                    {
+                        errors.Add(
+                            $"步骤 '{step.Id}' 的 value_lifecycle 只能释放 author-owned 变量，'{name}' 是保留名称");
+                    }
+                }
+            }
+
+            if (step.Children is { Count: > 0 })
+                ValidateValueLifecycles(step.Children, stepIds, nested: true, errors);
+        }
     }
 
     private static void DetectCompensationCycles(

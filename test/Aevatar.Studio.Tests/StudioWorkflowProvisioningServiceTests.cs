@@ -1409,6 +1409,51 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_WithAcceptanceInput_ShouldRenderClonedSnapshotIntoSchedulePrompt()
+    {
+        var member = NewMemberService();
+        var bindingPort = new RecordingBindingPort(member, WorkflowId, RevisionId);
+        var scheduleCommand = new RecordingScheduleProvisioningCommandPort();
+        var sut = new StudioWorkflowProvisioningService(
+            member,
+            bindingPort,
+            scheduleCommand,
+            new StudioWorkflowCapabilityAdmissionTestService());
+        var sourceInput = new Struct
+        {
+            Fields =
+            {
+                ["dry_run"] = Google.Protobuf.WellKnownTypes.Value.ForBool(true),
+                ["limit"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(5),
+            },
+        };
+        var request = new ProvisionWorkflowRequest("Monitor", "name: monitor")
+        {
+            TeamId = TeamId,
+            AuthenticatedOwner = TestAuthenticatedOwner(),
+            AcceptanceInput = sourceInput,
+        };
+
+        sourceInput.Fields["dry_run"] = Google.Protobuf.WellKnownTypes.Value.ForBool(false);
+        request.AcceptanceInput!.Fields["limit"] =
+            Google.Protobuf.WellKnownTypes.Value.ForNumber(99);
+
+        await sut.ProvisionAsync(ScopeId, Caller, request);
+
+        var expectedInput = new Struct
+        {
+            Fields =
+            {
+                ["dry_run"] = Google.Protobuf.WellKnownTypes.Value.ForBool(true),
+                ["limit"] = Google.Protobuf.WellKnownTypes.Value.ForNumber(5),
+            },
+        };
+        request.AcceptanceInput.Should().BeEquivalentTo(expectedInput);
+        scheduleCommand.Intent!.Prompt.Should().Be(
+            Google.Protobuf.JsonFormatter.Default.Format(expectedInput));
+    }
+
+    [Fact]
     public async Task ProvisionAsync_DeliveryRetry_ShouldReplayCurrentIntentAndAdvanceNextAttempt()
     {
         var member = NewMemberService();

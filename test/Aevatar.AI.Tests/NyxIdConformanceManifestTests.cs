@@ -30,13 +30,17 @@ public sealed class NyxIdConformanceManifestTests
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v5.json")));
         var leastScope = NyxIdAssistantActionRegistry.Load(
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v6.json")));
-        var target = NyxIdAssistantActionRegistry.Load(
+        var keyRotation = NyxIdAssistantActionRegistry.Load(
             File.ReadAllText(Path.Combine(ContractRoot, "registry-v7.json")));
+        var target = NyxIdAssistantActionRegistry.Load(
+            File.ReadAllText(Path.Combine(ContractRoot, "registry-v8.json")));
 
         legacy.RegistryRevision.Should().Be("nyxid-assistant-actions.v4");
         draft.RegistryRevision.Should().Be("nyxid-assistant-actions.v5");
         leastScope.RegistryRevision.Should().Be("nyxid-assistant-actions.v6");
-        target.RegistryRevision.Should().Be("nyxid-assistant-actions.v7");
+        keyRotation.RegistryRevision.Should().Be("nyxid-assistant-actions.v7");
+        target.RegistryRevision.Should().Be("nyxid-assistant-actions.v8");
+        target.RegistryRevision.Should().Be(NyxIdAssistantActionRegistry.SupportedRegistryRevision);
         foreach (var registry in new[] { legacy, draft })
         {
             registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
@@ -49,10 +53,13 @@ public sealed class NyxIdConformanceManifestTests
         leastScope.TryGetDefinition("key.create", out _).Should().BeTrue();
         leastScope.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         leastScope.TryGetDefinition("key.rotate", out _).Should().BeFalse();
-        target.TryGetDefinition("service.connect", out _).Should().BeTrue();
-        target.TryGetDefinition("key.create", out _).Should().BeTrue();
-        target.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-        target.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        foreach (var registry in new[] { keyRotation, target })
+        {
+            registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+            registry.TryGetDefinition("key.create", out _).Should().BeTrue();
+            registry.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+            registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        }
     }
 
     [Fact]
@@ -106,8 +113,10 @@ public sealed class NyxIdConformanceManifestTests
         var mountedTools = (await new NyxIdAssistantToolSource(options, client).DiscoverToolsAsync())
             .Select(static tool => tool.Name)
             .ToHashSet(StringComparer.Ordinal);
-        var registry = NyxIdAssistantActionRegistry.Load(
-            File.ReadAllText(Path.Combine(ContractRoot, "registry-v7.json")));
+        var registries = new[] { "registry-v7.json", "registry-v8.json" }
+            .Select(fileName => NyxIdAssistantActionRegistry.Load(
+                File.ReadAllText(Path.Combine(ContractRoot, fileName))))
+            .ToArray();
 
         var shippedReads = rows.Where(static row =>
             row.GetProperty("operation_class").GetString() == "R" &&
@@ -125,7 +134,8 @@ public sealed class NyxIdConformanceManifestTests
         foreach (var row in shippedActions)
         {
             var operation = row.GetProperty("operation_id").GetString()!;
-            registry.TryGetDefinition(operation, out _).Should().BeTrue();
+            foreach (var registry in registries)
+                registry.TryGetDefinition(operation, out _).Should().BeTrue();
             var artifacts = row.GetProperty("artifacts").EnumerateArray()
                 .Select(static value => value.GetString()!)
                 .ToArray();

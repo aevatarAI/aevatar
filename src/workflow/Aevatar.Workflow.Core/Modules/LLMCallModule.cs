@@ -111,6 +111,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 RequestDispatched = false,
                 WatchdogCallbackId = BuildWatchdogCallbackId(sessionId),
                 DispatchOperationId = BuildDispatchOperationId(sessionId),
+                ExecutionId = request.ExecutionId,
+                InputValueId = request.InputValueId,
             };
             runtimeState.PendingBySessionId[sessionId] = pendingState;
             await SaveStateAsync(runtimeState, ctx, ct);
@@ -212,8 +214,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = pending.StepId,
                 RunId = pending.RunId,
+                ExecutionId = pending.ExecutionId,
                 Success = true,
                 Output = evt.Content ?? string.Empty,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 WorkerId = publisherActorId,
                 Usage = evt.Usage?.Clone(),
             },
@@ -529,6 +533,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             error,
             workerId,
             recoveryFailureKind,
+            pending.ExecutionId,
             ctx,
             ct);
 
@@ -545,6 +550,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             error,
             workerId,
             WorkflowRecoveryFailureKind.Unspecified,
+            string.Empty,
             ctx,
             ct);
 
@@ -554,6 +560,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         string error,
         string workerId,
         WorkflowRecoveryFailureKind recoveryFailureKind,
+        string executionId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct) =>
         ctx.PublishAsync(
@@ -561,8 +568,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = stepId,
                 RunId = runId,
+                ExecutionId = executionId,
                 Success = false,
                 Error = error,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 WorkerId = string.IsNullOrWhiteSpace(workerId) ? ctx.AgentId : workerId,
                 RecoveryFailureKind = recoveryFailureKind,
             },

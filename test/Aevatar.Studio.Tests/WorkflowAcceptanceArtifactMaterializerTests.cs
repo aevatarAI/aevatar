@@ -213,8 +213,8 @@ public sealed class WorkflowAcceptanceArtifactMaterializerTests
         { string.Empty, "acceptance_output_missing" },
         { "{", "acceptance_output_contract_invalid" },
         { "{\"workflow\":\"wrong\",\"mode\":\"preview\",\"side_effects\":false}", "acceptance_output_contract_invalid" },
-        { "{\"workflow\":\"fin_budget_variance_monitor\",\"mode\":\"live\",\"side_effects\":false}", "acceptance_output_contract_invalid" },
-        { "{\"workflow\":\"fin_budget_variance_monitor\",\"mode\":\"preview\",\"side_effects\":true}", "acceptance_output_contract_invalid" },
+        { "{\"workflow\":\"workflow-alpha\",\"mode\":\"live\",\"side_effects\":false}", "acceptance_output_contract_invalid" },
+        { "{\"workflow\":\"workflow-alpha\",\"mode\":\"preview\",\"side_effects\":true}", "acceptance_output_contract_invalid" },
         { new string('x', ContentArtifactConventions.MaxInlineContentBytes + 1), "acceptance_output_too_large" },
     };
 

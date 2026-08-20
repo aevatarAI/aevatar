@@ -830,6 +830,29 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleQueryWorkflowCatalogueAsync_ShouldParseDefaultAndArchivedViews()
+    {
+        var http = CreateHttpContext();
+        var catalogueService = new RecordingWorkflowCatalogueService();
+
+        var result = await ScopeWorkflowEndpoints.HandleQueryWorkflowCatalogueAsync(
+            http,
+            "user-1",
+            view: "archived",
+            query: null,
+            cursor: null,
+            take: null,
+            catalogueService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        catalogueService.Query.Should().NotBeNull();
+        catalogueService.Query!.View.Should().Be(ScopeWorkflowCatalogueView.Archived);
+    }
+
+    [Fact]
     public async Task HandleQueryWorkflowCatalogueAsync_ShouldUseDefaultTakeWhenQueryOmitsTake()
     {
         var http = CreateHttpContext();
@@ -849,7 +872,32 @@ public sealed class ScopeWorkflowEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         catalogueService.Query.Should().NotBeNull();
+        catalogueService.Query!.View.Should().Be(ScopeWorkflowCatalogueView.All);
         catalogueService.Query!.Take.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleQueryWorkflowCatalogueAsync_ShouldRejectInvalidViewWithArchivedHint()
+    {
+        var http = CreateHttpContext();
+        var catalogueService = new RecordingWorkflowCatalogueService();
+
+        var result = await ScopeWorkflowEndpoints.HandleQueryWorkflowCatalogueAsync(
+            http,
+            "user-1",
+            view: "historic",
+            query: null,
+            cursor: null,
+            take: null,
+            catalogueService,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("view must be either 'all', 'drafts', or 'archived'.");
+        catalogueService.Query.Should().BeNull();
     }
 
     [Fact]
@@ -892,6 +940,7 @@ public sealed class ScopeWorkflowEndpointsTests
             ],
         };
         var service = new ScopeWorkflowQueryApplicationService(
+            queryPort,
             queryPort,
             new FakeWorkflowActorBindingReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions
@@ -2266,8 +2315,10 @@ public sealed class ScopeWorkflowEndpointsTests
         FakeWorkflowActorBindingReader? bindingReader = null,
         IScopeWorkflowPublishedServiceDescriptorSource? descriptorSource = null)
     {
+        var resolvedQueryPort = queryPort ?? new FakeServiceLifecycleQueryPort();
         return new ScopeWorkflowQueryApplicationService(
-            queryPort ?? new FakeServiceLifecycleQueryPort(),
+            resolvedQueryPort,
+            resolvedQueryPort,
             bindingReader ?? new FakeWorkflowActorBindingReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
@@ -2709,7 +2760,7 @@ public sealed class ScopeWorkflowEndpointsTests
         private static ServiceCommandAcceptedReceipt Accepted() => new("target-actor", "cmd-1", "corr-1");
     }
 
-    private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
+    private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort, IServiceServingQueryPort
     {
         public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
 
@@ -2759,6 +2810,50 @@ public sealed class ScopeWorkflowEndpointsTests
                     service.UpdatedAt)],
                 service.UpdatedAt));
         }
+
+        public async Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default)
+        {
+            var deployments = await GetServiceDeploymentsAsync(identity, ct);
+            if (deployments == null)
+                return null;
+
+            return new ServiceServingSetSnapshot(
+                deployments.ServiceKey,
+                Generation: 1,
+                ActiveRolloutId: string.Empty,
+                Targets: deployments.Deployments
+                    .Where(deployment => string.Equals(
+                        deployment.Status,
+                        ServiceDeploymentStatus.Active.ToString(),
+                        StringComparison.OrdinalIgnoreCase))
+                    .Select(deployment => new ServiceServingTargetSnapshot(
+                        deployment.DeploymentId,
+                        deployment.RevisionId,
+                        deployment.PrimaryActorId,
+                        AllocationWeight: 100,
+                        ServiceServingState.Active.ToString(),
+                        EnabledEndpointIds: []))
+                    .ToArray(),
+                UpdatedAt: deployments.UpdatedAt);
+        }
+
+        public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutSnapshot?>(null);
+
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
+
+        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
     }
 
     private sealed class FakeWorkflowActorBindingReader : IWorkflowActorBindingReader

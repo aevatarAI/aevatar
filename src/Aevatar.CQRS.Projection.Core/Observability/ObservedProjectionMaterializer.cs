@@ -2,6 +2,8 @@ using System.Diagnostics;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Runtime.Observability;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.CQRS.Projection.Core.Observability;
 
@@ -11,10 +13,14 @@ internal sealed class ObservedProjectionMaterializer<TContext, TInner>
     where TInner : class, IProjectionMaterializer<TContext>
 {
     private readonly TInner _inner;
+    private readonly ILogger<ObservedProjectionMaterializer<TContext, TInner>> _logger;
 
-    public ObservedProjectionMaterializer(TInner inner)
+    public ObservedProjectionMaterializer(
+        TInner inner,
+        ILogger<ObservedProjectionMaterializer<TContext, TInner>>? logger = null)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        _logger = logger ?? NullLogger<ObservedProjectionMaterializer<TContext, TInner>>.Instance;
     }
 
     public async ValueTask ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -24,16 +30,19 @@ internal sealed class ObservedProjectionMaterializer<TContext, TInner>
 
         var lastEventId = envelope.Id;
         long? stateVersion = null;
-        if (CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out _, out var observedEventId, out var observedStateVersion))
+        if (CommittedStateEventEnvelope.TryUnpack(envelope, out var published) && published?.StateEvent != null)
         {
-            if (!string.IsNullOrWhiteSpace(observedEventId))
-                lastEventId = observedEventId;
-            stateVersion = observedStateVersion;
+            if (!string.IsNullOrWhiteSpace(published.StateEvent.EventId))
+                lastEventId = published.StateEvent.EventId;
+            stateVersion = published.StateEvent.Version;
         }
 
         using var activity = AevatarActivitySource.StartProjectionMaterialize(typeof(TContext).Name, lastEventId);
         EnrichWorkflowTags(activity, context);
 
+        var startedAt = Stopwatch.GetTimestamp();
+        var result = ProjectionProcessingMetrics.ResultFailed;
+        Exception? terminalException = null;
         try
         {
             await _inner.ProjectAsync(context, envelope, ct);
@@ -46,11 +55,92 @@ internal sealed class ObservedProjectionMaterializer<TContext, TInner>
             }
 
             AevatarActivitySource.SafeSetStatus(activity, ActivityStatusCode.Ok);
+            result = ProjectionProcessingMetrics.ResultCompleted;
+        }
+        catch (OperationCanceledException ex) when (ct.IsCancellationRequested)
+        {
+            terminalException = ex;
+            result = ProjectionProcessingMetrics.ResultCancelled;
+            AevatarActivitySource.SafeSetStatus(activity, ActivityStatusCode.Error, ex.Message);
+            throw;
         }
         catch (Exception ex)
         {
+            terminalException = ex;
             AevatarActivitySource.SafeSetStatus(activity, ActivityStatusCode.Error, ex.Message);
             throw;
+        }
+        finally
+        {
+            var elapsed = Stopwatch.GetElapsedTime(startedAt);
+            ProjectionProcessingMetrics.RecordMaterializerTerminal(
+                context.ProjectionKind,
+                typeof(TInner).Name,
+                result,
+                elapsed);
+            LogTerminal(context.ProjectionKind, stateVersion, result, elapsed, terminalException);
+        }
+    }
+
+    private void LogTerminal(
+        string projectionKind,
+        long? stateVersion,
+        string result,
+        TimeSpan elapsed,
+        Exception? terminalException)
+    {
+        try
+        {
+            if (string.Equals(result, ProjectionProcessingMetrics.ResultFailed, StringComparison.Ordinal))
+            {
+                _logger.LogError(
+                    "Projection materializer failed. projectionKind={ProjectionKind} materializerKind={MaterializerKind} stateVersion={StateVersion} elapsedMs={ElapsedMs} result={Result} errorType={ErrorType}",
+                    projectionKind,
+                    typeof(TInner).Name,
+                    stateVersion,
+                    elapsed.TotalMilliseconds,
+                    result,
+                    terminalException?.GetType().Name ?? "Unknown");
+                return;
+            }
+
+            if (string.Equals(result, ProjectionProcessingMetrics.ResultCancelled, StringComparison.Ordinal))
+            {
+                _logger.LogInformation(
+                    "Projection materializer cancelled. projectionKind={ProjectionKind} materializerKind={MaterializerKind} stateVersion={StateVersion} elapsedMs={ElapsedMs} result={Result}",
+                    projectionKind,
+                    typeof(TInner).Name,
+                    stateVersion,
+                    elapsed.TotalMilliseconds,
+                    result);
+                return;
+            }
+
+            _logger.LogInformation(
+                "Projection materializer completed. projectionKind={ProjectionKind} materializerKind={MaterializerKind} stateVersion={StateVersion} elapsedMs={ElapsedMs} result={Result}",
+                projectionKind,
+                typeof(TInner).Name,
+                stateVersion,
+                elapsed.TotalMilliseconds,
+                result);
+        }
+        catch (Exception ex)
+        {
+            TraceLoggingFailure(ex);
+        }
+    }
+
+    private static void TraceLoggingFailure(Exception exception)
+    {
+        try
+        {
+            Trace.TraceWarning(
+                "Projection materializer terminal log emission failed. errorType={0}",
+                exception.GetType().Name);
+        }
+        catch (Exception)
+        {
+            return;
         }
     }
 
@@ -73,9 +163,11 @@ internal sealed class ObservedCurrentStateProjectionMaterializer<TContext, TInne
 {
     private readonly ObservedProjectionMaterializer<TContext, TInner> _inner;
 
-    public ObservedCurrentStateProjectionMaterializer(TInner inner)
+    public ObservedCurrentStateProjectionMaterializer(
+        TInner inner,
+        ILogger<ObservedProjectionMaterializer<TContext, TInner>>? logger = null)
     {
-        _inner = new ObservedProjectionMaterializer<TContext, TInner>(inner);
+        _inner = new ObservedProjectionMaterializer<TContext, TInner>(inner, logger);
     }
 
     public ValueTask ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
@@ -89,9 +181,11 @@ internal sealed class ObservedProjectionArtifactMaterializer<TContext, TInner>
 {
     private readonly ObservedProjectionMaterializer<TContext, TInner> _inner;
 
-    public ObservedProjectionArtifactMaterializer(TInner inner)
+    public ObservedProjectionArtifactMaterializer(
+        TInner inner,
+        ILogger<ObservedProjectionMaterializer<TContext, TInner>>? logger = null)
     {
-        _inner = new ObservedProjectionMaterializer<TContext, TInner>(inner);
+        _inner = new ObservedProjectionMaterializer<TContext, TInner>(inner, logger);
     }
 
     public ValueTask ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
