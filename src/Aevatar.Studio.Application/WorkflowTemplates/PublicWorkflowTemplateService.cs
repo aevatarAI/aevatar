@@ -118,7 +118,7 @@ public sealed class PublicWorkflowTemplateService
         string? sort)
     {
         var normalizedSort = string.IsNullOrWhiteSpace(sort)
-            ? "displayName"
+            ? "-updated"
             : sort.Trim();
 
         return normalizedSort switch

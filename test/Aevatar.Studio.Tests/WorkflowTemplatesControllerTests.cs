@@ -53,7 +53,11 @@ public sealed class WorkflowTemplatesControllerTests
         var controller = CreateController(
             new RecordingWorkflowCatalogPort(
                 Detail("tmpl-alpha", showInLibrary: true, stateVersion: 7),
-                Detail("tmpl-beta", showInLibrary: true, stateVersion: 9)),
+                Detail(
+                    "tmpl-beta",
+                    showInLibrary: true,
+                    stateVersion: 9,
+                    projectionWatermark: ProjectionWatermark.AddMinutes(5))),
             new RecordingStudioWorkspacePorts());
 
         var result = await controller.List(
@@ -65,7 +69,7 @@ public sealed class WorkflowTemplatesControllerTests
 
         var response = result.Result.Should().BeOfType<OkObjectResult>().Subject
             .Value.Should().BeOfType<PublicWorkflowTemplateListResponse>().Subject;
-        response.Items.Should().ContainSingle(item => item.TemplateId == "tmpl-alpha");
+        response.Items.Should().ContainSingle(item => item.TemplateId == "tmpl-beta");
         response.NextCursor.Should().Be("1");
         response.Freshness.VersionSemantics.Should().Contain("max=9");
         response.Freshness.LastEventId.Should().Be("event-9");
@@ -182,7 +186,8 @@ public sealed class WorkflowTemplatesControllerTests
     private static WorkflowCatalogItemDetail Detail(
         string templateId,
         bool showInLibrary,
-        long stateVersion) =>
+        long stateVersion,
+        DateTimeOffset? projectionWatermark = null) =>
         new()
         {
             Catalog = new WorkflowCatalogItem
@@ -194,7 +199,7 @@ public sealed class WorkflowTemplatesControllerTests
                 RequiredConnectors = ["nyxid-calendar"],
                 StepCount = 2,
                 AuthorityStateVersion = stateVersion,
-                ProjectionWatermark = ProjectionWatermark,
+                ProjectionWatermark = projectionWatermark ?? ProjectionWatermark,
                 LastEventId = $"event-{stateVersion}",
             },
             Yaml = $"name: {templateId}\ndescription: Collect and summarize the day.\nsteps:\n  - id: collect\n    type: connector_call\n  - id: summarize\n    type: llm_call\n",
