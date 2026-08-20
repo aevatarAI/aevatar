@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task with verification checkpoints.
 
-**Goal:** Make Workflow Schedule creation match the approved Schedule design baseline by opening a direct quick modal from the catalogue and sharing one configure/preview/review/accepted flow with the editor panel.
+**Goal:** Make Workflow Schedule creation match the approved Schedule design baseline by opening a direct quick modal from the catalogue and sharing one configure/preview/review/create flow with the editor panel.
 
-**Architecture:** Keep `WorkflowScheduleSurface` as the single owner of Schedule query and mutation state. Replace the nested form Modal with a surface-local state machine (`configure`, `previewing`, `review`, `accepted`) that renders either inside the catalogue Modal or the editor Drawer. The catalogue entry opens directly in `configure`; the editor keeps list/detail management and transitions into the same creation surface. Continue using only workflow-scoped Schedule APIs.
+**Architecture:** Keep `WorkflowScheduleSurface` as the single owner of Schedule query and mutation state. Replace the nested form Modal with a surface-local state machine (`configure`, `previewing`, `review`) that renders either inside the catalogue Modal or the editor Drawer. The catalogue entry opens directly in `configure`; after create it closes with a Toast, while the editor returns to list management with the same Toast. Continue using only workflow-scoped Schedule APIs.
 
 **Tech Stack:** React, TypeScript, Ant Design, TanStack Query, Jest Testing Library, existing Workflow vNext CSS tokens and i18n helpers.
 
@@ -49,9 +49,9 @@
 
   Render the blue Workflow context block, Schedule name, `How often` repeat/time/timezone controls, `write it as cron instead` disclosure, `Run input (optional)`, and footer actions `Cancel` plus `Review schedule`. Map presets to five-field cron without calculating fire times in the browser.
 
-- [x] **Step 3: Render previewing, review, and accepted states**
+- [x] **Step 3: Render previewing and review states**
 
-  `Review schedule` calls `workflowScheduleApi.preview(scopeId, workflowId, { cronExpression, timezone, count: 5 })`. Previewing shows a pending state, errors return to configure while preserving fields, review shows the Workflow/name/repeat/timezone/enabled/prompt/five returned fire times, and create submits the existing `WorkflowScheduleConfigurationInput`. After `202 Accepted`, keep the accepted state visible while refreshing the workflow-scoped list.
+  `Review schedule` calls `workflowScheduleApi.preview(scopeId, workflowId, { cronExpression, timezone, count: 5 })`. Previewing shows a pending state, errors return to configure while preserving fields, review shows the Workflow/name/repeat/timezone/enabled/prompt/five returned fire times, and create submits the existing `WorkflowScheduleConfigurationInput`. After `202 Accepted`, close the catalogue modal or return the editor panel to its list, show a Toast, and continue refreshing the workflow-scoped list.
 
 - [x] **Step 4: Add only the required localized labels and messages**
 

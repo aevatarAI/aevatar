@@ -556,16 +556,12 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.verified': 'Verified',
   'workflowActivityVNext.settings.notVerified': 'Not verified',
   'workflowActivityVNext.settings.workflowExecution': 'Workflow execution',
-  'workflowActivityVNext.schedule.accepted':
-    'Schedule accepted. Refreshing the Workflow schedule list…',
   'workflowActivityVNext.schedule.actionAccepted':
     'Schedule action accepted. Refreshing the Workflow schedule list…',
-  'workflowActivityVNext.schedule.acceptedDescription':
-    'The request is continuing in the background. Closing this view will not cancel it.',
-  'workflowActivityVNext.schedule.backToSchedules': 'Back to schedules',
   'workflowActivityVNext.schedule.create': 'Create schedule',
   'workflowActivityVNext.schedule.createTitle': 'Create schedule',
-  'workflowActivityVNext.schedule.created': 'Schedule creation accepted',
+  'workflowActivityVNext.schedule.created':
+    'Schedule request accepted. It will appear in the list shortly.',
   'workflowActivityVNext.schedule.cron': 'Cron expression',
   'workflowActivityVNext.schedule.cronSummary': 'Cron: {cron}',
   'workflowActivityVNext.schedule.hourly': 'Every hour',
@@ -622,9 +618,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.reviewTitle': 'Review schedule',
   'workflowActivityVNext.schedule.save': 'Save changes',
   'workflowActivityVNext.schedule.scheduleName': 'Schedule name',
-  'workflowActivityVNext.schedule.requestAccepted': 'Schedule request accepted',
-  'workflowActivityVNext.schedule.refreshingSchedules':
-    'Refreshing Workflow schedules',
   'workflowActivityVNext.schedule.subtitle': 'Recurring runs for {name}',
   'workflowActivityVNext.schedule.time': 'Time',
   'workflowActivityVNext.schedule.timezone': 'Timezone',

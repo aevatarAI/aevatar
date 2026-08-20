@@ -1467,9 +1467,8 @@ steps:
       if (!workflow || !quickScheduleDraft) return;
       const stepPresentation = {
         configure: ["New schedule", "Configure recurring work for this published Workflow."],
-        previewing: ["Previewing schedule", "The Workflow Schedule API is validating the recurrence."],
+        previewing: ["Previewing schedule", "Checking the recurring setup."],
         review: ["Review schedule", "Confirm the recurring setup before creating it."],
-        accepted: ["Schedule request accepted", "Wait for Workflow Schedule state before treating it as active."]
       }[quickScheduleStep];
       let root;
       let content;
@@ -1533,13 +1532,6 @@ steps:
         content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Checking</span></div><div class="schedule-quick-review"><div><h3>Previewing schedule</h3><p>Checking the recurring setup.</p></div></div>`;
         footer.innerHTML = `<button type="button" class="button" id="quick-schedule-preview-cancel">Cancel</button><button type="button" class="button primary" disabled>Previewing...</button>`;
         footer.querySelector("#quick-schedule-preview-cancel").onclick = exitScheduleCreation;
-        return;
-      }
-
-      if (quickScheduleStep === "accepted") {
-        content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>${escapeHtml(quickScheduleDraft.cadence)} · ${escapeHtml(quickScheduleDraft.timeZone)} · ${escapeHtml(quickScheduleDraft.cronExpression)}</span></div><span class="schedule-state pending">Pending</span></div><div class="schedule-quick-review"><div><h3>202 Accepted</h3><p>Refreshing this Workflow's schedules until the new Schedule appears.</p></div><div class="schedule-quick-preview"><strong>Not yet Active</strong><p>Enabled state and next fire appear after the new Schedule is visible.</p></div></div>`;
-        footer.innerHTML = `<button type="button" class="button primary" id="quick-schedule-close-accepted">Close</button>`;
-        footer.querySelector("#quick-schedule-close-accepted").onclick = exitScheduleCreation;
         return;
       }
 
@@ -1641,10 +1633,9 @@ steps:
         headers: {}
       };
       void createRequest;
-      quickScheduleStep = "accepted";
-      renderScheduleCreation();
       refreshWorkflowSchedules(quickScheduleWorkflow);
-      showToast("Schedule request accepted. Refreshing Workflow schedules.");
+      showToast("Schedule request accepted. It will appear in the Workflow schedule list shortly.");
+      exitScheduleCreation();
     }
 
     function openSchedulePrototype(id = "wf-feedback") {

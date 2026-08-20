@@ -480,34 +480,15 @@ def frame_creation_pending(index: int) -> None:
     button(cx + 1140, header_y + 70, 80, "Schedule", color=BLUE, bg=BLUE_BG)
     button(cx + 1228, header_y + 70, 62, "Open")
 
-    modal_x, modal_y, modal_w, modal_h = cx + 520, cy + 48, 760, 720
-    rect(cx + 500, cy + 10, cw - 512, 820, bg="#eef2f6", stroke="#eef2f6", radius=False)
-    rect(modal_x, modal_y, modal_w, modal_h, bg=SURFACE, stroke=INK, sw=2)
-    text(modal_x + 28, modal_y + 28, "New schedule", FS_HEAD, INK, width=300)
-    button(modal_x + modal_w - 58, modal_y + 20, 32, "×", color=MUTED)
-    schedule_summary(modal_x + 28, modal_y + 82, modal_w - 56)
-    rect(modal_x + 28, modal_y + 184, modal_w - 56, 118, bg=BLUE_BG, stroke="#84adff")
-    text(modal_x + 50, modal_y + 208, "202 ACCEPTED", FS_SMALL, BLUE,
-         font=FONT_MONO, width=240)
-    text(modal_x + 50, modal_y + 240, "Refreshing Workflow schedules", FS_HEAD, INK,
-         width=520)
-    text(modal_x + 50, modal_y + 274,
-         "The create request was accepted. Its final read-model state has not arrived yet.",
-         FS_SMALL, MUTED, width=620)
-    rect(modal_x + 28, modal_y + 330, modal_w - 56, 132, bg=SUBTLE, stroke=LINE)
-    text(modal_x + 50, modal_y + 352, "NOT YET ACTIVE", FS_SMALL, AMBER,
-         font=FONT_MONO, width=220)
-    text(modal_x + 50, modal_y + 386,
-         "Enabled state and next fire appear only after Workflow Schedule detail is observed.",
-         FS_BODY, INK, width=620)
-    text(modal_x + 50, modal_y + 430,
-         "You can close this dialog. This Workflow's schedule list keeps refreshing.",
-         FS_SMALL, MUTED, width=620)
-    field(modal_x + 28, modal_y + 492, modal_w - 56, "Observation",
-          "GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules", disabled=True)
-    button(modal_x + modal_w - 146, modal_y + 650, 118, "Close", primary=True, color=BLUE)
-    annotation(fx + FRAME_W + 42, fy + 240, "4", "Accepted is not active",
-                "The dialog remains honest until the Workflow-scoped Schedule list or detail observes the result.")
+    toast_x, toast_y, toast_w, toast_h = cx + 680, cy + 28, 560, 118
+    rect(toast_x, toast_y, toast_w, toast_h, bg=GREEN_BG, stroke=GREEN)
+    text(toast_x + 24, toast_y + 22, "Schedule request accepted", FS_HEAD, GREEN,
+         width=toast_w - 48)
+    text(toast_x + 24, toast_y + 62,
+         "It will appear in this Workflow's schedule list shortly.",
+         FS_SMALL, INK, width=toast_w - 48)
+    annotation(fx + FRAME_W + 42, fy + 240, "4", "Toast, then keep working",
+                "202 Accepted is acknowledged without a second modal; the Workflow-scoped list continues observing the new Schedule.")
     end_frame()
 
 

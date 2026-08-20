@@ -518,16 +518,12 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.verified': '已验证',
     'workflowActivityVNext.settings.notVerified': '未验证',
     'workflowActivityVNext.settings.workflowExecution': '工作流执行',
-    'workflowActivityVNext.schedule.accepted':
-      '计划任务已受理，正在刷新工作流计划列表…',
     'workflowActivityVNext.schedule.actionAccepted':
       '计划任务操作已受理，正在刷新工作流计划列表…',
-    'workflowActivityVNext.schedule.acceptedDescription':
-      '请求正在后台继续处理，关闭此视图不会取消请求。',
-    'workflowActivityVNext.schedule.backToSchedules': '返回计划任务',
     'workflowActivityVNext.schedule.create': '创建计划任务',
     'workflowActivityVNext.schedule.createTitle': '创建计划任务',
-    'workflowActivityVNext.schedule.created': '计划任务创建请求已受理',
+    'workflowActivityVNext.schedule.created':
+      '计划任务请求已受理，稍后会出现在列表中。',
     'workflowActivityVNext.schedule.cron': 'Cron 表达式',
     'workflowActivityVNext.schedule.cronSummary': 'Cron：{cron}',
     'workflowActivityVNext.schedule.hourly': '每小时',
@@ -583,9 +579,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.reviewTitle': '复核计划任务',
     'workflowActivityVNext.schedule.save': '保存更改',
     'workflowActivityVNext.schedule.scheduleName': '计划任务名称',
-    'workflowActivityVNext.schedule.requestAccepted': '计划任务请求已受理',
-    'workflowActivityVNext.schedule.refreshingSchedules':
-      '正在刷新工作流计划任务',
     'workflowActivityVNext.schedule.subtitle': '为 {name} 创建周期性运行',
     'workflowActivityVNext.schedule.time': '时间',
     'workflowActivityVNext.schedule.timezone': '时区',

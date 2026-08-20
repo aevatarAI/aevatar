@@ -75,10 +75,10 @@ models.
 
 ## Creation Flow
 
-The shared state machine is:
+The shared creation flow is:
 
 ```text
-configure -> previewing -> review -> accepted -> refresh list/detail
+configure -> previewing -> review -> create -> toast -> refresh list/detail
 ```
 
 ### Configure
@@ -167,15 +167,17 @@ with:
 }
 ```
 
-### Accepted
+### Create acknowledgement
 
-Create returns `202 Accepted` and a mutation receipt. The UI may show the
-receipt's Schedule identity, but it must not claim Active, next fire, or final
-state from the command response.
+Create returns `202 Accepted` and a mutation receipt. The UI must not claim
+Active, next fire, or final state from the command response. The catalogue
+modal closes immediately and shows a non-blocking Toast saying that the
+request was accepted and will appear in the list shortly. The editor panel
+returns to the Schedule list and shows the same Toast.
 
-The modal shows `Refreshing Workflow schedules` and polls or refreshes the
-Workflow-scoped list or detail until the read model observes the mutation.
-Closing the modal does not cancel the accepted server command.
+The Workflow-scoped list continues refreshing while the panel remains open;
+the next list mount also refetches, so the read model remains the authority for
+the created Schedule. No second accepted-state modal is needed.
 
 ## Existing Schedule Management
 

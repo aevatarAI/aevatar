@@ -157,7 +157,7 @@ failures rather than undocumented implementation choices.
 - `schedule-workflows-list-modal.png`：从 Workflows 列表直接打开的新建 Schedule modal。
 - `schedule-workflow-editor-panel.png`：Workflow 编辑器右侧的新建 Schedule panel。
 - `schedule-review.png`：确认 Workflow、名称、周期、时区、可选运行输入、创建后启用状态与五次 next-fire 预览的创建复核页。
-- `schedule-creation-pending.png`：创建命令 `202 Accepted` 后等待 Schedule 状态的页面。
+- `schedule-creation-pending.png`：创建命令 `202 Accepted` 后回到列表并显示 Toast 的页面。
 - `schedule-detail.png`：Workflow 内的 Schedule 详情与生命周期动作。
 - `schedule-edit.png`：Workflow 内修改重复规则、时间、时区和可选运行输入的页面。
 - `prototype-workflows.png`：Workflows 桌面视图截图。
@@ -239,7 +239,7 @@ Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidra
 1. `01 · Workflows — quick schedule modal`：在 Workflow 列表点击已发布行的 `Schedule`，直接打开新建配置弹窗，不先进入编辑器。
 2. `02 · Workflow — schedule setup panel`：在画布旁用 `Repeat`、时间和时区构造重复规则；默认只显示人类可读摘要，`write it as cron instead` 才打开 raw cron，Review 时显示 next-fire 预览。
 3. `03 · Schedule — review before creation`：确认 Workflow、Schedule name、周期、时区、可选运行输入、enabled 与五次 next-fire 预览，然后直接创建。
-4. `04 · Schedule — creation pending`：创建命令返回 `202 Accepted` 后刷新当前 Workflow 的 Schedule list/detail，不提前声称 Active 或 next fire 已存在。
+4. `04 · Schedule — creation pending`：创建命令返回 `202 Accepted` 后立即回到列表并显示 Toast；后台继续刷新当前 Workflow 的 Schedule list/detail，不提前声称 Active 或 next fire 已存在。
 5. `05 · Workflow — schedule detail`：在 Workflow canvas 旁查看 API 返回的 enabled、next/last fire、计数、最近 fires 与生命周期动作。
 6. `06 · Workflow — change schedule`：在 Workflow panel 修改周期和运行输入，并在 `PUT` 中保留已读取的 enabled 状态。
 上述 6 个 frame 分别渲染为独立 1440×900 PNG；不再生成九宫格或总览拼图。
@@ -266,7 +266,7 @@ Workflows
 1. 打开 `prototype.html`，默认进入 Workflows；点击已发布 Workflow 行的 `Schedule` 会直接打开 `New schedule` 配置弹窗，弹窗关闭后仍留在列表。只评审编辑器 Schedule panel 时可直接打开 `prototype-schedule.html`。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
 3. 在画布点击节点，右侧打开 Node configuration；`Add node` 从左侧打开 Node library；`Edit YAML` 从右侧打开 YAML 面板。
-4. 打开一个已发布 Workflow，点击编辑器里的 `Schedule` 检查右侧 Workflow schedules 面板，再点击 `New schedule` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 保持禁用并显示 publish 原因。列表行 modal 与编辑器 panel 共享 `configure -> previewing -> review -> accepted`：先调用 `/api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview`，再直接调用 Workflow-scoped create；`202 Accepted` 后刷新当前 Workflow 的 list/detail，不提前声称 Active 或 next fire 已存在。详情、更新、enable/disable、run-now 与 delete 也只使用相同的 Workflow-scoped resource。Schedule 流程不提供 Activity 跳转或筛选。
+4. 打开一个已发布 Workflow，点击编辑器里的 `Schedule` 检查右侧 Workflow schedules 面板，再点击 `New schedule` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 保持禁用并显示 publish 原因。列表行 modal 与编辑器 panel 共享 `configure -> previewing -> review -> create -> toast`：先调用 `/api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview`，再直接调用 Workflow-scoped create；`202 Accepted` 后关闭 modal、显示 Toast，并刷新当前 Workflow 的 list/detail，不提前声称 Active 或 next fire 已存在。详情、更新、enable/disable、run-now 与 delete 也只使用相同的 Workflow-scoped resource。Schedule 流程不提供 Activity 跳转或筛选。
 5. 在列表或编辑器点击 `Run`，确认修订、输入、连接和外部影响。
 6. 勾选外部影响确认后点击 `Run`。记录会立即写入浏览器 `localStorage`，编辑器显示运行状态。
 7. 打开 Activity，点击任意一行查看详情。

@@ -48,7 +48,7 @@ type ScheduleForm = {
   readonly prompt: string;
 };
 
-type CreationStep = 'configure' | 'previewing' | 'review' | 'accepted';
+type CreationStep = 'configure' | 'previewing' | 'review';
 type ScheduleSurfaceView = 'list' | 'form';
 type RepeatPreset = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly';
 
@@ -396,9 +396,18 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
           workflowId,
           input,
         );
-        setCreationStep('accepted');
         setPendingObservationScheduleId(receipt.scheduleId);
-        setSaving(false);
+        setCreationStep('configure');
+        setPreview(null);
+        setEditingSchedule(null);
+        setSurfaceView(mode === 'modal' ? 'form' : 'list');
+        toast.success(
+          t(
+            'workflowActivityVNext.schedule.created',
+            'Schedule request accepted. It will appear in the list shortly.',
+          ),
+        );
+        if (mode === 'modal') onClose();
         void refreshSchedules().catch((error) => {
           toast.error(errorMessage(error));
         });
@@ -534,12 +543,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       ? workflowName
       : creationStep === 'review'
         ? t('workflowActivityVNext.schedule.reviewTitle', 'Review schedule')
-        : creationStep === 'accepted'
-          ? t(
-              'workflowActivityVNext.schedule.requestAccepted',
-              'Schedule request accepted',
-            )
-          : t('workflowActivityVNext.schedule.new', 'New schedule');
+        : t('workflowActivityVNext.schedule.new', 'New schedule');
 
   const workflowContext = (
     <div className="wa-vnext__schedule-context">
@@ -935,36 +939,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     </div>
   ) : null;
 
-  const acceptedView = (
-    <div className="wa-vnext__schedule-accepted" role="status">
-      {workflowContext}
-      <div className="wa-vnext__schedule-accepted-panel">
-        <p>
-          {t(
-            'workflowActivityVNext.schedule.refreshingSchedules',
-            'Refreshing Workflow schedules',
-          )}
-        </p>
-        <span>
-          {t(
-            'workflowActivityVNext.schedule.acceptedDescription',
-            'The request is continuing in the background. Closing this view will not cancel it.',
-          )}
-        </span>
-      </div>
-      <footer className="wa-vnext__schedule-footer">
-        <Button onClick={leaveForm} type="primary">
-          {mode === 'panel'
-            ? t(
-                'workflowActivityVNext.schedule.backToSchedules',
-                'Back to schedules',
-              )
-            : t('workflowActivityVNext.common.close', 'Close')}
-        </Button>
-      </footer>
-    </div>
-  );
-
   const listView = (
     <div className="wa-vnext__schedule-surface">
       <div className="wa-vnext__schedule-toolbar">
@@ -1135,8 +1109,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     />
   ) : surfaceView === 'list' ? (
     listView
-  ) : creationStep === 'accepted' ? (
-    acceptedView
   ) : creationStep === 'review' ? (
     reviewView
   ) : (

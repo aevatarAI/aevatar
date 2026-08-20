@@ -23,12 +23,12 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "a70b97f12956cdfa6295e062f84b17196ebdf970941d2fcdc0b441439897a300",
-    "schedule-workflow-editor-panel.png": "7d2fdebc28b45a4d0de532889b207f111206f253657d1cfd1be0cba74983e724",
-    "schedule-review.png": "7c172330b556696fecbe2fd404870cad8d1f6711290a7a30e2a0b7c6235ae05e",
-    "schedule-creation-pending.png": "6513f3140b11388049461a1a7a9bceef590b14ee9a2cb24491d62319a23149dd",
-    "schedule-detail.png": "4cd0c478d0f5c8cf3afa76a34fbcaf091b7f35106706ab5102026e02ed06001f",
-    "schedule-edit.png": "f4ecd76d0b466383aed408f89628991abb46d4a7eebad07a23f68c4fc5de75c8",
+    "schedule-workflows-list-modal.png": "2870a584fa814b7011326f98bd63480941b4c9e01bfc42f58a18a29003b0bfe2",
+    "schedule-workflow-editor-panel.png": "52db5a84dfca08ef5ac540e03d0931f69e46a16dbc4ce2fe5d1994582ccf4b6e",
+    "schedule-review.png": "1bc8adbc4be3514cc99cae7b0e1fa09d3c133910307d322ac180f49b63da4944",
+    "schedule-creation-pending.png": "c03e966168aed50837e9b3def3537579f6923d8d2be5add867c43e63432cbcee",
+    "schedule-detail.png": "14f6ba7cbb11f035817781eff9dbf56b2c13ad0d4e3ba5193c56de41b3551430",
+    "schedule-edit.png": "06429fbb9145bfcae5fe8a522b089f46957e7f19c3c3743e6dda8941a51be884",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
@@ -36,7 +36,7 @@ OBSOLETE_SCHEDULE_PNGS = (
     "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "a53632168678b82baa1999aa8db116f820320baa922e0cc92d842618777ed988"
+EXPECTED_SCHEDULE_SHA256 = "c6d72b82d900845f3af75c272a0c8d164d3143588e909043f387e9dfccb41a62"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -220,7 +220,7 @@ def main() -> None:
             raise SystemExit(f"schedule frame is missing required copy: {required}")
     if "run input (optional)" not in schedule_visible_text_casefolded:
         raise SystemExit("schedule frame incorrectly hides optional recurring prompt semantics")
-    for required_state in ("enabled after creation", "not yet active"):
+    for required_state in ("enabled after creation",):
         if required_state not in schedule_visible_text_casefolded:
             raise SystemExit(f"schedule frames are missing honest Schedule state: {required_state}")
     if "trigger" in schedule_visible_text_casefolded:
@@ -342,9 +342,8 @@ def main() -> None:
     pending_text = schedule_frame_text("04 · Schedule — creation pending").casefold()
     for required in (
         "202 accepted",
-        "not yet active",
-        "refreshing workflow schedules",
-        "get /api/scopes/{scopeid}/workflows/{workflowid}/schedules",
+        "schedule request accepted",
+        "appear in this workflow's schedule list shortly",
     ):
         if required not in pending_text:
             raise SystemExit(f"Schedule pending frame is missing honest accepted state: {required}")
@@ -409,9 +408,8 @@ def main() -> None:
         "prototypeSchedulePreviewByCron",
         "const presetCron = quickScheduleCronByRepeat[repeat]",
         "browserTimeZone()",
-        "202 Accepted",
-        "Refreshing this Workflow's schedules until the new Schedule appears.",
-        "Not yet Active",
+        "Schedule request accepted. It will appear in the Workflow schedule list shortly.",
+        "exitScheduleCreation();",
         "Save and publish the latest changes before scheduling.",
     ):
         if required not in prototype_text:
@@ -440,6 +438,8 @@ def main() -> None:
         "Dedicated Agent Key",
         "Review and reauthorize",
         "/automations/preflight",
+        'quickScheduleStep === "accepted"',
+        "quick-schedule-close-accepted",
     ):
         if forbidden in prototype_text:
             raise SystemExit(f"prototype quick-create Schedule modal still contains optimistic or shared sample state: {forbidden}")

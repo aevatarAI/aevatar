@@ -133,8 +133,9 @@ describe('WorkflowScheduleSurface', () => {
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });
 
-  it('previews five fire times before creating and keeps accepted state visible', async () => {
-    renderSurface(true);
+  it('previews five fire times, closes the modal, and shows a success toast', async () => {
+    const onClose = jest.fn();
+    renderSurface(true, 'modal', onClose);
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
       target: { value: 'Daily workflow run' },
@@ -203,19 +204,16 @@ describe('WorkflowScheduleSurface', () => {
         mockedWorkflowScheduleApi.list.mock.calls.length,
       ).toBeGreaterThanOrEqual(2),
     );
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Schedule request accepted. It will appear in the list shortly.',
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
     expect(
-      screen.getByText('Schedule request accepted', {
-        selector: '.ant-modal-title',
-      }),
-    ).toBeVisible();
-    expect(
-      screen.queryByRole('heading', { name: 'Schedule request accepted' }),
+      screen.queryByText('Refreshing Workflow schedules'),
     ).not.toBeInTheDocument();
-    expect(screen.getByText('Refreshing Workflow schedules')).toBeVisible();
-    expect(mockToast.success).not.toHaveBeenCalled();
   });
 
-  it('keeps accepted creation closable while schedule refresh continues', async () => {
+  it('returns the editor panel to the list while schedule refresh continues', async () => {
     let listCallCount = 0;
     let resolveRefresh: (value: {
       items: never[];
@@ -235,8 +233,13 @@ describe('WorkflowScheduleSurface', () => {
         ? Promise.resolve({ items: [], nextCursor: null, totalCount: 0 })
         : deferredRefresh;
     });
-    const onClose = jest.fn();
-    const view = renderSurface(true, 'modal', onClose);
+    const view = renderSurface(true, 'panel');
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'No schedules yet' }),
+      ).toBeVisible(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'New schedule' }));
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
       target: { value: 'Deferred refresh schedule' },
@@ -244,24 +247,17 @@ describe('WorkflowScheduleSurface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
     await waitFor(() =>
       expect(
-        screen.getByText('Review schedule', { selector: '.ant-modal-title' }),
+        screen.getByText('Review schedule', { selector: '.ant-drawer-title' }),
       ).toBeVisible(),
     );
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
     await waitFor(() =>
-      expect(
-        screen.getByText('Schedule request accepted', {
-          selector: '.ant-modal-title',
-        }),
-      ).toBeVisible(),
+      expect(mockToast.success).toHaveBeenCalledWith(
+        'Schedule request accepted. It will appear in the list shortly.',
+      ),
     );
-    expect(
-      screen.queryByRole('heading', { name: 'Schedule request accepted' }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText('Schedules')).toBeVisible();
     await waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(2));
-
-    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[1]);
-    expect(onClose).toHaveBeenCalledTimes(1);
     resolveRefresh({ items: [], nextCursor: null, totalCount: 0 });
     view.unmount();
   });
@@ -290,7 +286,14 @@ describe('WorkflowScheduleSurface', () => {
         totalCount: listCallCount >= 3 ? 1 : 0,
       });
     });
-    const view = renderSurface(true);
+    const view = renderSurface(true, 'panel');
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'No schedules yet' }),
+      ).toBeVisible(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'New schedule' }));
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
       target: { value: 'Observed schedule' },
@@ -298,13 +301,15 @@ describe('WorkflowScheduleSurface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
     await waitFor(() =>
       expect(
-        screen.getByText('Review schedule', { selector: '.ant-modal-title' }),
+        screen.getByText('Review schedule', { selector: '.ant-drawer-title' }),
       ).toBeVisible(),
     );
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
 
     await waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(2));
-    expect(screen.getByText('Refreshing Workflow schedules')).toBeVisible();
+    expect(mockToast.success).toHaveBeenCalledWith(
+      'Schedule request accepted. It will appear in the list shortly.',
+    );
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 1100));
