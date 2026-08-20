@@ -70,7 +70,7 @@ public class WorkflowCatalogToolsTests
         template.GetProperty("authority_state_version").GetInt64().Should().Be(7);
         template.GetProperty("projection_watermark").GetDateTimeOffset().Should().Be(ProjectionWatermark);
         template.GetProperty("last_event_id").GetString().Should().Be("event-7");
-        port.Calls.Should().Equal("ListWorkflowCatalog");
+        port.Calls.Should().Equal("ListPublicWorkflowCatalog");
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class WorkflowCatalogToolsTests
             .GetProperty("target_role").GetString().Should().Be("summarizer");
         root.GetProperty("edges")[0].GetProperty("from").GetString().Should().Be("collect");
         root.GetProperty("edges")[0].GetProperty("to").GetString().Should().Be("summarize");
-        port.Calls.Should().Equal("GetWorkflowDetail:daily_digest");
+        port.Calls.Should().Equal("GetPublicWorkflowDetail:daily_digest");
     }
 
     [Fact]
@@ -317,7 +317,7 @@ public class WorkflowCatalogToolsTests
         var output = await tool.ExecuteAsync("""{"template_name":"missing"}""");
 
         AssertError(output, "workflow_template_not_found", "missing");
-        port.Calls.Should().Equal("GetWorkflowDetail:missing");
+        port.Calls.Should().Equal("GetPublicWorkflowDetail:missing");
     }
 
     [Fact]
@@ -410,6 +410,7 @@ public class WorkflowCatalogToolsTests
             Catalog = new WorkflowCatalogItem
             {
                 Name = "daily_digest",
+                ShowInLibrary = true,
                 AuthorityStateVersion = 7,
                 ProjectionWatermark = ProjectionWatermark,
                 LastEventId = "event-7",
@@ -488,6 +489,32 @@ public class WorkflowCatalogToolsTests
                 return Task.FromException<WorkflowCatalogItemDetail?>(Failure);
 
             return Task.FromResult(Detail);
+        }
+
+        public Task<IReadOnlyList<WorkflowCatalogItem>> ListPublicWorkflowCatalogAsync(
+            CancellationToken ct = default)
+        {
+            Calls.Add("ListPublicWorkflowCatalog");
+            CancellationTokens.Add(ct);
+            if (Failure is not null)
+                return Task.FromException<IReadOnlyList<WorkflowCatalogItem>>(Failure);
+
+            IReadOnlyList<WorkflowCatalogItem> publicCatalog = Catalog
+                .Where(static item => item.ShowInLibrary)
+                .ToList();
+            return Task.FromResult(publicCatalog);
+        }
+
+        public Task<WorkflowCatalogItemDetail?> GetPublicWorkflowDetailAsync(
+            string templateId,
+            CancellationToken ct = default)
+        {
+            Calls.Add($"GetPublicWorkflowDetail:{templateId}");
+            CancellationTokens.Add(ct);
+            if (Failure is not null)
+                return Task.FromException<WorkflowCatalogItemDetail?>(Failure);
+
+            return Task.FromResult(Detail?.Catalog.ShowInLibrary == true ? Detail : null);
         }
     }
 

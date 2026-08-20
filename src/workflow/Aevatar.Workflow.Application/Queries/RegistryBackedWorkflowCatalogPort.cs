@@ -58,6 +58,14 @@ internal sealed class RegistryBackedWorkflowCatalogPort : IWorkflowCatalogPort, 
         });
     }
 
+    public Task<IReadOnlyList<WorkflowCatalogItem>> ListPublicWorkflowCatalogAsync(CancellationToken ct = default) =>
+        ListWorkflowCatalogAsync(ct);
+
+    public Task<WorkflowCatalogItemDetail?> GetPublicWorkflowDetailAsync(
+        string templateId,
+        CancellationToken ct = default) =>
+        GetWorkflowDetailAsync(templateId, ct);
+
     public Task<WorkflowCapabilitiesDocument> GetCapabilitiesAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

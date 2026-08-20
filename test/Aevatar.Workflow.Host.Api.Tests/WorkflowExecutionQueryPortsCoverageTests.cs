@@ -1,3 +1,4 @@
+using System.Globalization;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
@@ -147,6 +148,26 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             .BeNull();
         catalogReader.QueryCalls.Should().Be(1);
         catalogReader.GetCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task WorkflowCatalogReadModelQueryPort_ShouldPageThroughCatalogReadModelsBeforePublicFiltering()
+    {
+        var updatedAt = DateTimeOffset.Parse("2026-03-17T12:00:00+00:00");
+        var catalogReader = new RecordingDocumentReader<WorkflowCatalogCurrentStateDocument>
+        {
+            Items = Enumerable.Range(0, 1001)
+                .Select(index => BuildCatalogDocument($"template-{index:D4}", updatedAt.AddMinutes(index), index, index == 1000))
+                .ToList(),
+        };
+        var port = new WorkflowCatalogReadModelQueryPort(catalogReader, new WorkflowCatalogReadModelMapper());
+
+        var catalog = await port.ListPublicWorkflowCatalogAsync();
+
+        catalog.Should().ContainSingle(item => item.Name == "template-1000");
+        catalogReader.QueryCalls.Should().Be(2);
+        catalogReader.Queries.Select(query => query.Take).Should().Equal(1000, 1000);
+        catalogReader.Queries.Select(query => query.Cursor).Should().Equal(null, "1000");
     }
 
     [Fact]
@@ -458,10 +479,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         RecordingDocumentReader<WorkflowRunInsightReportDocument> ReportReader,
         RecordingProjectionGraphStore GraphStore);
 
-    private static WorkflowCatalogCurrentStateDocument BuildCatalogDocument(
-        string workflowName,
-        DateTimeOffset updatedAt,
-        int sortOrder = 1) =>
+    private static WorkflowCatalogCurrentStateDocument BuildCatalogDocument(string workflowName, DateTimeOffset updatedAt, int sortOrder = 1, bool showInLibrary = true) =>
         new()
         {
             Id = workflowName,
@@ -475,7 +493,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             SortOrder = sortOrder,
             Source = "repo",
             SourceLabel = "Starter",
-            ShowInLibrary = true,
+            ShowInLibrary = showInLibrary,
             StateVersion = 10 + sortOrder,
             LastEventId = $"evt-{sortOrder}",
             UpdatedAt = updatedAt,
@@ -486,29 +504,20 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 {
                     Id = "operator", Name = "Operator", SystemPrompt = "Operate.", Provider = "openai",
                     Model = "gpt-test", Temperature = 0.1f, MaxTokens = 512, MaxToolRounds = 2,
-                    MaxHistoryMessages = 3, EventModules = ["audit", "trace"], EventRoutes = "route:*",
-                    Connectors = ["aevatar_cli"],
+                    MaxHistoryMessages = 3, EventModules = ["audit", "trace"], EventRoutes = "route:*", Connectors = ["aevatar_cli"],
                 },
             ],
             Steps =
             [
                 new()
                 {
-                    Id = "start",
-                    Type = "assign",
-                    TargetRole = "operator",
+                    Id = "start", Type = "assign", TargetRole = "operator",
                     Parameters = { ["target"] = "result" },
                     Branches = { ["done"] = "child" },
-                    Children =
-                    [
-                        new() { Id = "child", Type = "assign", TargetRole = "operator" },
-                    ],
+                    Children = [new() { Id = "child", Type = "assign", TargetRole = "operator" }],
                 },
             ],
-            Edges =
-            [
-                new() { From = "start", To = "child", Label = "child" },
-            ],
+            Edges = [new() { From = "start", To = "child", Label = "child" }],
             RequiredConnectors = ["aevatar_cli"],
             WorkflowCalls = ["child_workflow"],
         };
@@ -520,14 +529,24 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         public int QueryCalls { get; private set; }
         public TReadModel? Item { get; init; }
         public IReadOnlyList<TReadModel> Items { get; init; } = [];
+        public List<ProjectionDocumentQuery> Queries { get; } = [];
 
-        public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)
-        { _ = key; ct.ThrowIfCancellationRequested(); GetCalls++; return Task.FromResult(Item); }
+        public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default) { _ = key; ct.ThrowIfCancellationRequested(); GetCalls++; return Task.FromResult(Item); }
 
-        public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default)
-        { _ = query; ct.ThrowIfCancellationRequested(); QueryCalls++; return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel> { Items = Items }); }
+        public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(ProjectionDocumentQuery query, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            QueryCalls++;
+            Queries.Add(query);
+
+            var skip = string.IsNullOrWhiteSpace(query.Cursor) ? 0 : int.Parse(query.Cursor, CultureInfo.InvariantCulture);
+            var take = query.Take <= 0 ? Items.Count : query.Take;
+            var page = Items.Skip(skip).Take(take).ToList();
+            var nextSkip = skip + page.Count;
+
+            return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel>
+                { Items = page, NextCursor = nextSkip < Items.Count ? nextSkip.ToString(CultureInfo.InvariantCulture) : null });
+        }
     }
 
     private sealed class DeferredQueryDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>

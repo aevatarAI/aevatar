@@ -21,6 +21,8 @@ public sealed class WorkflowCatalogItem
     public bool IsPrimitiveExample { get; set; }
     public bool RequiresLlmProvider { get; set; }
     public List<string> Primitives { get; set; } = [];
+    public List<string> RequiredConnectors { get; set; } = [];
+    public int StepCount { get; set; }
     public long AuthorityStateVersion { get; set; }
     public DateTimeOffset ProjectionWatermark { get; set; }
     public string LastEventId { get; set; } = string.Empty;

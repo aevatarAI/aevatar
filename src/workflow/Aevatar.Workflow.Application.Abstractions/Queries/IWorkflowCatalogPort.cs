@@ -8,4 +8,8 @@ public interface IWorkflowCatalogPort
     Task<IReadOnlyList<WorkflowCatalogItem>> ListWorkflowCatalogAsync(CancellationToken ct = default);
 
     Task<WorkflowCatalogItemDetail?> GetWorkflowDetailAsync(string workflowName, CancellationToken ct = default);
+
+    Task<IReadOnlyList<WorkflowCatalogItem>> ListPublicWorkflowCatalogAsync(CancellationToken ct = default);
+
+    Task<WorkflowCatalogItemDetail?> GetPublicWorkflowDetailAsync(string templateId, CancellationToken ct = default);
 }
