@@ -85,7 +85,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
     }
 
     /// <summary>
-    /// Compiles the external invocation for the sub-step a looping primitive synthesizes at runtime.
+    /// Compiles the external invocation for a sub-step a composite primitive synthesizes at runtime.
     /// The call-site identity is the owner step's, never the dynamic per-item or per-iteration id.
     /// </summary>
     public static ExternalToolInvocationSpec? TryCompileSynthesizedSubStepInvocation(
@@ -354,11 +354,16 @@ public static class WorkflowAuthorizationDependencyEvaluator
     private static StepDefinition? TryBuildSynthesizedSubStep(StepDefinition owner)
     {
         var ownerType = WorkflowPrimitiveCatalog.ToCanonicalType(owner.Type);
-        if (ownerType is not ("foreach" or "while"))
+        var (subStepTypeKey, defaultSubStepType, targetRoleKey) = ownerType switch
+        {
+            "foreach" => ("sub_step_type", "parallel", "sub_target_role"),
+            "while" => ("step", "llm_call", "sub_target_role"),
+            "cache" => ("child_step_type", "llm_call", "child_target_role"),
+            _ => (null, null, null),
+        };
+        if (subStepTypeKey is null)
             return null;
 
-        var subStepTypeKey = ownerType == "foreach" ? "sub_step_type" : "step";
-        var defaultSubStepType = ownerType == "foreach" ? "parallel" : "llm_call";
         var subStepType = owner.Parameters.GetValueOrDefault(subStepTypeKey, defaultSubStepType);
         var canonicalSubStepType = WorkflowPrimitiveCatalog.ToCanonicalType(subStepType);
         var subParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -372,7 +377,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
         {
             Id = $"{owner.Id}/sub-step",
             Type = canonicalSubStepType,
-            TargetRole = owner.Parameters.GetValueOrDefault("sub_target_role"),
+            TargetRole = owner.Parameters.GetValueOrDefault(targetRoleKey),
             Parameters = subParameters,
             Capability = owner.Capability?.Clone(),
             ResponseProjection = owner.ResponseProjection?.Clone(),

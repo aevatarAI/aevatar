@@ -110,7 +110,7 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
             state.ChildStepToCacheKey[BuildChildKey(runId, childStepId)] = cacheKey;
             await SaveStateAsync(state, ctx, ct);
 
-            await ctx.PublishAsync(new StepRequestEvent
+            var childRequest = new StepRequestEvent
             {
                 StepId = childStepId,
                 StepType = childType,
@@ -119,7 +119,15 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
                 TargetRole = childRole ?? "",
                 ExecutionId = childExecutionId,
                 InputValueId = request.InputValueId,
-            }, TopologyAudience.Self, ct);
+                ExternalInvocation = request.ExternalInvocation?.Clone(),
+            };
+            foreach (var (key, value) in request.Parameters)
+            {
+                if (key.StartsWith("sub_param_", StringComparison.OrdinalIgnoreCase))
+                    childRequest.Parameters[key["sub_param_".Length..]] = value;
+            }
+
+            await ctx.PublishAsync(childRequest, TopologyAudience.Self, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
@@ -134,11 +142,27 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
             if (!state.ChildStepToCacheKey.TryGetValue(childKey, out var cacheKey))
                 return;
             if (!state.PendingByCacheKey.TryGetValue(cacheKey, out var pending))
+            {
+                ctx.Logger.LogWarning(
+                    "Cache child {ChildStepId} mapped to key={Key} but no pending call remains. run={RunId}",
+                    evt.StepId,
+                    ShortenKey(cacheKey),
+                    runId);
                 return;
+            }
             if (normalizedValues &&
                 (!string.Equals(pending.ChildStepId, evt.StepId, StringComparison.Ordinal) ||
                  !string.Equals(pending.ChildExecutionId, evt.ExecutionId, StringComparison.Ordinal)))
+            {
+                ctx.Logger.LogWarning(
+                    "Cache ignored stale child completion. run={RunId} child={ChildStepId} " +
+                    "expectedExecution={ExpectedExecutionId} actualExecution={ActualExecutionId}",
+                    runId,
+                    evt.StepId,
+                    pending.ChildExecutionId,
+                    evt.ExecutionId);
                 return;
+            }
 
             if (!normalizedValues)
             {
@@ -170,6 +194,12 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
                     completed.Annotations["cache.key"] = ShortenKey(cacheKey);
                     await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
                 }
+                ctx.Logger.LogInformation(
+                    "Cache child {ChildStepId} completed key={Key}; released {WaiterCount} waiter(s). run={RunId}",
+                    evt.StepId,
+                    ShortenKey(cacheKey),
+                    pending.Waiters.Count,
+                    runId);
                 return;
             }
 
@@ -232,6 +262,12 @@ public sealed class CacheModule : IEventModule<IWorkflowExecutionContext>
             state.ChildStepToCacheKey.Remove(childKey);
             state.PendingByCacheKey.Remove(cacheKey);
             await SaveStateAsync(state, ctx, CancellationToken.None);
+            ctx.Logger.LogInformation(
+                "Cache child {ChildStepId} completed key={Key}; released {WaiterCount} waiter(s). run={RunId}",
+                evt.StepId,
+                ShortenKey(cacheKey),
+                pending.Waiters.Count,
+                runId);
         }
     }
 

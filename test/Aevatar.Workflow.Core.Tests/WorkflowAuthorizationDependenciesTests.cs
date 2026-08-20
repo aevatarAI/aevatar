@@ -537,6 +537,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
     [InlineData("foreach_llm", "sub_step_type")]
     [InlineData("while", "step")]
     [InlineData("loop", "step")]
+    [InlineData("cache", "child_step_type")]
     public void EvaluateAuthorizationDependencies_IndirectNyxIdProxy_ShouldNeverBypassAdmission(
         string primitive,
         string subStepTypeKey)
