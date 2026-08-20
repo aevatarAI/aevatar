@@ -185,6 +185,7 @@ public enum NyxIdChatStartError
     None = 0,
     ActorNotFound = 1,
     ProjectionUnavailable = 2,
+    AdmissionUnavailable = 3,
 }
 
 public readonly record struct NyxIdChatCompletionStatus
@@ -406,9 +407,14 @@ internal sealed class NyxIdChatCommandTargetResolver
         if (!resolved.Succeeded || resolved.Target is null)
         {
             return CommandTargetResolution<NyxIdChatCommandTarget, NyxIdChatStartError>.Failure(
-                resolved.Error == NyxIdChatLifecycleCommandStartError.TargetNotFound
-                    ? NyxIdChatStartError.ActorNotFound
-                    : NyxIdChatStartError.ProjectionUnavailable);
+                resolved.Error switch
+                {
+                    NyxIdChatLifecycleCommandStartError.TargetNotFound => NyxIdChatStartError.ActorNotFound,
+                    NyxIdChatLifecycleCommandStartError.AdmissionUnavailable or
+                        NyxIdChatLifecycleCommandStartError.RouteRejected or
+                        NyxIdChatLifecycleCommandStartError.AccessDenied => NyxIdChatStartError.AdmissionUnavailable,
+                    _ => NyxIdChatStartError.ProjectionUnavailable,
+                });
         }
 
         command.CreatedLocally = resolved.Target.CreatedLocally;

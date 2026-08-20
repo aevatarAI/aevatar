@@ -29,7 +29,9 @@ NyxID Chat 是第一阶段唯一正式消费 Agent Profile 的 runtime。管理�
 
 明确 binding 不可用时必须在创建 Actor 之前 fail closed，返回 typed unavailable/integrity failure；不得继续尝试下一层。只有没有任何显式或默认 binding 时，create command 才不携带 Profile snapshot。
 
-Create resolver 不访问 Ornn、文件、event store 或进程内 Profile registry，也不在 query 方法里 prime projection/activate Actor。Chat route 的明确拒绝仍是 403；Profile unavailable/integrity failure 使用稳定的 503-class typed error；成功仍是 honest `202 Accepted`，不暗示 Conversation state 已提交或已投影。
+Profile 解析完成后，create resolver 才解析 direct-chat route。已选 sealed Profile 的 `routeToolSetRef` 只补充 route 的隐式值：projected `ForwardToModel` 未写 `toolSetRef` 时使用 Profile route；没有 route snapshot 时，Profile route 可以替换 Host fallback 中的默认 tool set。fallback decision 必须先 clone，禁止把单请求 override 写回可复用对象并跨 caller 泄漏。route policy 显式写出的 `toolSetRef` 始终更权威，与 Profile route 不一致时必须在创建 Actor 前 fail closed；未选 Profile 时保持既有 Host fallback 行为。
+
+Create resolver 不访问 Ornn、文件、event store 或进程内 Profile registry，也不在 query 方法里 prime projection/activate Actor。Chat route 的明确拒绝仍是 403；Profile unavailable/integrity failure 与 route/Profile mismatch 使用稳定的 `ADMISSION_UNAVAILABLE`，不得伪装为 `PROJECTION_UNAVAILABLE`；成功仍是 honest `202 Accepted`，不暗示 Conversation state 已提交或已投影。
 
 ## Conversation 固化
 
@@ -61,6 +63,11 @@ Profiled 与 genuinely unprofiled NyxID Chat 共用 Host 静态注册的
 unprofiled turn 直接使用同一 ceiling，不会回退为枚举所有 DI `IAgentToolSource`。
 因此注册新的通用 tool source 不会自动扩大 NyxID Chat surface，扩大 surface 必须通过
 明确的 route tool set 变更。
+
+这里描述的是 Conversation turn 的实际工具 ceiling；create-time chat route 仍是独立的准入输入，
+不得把 Host 的 `workspace.default` fallback 当成 Profile binding 的 route 事实。系统默认 Profile
+上线时由 sealed `routeToolSetRef` 填充上述隐式 route 值，不能通过全局扩大
+`workspace.default` 来制造短暂的 unprofiled 权限窗口。
 
 这个固定 tool set 只提供审查过的只读 NyxID management wrappers、readiness/browser-action
 handoff、单一 `web_search`、单一 `ask_user` typed input，以及其他明确允许的

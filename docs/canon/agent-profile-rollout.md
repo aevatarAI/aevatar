@@ -55,6 +55,25 @@ create request 显式 caller/system reference
 
 Conversation 创建时从 protected execution read model 读取一次 snapshot，并把 clone 固化到自己的 Protobuf state。Profile revision B 只影响之后创建的 Conversation；已经绑定 revision A 的实例不 hot-upgrade、不 lazy rebind、不 replay/backfill。Host/Actor 重启恢复 actor state 与持久化 read model，不需要 Profile 文件，也不在 create/turn 路径重新访问管理 API 或 Ornn。Turn-time 对已固化 exact skill 的受限读取仍遵循既有 `AgentProfileTurnCatalogMaterializer` 契约，不改变这里的 create-time 权威边界。
 
+## Route admission 与全量 rollout
+
+系统默认 binding 只负责选择 sealed Profile，不得通过改写所有 caller 的 route policy 或扩大
+`workspace.default` 来模拟 Profile。新 Conversation 的 direct-chat route 按以下规则与已选 Profile 对账：
+
+- projected `ForwardToModel` 未写 `toolSetRef` 时，由 Profile `routeToolSetRef` 填充；
+- route snapshot 缺失时，Profile route 只替换 Host fallback 的隐式 tool set，并在 clone 后修改；
+- route policy 显式写出的 tool set 不被覆盖，任何 drift 都 fail closed；
+- 未选 Profile 的创建请求保持既有 fallback 行为。
+
+全用户启用的标准顺序是：先部署上述 route admission 语义；再创建、validate、publish system-owned
+Profile；用显式 system reference 创建新 Conversation 做 canary；最后把 system default binding 设为
+enabled + `10000` basis points，并再次用无显式 reference 的新 Conversation 验证。scope default binding
+继续高于 system default。Published revision 与 Conversation snapshot 都不可原地修改，因此每次发布或
+binding 变更后的验证都必须创建新 Conversation，旧 Conversation 不代表 rollout 结果。
+
+Route/Profile admission 失败统一返回 `ADMISSION_UNAVAILABLE`；只有 observation/projection lifecycle
+确实不可用时才返回 `PROJECTION_UNAVAILABLE`。这两个错误不得互相兜底或复用文案。
+
 ## Tool 权限
 
 Profile 只能缩权：
