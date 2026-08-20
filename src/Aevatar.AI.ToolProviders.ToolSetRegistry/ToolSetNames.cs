@@ -6,6 +6,12 @@ public static class ToolSetNames
     public const string LarkSelfNotify = "lark.self_notify";
 
     /// <summary>
+    /// Studio-owned provisioning, member, binding, schedule, and query tools. This set is
+    /// opt-in and must not be included by public/default route tool sets.
+    /// </summary>
+    public const string StudioLocal = "studio.local";
+
+    /// <summary>
     /// Opt-in tool set that exposes the caller's <c>x-aevatar-tool</c>-marked NyxID
     /// connected-service operations as individual tools. Kept out of
     /// <see cref="WorkspaceDefault"/> so connected services are only injected when a route
