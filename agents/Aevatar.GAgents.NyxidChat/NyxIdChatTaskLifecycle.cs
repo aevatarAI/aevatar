@@ -148,8 +148,8 @@ public static class NyxIdChatTaskLifecycle
 
         if (signal.ResultCase ==
                 NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition &&
-            IsServiceConnectedPostcondition(currentStep) &&
-            !MatchesServiceConnectedPostcondition(currentStep, signal.ActionPostcondition))
+            (!IsServiceConnectedPostcondition(currentStep) ||
+             !MatchesServiceConnectedPostcondition(state, currentStep, signal.ActionPostcondition)))
         {
             return new NyxIdChatTaskLifecycleDecision(
                 NyxIdChatTransitionOutcome.Rejected,
@@ -1644,6 +1644,9 @@ public static class NyxIdChatTaskLifecycle
                     EffectStepId = completedToolKey.StepId,
                     Check = ServiceConnectedCheck,
                     ProviderResourceId = providerResourceId,
+                    Action = NyxIdAssistantActionKind.ServiceConnect,
+                    VerificationInputBinding =
+                        NyxIdChatVerificationInputBinding.Sha256V1,
                 },
             },
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
@@ -1692,6 +1695,7 @@ public static class NyxIdChatTaskLifecycle
             {
                 CatalogServiceConnect = serviceConnect.Clone(),
             },
+            RequestedAt = now.Clone(),
         };
 
         state.ActiveTask.Steps.Add(postconditionStep);
@@ -1726,39 +1730,41 @@ public static class NyxIdChatTaskLifecycle
                 StringComparison.Ordinal)) == true;
 
     private static bool HasVerifiedServiceConnectedPostcondition(
-        NyxIdChatConversationGAgentState state) =>
-        state.ActiveTask?.Steps.Any(step =>
+        NyxIdChatConversationGAgentState state)
+    {
+        if (NyxIdChatDirectServiceConnectPostconditionRecovery
+            .HasVerifiedCompletedDirectState(state))
+        {
+            return true;
+        }
+
+        return state.ActiveTask?.Steps.Any(step =>
             step.Kind == NyxIdChatStepKind.Postcondition &&
             step.Status == NyxIdChatStepStatus.Done &&
             step.ExternalEffect == NyxIdChatEffectEvidence.Confirmed &&
-            string.Equals(
-                step.Source?.Postcondition?.Check,
+            step.Source?.Postcondition?.Action == NyxIdAssistantActionKind.ServiceConnect &&
+            !string.Equals(
+                step.Source.Postcondition.Check,
                 ServiceConnectedCheck,
                 StringComparison.Ordinal)) == true;
+    }
 
     private static bool IsServiceConnectedPostcondition(NyxIdChatTaskStepState step) =>
         step.Kind == NyxIdChatStepKind.Postcondition &&
-        string.Equals(
-            step.Source?.Postcondition?.Check,
-            ServiceConnectedCheck,
-            StringComparison.Ordinal);
+        step.Source?.Postcondition?.Action == NyxIdAssistantActionKind.ServiceConnect;
 
     private static bool MatchesServiceConnectedPostcondition(
+        NyxIdChatConversationGAgentState state,
         NyxIdChatTaskStepState step,
         NyxIdChatActionPostconditionResult result)
     {
-        var frozen = step.Source?.Postcondition;
-        if (frozen is null ||
-            string.IsNullOrWhiteSpace(frozen.ActionRequestId) ||
-            string.IsNullOrWhiteSpace(frozen.ProviderResourceId) ||
-            !string.Equals(
-                frozen.ActionRequestId,
-                result.ActionRequestId,
-                StringComparison.Ordinal))
-        {
+        if (!NyxIdChatDirectServiceConnectPostconditionRecovery.MatchesExpectedInput(
+                state,
+                step,
+                result))
             return false;
-        }
 
+        var frozen = step.Source.Postcondition;
         var reportedUserServiceId = result.Resource?.UserService?.UserServiceId?.Trim();
         if (!string.IsNullOrWhiteSpace(reportedUserServiceId) &&
             !string.Equals(
@@ -2419,7 +2425,7 @@ public static class NyxIdChatTaskLifecycle
         state.UpdatedAt = now.Clone();
     }
 
-    private static void AddTerminalSummary(
+    internal static void AddTerminalSummary(
         NyxIdChatConversationGAgentState state,
         NyxIdChatTurnState turn)
     {

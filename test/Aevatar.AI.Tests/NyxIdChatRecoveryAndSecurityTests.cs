@@ -152,7 +152,11 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
     {
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
-        await PersistStateAsync(eventStore, actorId, CreateRequestedPostconditionState());
+        var requested = NyxIdChatBrowserActionTests.AdmittedAction(
+            NyxIdAssistantActionKind.ServiceConnect).State.Clone();
+        var postconditionKey = requested.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition).Operation.Key.Clone();
+        await PersistStateAsync(eventStore, actorId, requested);
         var callbacks = new RecordingRuntimeCallbackScheduler();
         using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
@@ -171,15 +175,14 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         var callback = GetSingleRecoveryCallback(callbacks, actorId);
         callback.CallbackId.Should().NotBeNullOrWhiteSpace();
         callback.TriggerEnvelope.Propagation.CorrelationId.Should().Be(
-            "operation-postcondition-alpha");
+            postconditionKey.OperationId);
         callback.TriggerEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(
-            "operation-postcondition-alpha:recovery:1");
+            $"{postconditionKey.OperationId}:recovery:1");
         var signal = callback.TriggerEnvelope.Payload
             .Unpack<NyxIdChatRecoveryRequestedSignal>();
         signal.Kind.Should().Be(NyxIdChatRecoveryKind.PostconditionRedispatch);
         signal.ExpectedStateVersion.Should().Be(1);
-        signal.Key.Should().BeEquivalentTo(
-            agent.State.ActiveTask.Steps.Single().Operation.Key);
+        signal.Key.Should().BeEquivalentTo(postconditionKey);
     }
 
     [Fact]
@@ -187,7 +190,9 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
     {
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
-        await PersistStateAsync(eventStore, actorId, CreateRequestedPostconditionState());
+        var requested = NyxIdChatBrowserActionTests.AdmittedAction(
+            NyxIdAssistantActionKind.ServiceConnect).State.Clone();
+        await PersistStateAsync(eventStore, actorId, requested);
         var callbacks = new RecordingRuntimeCallbackScheduler();
         using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
@@ -216,11 +221,14 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         operation.Key.Should().BeEquivalentTo(recovery.Key);
         operation.InputCase.Should().Be(
             NyxIdChatOperationDispatchCommand.InputOneofCase.ActionPostcondition);
-        operation.ActionPostcondition.ActionRequestId.Should().Be("action-alpha");
+        operation.ActionPostcondition.ActionRequestId.Should().Be(
+            requested.PendingActions.Single().ActionRequestId);
         operation.ActionPostcondition.OwnerSubject.Should().Be("owner-alpha");
         operation.ActionPostcondition.ResourceHint.UserService.UserServiceId.Should().Be(
             "service-alpha");
-        agent.State.ActiveTask.Steps.Single().Operation.Phase.Should().Be(
+        agent.State.ActiveTask.Steps.Single(step =>
+                step.Operation?.Key.Equals(recovery.Key) == true)
+            .Operation.Phase.Should().Be(
             NyxIdChatOperationPhase.Dispatched);
         var events = await eventStore.GetEventsAsync(actorId);
         events.Should().HaveCount(2);
@@ -841,6 +849,9 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 {
                     ActionRequestId = "action-alpha",
                     Check = nameof(NyxIdAssistantActionKind.ServiceConnect),
+                    Action = NyxIdAssistantActionKind.ServiceConnect,
+                    VerificationInputBinding =
+                        NyxIdChatVerificationInputBinding.Sha256V1,
                 },
             },
             ActionRequestId = "action-alpha",

@@ -53,13 +53,22 @@ public sealed class NyxIdConformanceManifestTests
         leastScope.TryGetDefinition("key.create", out _).Should().BeTrue();
         leastScope.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         leastScope.TryGetDefinition("key.rotate", out _).Should().BeFalse();
-        foreach (var registry in new[] { keyRotation, target })
-        {
-            registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
-            registry.TryGetDefinition("key.create", out _).Should().BeTrue();
-            registry.TryGetDefinition("key.rotate", out _).Should().BeTrue();
-            registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
-        }
+        keyRotation.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        keyRotation.TryGetDefinition("key.create", out _).Should().BeTrue();
+        keyRotation.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        keyRotation.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        target.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        target.TryGetDefinition("key.create", out _).Should().BeTrue();
+        target.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        target.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                target.RegistryRevision,
+                NyxIdAssistantActionKind.ServiceReauthorize)
+            .Should().BeFalse();
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                keyRotation.RegistryRevision,
+                NyxIdAssistantActionKind.ServiceReauthorize)
+            .Should().BeFalse();
     }
 
     [Fact]

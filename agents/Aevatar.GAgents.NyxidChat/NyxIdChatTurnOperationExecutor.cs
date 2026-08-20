@@ -591,6 +591,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         CancellationToken ct)
     {
         var input = command.ActionPostcondition;
+        var verificationInputSha256 =
+            NyxIdChatActionPostconditionEvidence.ComputeVerificationInputSha256(input);
         if (input is null ||
             input.ReportedDisposition is not
                 (NyxIdChatActionDisposition.Completed or
@@ -607,7 +609,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                 input,
                 verified: false,
                 InvalidPostconditionInputCode,
-                InvalidPostconditionInputMessage);
+                InvalidPostconditionInputMessage,
+                verificationInputSha256);
         }
 
         if (input.ToolContext is not null &&
@@ -618,7 +621,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                 input,
                 verified: false,
                 ToolAuthorizationMismatchCode,
-                ToolAuthorizationMismatchMessage);
+                ToolAuthorizationMismatchMessage,
+                verificationInputSha256);
         }
 
         var verificationInput = input.Clone();
@@ -643,13 +647,18 @@ public sealed class NyxIdChatTurnOperationExecutor
                 input,
                 verified: false,
                 InvalidExecutionResultCode,
-                InvalidExecutionResultMessage);
+                InvalidExecutionResultMessage,
+                verificationInputSha256);
         }
 
+        var durableResult = result.Clone();
+        // The executor owns this binding and overwrites any provider-supplied
+        // value for both verified and unverified results.
+        durableResult.VerificationInputSha256 = verificationInputSha256;
         return new NyxIdChatTurnOperationExecution(new NyxIdChatOperationResultSignal
         {
             Key = command.Key.Clone(),
-            ActionPostcondition = result.Clone(),
+            ActionPostcondition = durableResult,
         });
     }
 
@@ -658,7 +667,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         NyxIdChatActionPostconditionInput? input,
         bool verified,
         string code,
-        string safeMessage) =>
+        string safeMessage,
+        ByteString? verificationInputSha256 = null) =>
         new(new NyxIdChatOperationResultSignal
         {
             Key = key?.Clone(),
@@ -671,6 +681,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                 Resource = input?.ResourceHint?.Clone(),
                 FailureCode = code,
                 SafeMessage = safeMessage,
+                VerificationInputSha256 = verificationInputSha256 ??
+                    NyxIdChatActionPostconditionEvidence.ComputeVerificationInputSha256(input),
             },
         });
 

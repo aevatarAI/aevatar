@@ -24,15 +24,14 @@ Commit the resulting `sources.json` update only after the guard passes.
 NyxID production began serving `nyxid-assistant-actions.v8` on 2026-08-19
 (`registry-v8.json` is the served payload: v7 plus `service.reauthorize`
 `{userServiceId, requestedScopes[]}`, risk `grant`, `remember_eligible: false`).
-Aevatar accepts v8 as a transition revision so the startup snapshot loads and
-`service.connect` / `key.create` / `key.rotate` stay executable;
-`service.reauthorize` is pinned but not executable. `assistant_registry.revision`
-still names v7 because `nyxid.revision` / `nyxid_source_sha256` pin the NyxID
-commit that published v7. Flipping the current pin to v8 requires re-pinning
-the NyxID source commit (and the CI workflow checkout ref) in the same change,
-and advertising `service.reauthorize` additionally requires the typed producer,
-AG-UI mapper, postcondition reader, coverage-manifest row flip, and a fresh
-semantic evaluation run.
+Aevatar accepts v8 and pins the `service.reauthorize` descriptor so the startup
+snapshot remains compatible with NyxID production. The action remains closed
+at the executable gate: the prepared producer, mapper, blocker contract, and
+postcondition code are dormant, mounted on no tool source, absent from turn
+intent and the system prompt, and cannot be resolved or validated by the
+runtime registry. Advertising it later requires the complete cross-repo chain,
+the coverage-manifest row flip, a fresh authenticated semantic evaluation, and
+another Aevatar source-pin refresh.
 
 `semantic-evaluation.json` is the checked-in release-gate record. The conformance guard fails while its
 status is not `passed`, while results are absent, or when the recorded aggregate cannot be reproduced

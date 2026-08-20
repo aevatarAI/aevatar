@@ -421,6 +421,29 @@ public sealed class NyxIdChatStateEndpointTests
                             "service-slug-beta",
                             "connected-service-beta",
                             null))),
+                new NyxIdChatConversationStepSnapshot(
+                    StepId: "step-postcondition",
+                    Order: 3,
+                    Kind: "postcondition",
+                    Status: "done",
+                    Required: true,
+                    Description: "Verify the connected service.",
+                    MayChangeExternalState: false,
+                    ExternalEffect: "confirmed",
+                    ApprovalRequestId: null,
+                    ActionRequestId: "action-alpha",
+                    FailureCode: null,
+                    SafeMessage: null,
+                    SafeToSkip: false,
+                    AvailableActions: null,
+                    UpdatedAt: null,
+                    Operation: null,
+                    Source: new NyxIdChatConversationStepSourceSnapshot(
+                        Postcondition: new NyxIdChatPostconditionStepSourceSnapshot(
+                            ActionRequestId: "action-alpha",
+                            Check: "service.connected",
+                            ProviderResourceId: "service-alpha",
+                            Action: "service.connect"))),
             ]);
         var queryPort = new RecordingQueryPort
         {
@@ -510,6 +533,13 @@ public sealed class NyxIdChatStateEndpointTests
         optionalReadStep.GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
         optionalReadStep.GetProperty("operation")
             .GetProperty("mayChangeExternalState").GetBoolean().Should().BeFalse();
+        var postconditionSource = json.RootElement
+            .GetProperty("snapshot")
+            .GetProperty("activeTask")
+            .GetProperty("steps")[2]
+            .GetProperty("source")
+            .GetProperty("postcondition");
+        postconditionSource.GetProperty("action").GetString().Should().Be("service_connect");
     }
 
     [Fact]

@@ -69,6 +69,7 @@ public static class NyxIdChatBrowserActions
             !string.IsNullOrWhiteSpace(blocker?.ServiceSlug);
         var hasKeyCreate = blocker?.KeyCreate is not null;
         var hasKeyRotate = blocker?.KeyRotate is not null;
+        var hasServiceReauthorize = blocker?.ServiceReauthorize is not null;
         if (receipt?.Status != AgentToolReceiptStatus.AuthorizationRequired ||
             blocker is null ||
             signalKey is null ||
@@ -77,7 +78,8 @@ public static class NyxIdChatBrowserActions
             (hasServiceAccessReview ? 1 : 0) +
             (hasCatalogServiceConnect ? 1 : 0) +
             (hasKeyCreate ? 1 : 0) +
-            (hasKeyRotate ? 1 : 0) != 1 ||
+            (hasKeyRotate ? 1 : 0) +
+            (hasServiceReauthorize ? 1 : 0) != 1 ||
             state.ActiveTurn is null ||
             state.ActiveTask is null)
         {
@@ -106,7 +108,9 @@ public static class NyxIdChatBrowserActions
             : hasKeyCreate
             ? registry.ResolveKeyCreate(blocker.KeyCreate)
             : hasKeyRotate
-                ? registry.ResolveKeyRotate(blocker.KeyRotate)
+            ? registry.ResolveKeyRotate(blocker.KeyRotate)
+            : hasServiceReauthorize
+                ? registry.ResolveServiceReauthorize(blocker.ServiceReauthorize)
                 : registry.ResolveCatalogServiceConnect(
                     blocker.ServiceSlug,
                     blocker.RequestedScopes);
@@ -295,6 +299,19 @@ public static class NyxIdChatBrowserActions
 
         if (!TryNormalizeReports(command.Actions, now, out var sanitizedReports))
             return RejectContinuation(state, ActionContinuationConflict);
+
+        IEnumerable<NyxIdChatActionRequestState> referencedRequests = isStateChangeWake
+            ? state.PendingActions
+            : sanitizedReports
+                .Select(report => state.PendingActions
+                    .Concat(state.RecentActions)
+                    .FirstOrDefault(request => string.Equals(
+                        request.ActionRequestId,
+                        report.ActionRequestId,
+                        StringComparison.Ordinal)))
+                .OfType<NyxIdChatActionRequestState>();
+        if (referencedRequests.Any(request => !IsRequestExecutable(request)))
+            return RejectContinuation(state, ActionContinuationInvalid);
 
         var existingAdmission = state.ContinuationAdmission;
         if (existingAdmission is
@@ -531,18 +548,30 @@ public static class NyxIdChatBrowserActions
 
         var result = signal.ActionPostcondition;
         var step = FindStep(state, signal.Key?.StepId);
+        var admission = state.ContinuationAdmission;
         var request = result is null
             ? null
             : state.PendingActions.FirstOrDefault(action => string.Equals(
                 action.ActionRequestId,
                 result.ActionRequestId,
                 StringComparison.Ordinal));
+        var expectedInput = request is null || admission is null
+            ? null
+            : BuildPostconditionInput(
+                state.ScopeId,
+                admission.OwnerSubject,
+                request,
+                FindAdmissionReport(admission, request.ActionRequestId));
         if (result is null ||
             step?.Operation?.Key is null ||
             !KeysEqual(step.Operation.Key, signal.Key) ||
             step.Kind != NyxIdChatStepKind.Postcondition ||
+            step.Source?.Postcondition?.VerificationInputBinding !=
+            NyxIdChatVerificationInputBinding.Sha256V1 ||
             request is null ||
-            !PostconditionResourceMatchesAction(request.Action, result))
+            !IsRequestExecutable(request) ||
+            !PostconditionResourceMatchesAction(request.Action, result) ||
+            !NyxIdChatActionPostconditionEvidence.Matches(expectedInput, result))
         {
             return RejectContinuation(state, ActionContinuationInvalid);
         }
@@ -688,6 +717,9 @@ public static class NyxIdChatBrowserActions
                 {
                     ActionRequestId = request.ActionRequestId,
                     Check = request.Action.ToString(),
+                    Action = request.Action,
+                    VerificationInputBinding =
+                        NyxIdChatVerificationInputBinding.Sha256V1,
                 },
             },
             ActionRequestId = request.ActionRequestId,
@@ -958,7 +990,7 @@ public static class NyxIdChatBrowserActions
         AddTerminalSummary(state, turn);
     }
 
-    private static NyxIdChatOperationDispatchCommand BuildPostconditionCommand(
+    internal static NyxIdChatOperationDispatchCommand BuildPostconditionCommand(
         string scopeId,
         string ownerSubject,
         NyxIdChatActionRequestState request,
@@ -968,20 +1000,32 @@ public static class NyxIdChatBrowserActions
         new()
         {
             Key = key.Clone(),
-            ActionPostcondition = new NyxIdChatActionPostconditionInput
-            {
-                ScopeId = scopeId,
-                OwnerSubject = ownerSubject,
-                OriginTurnId = request.OriginTurnId,
-                ActionRequestId = request.ActionRequestId,
-                Action = request.Action,
-                ReportedDisposition = report?.Disposition ?? NyxIdChatActionDisposition.Unspecified,
-                ResourceHint = report?.Resource?.Clone(),
-                Params = request.Params?.Clone(),
-                RequestedAt = request.RequestedAt?.Clone(),
-                ToolContext = toolContext?.Clone(),
-            },
+            ActionPostcondition = BuildPostconditionInput(
+                scopeId,
+                ownerSubject,
+                request,
+                report,
+                toolContext),
         };
+
+    internal static NyxIdChatActionPostconditionInput BuildPostconditionInput(
+        string scopeId,
+        string ownerSubject,
+        NyxIdChatActionRequestState request,
+        NyxIdChatActionReport? report,
+        AgentToolExecutionContextPayload? toolContext = null) => new()
+    {
+        ScopeId = scopeId,
+        OwnerSubject = ownerSubject,
+        OriginTurnId = request.OriginTurnId,
+        ActionRequestId = request.ActionRequestId,
+        Action = request.Action,
+        ReportedDisposition = report?.Disposition ?? NyxIdChatActionDisposition.Unspecified,
+        ResourceHint = report?.Resource?.Clone(),
+        Params = request.Params?.Clone(),
+        RequestedAt = request.RequestedAt?.Clone(),
+        ToolContext = toolContext?.Clone(),
+    };
 
     private static NyxIdChatOperationDispatchCommand? StartNextPlannedPostcondition(
         NyxIdChatConversationGAgentState state,
@@ -1000,6 +1044,8 @@ public static class NyxIdChatBrowserActions
             action.ActionRequestId,
             step.ActionRequestId,
             StringComparison.Ordinal));
+        if (!IsRequestExecutable(request))
+            return null;
         var report = FindAdmissionReport(state.ContinuationAdmission, request.ActionRequestId);
         step.Status = NyxIdChatStepStatus.Running;
         step.Operation.Phase = NyxIdChatOperationPhase.Requested;
@@ -1103,7 +1149,7 @@ public static class NyxIdChatBrowserActions
         var report = request is null
             ? null
             : FindAdmissionReport(admission, request.ActionRequestId);
-        return request is null
+        return request is null || !IsRequestExecutable(request)
             ? null
             : BuildPostconditionCommand(
                 state.ScopeId,
@@ -1153,6 +1199,7 @@ public static class NyxIdChatBrowserActions
             step.ActionRequestId,
             StringComparison.Ordinal));
         if (request is null ||
+            !IsRequestExecutable(request) ||
             !string.Equals(request.OriginTurnId, key.TurnId, StringComparison.Ordinal))
         {
             return null;
@@ -1189,6 +1236,12 @@ public static class NyxIdChatBrowserActions
         string.Equals(state.ActiveTask.TaskId, request.TaskId, StringComparison.Ordinal) &&
         SourceToolMatchesState(state, request);
 
+    internal static bool IsRequestExecutable(NyxIdChatActionRequestState request) =>
+        request.SchemaVersion == NyxIdAssistantActionRegistry.SupportedSchemaVersion &&
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+            request.RegistryRevision,
+            request.Action);
+
     private static bool SourceToolMatchesState(
         NyxIdChatConversationGAgentState state,
         NyxIdChatActionRequestState request)
@@ -1211,7 +1264,7 @@ public static class NyxIdChatBrowserActions
                string.Equals(source.Operation.Key.TaskId, request.TaskId, StringComparison.Ordinal);
     }
 
-    private static bool RequestParamsMatchAction(NyxIdChatActionRequestState request) =>
+    internal static bool RequestParamsMatchAction(NyxIdChatActionRequestState request) =>
         request.Action switch
         {
             NyxIdAssistantActionKind.ServiceConnect => request.Params?.ParamsCase is
@@ -1221,6 +1274,8 @@ public static class NyxIdChatBrowserActions
                 IsValidServiceAccessReviewParams(request.Params?.ServiceAccessReview),
             NyxIdAssistantActionKind.KeyCreate => IsValidKeyCreateParams(request.Params?.KeyCreate),
             NyxIdAssistantActionKind.KeyRotate => IsValidKeyRotateParams(request.Params?.KeyRotate),
+            NyxIdAssistantActionKind.ServiceReauthorize =>
+                IsValidServiceReauthorizeParams(request.Params?.ServiceReauthorize),
             _ => false,
         };
 
@@ -1267,8 +1322,22 @@ public static class NyxIdChatBrowserActions
     private static bool IsValidKeyRotateParams(NyxIdKeyRotateParams? value) =>
         value is not null &&
         IsNormalizedActionValue(value.KeyId, 256) &&
-        !value.KeyId.Any(char.IsWhiteSpace) &&
-        !value.KeyId.Any(static character => character is '/' or '\\' or '?' or '#');
+        NyxIdAssistantActionRegistry.IsSafeIdentity(value.KeyId);
+
+    private static bool IsValidServiceReauthorizeParams(NyxIdServiceReauthorizeParams? value)
+    {
+        if (value is null ||
+            !IsNormalizedActionValue(value.UserServiceId, 256) ||
+            !NyxIdAssistantActionRegistry.IsSafeIdentity(value.UserServiceId) ||
+            value.RequestedScopes.Count is < 1 or > 64)
+        {
+            return false;
+        }
+
+        var scopes = new HashSet<string>(StringComparer.Ordinal);
+        return value.RequestedScopes.All(scope =>
+            IsNormalizedActionValue(scope, 256) && scopes.Add(scope));
+    }
 
     private static bool IsNormalizedActionValue(string? value, int maxLength) =>
         !string.IsNullOrWhiteSpace(value) &&
@@ -1355,7 +1424,7 @@ public static class NyxIdChatBrowserActions
         };
     }
 
-    private static bool PostconditionResourceMatchesAction(
+    internal static bool PostconditionResourceMatchesAction(
         NyxIdAssistantActionKind action,
         NyxIdChatActionPostconditionResult result) =>
         (!result.Verified &&
@@ -1429,7 +1498,7 @@ public static class NyxIdChatBrowserActions
         return true;
     }
 
-    private static bool ReportsEqual(NyxIdChatActionReport left, NyxIdChatActionReport right) =>
+    internal static bool ReportsEqual(NyxIdChatActionReport left, NyxIdChatActionReport right) =>
         string.Equals(left.ActionRequestId, right.ActionRequestId, StringComparison.Ordinal) &&
         string.Equals(left.OriginTurnId, right.OriginTurnId, StringComparison.Ordinal) &&
         left.Disposition == right.Disposition &&

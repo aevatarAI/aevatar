@@ -354,7 +354,11 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             NyxIdAssistantActionParams.ParamsOneofCase.ServiceReauthorize =>
                 new NyxIdAssistantActionWireParams
                 {
-                    ServiceReauthorize = request.Params.ServiceReauthorize.Clone(),
+                    ServiceReauthorizeUserServiceId = request.Params.ServiceReauthorize.UserServiceId,
+                    ServiceReauthorizeRequestedScopes =
+                    {
+                        request.Params.ServiceReauthorize.RequestedScopes,
+                    },
                 },
             NyxIdAssistantActionParams.ParamsOneofCase.ServiceAccessReview =>
                 new NyxIdAssistantActionWireParams

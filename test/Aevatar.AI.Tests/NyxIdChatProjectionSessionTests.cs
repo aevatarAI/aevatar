@@ -2449,203 +2449,34 @@ public sealed class NyxIdChatProjectionSessionTests
             NyxIdChatTaskStatus taskStatus,
             NyxIdChatTurnStatus turnStatus)
     {
-        const string conversationActorId = "conversation-alpha";
-        const string originTurnId = "turn-origin-alpha";
-        const string continuationTurnId = "turn-continuation-alpha";
-        const string taskId = "task-alpha";
-        const string actionRequestId = "action-alpha";
-        const string sourceToolStepId = "step-source-tool-alpha";
-        const string postconditionStepId = "step-postcondition-alpha";
+        var completed = NyxIdChatBrowserActionTests.CompletedAction(
+            NyxIdAssistantActionKind.ServiceConnect);
+        var state = completed.State.Clone();
+        var continuationKey = completed.NextCommand!.Key.Clone();
+        var continuationStep = state.ActiveTask.Steps.Single(step =>
+            step.Operation?.Key.Equals(continuationKey) == true);
+        if (taskStatus != NyxIdChatTaskStatus.Active)
+        {
+            var completedAt = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 7, 24, 8, 1, 0, TimeSpan.Zero));
+            continuationStep.Status = NyxIdChatStepStatus.Done;
+            continuationStep.Operation.Phase = NyxIdChatOperationPhase.Succeeded;
+            continuationStep.Operation.CompletedAt = completedAt.Clone();
+            state.ActiveTask.ActiveStepId = string.Empty;
+            state.ActiveTask.ActiveOperationId = string.Empty;
+            state.ActiveTurn.TerminalAt = completedAt.Clone();
+        }
+
+        state.ActiveTask.Status = taskStatus;
+        state.ActiveTurn.Status = turnStatus;
+        state.LatestTurn = state.ActiveTurn.Clone();
+        state.ProgressSequence = taskStatus == NyxIdChatTaskStatus.Active ? 43 : 44;
         var context = new NyxIdChatSessionProjectionContext
         {
-            RootActorId = conversationActorId,
-            SessionId = continuationTurnId,
+            RootActorId = state.ConversationActorId,
+            SessionId = state.ActiveTurn.TurnId,
             ProjectionKind = "nyxid-chat-session",
         };
-        var continuationKey = new NyxIdChatOperationKey
-        {
-            ConversationActorId = conversationActorId,
-            TurnId = originTurnId,
-            TaskId = taskId,
-            StepId = "step-continuation-alpha",
-            OperationId = "operation-continuation-alpha",
-            OperationGeneration = 1,
-        };
-        var sourceToolStep = new NyxIdChatTaskStepState
-        {
-            StepId = sourceToolStepId,
-            Order = 1,
-            Kind = NyxIdChatStepKind.Tool,
-            Status = NyxIdChatStepStatus.Done,
-            Required = true,
-            Source = new NyxIdChatStepSource
-            {
-                Tool = new NyxIdChatToolStepSource
-                {
-                    ToolName = "nyxid_require_service",
-                    AuthorizationReadiness = new NyxIdChatAuthorizationReadinessInput
-                    {
-                        ToolName = "nyxid_require_service",
-                        Params = new NyxIdChatRequireServiceParams
-                        {
-                            ServiceSlug = "service-alpha",
-                            RequestedScopes = { "items:read" },
-                        },
-                    },
-                },
-            },
-            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
-            Operation = new NyxIdChatOperationState
-            {
-                Key = new NyxIdChatOperationKey
-                {
-                    ConversationActorId = conversationActorId,
-                    TurnId = originTurnId,
-                    TaskId = taskId,
-                    StepId = sourceToolStepId,
-                    OperationId = "operation-source-tool-alpha",
-                    OperationGeneration = 1,
-                },
-                Kind = NyxIdChatStepKind.Tool,
-                Phase = NyxIdChatOperationPhase.Succeeded,
-            },
-        };
-        var postconditionStep = new NyxIdChatTaskStepState
-        {
-            StepId = postconditionStepId,
-            Order = 2,
-            Kind = NyxIdChatStepKind.Postcondition,
-            Status = NyxIdChatStepStatus.Done,
-            Required = true,
-            ActionRequestId = actionRequestId,
-            Source = new NyxIdChatStepSource
-            {
-                Postcondition = new NyxIdChatPostconditionStepSource
-                {
-                    ActionRequestId = actionRequestId,
-                    Check = "ServiceConnect",
-                },
-            },
-            ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
-            DependsOn = { sourceToolStepId },
-            Operation = new NyxIdChatOperationState
-            {
-                Key = new NyxIdChatOperationKey
-                {
-                    ConversationActorId = conversationActorId,
-                    TurnId = originTurnId,
-                    TaskId = taskId,
-                    StepId = postconditionStepId,
-                    OperationId = "operation-postcondition-alpha",
-                    OperationGeneration = 1,
-                },
-                Kind = NyxIdChatStepKind.Postcondition,
-                Phase = NyxIdChatOperationPhase.Succeeded,
-            },
-        };
-        var continuationStep = new NyxIdChatTaskStepState
-        {
-            StepId = continuationKey.StepId,
-            Order = 3,
-            Kind = NyxIdChatStepKind.Llm,
-            Status = taskStatus == NyxIdChatTaskStatus.Active
-                ? NyxIdChatStepStatus.Running
-                : NyxIdChatStepStatus.Done,
-            Required = true,
-            Source = new NyxIdChatStepSource
-            {
-                Llm = new NyxIdChatLLMStepSource
-                {
-                    ActionRequestId = actionRequestId,
-                    ResumeRequirement =
-                        NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest,
-                },
-            },
-            DependsOn = { postconditionStepId },
-            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
-            Operation = new NyxIdChatOperationState
-            {
-                Key = continuationKey.Clone(),
-                Kind = NyxIdChatStepKind.Llm,
-                Phase = taskStatus == NyxIdChatTaskStatus.Active
-                    ? NyxIdChatOperationPhase.Dispatched
-                    : NyxIdChatOperationPhase.Succeeded,
-            },
-        };
-        var task = new NyxIdChatTaskState
-        {
-            ActorId = conversationActorId,
-            TurnId = continuationTurnId,
-            TaskId = taskId,
-            PlanId = "plan-alpha",
-            PlanRevision = 2,
-            PlanRevisionHistoryStart = 1,
-            Status = taskStatus,
-            ActiveStepId = taskStatus == NyxIdChatTaskStatus.Active
-                ? continuationKey.StepId
-                : string.Empty,
-            ActiveOperationId = taskStatus == NyxIdChatTaskStatus.Active
-                ? continuationKey.OperationId
-                : string.Empty,
-        };
-        task.Steps.Add(sourceToolStep);
-        task.Steps.Add(postconditionStep);
-        task.Steps.Add(continuationStep);
-        var state = new NyxIdChatConversationGAgentState
-        {
-            ConversationActorId = conversationActorId,
-            ScopeId = "scope-alpha",
-            ActiveTurn = new NyxIdChatTurnState
-            {
-                TurnId = continuationTurnId,
-                TaskId = taskId,
-                Status = turnStatus,
-            },
-            ActiveTask = task,
-            ContinuationAdmission = new NyxIdChatContinuationAdmissionState
-            {
-                Kind = NyxIdChatContinuationKind.Action,
-                RequestId = "command-continuation-alpha",
-                ClientRequestId = "client-continuation-alpha",
-                OriginTurnId = originTurnId,
-                ContinuationTurnId = continuationTurnId,
-                Status = NyxIdChatContinuationAdmissionStatus.Accepted,
-                OwnerSubject = "owner-alpha",
-            },
-            ProgressSequence = taskStatus == NyxIdChatTaskStatus.Active ? 43 : 44,
-        };
-        state.LatestTurn = state.ActiveTurn.Clone();
-        state.RecentActions.Add(new NyxIdChatActionRequestState
-        {
-            SchemaVersion = 4,
-            ConversationActorId = conversationActorId,
-            OriginTurnId = originTurnId,
-            TaskId = taskId,
-            StepId = "step-browser-action-alpha",
-            SourceToolStepId = sourceToolStepId,
-            ActionRequestId = actionRequestId,
-            Action = NyxIdAssistantActionKind.ServiceConnect,
-            Params = new NyxIdAssistantActionParams
-            {
-                CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
-                {
-                    ServiceSlug = "service-alpha",
-                },
-            },
-            PostconditionResult = new NyxIdChatActionPostconditionResult
-            {
-                ActionRequestId = actionRequestId,
-                Disposition = NyxIdChatActionDisposition.Completed,
-                Verified = true,
-                Resource = new NyxIdChatSafeResourceRef
-                {
-                    UserService = new NyxIdChatUserServiceRef
-                    {
-                        UserServiceId = "user-service-alpha",
-                    },
-                },
-            },
-        });
         return (context, state, continuationKey);
     }
 

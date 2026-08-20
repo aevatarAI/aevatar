@@ -119,7 +119,12 @@ internal static class NyxIdChatActionContinuationCorrelation
                  actionRequestId,
                  StringComparison.Ordinal) ||
              postconditionStep.Status != NyxIdChatStepStatus.Done ||
-             postconditionStep.ExternalEffect != NyxIdChatEffectEvidence.Confirmed))
+             postconditionStep.ExternalEffect != NyxIdChatEffectEvidence.Confirmed ||
+             !NyxIdChatBrowserActionPostconditionRecovery
+                 .HasVerifiedCompletedBoundEvidence(
+                     authorityState,
+                     postconditionStep,
+                     action)))
         {
             return false;
         }

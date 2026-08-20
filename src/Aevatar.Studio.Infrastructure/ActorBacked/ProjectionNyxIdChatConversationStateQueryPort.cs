@@ -340,7 +340,8 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                     Postcondition: new NyxIdChatPostconditionStepSourceSnapshot(
                         NullIfEmpty(source.Postcondition.ActionRequestId),
                         NullIfEmpty(source.Postcondition.Check),
-                        NullIfEmpty(source.Postcondition.ProviderResourceId))),
+                        NullIfEmpty(source.Postcondition.ProviderResourceId),
+                        NullIfEmpty(source.Postcondition.Action))),
             NyxIdChatConversationStepSourceDocument.SourceOneofCase.Input =>
                 new NyxIdChatConversationStepSourceSnapshot(
                     Input: new NyxIdChatInputStepSourceSnapshot(
@@ -580,6 +581,11 @@ internal sealed class ProjectionNyxIdChatConversationStateQueryPort
                         request.Params.ServiceAccessReview.UserServiceId,
                         request.Params.ServiceAccessReview.ServiceSlug,
                         request.Params.ServiceAccessReview.ResourceUri)),
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.ServiceReauthorize =>
+                new NyxIdChatActionParamsSnapshot(
+                    ServiceReauthorize: new NyxIdChatServiceReauthorizeSnapshot(
+                        request.Params.ServiceReauthorize.UserServiceId,
+                        request.Params.ServiceReauthorize.RequestedScopes.ToArray())),
             _ => null,
         };
         return parameters is null

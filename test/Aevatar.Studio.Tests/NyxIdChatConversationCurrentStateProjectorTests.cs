@@ -153,6 +153,50 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldHydrateReloadableServiceReauthorizeParameters()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-19T04:00:00Z")));
+        var state = BuildState();
+        var reauthorize = state.PendingActions.Single();
+        reauthorize.Action = NyxIdAssistantActionKind.ServiceReauthorize;
+        reauthorize.Params = new NyxIdAssistantActionParams
+        {
+            ServiceReauthorize = new NyxIdServiceReauthorizeParams
+            {
+                UserServiceId = "service-alpha",
+                RequestedScopes = { "repo", "read:org" },
+            },
+        };
+        var recentReauthorize = reauthorize.Clone();
+        recentReauthorize.ActionRequestId = "action-service-reauthorize";
+        state.RecentActions.Add(recentReauthorize);
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new NyxIdChatActionRequestedEvent(),
+                state,
+                version: 19,
+                eventId: "event-alpha-19",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-08-19T04:00:00Z")));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        var pendingRequest = document.PendingActions.Should().ContainSingle().Which.Request;
+        pendingRequest.Action.Should().Be("service.reauthorize");
+        pendingRequest.Params.ParamsCase.Should().Be(
+            NyxIdChatConversationActionParamsDocument.ParamsOneofCase.ServiceReauthorize);
+        pendingRequest.Params.ServiceReauthorize.UserServiceId.Should().Be("service-alpha");
+        pendingRequest.Params.ServiceReauthorize.RequestedScopes.Should().Equal("repo", "read:org");
+        var recentRequest = document.RecentActions.Should().ContainSingle().Which.Request;
+        recentRequest.ActionRequestId.Should().Be("action-service-reauthorize");
+        recentRequest.Params.ServiceReauthorize.UserServiceId.Should().Be("service-alpha");
+        recentRequest.Params.ServiceReauthorize.RequestedScopes.Should().Equal("repo", "read:org");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldCopyAuthoritativeDeletionTombstone()
     {
         var dispatcher = new RecordingWriteDispatcher();
@@ -536,6 +580,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
                 ActionRequestId = "action-alpha",
                 Check = "service.connected",
                 ProviderResourceId = "connected-service-resource-alpha",
+                Action = NyxIdAssistantActionKind.ServiceConnect,
             },
         };
 
@@ -553,6 +598,7 @@ public sealed class NyxIdChatConversationCurrentStateProjectorTests
         source.ActionRequestId.Should().Be("action-alpha");
         source.Check.Should().Be("service.connected");
         source.ProviderResourceId.Should().Be("connected-service-resource-alpha");
+        source.Action.Should().Be("service.connect");
     }
 
     [Fact]

@@ -58,6 +58,15 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
         if (eventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
             return eventData.Unpack<NyxIdChatOperationReconciledEvent>().Result?.Key?.TurnId;
 
+        if (eventData.Is(NyxIdChatPostconditionContractUpgradeCommittedEvent.Descriptor))
+        {
+            var upgrade =
+                eventData.Unpack<NyxIdChatPostconditionContractUpgradeCommittedEvent>();
+            return upgrade.RedispatchKey?.TurnId ??
+                   upgrade.Key?.TurnId ??
+                   upgrade.State?.ActiveTurn?.TurnId;
+        }
+
         if (eventData.Is(NyxIdChatLateOperationEvidenceCommittedEvent.Descriptor))
             return eventData.Unpack<NyxIdChatLateOperationEvidenceCommittedEvent>().Key?.TurnId;
 
