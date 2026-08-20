@@ -743,6 +743,7 @@ describe('New workflow save-target recovery', () => {
       name: 'Use template Incident triage',
     });
     expect(instantiate).toBeDisabled();
+    expect(instantiate).not.toHaveClass('ant-btn-loading');
     fireEvent.click(instantiate);
     expect(mockStudioApi.instantiateWorkflowTemplate).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();

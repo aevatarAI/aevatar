@@ -94,11 +94,13 @@ function TemplateFact({
 
 function TemplateRow({
   creating,
+  disabled,
   onCreate,
   onView,
   template,
 }: {
   readonly creating: boolean;
+  readonly disabled: boolean;
   readonly onCreate: (template: WorkflowTemplateSummary) => void;
   readonly onView: (templateId: string) => void;
   readonly template: WorkflowTemplateSummary;
@@ -163,7 +165,7 @@ function TemplateRow({
               name: template.displayName,
             },
           )}
-          disabled={creating}
+          disabled={disabled}
           onClick={() => onView(template.templateId)}
         >
           {t('workflowActivityVNext.new.templateBrowser.view', 'View')}
@@ -176,7 +178,7 @@ function TemplateRow({
               name: template.displayName,
             },
           )}
-          disabled={creating}
+          disabled={disabled}
           loading={creating}
           onClick={() => onCreate(template)}
           type="primary"
@@ -506,7 +508,12 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
   const currentItems = listQuery.data?.items ?? [];
   const nextCursor = listQuery.data?.nextCursor ?? null;
   const detail = detailQuery.data;
-  const creationPending = Boolean(
+  const creationBusy = Boolean(
+    creatingTemplateId ||
+      materialization.phase === 'accepted' ||
+      materialization.phase === 'observing',
+  );
+  const creationLocked = Boolean(
     creatingTemplateId || materialization.phase !== 'idle',
   );
   const browserFailure = failure?.surface === 'browser' ? failure : null;
@@ -793,7 +800,8 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
           <div className="wa-vnext__template-list">
             {currentItems.map((template) => (
               <TemplateRow
-                creating={creationPending}
+                creating={creationBusy}
+                disabled={creationLocked}
                 key={template.templateId}
                 onCreate={(selected) =>
                   void createFromTemplate(selected, 'browser')
@@ -817,7 +825,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
           </Typography.Text>
           <Space>
             <Button
-              disabled={cursorHistory.length === 0 || creationPending}
+              disabled={cursorHistory.length === 0 || creationLocked}
               icon={<LeftOutlined aria-hidden="true" />}
               onClick={goToPreviousPage}
             >
@@ -827,7 +835,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
               )}
             </Button>
             <Button
-              disabled={!nextCursor || creationPending}
+              disabled={!nextCursor || creationLocked}
               icon={<RightOutlined aria-hidden="true" />}
               onClick={goToNextPage}
             >
@@ -842,7 +850,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
         footer={
           <Space>
             <Button
-              disabled={creationPending}
+              disabled={creationLocked}
               onClick={() => setSelectedTemplateId(null)}
             >
               {t('workflowActivityVNext.new.templateBrowser.cancel', 'Cancel')}
@@ -850,7 +858,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
             <Button
               disabled={
                 !detail ||
-                creationPending ||
+                creationLocked ||
                 detailQuery.isFetching ||
                 detailQuery.isError ||
                 detailQuery.isRefetchError ||
