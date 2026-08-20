@@ -21,29 +21,31 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 /// <item>WARMING — the new writer is installed on this scope's stream and observes; the current
 /// writer keeps writing; the new writer reports its observed version.</item>
 /// <item>caught up — the reported version reached the version at which warming started.</item>
-/// <item>BLOCKED — the scope stops consuming observations; nothing new is published.</item>
+/// <item>BLOCKED — the scope stops consuming observations; a committed drain probe is published
+/// only after the Phase-A bridge receipt, and the candidate writer may perform the epoch-fenced
+/// same-version takeover while the previous writer drains that exact version.</item>
 /// <item>previous writer released — the release is dispatched to it and the route stays
 /// BLOCKED until the previous writer confirms, with a typed continuation
 /// (<see cref="ProjectionScopeStatusWriterReleasedEvent"/>), that its release is committed;
 /// inbox acceptance of the release command is never taken as the release.</item>
-/// <item>ACTIVE — the route is flipped; the new writer performs the epoch-fenced same-version
-/// takeover of the status document and then writes every later terminal outcome.</item>
+/// <item>ACTIVE — the route is flipped only after the exact previous writer confirms its durable
+/// drain; the selected writer then handles every later terminal outcome.</item>
 /// </list>
-/// Every phase is a committed fact, so a restart between any two phases resumes the cutover on
-/// activation, before this scope's own observation relay is asserted. Fleet capability is only
-/// the admission evidence for adopting the terminal writer; a revoked gate rolls the route back
-/// to the legacy writer through the same phases (the legacy shadow warms, catches up, takes
-/// over). Adoption is decided only on the cold ensure / activation path and on durable retries,
-/// never per observed envelope.
+/// This forward-only Phase-A bridge never starts, upgrades, or rolls back a route. Before its
+/// distinct fleet contract is durably quiesced, persisted WARMING/BLOCKED routes remain frozen.
+/// After quiescence, activation or the durable retry repairs only those persisted cutovers with
+/// fresh committed probe watermarks. ACTIVE and phase-less routes keep their existing writer;
+/// no-route and legacy steady states keep the legacy writer. A later Phase-B rollout requires a
+/// separate fresh fleet admission before it may initiate route changes.
 /// </summary>
 public abstract partial class ProjectionScopeGAgentBase<TContext>
 {
     internal const string StatusRouteAdoptionRetryCallbackId = "projection-scope-status-route-adoption";
 
     /// <summary>
-    /// Backed-off retry schedule for adopting the terminal status route after a scope activated
-    /// while the fleet gate was still closed. The last delay repeats for as long as the gate
-    /// stays closed.
+    /// Backed-off retry schedule for observing bridge quiescence and repairing a persisted
+    /// WARMING/BLOCKED route. The last delay repeats while the receipt is unavailable or repair
+    /// dependencies are not ready.
     /// </summary>
     internal static readonly TimeSpan[] StatusRouteAdoptionRetryDelays =
     [
@@ -74,36 +76,40 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return;
 
         var route = State.StatusRoute;
+        if (route?.Phase is ProjectionScopeStatusRoutePhase.Warming or
+            ProjectionScopeStatusRoutePhase.Blocked)
+        {
+            var quiescence = await ReadTerminalQuiescenceAsync(ct);
+            if (quiescence.Receipt != null)
+            {
+                if (route.Phase == ProjectionScopeStatusRoutePhase.Warming)
+                    await ContinueWarmingAsync(route, attempt, ct);
+                else
+                    await CompleteCutoverAsync(route, attempt, ct);
+                return;
+            }
+
+            _logger.LogInformation(
+                "Projection scope status route freezes its persisted cutover until the Phase-A bridge is quiesced. actorId={ActorId} contractId={ContractId} routeEpoch={RouteEpoch} phase={Phase} attempt={Attempt}",
+                Id,
+                route.ContractId,
+                route.RouteEpoch,
+                route.Phase,
+                attempt);
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+            return;
+        }
+
         if (ProjectionScopeStatusRoutePolicy.IsTerminalRoute(route))
         {
-            switch (route!.Phase)
-            {
-                case ProjectionScopeStatusRoutePhase.Warming:
-                    await ContinueWarmingAsync(route, attempt, ct);
-                    return;
-                case ProjectionScopeStatusRoutePhase.Blocked:
-                    await CompleteCutoverAsync(route, attempt, ct);
-                    return;
-                default:
-                    await MaintainActiveTerminalRouteAsync(route, attempt, ct);
-                    return;
-            }
+            await MaintainActiveTerminalRouteAsync(route!, attempt, ct);
+            return;
         }
 
         if (ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route))
         {
-            switch (route!.Phase)
-            {
-                case ProjectionScopeStatusRoutePhase.Warming:
-                    await ContinueWarmingAsync(route, attempt, ct);
-                    return;
-                case ProjectionScopeStatusRoutePhase.Blocked:
-                    await CompleteCutoverAsync(route, attempt, ct);
-                    return;
-                default:
-                    await MaintainLegacyWriterAsync(route, attempt, ct);
-                    return;
-            }
+            await MaintainLegacyWriterAsync(route!, attempt, ct);
+            return;
         }
 
         await MaintainLegacyWriterAsync(route: null, attempt, ct);
@@ -113,8 +119,9 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
     /// <summary>
     /// The legacy shadow is the writer. The scope ensures it exists on its own turn (it owns the
-    /// decision; no activation service decides from relay evidence) and, with a fresh terminal
-    /// admission, starts warming the terminal materializer at the next route epoch.
+    /// decision; no activation service decides from relay evidence). Phase A never starts a new
+    /// terminal cutover: mixed fleets lack the drain proof, while a fully upgraded fleet closes
+    /// V2 as QUIESCED for the later Phase-B artifact.
     /// </summary>
     private async Task MaintainLegacyWriterAsync(ProjectionScopeStatusRoute? route, int attempt, CancellationToken ct)
     {
@@ -129,9 +136,11 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         }
 
         await EnsureLegacyStatusShadowAsync(runtime, dispatchPort, ct);
+        if (route?.LegacyRouteReleased == true)
+            await ReconcileReleasedPreviousWriterRelayAsync(route, ct);
 
-        var admission = await ReadTerminalAdmissionAsync(ct);
-        if (admission.Readers == null)
+        var quiescence = await ReadTerminalQuiescenceAsync(ct);
+        if (!quiescence.ReaderAvailable)
         {
             _logger.LogInformation(
                 "Projection scope status route stays legacy: fleet admission readers unavailable. actorId={ActorId}",
@@ -139,35 +148,28 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return;
         }
 
-        if (admission.Grant == null)
+        if (quiescence.Receipt != null)
         {
             _logger.LogInformation(
-                "Projection scope status route stays legacy: no fresh terminal admission. actorId={ActorId} attempt={Attempt}",
-                Id,
-                attempt);
-            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+                "Projection scope status route stays legacy after the V2 gate is quiesced. actorId={ActorId}",
+                Id);
             return;
         }
 
-        await StartWarmingAsync(
-            ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
-                (route?.RouteEpoch ?? 0) + 1,
-                ProjectionScopeStatusRoutePhase.Warming),
-            admission.Grant,
-            runtime,
-            dispatchPort,
-            ct);
+        _logger.LogInformation(
+            "Projection scope status route stays legacy until the Phase-A drain bridge is quiesced. actorId={ActorId} attempt={Attempt}",
+            Id,
+            attempt);
+        await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
     }
 
     // ── active terminal writer ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The terminal materializer is the writer (ACTIVE, or a phase-less route of a binary that
-    /// adopted without phases). Heal the derived facts (relay, materializer existence, pending
-    /// release of the previous writer), reconcile a legacy relay that reappeared after the
-    /// release; upgrade a route of the previous terminal contract in place under a fresh
-    /// admission of the current one (same writer, no cutover); and roll back to the legacy
-    /// writer if the fleet explicitly revoked this route's own contract gate.
+    /// The terminal materializer is the writer (ACTIVE, or a phase-less route of an earlier
+    /// binary). Heal its relay/materializer and remove a previous-writer relay that reappeared
+    /// after a committed release. Phase A does not reconstruct an unconfirmed ACTIVE release,
+    /// upgrade an earlier terminal contract, or roll the route back.
     /// </summary>
     private async Task MaintainActiveTerminalRouteAsync(ProjectionScopeStatusRoute route, int attempt, CancellationToken ct)
     {
@@ -177,166 +179,18 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (runtime != null && !await runtime.ExistsAsync(terminalActorId))
             _ = await runtime.CreateByKindAsync(ProjectionScopeStatusGAgent.AgentKind, terminalActorId, ct);
 
-        // An ACTIVE route whose previous writer never confirmed its release (a route flipped by
-        // a binary that released on dispatch acceptance, or a lost confirmation) re-dispatches
-        // and keeps a durable continuation until the confirmation arrives.
-        if (!await RequestPreviousWriterReleaseIfPendingAsync(route, ct))
-            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
-        // Re-read: persisting the release replaces the state, so the local route is stale.
+        // Phase A repairs only a relay that contradicts an already committed release. It does not
+        // infer or reconstruct release proof for an ACTIVE route whose flag is still false.
         route = State.StatusRoute ?? route;
-        await ReconcileReappearedLegacyStatusRelayAsync(route, ct);
-
-        var dispatchPort = Services.GetService<IActorDispatchPort>();
-        if (runtime == null || dispatchPort == null)
-            return;
-
-        if (ProjectionScopeStatusRoutePolicy.IsPreviousTerminalContractRoute(route, ProjectionScopeStatusGAgent.ContractId))
-        {
-            var upgrade = await ReadTerminalAdmissionAsync(ct);
-            if (upgrade.Grant != null)
-            {
-                await UpgradeTerminalRouteContractAsync(route, upgrade.Grant, ct);
-                return;
-            }
-
-            // A route of the previous contract is never rolled back by this binary: this binary
-            // stopped advertising that contract, so its gate is revoked as a consequence of the
-            // contract revision itself and is no longer evidence of an operator decision. The
-            // writer is unchanged and authoritative meanwhile; only a fresh grant of the current
-            // contract moves the route (in place, at the next epoch). An always-active scope
-            // never reactivates, so the upgrade is retried on a durable continuation.
-            _logger.LogInformation(
-                "Projection scope status route keeps the previous terminal contract until the current one is granted. actorId={ActorId} contractId={ContractId} routeEpoch={RouteEpoch} attempt={Attempt}",
-                Id,
-                route.ContractId,
-                route.RouteEpoch,
-                attempt);
-            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
-            return;
-        }
-
-        var admission = await ReadTerminalAdmissionAsync(ct);
-        if (admission.Revoked)
-            await RollBackToLegacyWriterAsync(route, runtime, dispatchPort, ct);
+        await ReconcileReleasedPreviousWriterRelayAsync(route, ct);
     }
 
-    private async Task RollBackToLegacyWriterAsync(
-        ProjectionScopeStatusRoute route,
-        IActorRuntime runtime,
-        IActorDispatchPort dispatchPort,
-        CancellationToken ct)
-    {
-        _logger.LogWarning(
-            "Projection scope status route: terminal admission revoked; rolling back to the legacy writer. actorId={ActorId} contractId={ContractId} routeEpoch={RouteEpoch}",
-            Id,
-            route.ContractId,
-            route.RouteEpoch);
-        await StartWarmingAsync(
-            ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(
-                route.RouteEpoch + 1,
-                ProjectionScopeStatusRoutePhase.Warming),
-            grant: null,
-            runtime,
-            dispatchPort,
-            ct);
-    }
+    // ── receipt-gated repair of persisted cutovers ────────────────────────────────────────────
 
     /// <summary>
-    /// A route created under the previous terminal contract is served by the same materializer;
-    /// under a fresh admission of the current contract the route moves to it at the next epoch
-    /// without a cutover (no previous writer). The higher epoch makes the materializer's next
-    /// write the epoch-fenced takeover of its own document.
-    /// </summary>
-    private async Task UpgradeTerminalRouteContractAsync(
-        ProjectionScopeStatusRoute route,
-        RuntimeFleetCapabilityAdmissionGrant grant,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        var upgraded = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
-            route.RouteEpoch + 1,
-            ProjectionScopeStatusRoutePhase.Active);
-        upgraded.ActivatedAtUtc = Timestamp.FromDateTimeOffset(grant.ValidatedAt);
-        upgraded.ActivationProof = BuildActivationProof(grant);
-        upgraded.LegacyRouteReleased = route.LegacyRouteReleased;
-        upgraded.FlipVersion = CurrentScopeVersion + 1;
-        await PersistDomainEventAsync(new ProjectionScopeStatusRouteContractUpgradedEvent
-        {
-            Route = upgraded,
-            OccurredAtUtc = Timestamp.FromDateTimeOffset(grant.ValidatedAt),
-        });
-        _logger.LogInformation(
-            "Projection scope status route contract upgraded in place. actorId={ActorId} fromContractId={FromContractId} toContractId={ToContractId} routeEpoch={RouteEpoch}",
-            Id,
-            route.ContractId,
-            upgraded.ContractId,
-            upgraded.RouteEpoch);
-    }
-
-    private static ProjectionMaterializationActivationProof BuildActivationProof(RuntimeFleetCapabilityAdmissionGrant grant)
-    {
-        var admission = grant.Admission;
-        return new ProjectionMaterializationActivationProof
-        {
-            AuthorityStateVersion = admission.AuthorityStateVersion,
-            CapabilityEpoch = admission.CapabilityEpoch,
-            MembershipEpoch = admission.MembershipEpoch,
-            MembershipDigest = admission.MembershipDigest,
-            DeploymentRevision = admission.DeploymentRevision,
-            ValidatedAtUtc = Timestamp.FromDateTimeOffset(grant.ValidatedAt),
-            ValidUntilUtc = admission.MembershipValidUntil?.Clone(),
-        };
-    }
-
-    // ── cutover phases ───────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Phase 1: install the new writer on this scope's stream (relay + actor), then commit the
-    /// warming route at the next epoch — the warming version is the version of that commit and
-    /// its publication is the first routed envelope the new writer observes and reports. The
-    /// current writer is not touched: it keeps writing until the route is blocked.
-    /// </summary>
-    private async Task StartWarmingAsync(
-        ProjectionScopeStatusRoute route,
-        RuntimeFleetCapabilityAdmissionGrant? grant,
-        IActorRuntime runtime,
-        IActorDispatchPort dispatchPort,
-        CancellationToken ct)
-    {
-        var now = grant?.ValidatedAt ?? Now();
-        route.WarmStartedVersion = CurrentScopeVersion + 1;
-        route.ActivatedAtUtc = Timestamp.FromDateTimeOffset(now);
-        if (grant != null)
-            route.ActivationProof = BuildActivationProof(grant);
-
-        // The new writer is installed before the warming fact is committed: relays forward at
-        // publication time (no replay), so the publication of the warming commit itself is the
-        // first routed envelope the new writer observes and reports — no further source event
-        // is needed for an idle source to catch up. A restart in between leaves a relay whose
-        // publications carry no route yet; the writer ignores them and the next activation
-        // re-runs this decision.
-        await InstallWarmingWriterAsync(route, runtime, dispatchPort, ct);
-        await PersistDomainEventAsync(new ProjectionScopeStatusRouteWarmingStartedEvent
-        {
-            Route = route,
-            OccurredAtUtc = Timestamp.FromDateTimeOffset(now),
-        });
-        _logger.LogInformation(
-            "Projection scope status route warming started. actorId={ActorId} contractId={ContractId} routeEpoch={RouteEpoch} warmStartedVersion={WarmStartedVersion}",
-            Id,
-            route.ContractId,
-            route.RouteEpoch,
-            route.WarmStartedVersion);
-
-        // Liveness without waiting for another activation: if the caught-up report is lost the
-        // durable continuation re-probes (backed off) until the cutover completes.
-        await ScheduleStatusRouteAdoptionRetryAsync(attempt: 0, ct);
-    }
-
-    /// <summary>
-    /// Phase 1 continued (activation while WARMING): re-install the warming writer and, when it
-    /// has reported a caught-up version, proceed; otherwise commit a probe so its publication
-    /// carries the warming route through the relay even for an otherwise idle source.
+    /// Reinstalls the candidate writer for an already committed WARMING route and publishes a
+    /// fresh probe. Persisted caught-up state predates the bridge receipt and is never trusted to
+    /// advance the route; only a new authenticated continuation can block it.
     /// </summary>
     private async Task ContinueWarmingAsync(ProjectionScopeStatusRoute route, int attempt, CancellationToken ct)
     {
@@ -345,31 +199,31 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (runtime == null || dispatchPort == null)
         {
             _logger.LogInformation(
-                "Projection scope status route warming cannot continue: actor runtime ports unavailable. actorId={ActorId} routeEpoch={RouteEpoch}",
+                "Projection scope status route warming cannot resume: actor runtime ports unavailable. actorId={ActorId} routeEpoch={RouteEpoch}",
                 Id,
                 route.RouteEpoch);
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
             return;
         }
 
-        await InstallWarmingWriterAsync(route, runtime, dispatchPort, ct);
-        if (route.CaughtUpVersion >= route.WarmStartedVersion)
+        if (!await InstallWarmingWriterAsync(route, runtime, dispatchPort, ct))
         {
-            await BlockAndCompleteCutoverAsync(route, ct);
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
             return;
         }
-
-        // The committed probe publishes the warming route through the (re)installed relay so
-        // the writer can report even when the source is otherwise idle; the continuation
-        // repeats, backed off, until the writer catches up.
+        var requiredObservedVersion = route.WarmingProbeVersion > 0
+            ? route.WarmingProbeVersion
+            : CurrentScopeVersion + 1;
         await PersistDomainEventAsync(new ProjectionScopeStatusRouteWarmingProbedEvent
         {
             RouteEpoch = route.RouteEpoch,
+            RequiredObservedVersion = requiredObservedVersion,
             OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
         });
         await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
     }
 
-    private async Task InstallWarmingWriterAsync(
+    private async Task<bool> InstallWarmingWriterAsync(
         ProjectionScopeStatusRoute route,
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
@@ -380,18 +234,26 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             var terminalActorId = ProjectionScopeStatusRoutes.BuildTerminalActorId(Id);
             await UpsertTerminalStatusRelayAsync(terminalActorId, ct);
             await EnsureTerminalStatusMaterializerAsync(runtime, dispatchPort, terminalActorId, ct);
-            return;
+            return true;
+        }
+
+        var registry = Services.GetService<IAgentKindRegistry>();
+        if (registry == null ||
+            !registry.TryGetKindForAgentType(
+                typeof(ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>),
+                out var legacyKind))
+        {
+            return false;
         }
 
         await EnsureLegacyStatusShadowAsync(runtime, dispatchPort, ct);
+        await UpsertPreviousWriterRelayAsync(
+            ProjectionScopeStatusRoutes.BuildLegacyActorId(Id),
+            legacyKind,
+            ct);
+        return true;
     }
 
-    /// <summary>
-    /// Phase 2: the warming writer reported an observed version. A report at or above the
-    /// warming version means the writer has seen everything since warming started, so the
-    /// route is blocked, the previous writer is released and the route is flipped — each a
-    /// committed fact of this turn.
-    /// </summary>
     [EventHandler]
     public async Task HandleStatusWriterCaughtUpAsync(ProjectionScopeStatusWriterCaughtUpEvent evt)
     {
@@ -408,6 +270,28 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return;
         }
 
+        var expectedWriterActorId = ResolveWarmingWriterActorId(route);
+        var requiredObservedVersion = Math.Max(
+            route.WarmStartedVersion,
+            route.WarmingProbeVersion);
+        if (!string.Equals(evt.WriterActorId, expectedWriterActorId, StringComparison.Ordinal) ||
+            !IsExpectedDirectPublisher(expectedWriterActorId) ||
+            evt.ObservedVersion < requiredObservedVersion ||
+            (await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null)
+        {
+            return;
+        }
+
+        if (!HasStatusRouteCutoverLifecycleDependencies())
+        {
+            _logger.LogInformation(
+                "Projection scope status route caught-up report cannot block the route: lifecycle dependencies unavailable. actorId={ActorId} routeEpoch={RouteEpoch}",
+                Id,
+                route.RouteEpoch);
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt: 0, CancellationToken.None);
+            return;
+        }
+
         if (evt.ObservedVersion > route.CaughtUpVersion)
         {
             await PersistDomainEventAsync(new ProjectionScopeStatusRouteCaughtUpEvent
@@ -418,12 +302,26 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             });
         }
 
-        route = State.StatusRoute!;
-        if (route.CaughtUpVersion >= route.WarmStartedVersion)
-            await BlockAndCompleteCutoverAsync(route, CancellationToken.None);
+        // Use only an authenticated report that observed the post-receipt committed probe.
+        if (evt.ObservedVersion >= requiredObservedVersion)
+            await BlockAndCompleteCutoverAsync(State.StatusRoute!, CancellationToken.None);
     }
 
-    /// <summary>Phase 3: block the route (this scope consumes no observation until the flip).</summary>
+    private bool HasStatusRouteCutoverLifecycleDependencies()
+    {
+        if (Services.GetService<IActorRuntime>() == null ||
+            Services.GetService<IActorDispatchPort>() == null)
+        {
+            return false;
+        }
+
+        var registry = Services.GetService<IAgentKindRegistry>();
+        return registry != null &&
+               registry.TryGetKindForAgentType(
+                   typeof(ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>),
+                   out _);
+    }
+
     private async Task BlockAndCompleteCutoverAsync(ProjectionScopeStatusRoute route, CancellationToken ct)
     {
         await PersistDomainEventAsync(new ProjectionScopeStatusRouteBlockedEvent
@@ -436,19 +334,25 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
     }
 
     /// <summary>
-    /// Phase 4 (also resumed on activation while BLOCKED and by the durable continuation):
-    /// request the previous writer's release and flip only once the release is confirmed
-    /// committed. The previous writer's queued work is at or below the blocked version, so the
-    /// new writer's first write at the higher epoch is the same-version takeover. Until the
-    /// confirmation arrives the route stays BLOCKED (every observation is refused) and the
-    /// release is re-dispatched, backed off, by the durable continuation.
+    /// Re-dispatches the strengthened release while BLOCKED. Dispatch admission is never drain
+    /// evidence; only the exact writer's authenticated confirmation can flip the route.
     /// </summary>
     private async Task CompleteCutoverAsync(ProjectionScopeStatusRoute route, int attempt, CancellationToken ct)
     {
-        if (!await RequestPreviousWriterReleaseIfPendingAsync(route, ct))
+        var runtime = Services.GetService<IActorRuntime>();
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        if (runtime == null ||
+            dispatchPort == null ||
+            !await InstallWarmingWriterAsync(route, runtime, dispatchPort, ct))
+        {
+            await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+            return;
+        }
+
+        if (!await RestorePreviousWriterForDrainAsync(route, ct))
         {
             _logger.LogInformation(
-                "Projection scope status route stays blocked until the previous writer confirms its release. actorId={ActorId} routeEpoch={RouteEpoch} attempt={Attempt}",
+                "Projection scope status route cannot restore its previous writer for a fresh drain probe. actorId={ActorId} routeEpoch={RouteEpoch} attempt={Attempt}",
                 Id,
                 route.RouteEpoch,
                 attempt);
@@ -456,10 +360,165 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return;
         }
 
+        var requiredObservedVersion = route.DrainProbeVersion > 0
+            ? route.DrainProbeVersion
+            : CurrentScopeVersion + 1;
+        await PersistDomainEventAsync(new ProjectionScopeStatusRouteDrainProbedEvent
+        {
+            RouteEpoch = route.RouteEpoch,
+            RequiredObservedVersion = requiredObservedVersion,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
+        });
+
+        route = State.StatusRoute!;
+        _ = await RequestPreviousWriterReleaseAsync(route, ct);
+        _logger.LogInformation(
+            "Projection scope status route stays blocked until the exact previous writer confirms the drain watermark. actorId={ActorId} routeEpoch={RouteEpoch} blockedVersion={BlockedVersion} drainProbeVersion={DrainProbeVersion} attempt={Attempt}",
+            Id,
+            route.RouteEpoch,
+            route.BlockedVersion,
+            route.DrainProbeVersion,
+            attempt);
+        await ScheduleStatusRouteAdoptionRetryAsync(attempt, ct);
+    }
+
+    private async Task<bool> RestorePreviousWriterForDrainAsync(
+        ProjectionScopeStatusRoute route,
+        CancellationToken ct)
+    {
+        if (route.Phase != ProjectionScopeStatusRoutePhase.Blocked)
+            return false;
+
+        var runtime = Services.GetService<IActorRuntime>();
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        if (runtime == null || dispatchPort == null)
+            return false;
+
+        var previousWriterActorId = ResolvePreviousWriterActorId(route);
+        if (ProjectionScopeStatusRoutePolicy.IsTerminalRoute(route))
+        {
+            var registry = Services.GetService<IAgentKindRegistry>();
+            if (registry == null ||
+                !registry.TryGetKindForAgentType(
+                    typeof(ProjectionMaterializationScopeGAgent<ProjectionScopeStatusMaterializationContext>),
+                    out var legacyKind))
+            {
+                return false;
+            }
+
+            if (!await runtime.ExistsAsync(previousWriterActorId))
+                _ = await runtime.CreateByKindAsync(legacyKind, previousWriterActorId, ct);
+
+            await DispatchLifecycleAsync(
+                dispatchPort,
+                previousWriterActorId,
+                new EnsureProjectionScopeCommand
+                {
+                    RootActorId = Id,
+                    ProjectionKind = ProjectionScopeStatusMaterializationContext.ProjectionKindValue,
+                    Mode = ProjectionScopeMode.DurableMaterialization,
+                },
+                ct);
+            await UpsertPreviousWriterRelayAsync(previousWriterActorId, legacyKind, ct);
+            return true;
+        }
+
+        if (!ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route))
+            return false;
+
+        if (!await runtime.ExistsAsync(previousWriterActorId))
+            _ = await runtime.CreateByKindAsync(ProjectionScopeStatusGAgent.AgentKind, previousWriterActorId, ct);
+
+        await DispatchLifecycleAsync(
+            dispatchPort,
+            previousWriterActorId,
+            new EnsureProjectionScopeCommand
+            {
+                RootActorId = Id,
+                ProjectionKind = ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
+                Mode = ProjectionScopeMode.DurableMaterialization,
+            },
+            ct);
+        await UpsertPreviousWriterRelayAsync(
+            previousWriterActorId,
+            ProjectionScopeStatusGAgent.AgentKind,
+            ct);
+        return true;
+    }
+
+    private Task UpsertPreviousWriterRelayAsync(
+        string previousWriterActorId,
+        string previousWriterKind,
+        CancellationToken ct) =>
+        Services
+            .GetRequiredService<IStreamProvider>()
+            .GetStream(Id)
+            .UpsertRelayAsync(
+                ProjectionScopeObservationRelayBinding.Create(
+                    Id,
+                    previousWriterActorId,
+                    previousWriterKind,
+                    activationGeneration: 1),
+                ct);
+
+    private async Task<bool> RequestPreviousWriterReleaseAsync(
+        ProjectionScopeStatusRoute route,
+        CancellationToken ct)
+    {
+        if (route.Phase != ProjectionScopeStatusRoutePhase.Blocked ||
+            ResolveRequiredDrainVersion(route) <= 0)
+            return false;
+
+        var previousWriterActorId = ResolvePreviousWriterActorId(route);
+        var runtime = Services.GetService<IActorRuntime>();
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        if (runtime == null || dispatchPort == null || !await runtime.ExistsAsync(previousWriterActorId))
+            return false;
+
+        await DispatchLifecycleAsync(
+            dispatchPort,
+            previousWriterActorId,
+            BuildPreviousWriterReleaseCommand(route, previousWriterActorId),
+            ct);
+        return true;
+    }
+
+    [EventHandler]
+    public async Task HandleStatusWriterReleasedAsync(ProjectionScopeStatusWriterReleasedEvent evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!OwnsStatusRoute)
+            return;
+
+        var route = State.StatusRoute;
+        if (route == null ||
+            route.Phase != ProjectionScopeStatusRoutePhase.Blocked ||
+            ResolveRequiredDrainVersion(route) <= 0 ||
+            route.RouteEpoch != evt.RouteEpoch ||
+            !string.Equals(evt.SourceScopeActorId, Id, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var expectedWriterActorId = ResolvePreviousWriterActorId(route);
+        if (!string.Equals(evt.WriterActorId, expectedWriterActorId, StringComparison.Ordinal) ||
+            !IsExpectedDirectPublisher(expectedWriterActorId) ||
+            evt.LastObservedVersion < ResolveRequiredDrainVersion(route) ||
+            (await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null)
+        {
+            return;
+        }
+
+        await RemoveStatusRelayAsync(expectedWriterActorId, CancellationToken.None);
+        await PersistDomainEventAsync(new ProjectionScopeStatusLegacyRouteReleasedEvent
+        {
+            RouteEpoch = route.RouteEpoch,
+            ReleasedWriterObservedVersion = evt.LastObservedVersion,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
+        });
         await ActivateStatusRouteAsync(State.StatusRoute!);
     }
 
-    /// <summary>Phase 5: flip the route to ACTIVE (the previous writer's release is confirmed).</summary>
     private async Task ActivateStatusRouteAsync(ProjectionScopeStatusRoute route)
     {
         var flipped = route.Clone();
@@ -471,103 +530,24 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             Route = flipped,
             OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
         });
-        _logger.LogInformation(
-            "Projection scope status route flipped. actorId={ActorId} contractId={ContractId} routeEpoch={RouteEpoch} flipVersion={FlipVersion}",
-            Id,
-            flipped.ContractId,
-            flipped.RouteEpoch,
-            flipped.FlipVersion);
     }
 
-    /// <summary>
-    /// Dispatches the previous writer's release for this route epoch: the legacy shadow when the
-    /// route selects the terminal materializer, the terminal materializer when the route rolled
-    /// back to the legacy shadow. Returns <c>true</c> only when the release is already
-    /// confirmed for this epoch, or when no previous writer actor exists (nothing can confirm;
-    /// its stale relay, if any, is removed and the release is recorded). Dispatch acceptance is
-    /// not a release: the previous writer's relay stays until it confirms its committed release
-    /// (<see cref="HandleStatusWriterReleasedAsync"/>), so it can still observe the BLOCKED
-    /// publication and drain.
-    /// </summary>
-    private async Task<bool> RequestPreviousWriterReleaseIfPendingAsync(ProjectionScopeStatusRoute route, CancellationToken ct)
-    {
-        if (route.LegacyRouteReleased)
-            return true;
-
-        var previousWriterActorId = ResolvePreviousWriterActorId(route);
-        var runtime = Services.GetService<IActorRuntime>();
-        var dispatchPort = Services.GetService<IActorDispatchPort>();
-        if (runtime != null && dispatchPort != null && await runtime.ExistsAsync(previousWriterActorId))
-        {
-            await DispatchLifecycleAsync(
-                dispatchPort,
-                previousWriterActorId,
-                BuildPreviousWriterReleaseCommand(route),
-                ct);
-            return false;
-        }
-
-        await RemoveStatusRelayAsync(previousWriterActorId, ct);
-        await PersistDomainEventAsync(new ProjectionScopeStatusLegacyRouteReleasedEvent
-        {
-            RouteEpoch = route.RouteEpoch,
-            ReleasedWriterObservedVersion = 0,
-            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
-        });
-        return true;
-    }
-
-    /// <summary>
-    /// The previous writer confirmed that its release is committed for this route epoch: the
-    /// only evidence on which the route leaves BLOCKED. Recorded per epoch (a confirmation for
-    /// another epoch, another source or an already released epoch is ignored); a confirmation
-    /// below the blocked version is recorded as released-before-drained.
-    /// </summary>
-    [EventHandler]
-    public async Task HandleStatusWriterReleasedAsync(ProjectionScopeStatusWriterReleasedEvent evt)
-    {
-        ArgumentNullException.ThrowIfNull(evt);
-        if (!OwnsStatusRoute)
-            return;
-
-        var route = State.StatusRoute;
-        if (route == null ||
-            route.LegacyRouteReleased ||
-            route.RouteEpoch != evt.RouteEpoch ||
-            !string.Equals(evt.SourceScopeActorId, Id, StringComparison.Ordinal) ||
-            route.Phase == ProjectionScopeStatusRoutePhase.Warming)
-        {
-            return;
-        }
-
-        if (route.BlockedVersion > 0 && evt.LastObservedVersion < route.BlockedVersion)
-        {
-            _logger.LogWarning(
-                "Projection scope status route: previous writer released before it observed the blocked version. actorId={ActorId} routeEpoch={RouteEpoch} blockedVersion={BlockedVersion} lastObservedVersion={LastObservedVersion}",
-                Id,
-                route.RouteEpoch,
-                route.BlockedVersion,
-                evt.LastObservedVersion);
-        }
-
-        await RemoveStatusRelayAsync(ResolvePreviousWriterActorId(route), CancellationToken.None);
-        await PersistDomainEventAsync(new ProjectionScopeStatusLegacyRouteReleasedEvent
-        {
-            RouteEpoch = route.RouteEpoch,
-            ReleasedWriterObservedVersion = evt.LastObservedVersion,
-            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
-        });
-
-        if (State.StatusRoute!.Phase == ProjectionScopeStatusRoutePhase.Blocked)
-            await ActivateStatusRouteAsync(State.StatusRoute);
-    }
+    private string ResolveWarmingWriterActorId(ProjectionScopeStatusRoute route) =>
+        ProjectionScopeStatusRoutePolicy.IsTerminalRoute(route)
+            ? ProjectionScopeStatusRoutes.BuildTerminalActorId(Id)
+            : ProjectionScopeStatusRoutes.BuildLegacyActorId(Id);
 
     private string ResolvePreviousWriterActorId(ProjectionScopeStatusRoute route) =>
         ProjectionScopeStatusRoutePolicy.IsTerminalRoute(route)
             ? ProjectionScopeStatusRoutes.BuildLegacyActorId(Id)
             : ProjectionScopeStatusRoutes.BuildTerminalActorId(Id);
 
-    private ReleaseProjectionScopeCommand BuildPreviousWriterReleaseCommand(ProjectionScopeStatusRoute route) =>
+    private static long ResolveRequiredDrainVersion(ProjectionScopeStatusRoute route) =>
+        Math.Max(route.BlockedVersion, route.DrainProbeVersion);
+
+    private ReleaseProjectionScopeCommand BuildPreviousWriterReleaseCommand(
+        ProjectionScopeStatusRoute route,
+        string previousWriterActorId) =>
         new()
         {
             RootActorId = Id,
@@ -576,6 +556,8 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                 : ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
             Mode = ProjectionScopeMode.DurableMaterialization,
             StatusRouteEpoch = route.RouteEpoch,
+            ExpectedWriterActorId = previousWriterActorId,
+            RequiredObservedVersion = ResolveRequiredDrainVersion(route),
         };
 
     // ── reconciliation on this scope's own observations ──────────────────────────────────────
@@ -611,34 +593,68 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             return false;
         }
 
+        var sourceScopeActorId = BuildObservedSourceScopeActorId(sourceState);
+        if (!IsAuthenticForwardedSourcePublication(envelope, stateEvent, sourceScopeActorId) ||
+            !string.Equals(sourceScopeActorId, State.RootActorId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
         var route = sourceState.StatusRoute;
         if (ProjectionScopeStatusRoutePolicy.LegacyShadowIsSuperseded(route))
         {
+            if (route!.Phase == ProjectionScopeStatusRoutePhase.Blocked)
+            {
+                if ((await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null)
+                    return true;
+
+                // The forwarded BLOCKED publication is the only drain proof. Commit its exact
+                // source version before confirming; a racing release command cannot fabricate it.
+                var blockedDrainVersion = Math.Max(
+                    State.HighestSeenVersion,
+                    stateEvent?.Version ?? 0);
+                await ReleaseScopeAsync(blockedDrainVersion);
+                await ConfirmStatusWriterReleasedAsync(
+                    sourceScopeActorId,
+                    route.RouteEpoch,
+                    State.ReleasedAtObservedVersion);
+                return true;
+            }
+
             _logger.LogInformation(
                 "Legacy status shadow observed a source whose status route selects the terminal materializer; releasing itself. actorId={ActorId} routeEpoch={RouteEpoch}",
                 Id,
-                route!.RouteEpoch);
-            await ReleaseScopeAsync();
+                route.RouteEpoch);
             // This publication is the last one the shadow observed through the source's relay
-            // (stream order), so the confirmation carries it as the drained version.
-            await ConfirmStatusWriterReleasedAsync(
-                State.RootActorId,
-                route.RouteEpoch,
-                Math.Max(State.HighestSeenVersion, stateEvent?.Version ?? 0));
+            // (stream order). Persist that watermark with the release so a lost confirmation is
+            // re-sent from durable evidence rather than the shadow's pre-release live state.
+            var releasedAtObservedVersion = Math.Max(State.HighestSeenVersion, stateEvent?.Version ?? 0);
+            await ReleaseScopeAsync(releasedAtObservedVersion);
             return true;
         }
 
         if (ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route) &&
             route!.Phase == ProjectionScopeStatusRoutePhase.Warming &&
-            stateEvent != null)
+            stateEvent != null &&
+            (await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt != null)
         {
-            await SendToAsync(State.RootActorId, new ProjectionScopeStatusWriterCaughtUpEvent
+            await SendToAsync(sourceScopeActorId, new ProjectionScopeStatusWriterCaughtUpEvent
             {
-                SourceScopeActorId = State.RootActorId,
+                SourceScopeActorId = sourceScopeActorId,
                 RouteEpoch = route.RouteEpoch,
                 ObservedVersion = stateEvent.Version,
                 ObservedAtUtc = Timestamp.FromDateTimeOffset(Now()),
+                WriterActorId = Id,
             });
+        }
+
+        // A persisted rollback may already be BLOCKED when the bridge binary first sees it. The
+        // legacy candidate must not write at its new epoch before the fleet receipt exists.
+        if (ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route) &&
+            route!.Phase == ProjectionScopeStatusRoutePhase.Blocked &&
+            (await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null)
+        {
+            return true;
         }
 
         return false;
@@ -650,7 +666,7 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
     /// every activation reconciles the authoritative relay evidence: a reappeared legacy relay is
     /// removed and the shadow is released again without a new route decision.
     /// </summary>
-    private async Task ReconcileReappearedLegacyStatusRelayAsync(ProjectionScopeStatusRoute route, CancellationToken ct)
+    private async Task ReconcileReleasedPreviousWriterRelayAsync(ProjectionScopeStatusRoute route, CancellationToken ct)
     {
         if (!route.LegacyRouteReleased)
             return;
@@ -659,30 +675,25 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (authority == null)
             return;
 
-        var legacyActorId = ProjectionScopeStatusRoutes.BuildLegacyActorId(Id);
-        var binding = await authority.GetAsync(Id, legacyActorId, ct);
+        var previousWriterActorId = ResolvePreviousWriterActorId(route);
+        var binding = await authority.GetAsync(Id, previousWriterActorId, ct);
         if (binding == null)
             return;
 
         _logger.LogWarning(
-            "Projection scope legacy status relay reappeared after the terminal route was adopted; removing it and releasing the shadow again. actorId={ActorId} routeEpoch={RouteEpoch}",
+            "Projection scope previous-writer relay exists after its durable release; removing the contradictory relay without re-dispatching release. actorId={ActorId} previousWriterActorId={PreviousWriterActorId} routeEpoch={RouteEpoch}",
             Id,
+            previousWriterActorId,
             route.RouteEpoch);
-        await RemoveStatusRelayAsync(legacyActorId, ct);
-        var runtime = Services.GetService<IActorRuntime>();
-        var dispatchPort = Services.GetService<IActorDispatchPort>();
-        if (runtime != null && dispatchPort != null && await runtime.ExistsAsync(legacyActorId))
-            await DispatchLifecycleAsync(dispatchPort, legacyActorId, BuildPreviousWriterReleaseCommand(route), ct);
+        await RemoveStatusRelayAsync(previousWriterActorId, ct);
     }
 
     // ── durable adoption retry ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// A durable scope that activates before the terminal fleet gate opens would otherwise stay
-    /// on the legacy writer until its next activation, which for an always-active scope never
-    /// comes. The retry is a backed-off self continuation through the durable callback
-    /// scheduler; the attempt count travels in the command, never in actor memory, and the last
-    /// delay repeats for as long as the gate stays closed.
+    /// The retry is a backed-off self continuation through the durable callback scheduler. It
+    /// observes the historical bridge receipt and resumes only a persisted WARMING/BLOCKED
+    /// repair; the attempt count travels in the command, never in actor memory.
     /// </summary>
     private async Task ScheduleStatusRouteAdoptionRetryAsync(int attempt, CancellationToken ct)
     {
@@ -795,7 +806,29 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             RouteEpoch = routeEpoch,
             LastObservedVersion = lastObservedVersion,
             ReleasedAtUtc = Timestamp.FromDateTimeOffset(Now()),
+            WriterActorId = Id,
         });
+
+    private static bool IsAuthenticForwardedSourcePublication(
+        EventEnvelope envelope,
+        StateEvent? stateEvent,
+        string sourceScopeActorId) =>
+        !string.IsNullOrWhiteSpace(sourceScopeActorId) &&
+        string.Equals(envelope.Route?.PublisherActorId, sourceScopeActorId, StringComparison.Ordinal) &&
+        string.Equals(
+            StreamForwardingEnvelopeState.GetSourceStreamId(envelope),
+            sourceScopeActorId,
+            StringComparison.Ordinal) &&
+        string.Equals(stateEvent?.AgentId, sourceScopeActorId, StringComparison.Ordinal) &&
+        (string.IsNullOrWhiteSpace(envelope.Runtime?.SourceActorId) ||
+         string.Equals(envelope.Runtime.SourceActorId, sourceScopeActorId, StringComparison.Ordinal));
+
+    private static string BuildObservedSourceScopeActorId(ProjectionScopeState sourceState) =>
+        ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            sourceState.RootActorId,
+            sourceState.ProjectionKind,
+            ProjectionScopeModeMapper.ToRuntime(sourceState.Mode),
+            sourceState.SessionId));
 
     private async Task DispatchLifecycleAsync<TCommand>(
         IActorDispatchPort dispatchPort,
@@ -811,51 +844,27 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
     // ── fleet admission ──────────────────────────────────────────────────────────────────────
 
-    private readonly record struct TerminalAdmissionRead(
-        object? Readers,
-        RuntimeFleetCapabilityAdmissionGrant? Grant,
-        bool Revoked);
+    private readonly record struct TerminalQuiescenceRead(
+        bool ReaderAvailable,
+        RuntimeFleetCapabilityQuiescenceReceipt? Receipt);
 
     /// <summary>
-    /// Admission of the current terminal contract — the only contract this binary adopts or
-    /// upgrades a route to. A route of an earlier terminal contract is served but never
-    /// re-admitted, so no earlier capability is read here.
+    /// Reads historical evidence that the distinct Phase-A bridge contract reached typed
+    /// quiescence. This is not live admission and cannot authorize a new route or Phase-B rollout.
     /// </summary>
-    private async Task<TerminalAdmissionRead> ReadTerminalAdmissionAsync(CancellationToken ct)
+    private async Task<TerminalQuiescenceRead> ReadTerminalQuiescenceAsync(CancellationToken ct)
     {
-        var admissionReader = Services.GetService<IRuntimeFleetCapabilityAdmissionReader>();
-        var membershipReader = Services.GetService<IRuntimeLocalMembershipIdentityReader>();
-        if (admissionReader == null || membershipReader == null)
-            return new TerminalAdmissionRead(null, null, false);
+        var quiescenceReader = Services.GetService<IRuntimeFleetCapabilityQuiescenceReader>();
+        if (quiescenceReader == null)
+            return new TerminalQuiescenceRead(false, null);
 
-        var grant = await RuntimeFleetCapabilityAdmissionValidation.GetGrantedAdmissionAsync(
+        var receipt = await RuntimeFleetCapabilityAdmissionValidation.GetQuiescenceReceiptAsync(
             RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
-            ProjectionScopeStatusGAgent.ContractId,
-            (int)ProjectionScopeStatusGAgent.ContractVersion,
-            admissionReader,
-            membershipReader,
-            Services.GetService<TimeProvider>(),
-            Services.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceV1,
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceReaderVersion,
+            quiescenceReader,
             ct);
-        if (grant != null)
-            return new TerminalAdmissionRead(admissionReader, grant, false);
-
-        // Only an explicit revocation rolls an active terminal route back; absence or expiry of
-        // the admission is not evidence that the terminal writer must stop.
-        RuntimeFleetCapabilityAdmission? admission;
-        try
-        {
-            admission = await admissionReader.GetAsync(RuntimeFleetCapability.ProjectionScopeStatusTerminalV2, ct);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            admission = null;
-        }
-
-        var revoked = admission != null &&
-                      admission.Status == RuntimeFleetCapabilityGateStatus.Revoked &&
-                      string.Equals(admission.ContractId, ProjectionScopeStatusGAgent.ContractId, StringComparison.Ordinal);
-        return new TerminalAdmissionRead(admissionReader, null, revoked);
+        return new TerminalQuiescenceRead(true, receipt);
     }
 
     private DateTimeOffset Now() =>
@@ -868,7 +877,8 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 /// </summary>
 public sealed class ProjectionScopeStatusRouteBlockedException(string scopeActorId, long routeEpoch)
     : InvalidOperationException(
-        $"Projection scope '{scopeActorId}' status route epoch {routeEpoch} is blocked for cutover; the observation is retried after the flip.")
+        $"Projection scope '{scopeActorId}' status route epoch {routeEpoch} is blocked for cutover; the observation is retried after the flip."),
+        IRuntimeEnvelopeRetryableException
 {
     public string ScopeActorId { get; } = scopeActorId;
 

@@ -45,6 +45,74 @@ public static class RuntimeFleetCapabilityAdmissionValidation
         RuntimeActorStateMigrationAdmissionOptions? options = null,
         CancellationToken ct = default)
     {
+        var validated = await ReadValidatedAdmissionAsync(
+            requiredCapability,
+            requiredContractId,
+            requiredReaderContractVersion,
+            admissionReader,
+            membershipReader,
+            timeProvider,
+            options,
+            ct);
+        if (validated == null)
+            return null;
+
+        return new RuntimeFleetCapabilityAdmissionGrant(
+            requiredCapability,
+            validated.Admission,
+            validated.LocalMembership,
+            validated.ValidatedAt);
+    }
+
+    /// <summary>
+    /// Validates a typed terminal quiescence marker. The evidence records the historical fleet
+    /// that closed the gate and is deliberately independent of current membership; it is never an
+    /// OPEN grant for a later rollout.
+    /// </summary>
+    public static async Task<RuntimeFleetCapabilityQuiescenceReceipt?> GetQuiescenceReceiptAsync(
+        RuntimeFleetCapability requiredCapability,
+        string requiredContractId,
+        int requiredReaderContractVersion,
+        IRuntimeFleetCapabilityQuiescenceReader quiescenceReader,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(quiescenceReader);
+        ValidateRequirement(requiredCapability, requiredContractId, requiredReaderContractVersion);
+        ct.ThrowIfCancellationRequested();
+
+        var evidence = (await quiescenceReader.GetQuiescenceAsync(requiredCapability, ct))?.Clone();
+        if (evidence == null ||
+            evidence.Capability != requiredCapability ||
+            !string.Equals(
+                evidence.AuthorityActorId,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal) ||
+            evidence.AuthorityStateVersion <= 0 ||
+            evidence.CapabilityEpoch != long.MaxValue ||
+            !string.Equals(evidence.ContractId, requiredContractId, StringComparison.Ordinal) ||
+            evidence.QuiescenceReaderContractVersion < requiredReaderContractVersion ||
+            evidence.QuiescedMembershipEpoch <= 0 ||
+            string.IsNullOrWhiteSpace(evidence.QuiescedMembershipDigest) ||
+            string.IsNullOrWhiteSpace(evidence.QuiescedDeploymentRevision) ||
+            evidence.QuiescedAt == null ||
+            string.IsNullOrWhiteSpace(evidence.QuiescenceTransitionId))
+        {
+            return null;
+        }
+
+        return new RuntimeFleetCapabilityQuiescenceReceipt(requiredCapability, evidence);
+    }
+
+    private static async Task<ValidatedAdmission?> ReadValidatedAdmissionAsync(
+        RuntimeFleetCapability requiredCapability,
+        string requiredContractId,
+        int requiredReaderContractVersion,
+        IRuntimeFleetCapabilityAdmissionReader admissionReader,
+        IRuntimeLocalMembershipIdentityReader membershipReader,
+        TimeProvider? timeProvider,
+        RuntimeActorStateMigrationAdmissionOptions? options,
+        CancellationToken ct)
+    {
         ArgumentNullException.ThrowIfNull(admissionReader);
         ArgumentNullException.ThrowIfNull(membershipReader);
         ValidateRequirement(requiredCapability, requiredContractId, requiredReaderContractVersion);
@@ -56,23 +124,16 @@ public static class RuntimeFleetCapabilityAdmissionValidation
 
         var admission = (await admissionReader.GetAsync(requiredCapability, ct))?.Clone();
         var validatedAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
-        if (!IsGranted(
+        return IsAdmission(
                 admission,
                 requiredCapability,
                 requiredContractId,
                 requiredReaderContractVersion,
                 localMembership!,
                 validatedAt,
-                options ?? new RuntimeActorStateMigrationAdmissionOptions()))
-        {
-            return null;
-        }
-
-        return new RuntimeFleetCapabilityAdmissionGrant(
-            requiredCapability,
-            admission!,
-            localMembership!,
-            validatedAt);
+                options ?? new RuntimeActorStateMigrationAdmissionOptions())
+            ? new ValidatedAdmission(admission!, localMembership!, validatedAt)
+            : null;
     }
 
     internal static bool IsValidLocalMembership(RuntimeLocalMembershipIdentity? membership) =>
@@ -95,6 +156,25 @@ public static class RuntimeFleetCapabilityAdmissionValidation
         ArgumentNullException.ThrowIfNull(options);
         ValidateRequirement(requiredCapability, requiredContractId, requiredReaderContractVersion);
 
+        return IsAdmission(
+            admission,
+            requiredCapability,
+            requiredContractId,
+            requiredReaderContractVersion,
+            localMembership,
+            now,
+            options);
+    }
+
+    private static bool IsAdmission(
+        RuntimeFleetCapabilityAdmission? admission,
+        RuntimeFleetCapability requiredCapability,
+        string requiredContractId,
+        int requiredReaderContractVersion,
+        RuntimeLocalMembershipIdentity localMembership,
+        DateTimeOffset now,
+        RuntimeActorStateMigrationAdmissionOptions options)
+    {
         if (admission == null ||
             admission.Capability != requiredCapability ||
             admission.Status != RuntimeFleetCapabilityGateStatus.Open ||
@@ -131,6 +211,11 @@ public static class RuntimeFleetCapabilityAdmissionValidation
                validUntil > observedAt &&
                validUntil <= observedAt + options.MaxMembershipEvidenceTtl;
     }
+
+    private sealed record ValidatedAdmission(
+        RuntimeFleetCapabilityAdmission Admission,
+        RuntimeLocalMembershipIdentity LocalMembership,
+        DateTimeOffset ValidatedAt);
 
     private static bool ContainsExactLocalMember(
         RuntimeFleetCapabilityAdmission admission,
@@ -176,6 +261,23 @@ public static class RuntimeFleetCapabilityAdmissionValidation
             throw new ArgumentException("A live fleet admission check requires an exact versioned capability contract.");
         }
     }
+}
+
+public sealed class RuntimeFleetCapabilityQuiescenceReceipt
+{
+    private readonly RuntimeFleetCapabilityQuiescenceEvidence _evidence;
+
+    internal RuntimeFleetCapabilityQuiescenceReceipt(
+        RuntimeFleetCapability capability,
+        RuntimeFleetCapabilityQuiescenceEvidence evidence)
+    {
+        Capability = capability;
+        _evidence = evidence.Clone();
+    }
+
+    public RuntimeFleetCapability Capability { get; }
+
+    public RuntimeFleetCapabilityQuiescenceEvidence Evidence => _evidence.Clone();
 }
 
 /// <summary>

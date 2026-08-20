@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -8,6 +9,7 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.Runtime;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -123,13 +125,40 @@ public sealed class ProjectionScopeStatusGAgent
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateLifecycleCommand(command.RootActorId, command.ProjectionKind, command.SessionId, command.Mode);
-        await ReleaseAsync(lastObservedVersion: 0);
-
-        // A status-route cutover release is confirmed only after the release is committed (also
-        // when it already was): the source flips its route on this typed continuation, never
-        // on inbox acceptance of the command.
         if (command.StatusRouteEpoch > 0)
+        {
+            if (!IsExpectedDirectPublisher(command.RootActorId) ||
+                !string.Equals(command.RootActorId, State.SourceScopeActorId, StringComparison.Ordinal) ||
+                !string.Equals(command.ExpectedWriterActorId, Id, StringComparison.Ordinal) ||
+                command.RequiredObservedVersion <= 0 ||
+                !State.Released ||
+                State.ReleasedAtObservedVersion < command.RequiredObservedVersion)
+            {
+                return;
+            }
+
+            await RemoveObservationRelayAsync(State.SourceScopeActorId, CancellationToken.None);
+            // A status-route cutover release is confirmed only after the release is committed.
+            // Terminal drain is normally committed while handling the source's BLOCKED
+            // publication; a direct command that races ahead of that publication does nothing.
             await ConfirmReleasedAsync(command.RootActorId, command.StatusRouteEpoch);
+            return;
+        }
+
+        await ReleaseAsync(lastObservedVersion: State.ReleasedAtObservedVersion);
+    }
+
+    private bool IsExpectedDirectPublisher(string expectedActorId)
+    {
+        var inbound = ActiveInboundEnvelope;
+        if (inbound == null)
+            return false;
+
+        var runtimeSourceActorId = inbound.Runtime?.SourceActorId;
+        return inbound.Route.IsDirect() &&
+               string.Equals(inbound.Route?.PublisherActorId, expectedActorId, StringComparison.Ordinal) &&
+               (string.IsNullOrWhiteSpace(runtimeSourceActorId) ||
+                string.Equals(runtimeSourceActorId, expectedActorId, StringComparison.Ordinal));
     }
 
     private Task ConfirmReleasedAsync(string sourceScopeActorId, long routeEpoch) =>
@@ -139,6 +168,7 @@ public sealed class ProjectionScopeStatusGAgent
             RouteEpoch = routeEpoch,
             LastObservedVersion = State.ReleasedAtObservedVersion,
             ReleasedAtUtc = Timestamp.FromDateTimeOffset(Now()),
+            WriterActorId = Id,
         });
 
     [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
@@ -165,16 +195,31 @@ public sealed class ProjectionScopeStatusGAgent
         }
 
         var sourceScopeActorId = BuildSourceScopeActorId(sourceState);
+        if (!IsAuthenticForwardedSourcePublication(envelope, stateEvent, sourceScopeActorId))
+            return;
+
         var route = sourceState.StatusRoute;
+        var warmingTerminalRoute = ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(
+            route,
+            ContractId,
+            ContractVersion);
+        if ((warmingTerminalRoute || route?.Phase == ProjectionScopeStatusRoutePhase.Blocked) &&
+            !await HasTerminalQuiescenceReceiptAsync())
+        {
+            // The existing continuation event types are understood by old sources, so writers
+            // must remain silent until the distinct bridge contract is unanimously quiesced.
+            return;
+        }
+
         var namesThisWriter =
-            ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(route, ContractId, ContractVersion) ||
-            ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(route, ContractId, ContractVersion);
+            warmingTerminalRoute ||
+            ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(route, ContractId, ContractVersion);
         if (!State.Active || State.Released)
         {
             // The source scope writes our relay and commits the route on its own turn; its
             // first routed publication can reach us before the lifecycle command does, and a
             // re-ensured source re-asserts our relay after we released with it. Only a
-            // publication whose committed route names this contract (warming or writing) may
+            // publication whose committed route names this contract may
             // start us, it must be the source the relay was written for (the relay is addressed
             // to this actor), and a released materializer never restarts for a source that is
             // itself released.
@@ -188,16 +233,15 @@ public sealed class ProjectionScopeStatusGAgent
             return;
         }
 
-        if (ProjectionScopeStatusRoutePolicy.IsWarmingTerminalRoute(route, ContractId, ContractVersion))
+        if (warmingTerminalRoute)
         {
-            // Warming: the legacy shadow still writes; we prove delivery by reporting the
-            // observed version to the source, which blocks, drains and flips on its own turn.
             await SendToAsync(State.SourceScopeActorId, new ProjectionScopeStatusWriterCaughtUpEvent
             {
                 SourceScopeActorId = State.SourceScopeActorId,
                 RouteEpoch = route!.RouteEpoch,
                 ObservedVersion = stateEvent.Version,
                 ObservedAtUtc = Timestamp.FromDateTimeOffset(Now()),
+                WriterActorId = Id,
             });
             return;
         }
@@ -209,7 +253,8 @@ public sealed class ProjectionScopeStatusGAgent
             // longer a writer for this source; this publication is the last one observed through
             // the source's relay (stream order), so the confirmation carries it as drained.
             await ReleaseAsync(stateEvent.Version);
-            await ConfirmReleasedAsync(State.SourceScopeActorId, route.RouteEpoch);
+            if (route!.Phase == ProjectionScopeStatusRoutePhase.Blocked)
+                await ConfirmReleasedAsync(State.SourceScopeActorId, route.RouteEpoch);
             return;
         }
 
@@ -232,7 +277,21 @@ public sealed class ProjectionScopeStatusGAgent
             EventId = stateEvent.EventId ?? string.Empty,
         };
         await WriteStatusAsync(envelope, sourceState, stateEvent, source);
-        await ReleaseWithSourceAsync(sourceState);
+        await ReleaseWithSourceAsync(sourceState, stateEvent.Version);
+    }
+
+    private async Task<bool> HasTerminalQuiescenceReceiptAsync()
+    {
+        var reader = Services.GetService<IRuntimeFleetCapabilityQuiescenceReader>();
+        if (reader == null)
+            return false;
+
+        return await RuntimeFleetCapabilityAdmissionValidation.GetQuiescenceReceiptAsync(
+                   RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
+                   RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceV1,
+                   RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceReaderVersion,
+                   reader,
+                   CancellationToken.None) != null;
     }
 
     /// <summary>
@@ -240,9 +299,9 @@ public sealed class ProjectionScopeStatusGAgent
     /// releases with it; but only once no write is pending, otherwise the source's final
     /// status document could never be written (release clears the pending write).
     /// </summary>
-    private Task ReleaseWithSourceAsync(ProjectionScopeState sourceState) =>
+    private Task ReleaseWithSourceAsync(ProjectionScopeState sourceState, long observedVersion) =>
         sourceState.Released && !sourceState.ObservationAttached && State.PendingWrite == null
-            ? ReleaseAsync(lastObservedVersion: 0)
+            ? ReleaseAsync(lastObservedVersion: observedVersion)
             : Task.CompletedTask;
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
@@ -272,7 +331,7 @@ public sealed class ProjectionScopeStatusGAgent
         }
 
         await WriteStatusAsync(pending.Envelope, sourceState, stateEvent, pending.Source, command.Attempt, redeliverable: false);
-        await ReleaseWithSourceAsync(sourceState);
+        await ReleaseWithSourceAsync(sourceState, stateEvent.Version);
     }
 
     protected override ProjectionScopeStatusTerminalState TransitionState(
@@ -512,17 +571,21 @@ public sealed class ProjectionScopeStatusGAgent
 
     private async Task ReleaseAsync(long lastObservedVersion)
     {
-        if (!State.Active || State.Released)
+        if (!State.Active)
             return;
 
-        // Remove the durable evidence first so a failed release commit can only cause a later
-        // cold ensure, never a warm hit against a released materializer.
-        await RemoveObservationRelayAsync(State.SourceScopeActorId, CancellationToken.None);
-        await PersistDomainEventAsync(new ProjectionScopeStatusTerminalReleasedEvent
+        if (!State.Released)
         {
-            LastObservedVersion = lastObservedVersion,
-            OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
-        });
+            await PersistDomainEventAsync(new ProjectionScopeStatusTerminalReleasedEvent
+            {
+                LastObservedVersion = lastObservedVersion,
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(Now()),
+            });
+        }
+
+        // The release watermark is authoritative. Relay cleanup is derived and idempotent, so a
+        // crash or store failure can never remove the only path that can prove the drain.
+        await RemoveObservationRelayAsync(State.SourceScopeActorId, CancellationToken.None);
     }
 
     private static string BuildSourceScopeActorId(ProjectionScopeState sourceState) =>
@@ -531,6 +594,20 @@ public sealed class ProjectionScopeStatusGAgent
             sourceState.ProjectionKind,
             ProjectionScopeModeMapper.ToRuntime(sourceState.Mode),
             sourceState.SessionId));
+
+    private static bool IsAuthenticForwardedSourcePublication(
+        EventEnvelope envelope,
+        StateEvent stateEvent,
+        string sourceScopeActorId) =>
+        !string.IsNullOrWhiteSpace(sourceScopeActorId) &&
+        string.Equals(envelope.Route?.PublisherActorId, sourceScopeActorId, StringComparison.Ordinal) &&
+        string.Equals(
+            StreamForwardingEnvelopeState.GetSourceStreamId(envelope),
+            sourceScopeActorId,
+            StringComparison.Ordinal) &&
+        string.Equals(stateEvent.AgentId, sourceScopeActorId, StringComparison.Ordinal) &&
+        (string.IsNullOrWhiteSpace(envelope.Runtime?.SourceActorId) ||
+         string.Equals(envelope.Runtime.SourceActorId, sourceScopeActorId, StringComparison.Ordinal));
 
     private Task EnsureObservationRelayAsync(string sourceScopeActorId, CancellationToken ct)
     {
@@ -609,6 +686,7 @@ public sealed class ProjectionScopeStatusWriteRejectedException(
     ProjectionWriteDisposition disposition)
     : InvalidOperationException(
         $"Terminal status materializer '{materializerActorId}' could not apply the status document for source '{source.ActorId}' version {source.StateVersion} ({disposition}); the observation is redelivered.")
+    , IRuntimeEnvelopeRetryableException
 {
     public string MaterializerActorId { get; } = materializerActorId;
 

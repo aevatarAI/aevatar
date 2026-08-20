@@ -46,7 +46,8 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     private const string PreviousTerminalContractId =
         RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV1;
 
-    private const long PreviousTerminalContractVersion = 1;
+    private const long PreviousTerminalContractVersion =
+        1;
 
     private static readonly DateTimeOffset FixedNow = new(2026, 8, 19, 10, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan CappedRetryDelay = TimeSpan.FromMinutes(10);
@@ -309,17 +310,16 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Outbox.Sent.Should().BeEmpty();
     }
 
-    // ─── 4b. Terminal route phases: writing phases write, v1 compat, warming reports ──
+    // ─── 4b. Phase-A terminal routes: frozen cutovers, active writers preserved ──
 
-    [Theory]
-    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
-    [InlineData(ProjectionScopeStatusRoutePhase.Active)]
-    public async Task HandleObservedEnvelopeAsync_TerminalRouteInWritingPhase_ShouldWriteOncePerTerminalOutcome(
-        ProjectionScopeStatusRoutePhase phase)
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_ActiveTerminalRoute_ShouldWriteOncePerTerminalOutcome()
     {
         var harness = await TerminalHarness.CreateStartedAsync();
         var sourceState = BuildSourceState();
-        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(2, phase);
+        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(
+            2,
+            ProjectionScopeStatusRoutePhase.Active);
         sourceState.StatusRoute.ContractVersion.Should().Be(ProjectionScopeStatusGAgent.ContractVersion,
             "a built terminal route names the current reader version");
 
@@ -395,49 +395,42 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Dispatcher.Documents.Should().ContainSingle().Which.StateVersion.Should().Be(9);
     }
 
-    [Fact]
-    public async Task HandleObservedEnvelopeAsync_WarmingTerminalRoute_NotYetActive_ShouldSelfStartReportCaughtUpAndWriteNothing()
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Warming)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
+    public async Task HandleObservedEnvelopeAsync_FrozenTerminalRoute_NotYetActive_ShouldNotStartOrContinueCutover(
+        ProjectionScopeStatusRoutePhase phase)
     {
         var harness = new TerminalHarness();
         harness.Agent.State.Active.Should().BeFalse();
         var sourceState = BuildSourceState();
-        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(3, ProjectionScopeStatusRoutePhase.Warming);
+        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(3, phase);
         sourceState.StatusRoute.WarmStartedVersion = 10;
 
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             sourceState,
             BuildStateEvent(version: 10, eventId: "evt-10", new ProjectionScopeStatusRouteWarmingStartedEvent())));
 
-        var started = harness.EventSourcing.PersistedEvents.Should().ContainSingle(
-                "warming self-starts the materializer; the report itself is no durable fact of ours")
-            .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>().Subject;
-        started.SourceScopeActorId.Should().Be(SourceScopeActorId);
-        harness.Agent.State.Active.Should().BeTrue();
-        harness.Agent.State.SourceScopeActorId.Should().Be(SourceScopeActorId);
-
-        harness.Dispatcher.UpsertAttempts.Should().Be(0, "a warming writer never writes");
+        harness.EventSourcing.PersistedEvents.Should().BeEmpty();
+        harness.Agent.State.Active.Should().BeFalse();
+        harness.Dispatcher.UpsertAttempts.Should().Be(0);
         harness.Dispatcher.Documents.Should().BeEmpty();
-        var report = harness.Outbox.Sent.Should().ContainSingle().Subject;
-        report.TargetActorId.Should().Be(SourceScopeActorId, "the caught-up report is addressed to the source scope actor");
-        report.CaughtUp.SourceScopeActorId.Should().Be(SourceScopeActorId);
-        report.CaughtUp.RouteEpoch.Should().Be(3);
-        report.CaughtUp.ObservedVersion.Should().Be(10);
-        report.CaughtUp.ObservedAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
+        harness.Outbox.Sent.Should().BeEmpty();
         harness.Outbox.Published.Should().BeEmpty();
-        harness.Agent.State.PendingWrite.Should().BeNull("warming defers nothing: there is no write to defer");
+        harness.Agent.State.PendingWrite.Should().BeNull();
         harness.Callbacks.Timeouts.Should().BeEmpty();
         harness.Alerts.Published.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task HandleObservedEnvelopeAsync_WarmingTerminalRoute_ShouldReportEveryObservedVersionWithoutWriting()
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Warming)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
+    public async Task HandleObservedEnvelopeAsync_FrozenTerminalRoute_ShouldNotWriteReleaseOrContinueCutover(
+        ProjectionScopeStatusRoutePhase phase)
     {
-        // While warming the legacy shadow still writes; the terminal proves delivery by reporting
-        // every observed version (terminal and intermediate outcomes alike) to the source, which
-        // blocks, drains and flips on its own turn. Nothing is written, nothing is deferred.
         var harness = await TerminalHarness.CreateStartedAsync();
         var sourceState = BuildSourceState();
-        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(2, ProjectionScopeStatusRoutePhase.Warming);
+        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(2, phase);
 
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             sourceState,
@@ -449,11 +442,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             sourceState,
             BuildStateEvent(version: 13, eventId: "evt-13", new ProjectionScopeStatusRouteWarmingProbedEvent())));
 
-        harness.Outbox.Sent.Should().HaveCount(3);
-        harness.Outbox.Sent.Should().OnlyContain(sent => sent.TargetActorId == SourceScopeActorId);
-        harness.Outbox.CaughtUpReports.Select(static sent => sent.CaughtUp.ObservedVersion).Should().Equal(11, 12, 13);
-        harness.Outbox.CaughtUpReports.Should().OnlyContain(sent =>
-            sent.CaughtUp.RouteEpoch == 2 && sent.CaughtUp.SourceScopeActorId == SourceScopeActorId);
+        harness.Outbox.Sent.Should().BeEmpty();
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
         harness.EventSourcing.PersistedEvents.Should().ContainSingle()
             .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>();
@@ -462,27 +451,30 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Agent.State.Released.Should().BeFalse();
     }
 
-    [Fact]
-    public async Task HandleObservedEnvelopeAsync_WarmingV1TerminalRoute_ShouldReportAsWell()
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Warming)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
+    public async Task HandleObservedEnvelopeAsync_PreviousContractFrozenRoute_ShouldNotWriteReleaseOrContinueCutover(
+        ProjectionScopeStatusRoutePhase phase)
     {
-        // A reader serves routes at or below its own contract version in every phase, warming
-        // included; version 1 is the lowest valid route version.
         var harness = await TerminalHarness.CreateStartedAsync();
         var sourceState = BuildSourceState();
-        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(2, ProjectionScopeStatusRoutePhase.Warming);
-        sourceState.StatusRoute.ContractVersion = 1;
+        sourceState.StatusRoute = BuildPreviousContractTerminalRoute(4, phase);
 
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             sourceState,
-            BuildStateEvent(version: 11, eventId: "evt-11", new ProjectionScopeWatermarkAdvancedEvent())));
+            BuildStateEvent(version: 46, eventId: "evt-46", new ProjectionScopeWatermarkAdvancedEvent())));
 
-        harness.Outbox.Sent.Should().ContainSingle().Which.CaughtUp.ObservedVersion.Should().Be(11);
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
+        harness.Outbox.Sent.Should().BeEmpty();
+        harness.EventSourcing.PersistedEvents.Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>();
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.Agent.State.Released.Should().BeFalse();
     }
 
     [Theory]
     [InlineData(ProjectionScopeStatusRoutePhase.Unspecified)]
-    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
     [InlineData(ProjectionScopeStatusRoutePhase.Active)]
     public async Task HandleObservedEnvelopeAsync_PreviousContractTerminalRouteInWritingPhase_ShouldStillWrite(
         ProjectionScopeStatusRoutePhase phase)
@@ -508,30 +500,8 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     }
 
     [Fact]
-    public async Task HandleObservedEnvelopeAsync_PreviousContractTerminalRouteWarming_ShouldReportCaughtUpWithoutWriting()
+    public async Task HandleObservedEnvelopeAsync_WarmingThenBlockedThenActive_ShouldFreezeUntilActive()
     {
-        var harness = await TerminalHarness.CreateStartedAsync();
-        var sourceState = BuildSourceState();
-        sourceState.StatusRoute = BuildPreviousContractTerminalRoute(4, ProjectionScopeStatusRoutePhase.Warming);
-
-        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
-            sourceState,
-            BuildStateEvent(version: 46, eventId: "evt-46", new ProjectionScopeWatermarkAdvancedEvent())));
-
-        harness.Dispatcher.UpsertAttempts.Should().Be(0, "a warming writer never writes, whatever the contract revision");
-        var report = harness.Outbox.CaughtUpReports.Should().ContainSingle().Subject;
-        report.TargetActorId.Should().Be(SourceScopeActorId);
-        report.CaughtUp.RouteEpoch.Should().Be(4);
-        report.CaughtUp.ObservedVersion.Should().Be(46);
-        harness.Agent.State.PendingWrite.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task HandleObservedEnvelopeAsync_WarmingThenBlockedThenActive_ShouldReportThenWriteOncePerTerminalOutcome()
-    {
-        // The whole cutover as the terminal sees it: warming publications are reported, the
-        // blocked publication (the source's own Blocked fact) and every later active terminal
-        // outcome is written exactly once; the route on the document is the source's route.
         var harness = new TerminalHarness();
         var warming = BuildSourceState();
         warming.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(2, ProjectionScopeStatusRoutePhase.Warming);
@@ -563,15 +533,13 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             active,
             BuildStateEvent(version: 25, eventId: "evt-25", new ProjectionScopeWatermarkAdvancedEvent())));
 
-        harness.Outbox.CaughtUpReports.Select(static sent => sent.CaughtUp.ObservedVersion).Should().Equal([20L, 21L],
-            "only warming publications are reported");
+        harness.Outbox.Sent.Should().BeEmpty();
         harness.Dispatcher.Writes.Select(static write => (write.Version, write.RouteEpoch)).Should().Equal(
-            (22, 2),
             (23, 2),
             (25, 2));
-        harness.Dispatcher.Documents[0].StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Blocked);
-        harness.Dispatcher.Documents[1].StatusRoute.Phase.Should().Be(ProjectionScopeStatusRoutePhase.Active);
-        harness.Dispatcher.Documents[1].StatusRoute.LegacyRouteReleased.Should().BeTrue();
+        harness.Dispatcher.Documents.Should().OnlyContain(document =>
+            document.StatusRoute.Phase == ProjectionScopeStatusRoutePhase.Active &&
+            document.StatusRoute.LegacyRouteReleased);
         harness.EventSourcing.PersistedEvents.Should().ContainSingle()
             .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>();
         harness.Agent.State.PendingWrite.Should().BeNull();
@@ -610,16 +578,13 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     }
 
     [Theory]
-    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
     [InlineData(ProjectionScopeStatusRoutePhase.Active)]
     [InlineData(ProjectionScopeStatusRoutePhase.Unspecified)]
     public async Task HandleObservedEnvelopeAsync_LegacyRouteInWritingPhase_ShouldReleaseWithoutWriting(
         ProjectionScopeStatusRoutePhase phase)
     {
-        // Rolled back: the legacy shadow took the route over. We release ourselves (relay
-        // removed first, then the durable released fact), write nothing, and confirm the release
-        // to the source carrying the last version we observed through its relay — the source
-        // flips its route on that typed confirmation, never on inbox acceptance.
+        // A rollback that an older source already completed still names the legacy writer. The
+        // terminal writer releases itself, but Phase A never emits the old cutover continuation.
         var harness = await TerminalHarness.CreateStartedAsync();
         var sourceState = BuildSourceState();
         sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(3, phase);
@@ -640,12 +605,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Agent.State.PendingWrite.Should().BeNull();
         (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().BeNull();
         harness.Streams.GetStream(SourceScopeActorId).RemovedTargets.Should().Equal(TerminalActorId);
-        var confirmation = harness.Outbox.Sent.Should().ContainSingle().Subject;
-        confirmation.TargetActorId.Should().Be(SourceScopeActorId);
-        confirmation.ReleaseConfirmation.SourceScopeActorId.Should().Be(SourceScopeActorId);
-        confirmation.ReleaseConfirmation.RouteEpoch.Should().Be(3, "the confirmation names the legacy route's epoch");
-        confirmation.ReleaseConfirmation.LastObservedVersion.Should().Be(17);
-        confirmation.ReleaseConfirmation.ReleasedAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
+        harness.Outbox.Sent.Should().BeEmpty("Phase A never continues a V2 rollback");
         harness.Callbacks.Timeouts.Should().BeEmpty();
 
         // a straggler for the now-released source (the legacy writer owns it) is ignored
@@ -657,14 +617,14 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
         harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
         harness.Agent.State.Released.Should().BeTrue();
-        harness.Outbox.Sent.Should().ContainSingle("a released materializer confirms once, then stays silent");
+        harness.Outbox.Sent.Should().BeEmpty();
         harness.Streams.GetStream(SourceScopeActorId).RemovedTargets.Should().Equal(
             new[] { TerminalActorId },
             "a released materializer does not touch the source stream again");
     }
 
     [Fact]
-    public async Task HandleObservedEnvelopeAsync_LegacyRouteBlocked_WithPendingWrite_ShouldReleaseAndDropPending()
+    public async Task HandleObservedEnvelopeAsync_LegacyRouteBlocked_WithPendingWrite_ShouldFreezeAndPreservePending()
     {
         var harness = await TerminalHarness.CreateStartedAsync();
         harness.Dispatcher.Enqueue(new IOException("store unavailable"));
@@ -680,15 +640,45 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             rolledBack,
             BuildStateEvent(version: 13, eventId: "evt-13", new ProjectionScopeStatusRouteBlockedEvent())));
 
-        harness.Agent.State.Released.Should().BeTrue();
-        harness.Agent.State.PendingWrite.Should().BeNull("the legacy writer owns the status from here on");
-        var confirmation = harness.Outbox.ReleaseConfirmations.Should().ContainSingle().Subject;
-        confirmation.ReleaseConfirmation.RouteEpoch.Should().Be(2);
-        confirmation.ReleaseConfirmation.LastObservedVersion.Should().Be(13);
+        harness.Agent.State.Released.Should().BeFalse();
+        harness.Agent.State.PendingWrite.Should().NotBeNull("Phase A leaves the current writer intact");
+        harness.Outbox.Sent.Should().BeEmpty();
 
         await harness.Agent.HandleRetryWriteAsync(retry);
 
-        harness.Dispatcher.Documents.Should().BeEmpty("the armed retry finds a released materializer and does nothing");
+        harness.Dispatcher.Documents.Should().ContainSingle().Which.StateVersion.Should().Be(12);
+        harness.Agent.State.PendingWrite.Should().BeNull();
+        harness.Agent.State.Released.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_LegacyRouteBlocked_AfterQuiescence_ShouldCommitDrainThenConfirm()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync(
+            quiescence: CreateQuiescenceEvidence());
+        var rolledBack = BuildSourceState();
+        rolledBack.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(
+            4,
+            ProjectionScopeStatusRoutePhase.Blocked);
+        rolledBack.StatusRoute.BlockedVersion = 17;
+
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            rolledBack,
+            BuildStateEvent(version: 17, eventId: "evt-17", new ProjectionScopeStatusRouteDrainProbedEvent())));
+
+        harness.Agent.State.Released.Should().BeTrue();
+        harness.Agent.State.ReleasedAtObservedVersion.Should().Be(17);
+        harness.EventSourcing.PersistedEvents[^1]
+            .Should().BeOfType<ProjectionScopeStatusTerminalReleasedEvent>();
+        harness.Outbox.ReleaseConfirmations.Should().ContainSingle()
+            .Which.ReleaseConfirmation.Should().Be(new ProjectionScopeStatusWriterReleasedEvent
+            {
+                SourceScopeActorId = SourceScopeActorId,
+                WriterActorId = TerminalActorId,
+                RouteEpoch = 4,
+                LastObservedVersion = 17,
+                ReleasedAtUtc = Timestamp.FromDateTimeOffset(FixedNow),
+            });
     }
 
     [Fact]
@@ -703,8 +693,7 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             rolledBack,
             BuildStateEvent(version: 40, eventId: "evt-40", new ProjectionScopeWatermarkAdvancedEvent())));
         harness.Agent.State.Released.Should().BeTrue();
-        harness.Outbox.ReleaseConfirmations.Should().ContainSingle()
-            .Which.ReleaseConfirmation.LastObservedVersion.Should().Be(40, "the rollback release is confirmed to the source");
+        harness.Outbox.Sent.Should().BeEmpty();
         var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
 
         var reWarming = BuildSourceState();
@@ -713,21 +702,10 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             reWarming,
             BuildStateEvent(version: 41, eventId: "evt-41", new ProjectionScopeStatusRouteWarmingStartedEvent())));
 
-        harness.Agent.State.Released.Should().BeFalse();
-        harness.Agent.State.Active.Should().BeTrue();
-        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore + 1);
-        harness.EventSourcing.PersistedEvents[^1].Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>()
-            .Which.ActivationGeneration.Should().Be(2);
-        var report = harness.Outbox.CaughtUpReports.Should().ContainSingle().Subject;
-        report.TargetActorId.Should().Be(SourceScopeActorId);
-        report.CaughtUp.RouteEpoch.Should().Be(3);
-        report.CaughtUp.ObservedVersion.Should().Be(41);
-        report.CaughtUp.SourceScopeActorId.Should().Be(SourceScopeActorId);
+        harness.Agent.State.Released.Should().BeTrue();
+        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
-        harness.Outbox.Sent.Should().HaveCount(2,
-            "the restart sends the caught-up report and nothing else: the release was already confirmed");
-        harness.Outbox.ReleaseConfirmations.Should().ContainSingle(
-            "a restarting materializer never re-confirms the release it already committed");
+        harness.Outbox.Sent.Should().BeEmpty();
 
         var reActive = BuildSourceState();
         reActive.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(3, ProjectionScopeStatusRoutePhase.Active);
@@ -736,8 +714,10 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
             BuildStateEvent(version: 42, eventId: "evt-42", new ProjectionScopeStatusRouteActivatedEvent())));
 
         harness.Dispatcher.Writes.Should().ContainSingle().Which.Should().Be((42L, 3L, ProjectionWriteDisposition.Applied));
-        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore + 1, "the restart was already persisted");
-        harness.Outbox.Sent.Should().HaveCount(2, "the re-adopted writer reports nothing while it writes");
+        harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore + 1);
+        harness.EventSourcing.PersistedEvents[^1].Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>()
+            .Which.ActivationGeneration.Should().Be(2);
+        harness.Outbox.Sent.Should().BeEmpty();
         harness.Outbox.Published.Should().BeEmpty();
     }
 
@@ -2153,31 +2133,19 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     }
 
     [Fact]
-    public async Task HandleReleaseAsync_WithStatusRouteEpoch_ShouldCommitTheReleaseThenConfirmItToTheSource()
+    public async Task HandleReleaseAsync_WithStatusRouteEpoch_BeforeDrainCommit_ShouldDoNothing()
     {
-        // The source flips its blocked route on this typed confirmation, never on inbox
-        // acceptance of the release command: the confirmation follows the committed release.
         var harness = await TerminalHarness.CreateStartedAsync();
 
-        await harness.Agent.HandleReleaseAsync(BuildReleaseCommand(statusRouteEpoch: 4));
+        await DispatchReleaseAsync(
+            harness.Agent,
+            BuildReleaseCommand(statusRouteEpoch: 4, requiredObservedVersion: 1));
 
-        harness.EventSourcing.PersistedEvents.Should().HaveCount(2);
-        var released = harness.EventSourcing.PersistedEvents[1]
-            .Should().BeOfType<ProjectionScopeStatusTerminalReleasedEvent>().Subject;
-        released.LastObservedVersion.Should().Be(0, "a lifecycle release drains no publication of its own");
-        harness.Agent.State.Released.Should().BeTrue();
-        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().BeNull();
-        var confirmation = harness.Outbox.Sent.Should().ContainSingle().Subject;
-        confirmation.TargetActorId.Should().Be(SourceScopeActorId);
-        confirmation.ReleaseConfirmation.SourceScopeActorId.Should().Be(SourceScopeActorId);
-        confirmation.ReleaseConfirmation.RouteEpoch.Should().Be(4);
-        confirmation.ReleaseConfirmation.LastObservedVersion.Should().Be(0);
-        confirmation.ReleaseConfirmation.ReleasedAtUtc.Should().Be(Timestamp.FromDateTimeOffset(FixedNow));
-        confirmation.Tick.Should().BeGreaterThan(
-            harness.EventSourcing.TickOfCommitted(released),
-            "the release is COMMITTED first and only then confirmed: the source flips its blocked route on the " +
-            "confirmation, so a confirmation that overtook its own commit would flip the route over an uncommitted release");
-        harness.Outbox.Published.Should().BeEmpty("the confirmation is addressed to the source, never broadcast");
+        harness.EventSourcing.PersistedEvents.Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionScopeStatusTerminalStartedEvent>();
+        harness.Agent.State.Released.Should().BeFalse();
+        (await harness.Streams.GetBindingAsync(SourceScopeActorId, TerminalActorId)).Should().NotBeNull();
+        harness.Outbox.Sent.Should().BeEmpty();
     }
 
     [Fact]
@@ -2190,23 +2158,57 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         // version to detect a writer that released before it had drained the blocked publication.
         var harness = await TerminalHarness.CreateStartedAsync();
         var rolledBack = BuildSourceState();
-        rolledBack.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(3, ProjectionScopeStatusRoutePhase.Blocked);
+        rolledBack.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(3, ProjectionScopeStatusRoutePhase.Active);
         await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
             rolledBack,
             BuildStateEvent(version: 17, eventId: "evt-17", new ProjectionScopeStatusRouteBlockedEvent())));
         harness.Agent.State.ReleasedAtObservedVersion.Should().Be(17);
         var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
 
-        await harness.Agent.HandleReleaseAsync(BuildReleaseCommand(statusRouteEpoch: 3));
+        await DispatchReleaseAsync(
+            harness.Agent,
+            BuildReleaseCommand(statusRouteEpoch: 3, requiredObservedVersion: 17));
 
         harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore, "the release was already committed");
-        harness.Outbox.ReleaseConfirmations.Should().HaveCount(2)
-            .And.OnlyContain(sent =>
-                sent.TargetActorId == SourceScopeActorId &&
-                ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).RouteEpoch == 3 &&
-                ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).LastObservedVersion == 17,
-                "the command path confirms the durably released-at version, not a fresh zero");
+        harness.Outbox.ReleaseConfirmations.Should().ContainSingle()
+            .Which.ReleaseConfirmation.Should().Be(new ProjectionScopeStatusWriterReleasedEvent
+            {
+                SourceScopeActorId = SourceScopeActorId,
+                WriterActorId = TerminalActorId,
+                RouteEpoch = 3,
+                LastObservedVersion = 17,
+                ReleasedAtUtc = Timestamp.FromDateTimeOffset(FixedNow),
+            });
         harness.Dispatcher.UpsertAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleReleaseAsync_WithStatusRouteEpoch_ShouldRequireExactPublisherWriterAndDrainWatermark()
+    {
+        var harness = await TerminalHarness.CreateStartedAsync();
+        var rolledBack = BuildSourceState();
+        rolledBack.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(
+            3,
+            ProjectionScopeStatusRoutePhase.Active);
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            rolledBack,
+            BuildStateEvent(version: 17, eventId: "evt-17", new ProjectionScopeWatermarkAdvancedEvent())));
+        harness.Agent.State.ReleasedAtObservedVersion.Should().Be(17);
+
+        var wrongWriter = BuildReleaseCommand(statusRouteEpoch: 3, requiredObservedVersion: 17);
+        wrongWriter.ExpectedWriterActorId = "other-writer";
+        await DispatchReleaseAsync(harness.Agent, wrongWriter);
+        await DispatchReleaseAsync(
+            harness.Agent,
+            BuildReleaseCommand(statusRouteEpoch: 3, requiredObservedVersion: 17),
+            publisherActorId: "other-source");
+        await DispatchReleaseAsync(
+            harness.Agent,
+            BuildReleaseCommand(statusRouteEpoch: 3, requiredObservedVersion: 18));
+
+        harness.Outbox.Sent.Should().BeEmpty();
+        harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusTerminalReleasedEvent>()
+            .Should().ContainSingle();
     }
 
     [Fact]
@@ -2215,10 +2217,18 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         // The source re-dispatches the release until it holds the confirmation, so an already
         // released writer must answer again — and commit nothing the second time.
         var harness = await TerminalHarness.CreateStartedAsync();
-        await harness.Agent.HandleReleaseAsync(BuildReleaseCommand(statusRouteEpoch: 4));
+        var rolledBack = BuildSourceState();
+        rolledBack.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(
+            4,
+            ProjectionScopeStatusRoutePhase.Active);
+        await harness.Agent.HandleObservedEnvelopeAsync(BuildForwardedEnvelope(
+            rolledBack,
+            BuildStateEvent(version: 17, eventId: "evt-17", new ProjectionScopeWatermarkAdvancedEvent())));
         var eventsBefore = harness.EventSourcing.PersistedEvents.Count;
 
-        await harness.Agent.HandleReleaseAsync(BuildReleaseCommand(statusRouteEpoch: 4));
+        var release = BuildReleaseCommand(statusRouteEpoch: 4, requiredObservedVersion: 17);
+        await DispatchReleaseAsync(harness.Agent, release);
+        await DispatchReleaseAsync(harness.Agent, release);
 
         harness.EventSourcing.PersistedEvents.Should().HaveCount(eventsBefore);
         harness.EventSourcing.PersistedEvents.OfType<ProjectionScopeStatusTerminalReleasedEvent>()
@@ -2227,8 +2237,8 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Outbox.ReleaseConfirmations.Should().OnlyContain(sent =>
             sent.TargetActorId == SourceScopeActorId &&
             ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).RouteEpoch == 4 &&
-            ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).LastObservedVersion == 0,
-            "this writer drained no publication, so every re-confirmation repeats the same released-at version");
+            ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).LastObservedVersion == 17 &&
+            ((ProjectionScopeStatusWriterReleasedEvent)sent.Message).WriterActorId == TerminalActorId);
     }
 
     [Fact]
@@ -3111,14 +3121,46 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     /// A lifecycle release. <paramref name="statusRouteEpoch"/> &gt; 0 marks it the previous-writer
     /// release of a status-route cutover at that epoch, which must be confirmed to the source.
     /// </summary>
-    private static ReleaseProjectionScopeCommand BuildReleaseCommand(long statusRouteEpoch = 0) =>
+    private static ReleaseProjectionScopeCommand BuildReleaseCommand(
+        long statusRouteEpoch = 0,
+        long requiredObservedVersion = 0) =>
         new()
         {
             RootActorId = SourceScopeActorId,
             ProjectionKind = ProjectionScopeStatusTerminalMaterializationContext.ProjectionKindValue,
             Mode = ProjectionScopeMode.DurableMaterialization,
             StatusRouteEpoch = statusRouteEpoch,
+            ExpectedWriterActorId = statusRouteEpoch > 0 ? TerminalActorId : string.Empty,
+            RequiredObservedVersion = statusRouteEpoch > 0 ? requiredObservedVersion : 0,
         };
+
+    private static RuntimeFleetCapabilityQuiescenceEvidence CreateQuiescenceEvidence() =>
+        new()
+        {
+            Capability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            AuthorityStateVersion = 15,
+            CapabilityEpoch = long.MaxValue,
+            ContractId = RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceV1,
+            QuiescenceReaderContractVersion =
+                RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceReaderVersion,
+            QuiescedMembershipEpoch = 7,
+            QuiescedMembershipDigest = "digest-a",
+            QuiescedDeploymentRevision = "revision-a",
+            QuiescedAt = Timestamp.FromDateTimeOffset(FixedNow),
+            QuiescenceTransitionId = "transition:quiesce-v2",
+        };
+
+    private static Task DispatchReleaseAsync(
+        ProjectionScopeStatusGAgent agent,
+        ReleaseProjectionScopeCommand command,
+        string? publisherActorId = null) =>
+        agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId ?? SourceScopeActorId, TerminalActorId),
+            Payload = Any.Pack(command),
+        });
 
     private static ProjectionScopeState BuildSourceState() =>
         new()
@@ -3212,7 +3254,10 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
     {
         private readonly IServiceProvider _services;
 
-        public TerminalHarness(bool withCallbackScheduler = true, bool withAlertSink = true)
+        public TerminalHarness(
+            bool withCallbackScheduler = true,
+            bool withAlertSink = true,
+            RuntimeFleetCapabilityQuiescenceEvidence? quiescence = null)
         {
             EventSourcing = new TerminalEventSourcing(Interactions);
             Outbox = new RecordingEventPublisher(Interactions);
@@ -3229,6 +3274,11 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
                 services.AddSingleton<IActorRuntimeCallbackScheduler>(Callbacks);
             if (withAlertSink)
                 services.AddSingleton<IProjectionFailureAlertSink>(Alerts);
+            if (quiescence != null)
+            {
+                services.AddSingleton<IRuntimeFleetCapabilityQuiescenceReader>(
+                    new StaticQuiescenceReader(quiescence));
+            }
             _services = services.BuildServiceProvider();
             Agent = CreateReplacementActor();
         }
@@ -3250,12 +3300,26 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
 
         public static async Task<TerminalHarness> CreateStartedAsync(
             bool withCallbackScheduler = true,
-            bool withAlertSink = true)
+            bool withAlertSink = true,
+            RuntimeFleetCapabilityQuiescenceEvidence? quiescence = null)
         {
-            var harness = new TerminalHarness(withCallbackScheduler, withAlertSink);
+            var harness = new TerminalHarness(withCallbackScheduler, withAlertSink, quiescence);
             await harness.Agent.HandleEnsureAsync(BuildEnsureCommand());
             harness.Agent.State.Active.Should().BeTrue();
             return harness;
+        }
+
+        private sealed class StaticQuiescenceReader(RuntimeFleetCapabilityQuiescenceEvidence evidence)
+            : IRuntimeFleetCapabilityQuiescenceReader
+        {
+            public Task<RuntimeFleetCapabilityQuiescenceEvidence?> GetQuiescenceAsync(
+                RuntimeFleetCapability capability,
+                CancellationToken ct = default)
+            {
+                ct.ThrowIfCancellationRequested();
+                return Task.FromResult<RuntimeFleetCapabilityQuiescenceEvidence?>(
+                    evidence.Capability == capability ? evidence.Clone() : null);
+            }
         }
 
         /// <summary>

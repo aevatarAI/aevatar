@@ -45,6 +45,9 @@ internal static class ProjectionScopeStateApplier
         var next = current.Clone();
         next.Released = true;
         next.ObservationAttached = false;
+        next.ReleasedAtObservedVersion = Math.Max(
+            current.ReleasedAtObservedVersion,
+            evt.LastObservedVersion);
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }
@@ -365,6 +368,8 @@ internal static class ProjectionScopeStateApplier
         next.StatusRoute.Phase = ProjectionScopeStatusRoutePhase.Warming;
         next.StatusRoute.LegacyRouteReleased = false;
         next.StatusRoute.CaughtUpVersion = 0;
+        next.StatusRoute.WarmingProbeVersion = 0;
+        next.StatusRoute.DrainProbeVersion = 0;
         next.StatusRoute.FlipVersion = 0;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
@@ -378,6 +383,9 @@ internal static class ProjectionScopeStateApplier
         if (route == null ||
             route.RouteEpoch != evt.RouteEpoch ||
             route.Phase != ProjectionScopeStatusRoutePhase.Warming ||
+            evt.ObservedVersion < Math.Max(
+                route.WarmStartedVersion,
+                route.WarmingProbeVersion) ||
             evt.ObservedVersion <= route.CaughtUpVersion)
         {
             return current;
@@ -385,6 +393,28 @@ internal static class ProjectionScopeStateApplier
 
         var next = current.Clone();
         next.StatusRoute.CaughtUpVersion = evt.ObservedVersion;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyStatusRouteWarmingProbed(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRouteWarmingProbedEvent evt)
+    {
+        var route = current.StatusRoute;
+        if (route == null ||
+            route.RouteEpoch != evt.RouteEpoch ||
+            route.Phase != ProjectionScopeStatusRoutePhase.Warming ||
+            evt.RequiredObservedVersion <= Math.Max(
+                route.WarmStartedVersion,
+                route.WarmingProbeVersion))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.StatusRoute.WarmingProbeVersion = evt.RequiredObservedVersion;
+        next.StatusRoute.CaughtUpVersion = 0;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }
@@ -404,6 +434,31 @@ internal static class ProjectionScopeStateApplier
         var next = current.Clone();
         next.StatusRoute.Phase = ProjectionScopeStatusRoutePhase.Blocked;
         next.StatusRoute.BlockedVersion = evt.BlockedVersion;
+        next.StatusRoute.DrainProbeVersion = 0;
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyStatusRouteDrainProbed(
+        ProjectionScopeState current,
+        ProjectionScopeStatusRouteDrainProbedEvent evt)
+    {
+        var route = current.StatusRoute;
+        if (route == null ||
+            route.RouteEpoch != evt.RouteEpoch ||
+            route.Phase != ProjectionScopeStatusRoutePhase.Blocked ||
+            evt.RequiredObservedVersion <= Math.Max(
+                route.BlockedVersion,
+                route.DrainProbeVersion))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.StatusRoute.DrainProbeVersion = evt.RequiredObservedVersion;
+        // A pre-bridge release flag may have been committed on dispatch acceptance or below the
+        // drain fence. Only a confirmation for this fresh probe may set it again.
+        next.StatusRoute.LegacyRouteReleased = false;
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }

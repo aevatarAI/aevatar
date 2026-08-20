@@ -104,39 +104,45 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
             }
         }
 
-        var events = new List<IMessage>
+        var reconciliation = new RuntimeFleetReconciliationRecordedEvent
         {
-            new RuntimeFleetReconciliationRecordedEvent
-            {
-                TransitionId = transitionId,
-                DeliveryEnvelopeId = attestation.EnvelopeId,
-                CallbackGeneration = attestation.Generation,
-                CallbackFireIndex = attestation.FireIndex,
-                CallbackSlotEpoch = attestation.SlotEpoch,
-                ObservationOutcome = observationOutcome,
-                AttemptedAt = Timestamp.FromDateTimeOffset(now),
-            },
+            TransitionId = transitionId,
+            DeliveryEnvelopeId = attestation.EnvelopeId,
+            CallbackGeneration = attestation.Generation,
+            CallbackFireIndex = attestation.FireIndex,
+            CallbackSlotEpoch = attestation.SlotEpoch,
+            ObservationOutcome = observationOutcome,
+            AttemptedAt = Timestamp.FromDateTimeOffset(now),
         };
 
         if (normalized == null)
         {
-            events.AddRange(BuildRevocations(
-                transitionId,
-                RevocationReason(observationOutcome),
-                now,
-                State.Gates.Where(static gate =>
-                    gate.Status == RuntimeFleetCapabilityGateStatus.Open)));
+            var events = BuildRevocations(
+                    transitionId,
+                    RevocationReason(observationOutcome),
+                    now,
+                    State.Gates.Where(static gate =>
+                        gate.Status == RuntimeFleetCapabilityGateStatus.Open))
+                .Cast<IMessage>()
+                .ToList();
+            // Close live gates before publishing the failed observation. Each committed event has
+            // its own state_root, so recording the failure first would briefly re-publish OPEN.
+            events.Add(reconciliation);
             await PersistDomainEventsAsync(events);
             return;
         }
 
-        events.Add(new RuntimeFleetMembershipObservedEvent
+        var validEvents = BuildGateTransitions(normalized, transitionId, now).ToList();
+        // Gate states are derived from the new proof but remain unreadable against the old state
+        // membership. Publish membership last so no per-event state_root can expose a new OPEN
+        // grant before every gate has been reconciled.
+        validEvents.Add(reconciliation);
+        validEvents.Add(new RuntimeFleetMembershipObservedEvent
         {
             TransitionId = transitionId,
             Membership = normalized,
         });
-        events.AddRange(BuildGateTransitions(normalized, transitionId, now));
-        await PersistDomainEventsAsync(events);
+        await PersistDomainEventsAsync(validEvents);
     }
 
     private async Task<RuntimeFleetMembershipObservation> ObserveMembershipAsync(
@@ -215,9 +221,10 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
         var managed = requirements
             .Select(static requirement => requirement.Capability)
             .ToHashSet();
-        var events = new List<IMessage>();
+        var closingEvents = new List<IMessage>();
+        var openingEvents = new List<IMessage>();
 
-        events.AddRange(BuildRevocations(
+        closingEvents.AddRange(BuildRevocations(
             transitionId,
             "capability-no-longer-managed",
             now,
@@ -228,20 +235,39 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
         foreach (var requirement in requirements)
         {
             var current = FindGate(requirement.Capability);
-            var supported = membership.ActiveMembers.All(member =>
-                member.Capabilities.Count(candidate =>
-                    candidate.Capability == requirement.Capability &&
-                    candidate.ReaderContractVersion >= requirement.MinimumReaderContractVersion &&
-                    string.Equals(
-                        candidate.ContractId,
-                        requirement.ContractId,
-                        StringComparison.Ordinal)) == 1);
+            if (current?.Status == RuntimeFleetCapabilityGateStatus.Quiesced)
+                continue;
+
+            var quiescence = _options.QuiescencePolicies.SingleOrDefault(policy =>
+                policy.TargetCapability == requirement.Capability);
+            if (quiescence != null &&
+                IsUnanimouslySupported(
+                    membership,
+                    requirement.Capability,
+                    quiescence.ContractId,
+                    quiescence.MinimumReaderContractVersion))
+            {
+                closingEvents.AddRange(CreateQuiescenceTransitions(
+                    current,
+                    requirement,
+                    quiescence,
+                    membership,
+                    transitionId,
+                    now));
+                continue;
+            }
+
+            var supported = IsUnanimouslySupported(
+                membership,
+                requirement.Capability,
+                requirement.ContractId,
+                requirement.MinimumReaderContractVersion);
 
             if (!supported)
             {
                 if (current?.Status == RuntimeFleetCapabilityGateStatus.Open)
                 {
-                    events.Add(CreateRevocation(
+                    closingEvents.Add(CreateRevocation(
                         current,
                         transitionId,
                         "fleet-capability-not-unanimous",
@@ -266,7 +292,7 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
                 throw new InvalidOperationException(
                     $"Capability {requirement.Capability} has a negative committed epoch.");
             }
-            events.Add(new RuntimeFleetCapabilityGateOpenedEvent
+            openingEvents.Add(new RuntimeFleetCapabilityGateOpenedEvent
             {
                 Gate = new RuntimeFleetCapabilityGateState
                 {
@@ -284,7 +310,70 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
             });
         }
 
-        return events;
+        return closingEvents.Concat(openingEvents);
+    }
+
+    private static bool IsUnanimouslySupported(
+        RuntimeFleetMembershipSnapshot membership,
+        RuntimeFleetCapability capability,
+        string contractId,
+        int minimumReaderContractVersion) =>
+        membership.ActiveMembers.All(member =>
+            member.Capabilities.Count(candidate =>
+                candidate.Capability == capability &&
+                candidate.ReaderContractVersion >= minimumReaderContractVersion &&
+                string.Equals(candidate.ContractId, contractId, StringComparison.Ordinal)) == 1);
+
+    private static IReadOnlyList<IMessage> CreateQuiescenceTransitions(
+        RuntimeFleetCapabilityGateState? current,
+        RuntimeFleetCapabilityRequirement requirement,
+        RuntimeFleetCapabilityQuiescencePolicy policy,
+        RuntimeFleetMembershipSnapshot membership,
+        string transitionId,
+        DateTimeOffset now)
+    {
+        if (current?.CapabilityEpoch < 0)
+        {
+            throw new InvalidOperationException(
+                $"Capability {requirement.Capability} has a negative committed epoch.");
+        }
+
+        var changedAt = Timestamp.FromDateTimeOffset(now);
+        var tombstoneGate = new RuntimeFleetCapabilityGateState
+        {
+            Capability = requirement.Capability,
+            Status = RuntimeFleetCapabilityGateStatus.Revoked,
+            CapabilityEpoch = long.MaxValue,
+            MembershipEpoch = membership.MembershipEpoch,
+            MembershipDigest = membership.MembershipDigest,
+            DeploymentRevision = membership.DeploymentRevision,
+            MinimumReaderContractVersion = policy.MinimumReaderContractVersion,
+            RequiredContractId = policy.ContractId,
+            ChangedAt = changedAt,
+            LastTransitionId = GateTransitionId(
+                transitionId,
+                requirement.Capability,
+                "quiescence-compatibility-tombstone"),
+            RevocationReason = "quiescence-compatibility-tombstone",
+            QuiescenceReaderContractVersion = policy.MinimumReaderContractVersion,
+        };
+
+        var quiescedGate = tombstoneGate.Clone();
+        quiescedGate.Status = RuntimeFleetCapabilityGateStatus.Quiesced;
+        quiescedGate.LastTransitionId = GateTransitionId(
+            transitionId,
+            requirement.Capability,
+            "quiesce");
+        quiescedGate.RevocationReason = string.Empty;
+
+        // The compatibility tombstone and typed quiescence are appended in one atomic event-store
+        // batch. A pre-bridge authority ignores the typed event but reconstructs REVOKED/max;
+        // its old OPEN transition then overflows under checked arithmetic and fails closed.
+        return
+        [
+            new RuntimeFleetCapabilityGateRevokedEvent { Gate = tombstoneGate },
+            new RuntimeFleetCapabilityGateQuiescedEvent { Gate = quiescedGate },
+        ];
     }
 
     private static IEnumerable<IMessage> BuildRevocations(
@@ -324,6 +413,7 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
             .On<RuntimeFleetMembershipObservedEvent>(ApplyMembershipObserved)
             .On<RuntimeFleetCapabilityGateOpenedEvent>(ApplyGateOpened)
             .On<RuntimeFleetCapabilityGateRevokedEvent>(ApplyGateRevoked)
+            .On<RuntimeFleetCapabilityGateQuiescedEvent>(ApplyGateQuiesced)
             .OrCurrent();
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -416,6 +506,11 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
         RuntimeFleetCapabilityGateRevokedEvent evt) =>
         ReplaceGate(state, evt.Gate);
 
+    private static RuntimeFleetCapabilityAuthorityState ApplyGateQuiesced(
+        RuntimeFleetCapabilityAuthorityState state,
+        RuntimeFleetCapabilityGateQuiescedEvent evt) =>
+        ReplaceGate(state, evt.Gate);
+
     private static RuntimeFleetCapabilityAuthorityState ReplaceGate(
         RuntimeFleetCapabilityAuthorityState state,
         RuntimeFleetCapabilityGateState? gate)
@@ -470,6 +565,9 @@ public sealed class RuntimeFleetCapabilityAuthorityGAgent
             options.MaxClockSkew,
             TimeSpan.Zero);
         RuntimeFleetCapabilityRequirement.ValidateAll(options.ManagedCapabilities);
+        RuntimeFleetCapabilityQuiescencePolicy.ValidateAll(
+            options.QuiescencePolicies,
+            options.ManagedCapabilities);
     }
 
     private sealed record RuntimeFleetMembershipObservation(
@@ -594,18 +692,60 @@ public sealed record RuntimeFleetCapabilityAuthorityOptions
             RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
             RuntimeFleetCapabilityContracts.WorkflowNormalizedStateV1,
             RuntimeFleetCapabilityContracts.WorkflowNormalizedStateReaderVersion),
-        // The phase-unaware V1 status contract is intentionally not managed any more: a binary
-        // that still needs it (8d47b5e5 / 416e80f4 / 59c6b4e9 source scopes) finds no admission
-        // and stays on its current writer, while V2 opens only once every silo advertises it.
+        // Keep the historical V2 route contract managed so the distinct bridge advertisement
+        // closes its OPEN gate in both old and new authorities. The quiescence policy below
+        // recognizes only unanimous exact bridge advertisements.
         new(
             RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
             RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalV2,
-            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersion),
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalReaderVersionV2),
         new(
             RuntimeFleetCapability.ProjectionIncrementalGraphV1,
             RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphV1,
             RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphReaderVersion),
     ];
+
+    public IReadOnlyList<RuntimeFleetCapabilityQuiescencePolicy> QuiescencePolicies { get; init; } =
+    [
+        new(
+            RuntimeFleetCapability.ProjectionScopeStatusTerminalV2,
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceV1,
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalQuiescenceReaderVersion),
+    ];
+}
+
+public sealed record RuntimeFleetCapabilityQuiescencePolicy(
+    RuntimeFleetCapability TargetCapability,
+    string ContractId,
+    int MinimumReaderContractVersion)
+{
+    internal static void ValidateAll(
+        IReadOnlyList<RuntimeFleetCapabilityQuiescencePolicy>? policies,
+        IReadOnlyList<RuntimeFleetCapabilityRequirement> requirements)
+    {
+        ArgumentNullException.ThrowIfNull(policies);
+        var requirementsByCapability = requirements.ToDictionary(static requirement => requirement.Capability);
+        var seenTargets = new HashSet<RuntimeFleetCapability>();
+        foreach (var policy in policies)
+        {
+            ArgumentNullException.ThrowIfNull(policy);
+            RuntimeFleetMembershipValidation.ValidateCapability(policy.TargetCapability);
+            if (!seenTargets.Add(policy.TargetCapability))
+            {
+                throw new InvalidOperationException(
+                    $"Runtime fleet capability {policy.TargetCapability} has more than one quiescence policy.");
+            }
+
+            if (!requirementsByCapability.TryGetValue(policy.TargetCapability, out var requirement) ||
+                string.IsNullOrWhiteSpace(policy.ContractId) ||
+                string.Equals(policy.ContractId, requirement.ContractId, StringComparison.Ordinal) ||
+                policy.MinimumReaderContractVersion <= requirement.MinimumReaderContractVersion)
+            {
+                throw new InvalidOperationException(
+                    $"Runtime fleet capability {policy.TargetCapability} quiescence requires a distinct exact contract and a higher reader revision.");
+            }
+        }
+    }
 }
 
 public sealed record RuntimeFleetCapabilityRequirement(

@@ -54,6 +54,8 @@ message RuntimeFleetCapabilityGateState
   google.protobuf.Timestamp changed_at = 9;
   string last_transition_id = 10;
   string revocation_reason = 11;
+  // Fleet reader revision whose exact unanimous advertisement closed this gate.
+  int32 quiescence_reader_contract_version = 12;
 }
 
 message RuntimeFleetCapabilityGateOpenedEvent
@@ -62,6 +64,13 @@ message RuntimeFleetCapabilityGateOpenedEvent
 }
 
 message RuntimeFleetCapabilityGateRevokedEvent
+{
+  RuntimeFleetCapabilityGateState gate = 1;
+}
+
+// Typed terminal bridge transition. Phase A is forward-only: an older authority must never be
+// reintroduced after this event is committed.
+message RuntimeFleetCapabilityGateQuiescedEvent
 {
   RuntimeFleetCapabilityGateState gate = 1;
 }
