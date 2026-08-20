@@ -114,14 +114,53 @@ internal sealed class ActorBackedChatHistoryStore :
         if (resolved.Document.Turns.Count == 0)
             return ChatHistoryConversationMessagesResult.Found([], resolved.Document.StateVersion);
 
+        var orderedTurns = resolved.Document.Turns
+            .OrderBy(static turn => turn.Sequence)
+            .ToList();
         return ChatHistoryConversationMessagesResult.Found(
-            resolved.Document.Turns
-                .OrderBy(static turn => turn.Sequence)
+            orderedTurns
                 .SelectMany(ToStoredChatMessages)
                 .ToList()
                 .AsReadOnly(),
-            resolved.Document.StateVersion);
+            resolved.Document.StateVersion,
+            orderedTurns
+                .SelectMany(ToStoredTurnOperations)
+                .ToList()
+                .AsReadOnly());
     }
+
+    private static IEnumerable<StoredChatTurnOperation> ToStoredTurnOperations(
+        ChatConversationTurnDocument turn) =>
+        turn.Operations
+            .OrderBy(static operation => operation.Order)
+            .Select(operation => new StoredChatTurnOperation(
+                TurnId: turn.TurnId,
+                OperationId: operation.OperationId,
+                Order: operation.Order,
+                Kind: operation.Kind,
+                Title: operation.Title,
+                Status: operation.Status,
+                StartedAt: ToInstant(operation.StartedAtMs),
+                CompletedAt: ToInstant(operation.CompletedAtMs),
+                Model: NullIfEmpty(operation.Model),
+                Provider: NullIfEmpty(operation.Provider),
+                FinishReason: NullIfEmpty(operation.FinishReason),
+                PromptTokens: NullIfZero(operation.PromptTokens),
+                CompletionTokens: NullIfZero(operation.CompletionTokens),
+                TotalTokens: NullIfZero(operation.TotalTokens),
+                InputPreview: NullIfEmpty(operation.InputPreview),
+                OutputPreview: NullIfEmpty(operation.OutputPreview),
+                ArgumentsPreview: NullIfEmpty(operation.ArgumentsPreview),
+                PreviewsTruncated: operation.PreviewsTruncated,
+                SafeMessage: NullIfEmpty(operation.SafeMessage)));
+
+    private static DateTimeOffset? ToInstant(long unixMs) =>
+        unixMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(unixMs) : null;
+
+    private static string? NullIfEmpty(string? value) =>
+        string.IsNullOrEmpty(value) ? null : value;
+
+    private static int? NullIfZero(int value) => value > 0 ? value : null;
 
     public async Task SaveMessagesAsync(
         string scopeId, string conversationId, ConversationMeta meta,
@@ -204,7 +243,42 @@ internal sealed class ActorBackedChatHistoryStore :
             ErrorCode = NormalizeOptional(notification.ErrorCode) ?? string.Empty,
             ObservedAtUnixMs = notification.ObservedAt.ToUnixTimeMilliseconds(),
         };
+        if (notification.Operations is { Count: > 0 } operations)
+            command.Operations.AddRange(operations.Select(ToChatTurnOperation));
         await _commandDispatch.DispatchAsync(deliveryActor, command, sourceActorId, ct);
+    }
+
+    private static ChatTurnOperation ToChatTurnOperation(ChatHistoryTurnOperation operation)
+    {
+        var mapped = new ChatTurnOperation
+        {
+            OperationId = operation.OperationId,
+            Order = operation.Order,
+            Kind = operation.Kind switch
+            {
+                ChatHistoryTurnOperationKind.Model => ChatTurnOperationKind.Model,
+                ChatHistoryTurnOperationKind.Tool => ChatTurnOperationKind.Tool,
+                _ => ChatTurnOperationKind.Other,
+            },
+            Title = operation.Title,
+            Status = operation.Status,
+            Model = operation.Model ?? string.Empty,
+            Provider = operation.Provider ?? string.Empty,
+            FinishReason = operation.FinishReason ?? string.Empty,
+            PromptTokens = operation.PromptTokens,
+            CompletionTokens = operation.CompletionTokens,
+            TotalTokens = operation.TotalTokens,
+            InputPreview = operation.InputPreview ?? string.Empty,
+            OutputPreview = operation.OutputPreview ?? string.Empty,
+            ArgumentsPreview = operation.ArgumentsPreview ?? string.Empty,
+            PreviewsTruncated = operation.PreviewsTruncated,
+            SafeMessage = operation.SafeMessage ?? string.Empty,
+        };
+        if (operation.StartedAt is { } startedAt)
+            mapped.StartedAt = Timestamp.FromDateTimeOffset(startedAt);
+        if (operation.CompletedAt is { } completedAt)
+            mapped.CompletedAt = Timestamp.FromDateTimeOffset(completedAt);
+        return mapped;
     }
 
     public async Task<ChatHistoryDeleteResult> DeleteConversationAsync(

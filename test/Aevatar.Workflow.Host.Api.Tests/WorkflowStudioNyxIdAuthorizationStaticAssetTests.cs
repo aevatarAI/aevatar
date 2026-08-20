@@ -306,7 +306,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
         var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
 
-        app.Should().Contain("import \"./transport.js?v=20260820-m56-trajectory-ledger\"");
+        app.Should().Contain("import \"./transport.js?v=20260820-m57-trajectory-persistence\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -427,13 +427,13 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260820-m56-trajectory-ledger");
-        html.Should().Contain("styles.css?v=20260820-m56-trajectory-ledger");
-        app.Should().Contain("transport.js?v=20260820-m56-trajectory-ledger");
-        app.Should().Contain("readiness.js?v=20260820-m56-trajectory-ledger");
-        transport.Should().Contain("readiness.js?v=20260820-m56-trajectory-ledger");
-        actorState.Should().Contain("protocol.js?v=20260820-m56-trajectory-ledger");
-        blocks.Should().Contain("protocol.js?v=20260820-m56-trajectory-ledger");
+        html.Should().Contain("app.js?v=20260820-m57-trajectory-persistence");
+        html.Should().Contain("styles.css?v=20260820-m57-trajectory-persistence");
+        app.Should().Contain("transport.js?v=20260820-m57-trajectory-persistence");
+        app.Should().Contain("readiness.js?v=20260820-m57-trajectory-persistence");
+        transport.Should().Contain("readiness.js?v=20260820-m57-trajectory-persistence");
+        actorState.Should().Contain("protocol.js?v=20260820-m57-trajectory-persistence");
+        blocks.Should().Contain("protocol.js?v=20260820-m57-trajectory-persistence");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");

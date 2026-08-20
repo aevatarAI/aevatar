@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260820-m56-trajectory-ledger";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260820-m57-trajectory-persistence";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};

@@ -1,4 +1,4 @@
-import "./transport.js?v=20260820-m56-trajectory-ledger";
+import "./transport.js?v=20260820-m57-trajectory-persistence";
 import {
   consumeSse,
   mergeUsage,
@@ -9,20 +9,20 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260820-m56-trajectory-ledger";
+} from "./protocol.js?v=20260820-m57-trajectory-persistence";
 import {
   buildConnectCardBlock,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260820-m56-trajectory-ledger";
+} from "./blocks.js?v=20260820-m57-trajectory-persistence";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260820-m56-trajectory-ledger";
-import { describeReadinessFailure } from "./readiness.js?v=20260820-m56-trajectory-ledger";
+} from "./actor-state.js?v=20260820-m57-trajectory-persistence";
+import { describeReadinessFailure } from "./readiness.js?v=20260820-m57-trajectory-persistence";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const SERVICE_ACCESS_REVIEW_KEY = "aevatar-studio:pending-service-access-review:v1";
@@ -496,6 +496,202 @@ function createInputTraceOperation(trace) {
     record.timingClock = "client";
   }
   return record;
+}
+
+// ---------------------------------------------------------------------------
+// Trajectory recovery.
+//
+// The live ledger is built from SSE frames, which are gone after a reload. Two
+// committed sources restore it, and neither infers a record it did not read:
+//   * stored turns  — `operations` from GET /api/chat/conversations/{id}
+//   * the in-flight turn — the conversation actor's current-state projection
+// Recovered containers are keyed by the server's `turnId`, because
+// `clientRequestId` is a browser identity that does not survive the reload. A
+// live container already owning that turn is never overwritten.
+// ---------------------------------------------------------------------------
+
+function restoredTraceKey(turnId) {
+  return `turn:${String(turnId || "").trim()}`;
+}
+
+function ensureRestoredRequestTrace(entry, turnId, { prompt = "", status = "closed" } = {}) {
+  const normalizedTurnId = String(turnId || "").trim();
+  if (!entry || !normalizedTurnId) return null;
+  for (const candidate of entry.traces.values()) {
+    if (String(candidate.serverTurnId || "").trim() === normalizedTurnId) return candidate;
+  }
+  const key = restoredTraceKey(normalizedTurnId);
+  const existing = entry.traces.get(key);
+  if (existing) return existing;
+
+  const run = createRunState();
+  run.status = status;
+  run.clientRequestId = key;
+  run.request = { prompt: String(prompt || "") };
+  run.context = { actorId: entry.actorId || "", turnId: normalizedTurnId };
+  const trace = {
+    key,
+    clientRequestId: key,
+    serverRunId: null,
+    serverTurnId: normalizedTurnId,
+    restored: true,
+    run,
+    records: [],
+    recordIndex: new Map(),
+    selectedOperationKey: null,
+    activeModelOperationKey: null,
+    followLatestOperation: false,
+    nextOperationSequence: 0,
+    typedModelLifecycleObserved: true,
+    element: null,
+    fields: null,
+  };
+  entry.traces.set(key, trace);
+  entry.traceOrder.unshift(key);
+  return trace;
+}
+
+function restoredOperationTimestamp(value) {
+  const timestamp = traceServerTimestamp(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+}
+
+function restoredOperationUsage(operation) {
+  const usage = {
+    promptTokens: operation?.promptTokens ?? null,
+    completionTokens: operation?.completionTokens ?? null,
+    totalTokens: operation?.totalTokens ?? null,
+  };
+  return Object.values(usage).some((value) => value != null) ? usage : null;
+}
+
+function applyRestoredOperation(trace, operation, { kind, id, title }) {
+  const key = traceOperationKey(kind, id);
+  const record = upsertTraceOperation(trace, {
+    key,
+    id,
+    kind,
+    title: title || traceOperationKindLabel(kind),
+    status: String(operation?.status || "closed").toLowerCase(),
+    input: operation?.inputPreview || operation?.argumentsPreview || "",
+    // Tool result bodies are never archived, so a restored tool record reports
+    // its status and timing but honestly has no captured output.
+    output: operation?.outputPreview || "",
+    model: operation?.model || "",
+    provider: operation?.provider || "",
+    finishReason: operation?.finishReason || "",
+    error: operation?.status === "error" ? operation?.safeMessage || "" : "",
+    usage: restoredOperationUsage(operation),
+    serverSequence: Number.isSafeInteger(operation?.order) && operation.order > 0
+      ? operation.order
+      : undefined,
+  });
+  if (!record) return null;
+  record.restored = true;
+  record.previewsTruncated = Boolean(operation?.previewsTruncated);
+  record.startedAt = restoredOperationTimestamp(operation?.startedAt);
+  record.completedAt = restoredOperationTimestamp(operation?.completedAt);
+  record.timingClock = record.startedAt == null ? null : "server";
+  return record;
+}
+
+function restoreTrajectoryFromStoredOperations(entry, operations, messages) {
+  if (!entry || !Array.isArray(operations) || !operations.length) return;
+  const promptByTurn = new Map();
+  for (const message of messages || []) {
+    if (message?.role !== "user" || !message.turnId) continue;
+    if (!promptByTurn.has(message.turnId)) promptByTurn.set(message.turnId, message.content || "");
+  }
+
+  const grouped = new Map();
+  for (const operation of operations) {
+    const turnId = String(operation?.turnId || "").trim();
+    if (!turnId) continue;
+    if (!grouped.has(turnId)) grouped.set(turnId, []);
+    grouped.get(turnId).push(operation);
+  }
+
+  for (const [turnId, turnOperations] of grouped) {
+    const trace = ensureRestoredRequestTrace(entry, turnId, {
+      prompt: promptByTurn.get(turnId) || "",
+      status: turnOperations.some((operation) => operation?.status === "error")
+        ? "error"
+        : "complete",
+    });
+    if (!trace || !trace.restored || trace.records.length) continue;
+    const ordered = [...turnOperations]
+      .sort((left, right) => (Number(left?.order) || 0) - (Number(right?.order) || 0));
+    const firstStart = ordered
+      .map((operation) => restoredOperationTimestamp(operation?.startedAt))
+      .find((value) => value != null) ?? null;
+    const lastEnd = ordered
+      .map((operation) => restoredOperationTimestamp(operation?.completedAt))
+      .filter((value) => value != null)
+      .at(-1) ?? null;
+    trace.run.startedAt = firstStart;
+    trace.run.completedAt = lastEnd;
+
+    const input = createInputTraceOperation(trace);
+    if (input) {
+      input.restored = true;
+      input.startedAt = firstStart;
+      input.timingClock = firstStart == null ? null : "server";
+    }
+    for (const operation of ordered) {
+      applyRestoredOperation(trace, operation, {
+        kind: operation?.kind === "model" ? "model" : "tool",
+        id: operation?.operationId || `${turnId}:${operation?.order ?? 0}`,
+        title: operation?.title,
+      });
+    }
+  }
+}
+
+function restoreTrajectoryFromActorProjection(entry, projection) {
+  const task = projection?.task;
+  const turnId = String(task?.turnId || "").trim();
+  if (!entry || !turnId || !(projection?.steps instanceof Map)) return;
+  const steps = [...projection.steps.values()]
+    .filter((step) => step?.operation?.requestedAt &&
+      (step.kind === "llm" || step.kind === "tool"));
+  if (!steps.length) return;
+
+  const trace = ensureRestoredRequestTrace(entry, turnId, {
+    prompt: projection?.activeTurn?.turnId === turnId
+      ? projection?.activeTurn?.prompt || ""
+      : projection?.latestTurn?.prompt || "",
+    status: task?.status === "failed" ? "error" : "running",
+  });
+  if (!trace || !trace.restored) return;
+
+  const firstStart = steps
+    .map((step) => restoredOperationTimestamp(step.operation.requestedAt))
+    .find((value) => value != null) ?? null;
+  if (trace.run.startedAt == null) trace.run.startedAt = firstStart;
+  const input = createInputTraceOperation(trace);
+  if (input && input.startedAt == null) {
+    input.restored = true;
+    input.startedAt = firstStart;
+    input.timingClock = firstStart == null ? null : "server";
+  }
+
+  for (const step of steps) {
+    applyRestoredOperation(trace, {
+      status: step.status,
+      title: step.kind === "tool" ? step.source?.tool?.toolName : step.source?.llm?.model,
+      model: step.source?.llm?.model || "",
+      startedAt: step.operation.requestedAt,
+      completedAt: step.operation.completedAt,
+      safeMessage: step.safeMessage,
+      order: step.order,
+    }, {
+      kind: step.kind === "llm" ? "model" : "tool",
+      id: step.operation.operationId || step.stepId,
+      title: step.kind === "tool"
+        ? step.source?.tool?.toolName
+        : step.source?.llm?.model || step.description,
+    });
+  }
 }
 
 function selectedTraceOperation(trace) {
@@ -1535,17 +1731,21 @@ function trajectoryFactList(pairs) {
   return list;
 }
 
-function trajectoryPayloadGroup(label, value) {
+function trajectoryPayloadGroup(label, value, { truncated = false } = {}) {
   const group = el("div", "trajectory-payload-group");
-  group.append(el("span", "", label), el("pre", "trajectory-payload", value));
+  const heading = el("span", "", label);
+  // A restored preview is a stored fragment, never the complete payload.
+  if (truncated) heading.append(el("i", "trajectory-payload-note", "已截断的存档预览"));
+  group.append(heading, el("pre", "trajectory-payload", value));
   return group;
 }
 
 function renderTrajectoryDetailBody(record, trace) {
   const tab = trajectory.detailsTab;
+  const truncated = Boolean(record.previewsTruncated);
   if (tab === "input") {
     const body = el("div");
-    if (record.input) body.append(trajectoryPayloadGroup("Input", record.input));
+    if (record.input) body.append(trajectoryPayloadGroup("Input", record.input, { truncated }));
     if (record.kind === "model" && record.tools?.length) {
       body.append(trajectoryPayloadGroup("Available tools", record.tools.join("\n")));
     }
@@ -1554,7 +1754,7 @@ function renderTrajectoryDetailBody(record, trace) {
   }
   if (tab === "output") {
     const body = el("div");
-    if (record.output) body.append(trajectoryPayloadGroup("Output", record.output));
+    if (record.output) body.append(trajectoryPayloadGroup("Output", record.output, { truncated }));
     if (record.reasoning) body.append(trajectoryPayloadGroup("Reasoning", record.reasoning));
     if (record.error) body.append(trajectoryPayloadGroup("Error", record.error));
     if (!body.childElementCount) body.append(el("p", "trajectory-payload-empty", "未捕获输出"));
@@ -1583,8 +1783,10 @@ function renderTrajectoryDetailBody(record, trace) {
     ["Output tokens", record.usage?.completionTokens ?? null],
     ["Total tokens", record.usage?.totalTokens ?? null],
     ["Session", record.sessionId || null, true],
-    ["Request", trace?.clientRequestId || null, true],
+    ["Turn", trace?.serverTurnId || null, true],
+    ["Request", trace?.restored ? null : trace?.clientRequestId || null, true],
     ["Run", trace?.serverRunId || trace?.run?.context?.runId || null, true],
+    ["来源", trace?.restored ? "已存档轨迹" : null],
   ]);
 }
 
@@ -4209,7 +4411,9 @@ async function loadConversation(conversation) {
       cache: "no-store",
     });
     if (!response.ok) throw await responseError(response);
-    const messages = normalizeStoredMessages(await response.json());
+    const payload = await response.json();
+    const messages = normalizeStoredMessages(payload);
+    const storedOperations = Array.isArray(payload?.operations) ? payload.operations : [];
     if (sequence !== state.conversationLoadSequence || configKey !== historyConfigKey()) return;
     const existing = findConversationState(conversation.id);
     if (existing) {
@@ -4226,6 +4430,7 @@ async function loadConversation(conversation) {
       title: conversation.title,
     });
     if (conversation.stateVersion > 0) ensureConversationProjectionVersion(entry);
+    restoreTrajectoryFromStoredOperations(entry, storedOperations, messages);
     activateConversationState(entry);
     renderActorProjection(entry);
     state.run.context = {
@@ -4295,6 +4500,10 @@ async function refreshActorStateFor(entry, actorId, { uncursored = false } = {})
       if (!response.ok) throw await responseError(response);
       const result = applyCurrentStateResult(projection, await response.json());
       setActorProjectionFor(entry, actorId, result.projection);
+      // The conversation actor owns the in-flight turn's step ledger. Rebuilding
+      // its trace container here is what makes a mid-run reload keep its
+      // trajectory; committed turns come from the stored chat history instead.
+      if (isConversationActor) restoreTrajectoryFromActorProjection(entry, result.projection);
       if (result.reloadWithoutCursor) {
         if (!uncursored) return refreshActorStateFor(entry, actorId, { uncursored: true });
         setActorStateNotice(entry, actorId, "Actor 要求重新加载状态，请稍后重试。");
@@ -4306,7 +4515,10 @@ async function refreshActorStateFor(entry, actorId, { uncursored = false } = {})
       restoreProjectionActionCaches(entry, actorId);
       renderActorProjection(entry, actorId);
       renderActionCards(entry);
-      if (entry === state.activeConversation) renderActiveConversationState();
+      if (entry === state.activeConversation) {
+        renderActiveConversationState();
+        renderRequestTraces(entry);
+      }
       return actorProjectionFor(entry, actorId);
     } catch (error) {
       setActorStateNotice(

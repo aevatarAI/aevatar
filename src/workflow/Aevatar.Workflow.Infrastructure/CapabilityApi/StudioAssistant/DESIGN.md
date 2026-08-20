@@ -105,12 +105,17 @@ The page is a quiet operational transcript with confident workspace scale. A sub
   duration bar requires the operation's recorded start and completion. An
   in-flight operation with only a real start renders a start marker/running
   state; absent timing is unavailable and is never synthesized from browser
-  receipt time. The current ledger is page-local: reopening a stored transcript
-  does not infer request identities or event traces from message positions.
-  Observatory now has a durable typed Model/Tool operation read model, but
-  Studio does not hydrate it or join it back to stored conversation/request
-  identity. Full Studio trajectory recovery after reopening a transcript is
-  therefore still unavailable.
+  receipt time. The ledger survives a reload from two committed sources: a
+  terminal turn appends its operation ledger with its chat history turn, and the
+  in-flight turn is rebuilt from the conversation actor's current-state step
+  ledger. Recovered containers are keyed by the server's `turnId`, never inferred
+  from message positions, and a live container already owning that turn is never
+  replaced. Persisted operation content is a sanitized, size-bounded preview; a
+  truncated preview is labelled as an archived fragment rather than presented as
+  the complete payload. Tool result bodies are deliberately not archived: they
+  are untrusted external text, and conversation actor state is re-read when
+  rebuilding model input, so a restored Tool record carries its identity, status
+  and timing but reports its output as uncaptured.
 
 ## Content Style
 
