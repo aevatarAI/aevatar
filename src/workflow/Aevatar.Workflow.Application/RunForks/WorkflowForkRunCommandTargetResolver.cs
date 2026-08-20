@@ -204,10 +204,16 @@ internal sealed class WorkflowForkRunCommandTargetResolver
             ForkSeed: new WorkflowChatRunForkSeed(
                 sourceRunId,
                 startAtStepId,
-                variables,
+                seedView.NormalizedValues == null
+                    ? variables
+                    : new Dictionary<string, string>(StringComparer.Ordinal),
                 Math.Max(0, command.Attempt),
                 ResolveStartStepIdempotency(seedView, startAtStepId),
-                ResolveOriginalRunId(seedView, sourceRunId)),
+                ResolveOriginalRunId(seedView, sourceRunId),
+                seedView.NormalizedValues?.Clone(),
+                seedView.NormalizedValues == null
+                    ? new Dictionary<string, string>(StringComparer.Ordinal)
+                    : CopyDictionary(command.VariableOverrides)),
             TargetSeed: new WorkflowRunTargetSeed(
                 actorId,
                 workflowName,

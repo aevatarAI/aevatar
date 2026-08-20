@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Aevatar.AIWorkspace.Application.Abstractions;
 using Aevatar.Audit;
@@ -20,16 +21,6 @@ internal static class AIWorkspaceEndpoints
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        app.MapMethods("/ai-assets/{**path}", [HttpMethods.Get, HttpMethods.Head], GetAsset).AllowAnonymous();
-        app.MapMethods("/ai", [HttpMethods.Get, HttpMethods.Head], GetPage).AllowAnonymous();
-        app.MapMethods("/ai/{**path}", [HttpMethods.Get, HttpMethods.Head], GetPage).AllowAnonymous();
-        app.MapMethods("/chat", [HttpMethods.Get, HttpMethods.Head], GetPage).AllowAnonymous();
-        app.MapMethods("/login", [HttpMethods.Get, HttpMethods.Head], GetPage).AllowAnonymous();
-        app.MapMethods("/auth/callback", [HttpMethods.Get, HttpMethods.Head], GetPage).AllowAnonymous();
-        app.MapMethods("/scopes", [HttpMethods.Get, HttpMethods.Head], GetPage).AllowAnonymous();
-        app.MapMethods("/scopes/{**path}", [HttpMethods.Get, HttpMethods.Head], GetPage).AllowAnonymous();
-        app.MapMethods("/settings", [HttpMethods.Get, HttpMethods.Head], GetPage).AllowAnonymous();
-
         var api = app.MapGroup("/api/ai")
             .WithTags("AIWorkspace")
             .RequireAuthorization();
@@ -37,54 +28,46 @@ internal static class AIWorkspaceEndpoints
         Audit(api.MapGet("/overview", GetOverviewAsync), "overview");
         Audit(api.MapGet("/agents", GetAgentsAsync), "agents");
         Audit(api.MapGet("/models", GetModelsAsync), "models");
+        api.MapAIWorkspaceModelsManagementEndpoints();
         api.MapAIWorkspaceActivityEndpoints();
         return app;
     }
 
-    private static IResult GetPage(
-        HttpContext http,
-        [FromServices] IAIWorkspaceWebAssetService assets) =>
-        assets.ServePage(http);
-
-    private static IResult GetAsset(
-        HttpContext http,
-        [FromRoute] string? path,
-        [FromServices] IAIWorkspaceWebAssetService assets) =>
-        assets.ServeAsset(http, path);
-
     private static IResult GetContext(HttpContext http)
     {
-        if (!TryGetScopeId(http, out var scopeId, out var error))
+        if (!TryGetScopeId(http, out _, out var error))
             return error;
+        if (!TryGetSubject(http, out var subject))
+        {
+            return Error(
+                StatusCodes.Status403Forbidden,
+                "AI_SUBJECT_REQUIRED",
+                "Authenticated caller subject is required.");
+        }
 
-        var encodedScopeId = Uri.EscapeDataString(scopeId);
         return Results.Ok(new AIWorkspaceContextResponse(
-            scopeId,
+            new AIWorkspaceAccountResponse(subject, DisplayName(http, subject)),
             IndependentReadModels,
             new AIWorkspacePageLinks(
-                "/ai",
-                "/ai/chat",
-                "/ai/agents",
-                "/ai/models",
-                "/ai/activity"),
+                "/ai#/overview",
+                "/ai#/agents",
+                "/ai#/models",
+                "/ai#/activity"),
             new AIWorkspaceApiLinks(
                 "/api/ai/overview",
-                "/api/chat",
                 "/api/ai/agents",
-                $"/api/scopes/{encodedScopeId}/agent-profiles",
-                "/api/agent-profiles/system",
                 "/api/ai/models",
-                "/api/user-config/llm",
-                $"/api/scopes/{encodedScopeId}/llm-model-catalog",
+                "/api/ai/models/personal-default",
+                "/api/ai/models/catalog",
+                "/api/ai/models/catalog/candidates",
                 "/api/ai/activity",
                 "/api/ai/activity/conversations",
                 "/api/ai/activity/runs"),
-            new AIWorkspaceFeaturesResponse(
-                new AIWorkspaceFeatureResponse("available", "/ai", "/api/ai/overview"),
-                new AIWorkspaceFeatureResponse("available", "/ai/chat", "/api/chat"),
-                new AIWorkspaceFeatureResponse("available", "/ai/agents", "/api/ai/agents"),
-                new AIWorkspaceFeatureResponse("available", "/ai/models", "/api/ai/models"),
-                new AIWorkspaceFeatureResponse("available", "/ai/activity", "/api/ai/activity"))));
+            new AIWorkspaceCapabilitiesResponse(
+                new AIWorkspaceCapabilityResponse("/ai#/overview", "/api/ai/overview"),
+                new AIWorkspaceCapabilityResponse("/ai#/agents", "/api/ai/agents"),
+                new AIWorkspaceCapabilityResponse("/ai#/models", "/api/ai/models"),
+                new AIWorkspaceCapabilityResponse("/ai#/activity", "/api/ai/activity"))));
     }
 
     private static async Task<IResult> GetOverviewAsync(
@@ -142,8 +125,8 @@ internal static class AIWorkspaceEndpoints
             http.User.Identity?.IsAuthenticated == true
                 ? StatusCodes.Status403Forbidden
                 : StatusCodes.Status401Unauthorized,
-            "AI_SCOPE_REQUIRED",
-            "A single authenticated scope is required.");
+            "AI_ACCESS_CONTEXT_REQUIRED",
+            "Authenticated caller access context is required.");
         return false;
     }
 
@@ -152,18 +135,25 @@ internal static class AIWorkspaceEndpoints
         if (result.Value is not null)
             return Results.Ok(result.Value);
 
-        var failure = result.Failure ?? new AIWorkspaceQueryFailure(
-            AIWorkspaceQueryFailureKind.Unavailable,
-            "AI_WORKSPACE_UNAVAILABLE",
-            "AI workspace data is temporarily unavailable.");
-        var statusCode = failure.Kind switch
+        return (result.Failure?.Kind ?? AIWorkspaceQueryFailureKind.Unavailable) switch
         {
-            AIWorkspaceQueryFailureKind.InvalidInput => StatusCodes.Status400BadRequest,
-            AIWorkspaceQueryFailureKind.InvalidCursor => StatusCodes.Status400BadRequest,
-            AIWorkspaceQueryFailureKind.NotFound => StatusCodes.Status404NotFound,
-            _ => StatusCodes.Status503ServiceUnavailable,
+            AIWorkspaceQueryFailureKind.InvalidInput => Error(
+                StatusCodes.Status400BadRequest,
+                "AI_REQUEST_INVALID",
+                "AI workspace request is invalid."),
+            AIWorkspaceQueryFailureKind.InvalidCursor => Error(
+                StatusCodes.Status400BadRequest,
+                "AI_CURSOR_INVALID",
+                "AI workspace cursor is invalid."),
+            AIWorkspaceQueryFailureKind.NotFound => Error(
+                StatusCodes.Status404NotFound,
+                "AI_RESOURCE_NOT_FOUND",
+                "AI workspace resource was not found."),
+            _ => Error(
+                StatusCodes.Status503ServiceUnavailable,
+                "AI_WORKSPACE_UNAVAILABLE",
+                "AI workspace data is temporarily unavailable."),
         };
-        return Error(statusCode, failure.Code, failure.Message);
     }
 
     internal static IResult Error(int statusCode, string code, string message) =>
@@ -174,7 +164,7 @@ internal static class AIWorkspaceEndpoints
             $"ai-workspace.{operation}",
             AuditSensitivityLevel.Confidential,
             "ai-workspace",
-            EndpointAuditTargetResolvers.Static("ai-workspace", "caller-scope"));
+            EndpointAuditTargetResolvers.Static("ai-workspace", "caller-access"));
 
     private static string? BearerToken(HttpContext http)
     {
@@ -186,45 +176,56 @@ internal static class AIWorkspaceEndpoints
         var token = value[prefix.Length..].Trim();
         return token.Length == 0 ? null : token;
     }
+
+    private static bool TryGetSubject(HttpContext http, out string subject)
+    {
+        subject = FirstClaimValue(http, "uid", "sub", ClaimTypes.NameIdentifier) ?? string.Empty;
+        return subject.Length > 0;
+    }
+
+    private static string DisplayName(HttpContext http, string subject) =>
+        FirstClaimValue(http, "preferred_username", ClaimTypes.Name, ClaimTypes.Email) ?? subject;
+
+    private static string? FirstClaimValue(HttpContext http, params string[] claimTypes) =>
+        claimTypes
+            .Select(type => http.User.FindFirst(type)?.Value?.Trim())
+            .FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value));
 }
 
 internal sealed record AIWorkspaceContextResponse(
-    string ScopeId,
+    AIWorkspaceAccountResponse Account,
     string Consistency,
     AIWorkspacePageLinks Pages,
     [property: JsonPropertyName("apis")] AIWorkspaceApiLinks APIs,
-    AIWorkspaceFeaturesResponse Features);
+    AIWorkspaceCapabilitiesResponse Capabilities);
+
+internal sealed record AIWorkspaceAccountResponse(string Subject, string DisplayName);
 
 internal sealed record AIWorkspacePageLinks(
     string Overview,
-    string Chat,
     string Agents,
     string Models,
     string Activity);
 
 internal sealed record AIWorkspaceApiLinks(
     string Overview,
-    string Chat,
     string Agents,
-    string OwnedAgentProfiles,
-    string SystemAgentProfiles,
     string Models,
-    string PersonalModelSettings,
-    string ScopeModelCatalog,
+    string PersonalModelDefault,
+    string ModelCatalog,
+    string ModelCandidates,
     string Activity,
     string Conversations,
     string Runs);
 
-internal sealed record AIWorkspaceFeaturesResponse(
-    AIWorkspaceFeatureResponse Overview,
-    AIWorkspaceFeatureResponse Chat,
-    AIWorkspaceFeatureResponse Agents,
-    AIWorkspaceFeatureResponse Models,
-    AIWorkspaceFeatureResponse Activity);
+internal sealed record AIWorkspaceCapabilitiesResponse(
+    AIWorkspaceCapabilityResponse Overview,
+    AIWorkspaceCapabilityResponse Agents,
+    AIWorkspaceCapabilityResponse Models,
+    AIWorkspaceCapabilityResponse Activity);
 
-internal sealed record AIWorkspaceFeatureResponse(
-    string Availability,
+internal sealed record AIWorkspaceCapabilityResponse(
     string Page,
-    string? API);
+    [property: JsonPropertyName("api")] string API);
 
 internal sealed record AIWorkspaceErrorResponse(string Code, string Message);

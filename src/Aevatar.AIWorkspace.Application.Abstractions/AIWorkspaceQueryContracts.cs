@@ -61,9 +61,17 @@ public sealed record AIWorkspaceActivityQuery(
     string? ConversationCursor = null,
     string? RunCursor = null);
 
+public enum AIWorkspaceRunOriginFilter
+{
+    Interactive = 0,
+    Integration = 1,
+    Automation = 2,
+    Development = 3,
+}
+
 public sealed record AIWorkspaceRunsQuery(
     string? Status = null,
-    IReadOnlyList<string>? Origins = null,
+    IReadOnlyList<AIWorkspaceRunOriginFilter>? Origins = null,
     string? WorkflowId = null,
     string? SearchText = null,
     DateTimeOffset? FromUtc = null,

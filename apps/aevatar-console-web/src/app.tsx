@@ -15,10 +15,6 @@ import {
 } from "./shared/auth/client";
 import { getNyxIDRuntimeConfig } from "./shared/auth/config";
 import {
-  PUBLIC_ROUTES,
-  requiresGlobalAuthGate,
-} from "./shared/auth/globalAuthGate";
-import {
   buildAuthInitialState,
   loadStoredAuthSession,
   sanitizeReturnTo,
@@ -48,6 +44,7 @@ import {
 } from "@/shared/i18n/localeProvider";
 import { AevatarPageLoading } from "@/shared/ui/AevatarLoading";
 
+const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
 const FULLSCREEN_DISPLAY_ROUTES = new Set(["/runtime/mission-wall"]);
 const STUDIO_HOST_ROUTES = new Set([
@@ -55,6 +52,7 @@ const STUDIO_HOST_ROUTES = new Set([
   "/scopes/:scopeId/teams/:teamId/members/new/workflow",
   "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow",
 ]);
+const SELF_MANAGED_AUTH_ROUTES = new Set(["/studio"]);
 
 function isFullscreenDisplayRoute(pathname: string): boolean {
   return FULLSCREEN_DISPLAY_ROUTES.has(pathname);
@@ -70,6 +68,10 @@ function isStudioHostRoute(pathname: string): boolean {
       pathname,
     )
   );
+}
+
+export function requiresGlobalAuthGate(pathname: string): boolean {
+  return !PUBLIC_ROUTES.has(pathname) && !SELF_MANAGED_AUTH_ROUTES.has(pathname);
 }
 
 function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {
@@ -149,7 +151,7 @@ const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
 const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = getNavigationGroupOrder();
 const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
-  "/ai": "nav.items.ai",
+  "/chat": "nav.items.chat",
   "/scopes": "nav.items.myTeams",
   "/runtime/runs": "nav.items.eventStream",
   "/services": "nav.items.services",

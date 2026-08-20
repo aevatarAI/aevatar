@@ -1,6 +1,7 @@
 using Aevatar.AIWorkspace.Application.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Microsoft.Extensions.Logging;
@@ -14,6 +15,7 @@ public sealed class AIWorkspaceActivityQueryService(
     ILogger<AIWorkspaceActivityQueryService>? logger = null)
     : IAIWorkspaceActivityQueryService
 {
+    private const string LegacyChatRunOrigin = "chat";
     private const int RunInputSummaryMaxLength = 240;
     private const int RunStepInputSummaryMaxLength = 160;
     private const int RunFailureMessageMaxLength = 240;
@@ -114,7 +116,7 @@ public sealed class AIWorkspaceActivityQueryService(
                     AIWorkspaceQueryFailureKind.NotFound,
                     "WORKFLOW_RUN_NOT_FOUND",
                     "Workflow run was not found.")
-                : AIWorkspaceQueryResult<AIWorkspaceRunDetailView>.Success(ToRunDetail(scopeId, detail));
+                : AIWorkspaceQueryResult<AIWorkspaceRunDetailView>.Success(ToRunDetail(detail));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -146,7 +148,6 @@ public sealed class AIWorkspaceActivityQueryService(
                 ct).ConfigureAwait(false);
             return new AIWorkspaceConversationCollectionView(
                 "chat_history",
-                scopeId,
                 AIWorkspaceSourceAvailability.Available,
                 page.Conversations.Select(ToConversation).ToArray(),
                 page.NextCursor,
@@ -166,7 +167,7 @@ public sealed class AIWorkspaceActivityQueryService(
                 ex,
                 "AI workspace conversation activity source is unavailable for scope {ScopeId}.",
                 scopeId);
-            return UnavailableConversations(scopeId);
+            return UnavailableConversations();
         }
     }
 
@@ -182,7 +183,7 @@ public sealed class AIWorkspaceActivityQueryService(
                 new WorkflowActivityRunFeedFilter
                 {
                     Status = query.Status,
-                    Origins = query.Origins ?? [],
+                    Origins = ToWorkflowRunOrigins(query.Origins),
                     WorkflowId = query.WorkflowId,
                     SearchText = query.SearchText,
                     FromUtc = query.FromUtc,
@@ -194,7 +195,6 @@ public sealed class AIWorkspaceActivityQueryService(
                 ct).ConfigureAwait(false);
             return new AIWorkspaceRunCollectionView(
                 "workflow_run_observatory",
-                scopeId,
                 AIWorkspaceSourceAvailability.Available,
                 page.Items.Select(ToRunSummary).ToArray(),
                 page.NextCursor,
@@ -216,14 +216,13 @@ public sealed class AIWorkspaceActivityQueryService(
                 ex,
                 "AI workspace workflow run activity source is unavailable for scope {ScopeId}.",
                 scopeId);
-            return UnavailableRuns(scopeId);
+            return UnavailableRuns();
         }
     }
 
-    internal static AIWorkspaceConversationCollectionView UnavailableConversations(string scopeId) =>
+    internal static AIWorkspaceConversationCollectionView UnavailableConversations() =>
         new(
             "chat_history",
-            scopeId,
             AIWorkspaceSourceAvailability.Unavailable,
             [],
             null,
@@ -231,10 +230,9 @@ public sealed class AIWorkspaceActivityQueryService(
                 "CONVERSATIONS_UNAVAILABLE",
                 "Conversation activity is temporarily unavailable."));
 
-    internal static AIWorkspaceRunCollectionView UnavailableRuns(string scopeId) =>
+    internal static AIWorkspaceRunCollectionView UnavailableRuns() =>
         new(
             "workflow_run_observatory",
-            scopeId,
             AIWorkspaceSourceAvailability.Unavailable,
             [],
             null,
@@ -248,8 +246,7 @@ public sealed class AIWorkspaceActivityQueryService(
         new(
             conversation.Id,
             conversation.Title,
-            conversation.ServiceId,
-            conversation.ServiceKind,
+            ToConversationKind(conversation.ServiceKind),
             conversation.CreatedAt,
             conversation.UpdatedAt,
             conversation.MessageCount,
@@ -267,7 +264,7 @@ public sealed class AIWorkspaceActivityQueryService(
             string.IsNullOrWhiteSpace(run.WorkflowId) ? null : run.WorkflowId,
             run.WorkflowName,
             run.Status,
-            run.RunOrigin,
+            ToRunOrigin(run.RunOrigin),
             run.Success,
             WorkflowAuditTextSanitizer.SanitizeForDisplay(
                 run.InputSummary,
@@ -281,10 +278,9 @@ public sealed class AIWorkspaceActivityQueryService(
             run.DurationMs,
             run.StateVersion);
 
-    private static AIWorkspaceRunDetailView ToRunDetail(string scopeId, ObservatoryRunDetail detail) =>
+    private static AIWorkspaceRunDetailView ToRunDetail(ObservatoryRunDetail detail) =>
         new(
             "workflow_run_observatory",
-            scopeId,
             detail.Summary.StateVersion,
             detail.Summary.UpdatedAtUtc,
             EmptyToNull(detail.ReportVersion),
@@ -294,7 +290,7 @@ public sealed class AIWorkspaceActivityQueryService(
                 string.IsNullOrWhiteSpace(detail.Summary.WorkflowId) ? null : detail.Summary.WorkflowId,
                 detail.Summary.WorkflowName,
                 detail.Summary.Status,
-                detail.Summary.RunOrigin,
+                ToRunOrigin(detail.Summary.RunOrigin),
                 detail.Summary.Success,
                 WorkflowAuditTextSanitizer.SanitizeForDisplay(
                     detail.InputSummary,
@@ -422,6 +418,58 @@ public sealed class AIWorkspaceActivityQueryService(
 
     private static AIWorkspaceUsageTotalsView ToUsage(ObservatoryUsageTotals usage) =>
         new(usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens, usage.Cost);
+
+    private static AIWorkspaceConversationKind ToConversationKind(string? serviceKind) =>
+        serviceKind?.Trim() switch
+        {
+            "assistant" or "nyxid.chat" => AIWorkspaceConversationKind.Assistant,
+            "workflow" => AIWorkspaceConversationKind.Workflow,
+            _ => AIWorkspaceConversationKind.Other,
+        };
+
+    private static AIWorkspaceRunOrigin ToRunOrigin(string? runOrigin) =>
+        runOrigin?.Trim() switch
+        {
+            WorkflowRunOrigins.Draft => AIWorkspaceRunOrigin.Development,
+            WorkflowRunOrigins.MemberInvoke or
+                WorkflowRunOrigins.DefaultInvoke or
+                WorkflowRunOrigins.TeamInvoke or
+                WorkflowRunOrigins.AdHocChat or
+                LegacyChatRunOrigin => AIWorkspaceRunOrigin.Interactive,
+            WorkflowRunOrigins.ServiceInvoke or
+                WorkflowRunOrigins.Webhook => AIWorkspaceRunOrigin.Integration,
+            WorkflowRunOrigins.WorkOrder or
+                WorkflowRunOrigins.Provisioned => AIWorkspaceRunOrigin.Automation,
+            _ => AIWorkspaceRunOrigin.Other,
+        };
+
+    private static IReadOnlyList<string> ToWorkflowRunOrigins(
+        IReadOnlyList<AIWorkspaceRunOriginFilter>? origins) =>
+        origins is null
+            ? []
+            : origins
+                .SelectMany(static origin => ToWorkflowRunOrigins(origin))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+
+    private static IReadOnlyList<string> ToWorkflowRunOrigins(AIWorkspaceRunOriginFilter origin) =>
+        origin switch
+        {
+            AIWorkspaceRunOriginFilter.Interactive =>
+            [
+                WorkflowRunOrigins.MemberInvoke,
+                WorkflowRunOrigins.DefaultInvoke,
+                WorkflowRunOrigins.TeamInvoke,
+                WorkflowRunOrigins.AdHocChat,
+                LegacyChatRunOrigin,
+            ],
+            AIWorkspaceRunOriginFilter.Integration =>
+            [WorkflowRunOrigins.ServiceInvoke, WorkflowRunOrigins.Webhook],
+            AIWorkspaceRunOriginFilter.Automation =>
+            [WorkflowRunOrigins.WorkOrder, WorkflowRunOrigins.Provisioned],
+            AIWorkspaceRunOriginFilter.Development => [WorkflowRunOrigins.Draft],
+            _ => [],
+        };
 
     private static string? EmptyToNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;

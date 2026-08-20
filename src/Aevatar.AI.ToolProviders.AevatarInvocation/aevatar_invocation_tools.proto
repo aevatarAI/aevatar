@@ -63,10 +63,11 @@ message InvokeMemberToolRequest {
 }
 
 message StartWorkflowToolRequest {
+  reserved 4;
+  reserved "actor_id";
   string workflow_id = 1;
   InvocationPayload inputs = 2;
   InvocationWaitMode wait = 3;
-  string actor_id = 4;
   repeated string workflow_yamls = 5;
 }
 

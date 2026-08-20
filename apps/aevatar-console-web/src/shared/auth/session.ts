@@ -38,7 +38,6 @@ const AUTH_SESSION_STORAGE_KEY = 'aevatar-console:nyxid:session';
 const ACCESS_TOKEN_CLOCK_SKEW_MS = 30_000;
 const AUTH_BLOCKED_PATHS = new Set(['/login', '/auth/callback']);
 const LEGACY_RETURN_TO_ALIASES = new Map<string, string>([
-  ['/chat', '/ai/chat'],
   ['/workflows', '/runtime/workflows'],
   ['/primitives', '/runtime/primitives'],
   ['/runs', '/runtime/runs'],

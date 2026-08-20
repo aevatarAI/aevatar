@@ -202,6 +202,7 @@ class NyxIdConformanceGuardTests(unittest.TestCase):
             "nyxid-assistant-actions.v5",
             "nyxid-assistant-actions.v6",
             "nyxid-assistant-actions.v7",
+            "nyxid-assistant-actions.v8",
         ]
         transition_payloads = {}
         for revision in revisions:

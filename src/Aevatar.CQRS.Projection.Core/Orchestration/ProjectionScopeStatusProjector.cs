@@ -1,6 +1,5 @@
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
@@ -43,61 +42,17 @@ public sealed class ProjectionScopeStatusProjector
             return;
         }
 
-        var scopeKey = new ProjectionRuntimeScopeKey(
-            state.RootActorId,
-            state.ProjectionKind,
-            ProjectionScopeModeMapper.ToRuntime(state.Mode),
-            state.SessionId);
-        var scopeActorId = ProjectionScopeActorId.Build(scopeKey);
+        // The source scope actor owns the status write route. This legacy shadow writes only
+        // while the route selects it: no route, a rolled-back legacy route in a writing phase,
+        // or a terminal route that is still warming. Once the terminal route is blocked or
+        // active this shadow may still be draining already-delivered envelopes before it is
+        // released, and must not write.
+        if (!ProjectionScopeStatusRoutePolicy.LegacyShadowMayWrite(state.StatusRoute))
+            return;
+
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
-        var failureSummary = state.FailureSummary ?? ProjectionScopeFailureLog.BuildSummary(state.Failures);
-
-        var document = new ProjectionScopeStatusDocument
-        {
-            Id = scopeActorId,
-            ScopeActorId = scopeActorId,
-            StateVersion = stateEvent.Version,
-            LastEventId = stateEvent.EventId ?? string.Empty,
-            UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(updatedAt.ToUniversalTime()),
-            RootActorId = state.RootActorId ?? string.Empty,
-            ProjectionKind = state.ProjectionKind ?? string.Empty,
-            SessionId = state.SessionId ?? string.Empty,
-            Mode = state.Mode,
-            Active = state.Active,
-            ObservationAttached = state.ObservationAttached,
-            Released = state.Released,
-            HighestSeenVersion = state.HighestSeenVersion,
-            LastSuccessfulVersion = state.LastSuccessfulVersion,
-            UnresolvedFailureCount = failureSummary.UnresolvedFailureCount,
-            ReceivedEnvelopeTotal = state.ReceivedEnvelopeTotal,
-            AttemptedEnvelopeTotal = state.AttemptedEnvelopeTotal,
-            SuccessfulMaterializationTotal = state.SuccessfulMaterializationTotal,
-            FailedAttemptTotal = state.FailedAttemptTotal,
-            RetryExhaustedTotal = state.RetryExhaustedTotal,
-            RetryExhaustedFailureCount = failureSummary.RetryExhaustedFailureCount,
-            FailureDiagnosticDroppedTotal = state.FailureDiagnosticDroppedTotal,
-        };
-        document.OldestUnresolvedFailureAtUtc = failureSummary.OldestUnresolvedFailureAtUtc?.Clone();
-        document.RecentObservedEnvelopes.Add(state.RecentObservedEnvelopes);
-        foreach (var sourceActorId in state.HighestSeenVersionsByActor.Keys
-                     .Union(state.LastSuccessfulVersionsByActor.Keys, StringComparer.Ordinal)
-                     .OrderBy(sourceActorId => sourceActorId, StringComparer.Ordinal))
-        {
-            var highestSeen = state.HighestSeenVersionsByActor.TryGetValue(sourceActorId, out var seen)
-                ? seen
-                : 0;
-            var lastSuccessful = state.LastSuccessfulVersionsByActor.TryGetValue(sourceActorId, out var successful)
-                ? successful
-                : 0;
-            document.SourceVersions.Add(new ProjectionSourceVersionStatus
-            {
-                SourceActorId = sourceActorId,
-                HighestSeenVersion = highestSeen,
-                LastSuccessfulVersion = lastSuccessful,
-                VersionGap = Math.Max(0, highestSeen - lastSuccessful),
-            });
-        }
-
-        await _writeDispatcher.UpsertAsync(document, ct);
+        await _writeDispatcher.UpsertAsync(
+            ProjectionScopeStatusDocumentMapper.Map(state, stateEvent, updatedAt),
+            ct);
     }
 }

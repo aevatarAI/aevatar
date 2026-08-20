@@ -378,6 +378,19 @@ public static class ChatQueryEndpoints
         new(
             subgraph.RootNodeId,
             subgraph.SourceStateVersion,
+            subgraph.RouteFingerprint == null
+                ? null
+                : new WorkflowRunGraphExportRouteFingerprintHttpResponse(
+                    subgraph.RouteFingerprint.ContractId,
+                    subgraph.RouteFingerprint.ContractVersion,
+                    subgraph.RouteFingerprint.PhysicalNamespace,
+                    subgraph.RouteFingerprint.RouteEpoch),
+            subgraph.SourceCoordinate == null
+                ? null
+                : new WorkflowRunGraphExportSourceCoordinateHttpResponse(
+                    subgraph.SourceCoordinate.ActorId,
+                    subgraph.SourceCoordinate.StateVersion,
+                    subgraph.SourceCoordinate.EventId),
             subgraph.Nodes.Select(MapGraphNode).ToList(),
             subgraph.Edges.Select(MapGraphEdge).ToList());
 
@@ -520,8 +533,21 @@ public sealed record WorkflowRunGraphExportEdgeHttpResponse(
 public sealed record WorkflowRunGraphExportSubgraphHttpResponse(
     string RootNodeId,
     long SourceStateVersion,
+    WorkflowRunGraphExportRouteFingerprintHttpResponse? RouteFingerprint,
+    WorkflowRunGraphExportSourceCoordinateHttpResponse? SourceCoordinate,
     List<WorkflowRunGraphExportNodeHttpResponse> Nodes,
     List<WorkflowRunGraphExportEdgeHttpResponse> Edges);
+
+public sealed record WorkflowRunGraphExportRouteFingerprintHttpResponse(
+    string ContractId,
+    long ContractVersion,
+    string PhysicalNamespace,
+    long RouteEpoch);
+
+public sealed record WorkflowRunGraphExportSourceCoordinateHttpResponse(
+    string ActorId,
+    long StateVersion,
+    string EventId);
 
 public sealed record WorkflowPrimitiveParameterDescriptorHttpResponse(
     string Name,

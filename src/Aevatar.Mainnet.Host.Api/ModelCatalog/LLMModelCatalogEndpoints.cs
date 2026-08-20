@@ -1,5 +1,6 @@
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Capabilities;
+using Aevatar.Mainnet.Host.Api.AI;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -31,19 +32,49 @@ internal static class LLMModelCatalogEndpoints
         return app;
     }
 
-    private static async Task<IResult> GetScopeAsync(
+    internal static async Task<IResult> GetScopeAsync(
         HttpContext http,
         string scopeId,
         [FromServices] ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        await GetScopeCoreAsync(
+            http,
+            scopeId,
+            service,
+            includeAuthorizationOwner: true,
+            callerFacing: false,
+            ct);
+
+    internal static async Task<IResult> GetScopeForCallerFacadeAsync(
+        HttpContext http,
+        string scopeId,
+        ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        await GetScopeCoreAsync(
+            http,
+            scopeId,
+            service,
+            includeAuthorizationOwner: false,
+            callerFacing: true,
+            ct);
+
+    private static async Task<IResult> GetScopeCoreAsync(
+        HttpContext http,
+        string scopeId,
+        ILLMModelCatalogPolicyApplicationService service,
+        bool includeAuthorizationOwner,
+        bool callerFacing,
         CancellationToken ct)
     {
-        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (TryCreateAccessDeniedResult(http, scopeId, callerFacing, out var denied))
             return denied;
 
         try
         {
             var view = await service.GetScopeAsync(scopeId, ct).ConfigureAwait(false);
-            return Results.Json(ToWireView(view));
+            return Results.Json(includeAuthorizationOwner
+                ? ToWireView(view)
+                : ToCallerWireView(view));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -51,23 +82,61 @@ internal static class LLMModelCatalogEndpoints
         }
         catch (LLMModelCatalogApplicationException ex)
         {
-            return ToError(ex);
+            return callerFacing ? ToCallerError(ex) : ToError(ex);
         }
     }
 
-    private static async Task<IResult> PutScopeAsync(
+    internal static async Task<IResult> PutScopeAsync(
         HttpContext http,
         string scopeId,
         [FromBody] ModelCatalogReplaceRequest? request,
         [FromServices] ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        await PutScopeCoreAsync(
+            http,
+            scopeId,
+            request,
+            service,
+            includeActorId: true,
+            callerFacing: false,
+            ct);
+
+    internal static async Task<IResult> PutScopeForCallerFacadeAsync(
+        HttpContext http,
+        string scopeId,
+        ModelCatalogReplaceRequest? request,
+        ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        await PutScopeCoreAsync(
+            http,
+            scopeId,
+            request,
+            service,
+            includeActorId: false,
+            callerFacing: true,
+            ct);
+
+    private static async Task<IResult> PutScopeCoreAsync(
+        HttpContext http,
+        string scopeId,
+        ModelCatalogReplaceRequest? request,
+        ILLMModelCatalogPolicyApplicationService service,
+        bool includeActorId,
+        bool callerFacing,
         CancellationToken ct)
     {
-        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (TryCreateAccessDeniedResult(http, scopeId, callerFacing, out var denied))
             return denied;
         if (request is null)
-            return Error(StatusCodes.Status400BadRequest, "REQUEST_REQUIRED", "Request body is required.");
+        {
+            return Error(
+                callerFacing,
+                StatusCodes.Status400BadRequest,
+                "REQUEST_REQUIRED",
+                "Request body is required.");
+        }
 
-        var parsed = ParseScopeIntent(request);
+        var parsed = ParseScopeIntent(request, callerFacing);
         if (parsed.Error is not null)
             return parsed.Error;
 
@@ -76,7 +145,7 @@ internal static class LLMModelCatalogEndpoints
             var receipt = await service
                 .ReplaceScopeAsync(scopeId, parsed.ScopeIntent!, ct)
                 .ConfigureAwait(false);
-            return Accepted(receipt);
+            return Accepted(receipt, includeActorId);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -84,24 +153,63 @@ internal static class LLMModelCatalogEndpoints
         }
         catch (LLMModelCatalogApplicationException ex)
         {
-            return ToError(ex);
+            return callerFacing ? ToCallerError(ex) : ToError(ex);
         }
     }
 
-    private static async Task<IResult> ResetScopeAsync(
+    internal static async Task<IResult> ResetScopeAsync(
         HttpContext http,
         string scopeId,
         [FromBody] ModelCatalogResetRequest? request,
         [FromServices] ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        await ResetScopeCoreAsync(
+            http,
+            scopeId,
+            request,
+            service,
+            includeActorId: true,
+            callerFacing: false,
+            ct);
+
+    internal static async Task<IResult> ResetScopeForCallerFacadeAsync(
+        HttpContext http,
+        string scopeId,
+        ModelCatalogResetRequest? request,
+        ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        await ResetScopeCoreAsync(
+            http,
+            scopeId,
+            request,
+            service,
+            includeActorId: false,
+            callerFacing: true,
+            ct);
+
+    private static async Task<IResult> ResetScopeCoreAsync(
+        HttpContext http,
+        string scopeId,
+        ModelCatalogResetRequest? request,
+        ILLMModelCatalogPolicyApplicationService service,
+        bool includeActorId,
+        bool callerFacing,
         CancellationToken ct)
     {
-        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (TryCreateAccessDeniedResult(http, scopeId, callerFacing, out var denied))
             return denied;
         if (request is null)
-            return Error(StatusCodes.Status400BadRequest, "REQUEST_REQUIRED", "Request body is required.");
+        {
+            return Error(
+                callerFacing,
+                StatusCodes.Status400BadRequest,
+                "REQUEST_REQUIRED",
+                "Request body is required.");
+        }
         if (request.ExpectedStateVersion is null)
         {
             return Error(
+                callerFacing,
                 StatusCodes.Status400BadRequest,
                 "EXPECTED_STATE_VERSION_REQUIRED",
                 "expectedStateVersion is required.");
@@ -113,7 +221,7 @@ internal static class LLMModelCatalogEndpoints
                 scopeId,
                 new LLMModelCatalogResetIntent(request.ExpectedStateVersion.Value, request.MutationId),
                 ct).ConfigureAwait(false);
-            return Accepted(receipt);
+            return Accepted(receipt, includeActorId);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -121,20 +229,41 @@ internal static class LLMModelCatalogEndpoints
         }
         catch (LLMModelCatalogApplicationException ex)
         {
-            return ToError(ex);
+            return callerFacing ? ToCallerError(ex) : ToError(ex);
         }
     }
 
-    private static async Task<IResult> GetScopeCandidatesAsync(
+    internal static Task<IResult> GetScopeCandidatesAsync(
         HttpContext http,
         string scopeId,
         [FromServices] ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        GetScopeCandidatesCoreAsync(http, scopeId, service, callerFacing: false, ct);
+
+    internal static Task<IResult> GetScopeCandidatesForCallerFacadeAsync(
+        HttpContext http,
+        string scopeId,
+        ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        GetScopeCandidatesCoreAsync(http, scopeId, service, callerFacing: true, ct);
+
+    private static async Task<IResult> GetScopeCandidatesCoreAsync(
+        HttpContext http,
+        string scopeId,
+        ILLMModelCatalogPolicyApplicationService service,
+        bool callerFacing,
         CancellationToken ct)
     {
-        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (TryCreateAccessDeniedResult(http, scopeId, callerFacing, out var denied))
             return denied;
         if (!TryGetBearerToken(http, out var bearerToken))
-            return Error(StatusCodes.Status401Unauthorized, "AUTHENTICATION_REQUIRED", "Bearer token is required.");
+        {
+            return Error(
+                callerFacing,
+                StatusCodes.Status401Unauthorized,
+                "AUTHENTICATION_REQUIRED",
+                "Bearer token is required.");
+        }
 
         try
         {
@@ -167,21 +296,56 @@ internal static class LLMModelCatalogEndpoints
         }
         catch (LLMModelCatalogApplicationException ex)
         {
-            return ToError(ex);
+            return callerFacing ? ToCallerError(ex) : ToError(ex);
         }
     }
 
-    private static async Task<IResult> GetScopeCandidateModelsAsync(
+    internal static Task<IResult> GetScopeCandidateModelsAsync(
         HttpContext http,
         string scopeId,
         string userServiceId,
         [FromServices] ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        GetScopeCandidateModelsCoreAsync(
+            http,
+            scopeId,
+            userServiceId,
+            service,
+            callerFacing: false,
+            ct);
+
+    internal static Task<IResult> GetScopeCandidateModelsForCallerFacadeAsync(
+        HttpContext http,
+        string scopeId,
+        string userServiceId,
+        ILLMModelCatalogPolicyApplicationService service,
+        CancellationToken ct) =>
+        GetScopeCandidateModelsCoreAsync(
+            http,
+            scopeId,
+            userServiceId,
+            service,
+            callerFacing: true,
+            ct);
+
+    private static async Task<IResult> GetScopeCandidateModelsCoreAsync(
+        HttpContext http,
+        string scopeId,
+        string userServiceId,
+        ILLMModelCatalogPolicyApplicationService service,
+        bool callerFacing,
         CancellationToken ct)
     {
-        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+        if (TryCreateAccessDeniedResult(http, scopeId, callerFacing, out var denied))
             return denied;
         if (!TryGetBearerToken(http, out var bearerToken))
-            return Error(StatusCodes.Status401Unauthorized, "AUTHENTICATION_REQUIRED", "Bearer token is required.");
+        {
+            return Error(
+                callerFacing,
+                StatusCodes.Status401Unauthorized,
+                "AUTHENTICATION_REQUIRED",
+                "Bearer token is required.");
+        }
 
         try
         {
@@ -202,7 +366,7 @@ internal static class LLMModelCatalogEndpoints
         }
         catch (LLMModelCatalogApplicationException ex)
         {
-            return ToError(ex);
+            return callerFacing ? ToCallerError(ex) : ToError(ex);
         }
     }
 
@@ -343,7 +507,9 @@ internal static class LLMModelCatalogEndpoints
         }
     }
 
-    private static ParsedIntent ParseScopeIntent(ModelCatalogReplaceRequest request)
+    private static ParsedIntent ParseScopeIntent(
+        ModelCatalogReplaceRequest request,
+        bool callerFacing = false)
     {
         var mode = request.Mode?.Trim().ToLowerInvariant() switch
         {
@@ -354,6 +520,7 @@ internal static class LLMModelCatalogEndpoints
         if (mode == LLMModelCatalogPolicyMode.Unspecified)
         {
             return ParsedIntent.Invalid(Error(
+                callerFacing,
                 StatusCodes.Status400BadRequest,
                 "INVALID_MODE",
                 "mode must be inherit_platform or custom_replace."));
@@ -361,12 +528,13 @@ internal static class LLMModelCatalogEndpoints
         if (request.ExpectedStateVersion is null)
         {
             return ParsedIntent.Invalid(Error(
+                callerFacing,
                 StatusCodes.Status400BadRequest,
                 "EXPECTED_STATE_VERSION_REQUIRED",
                 "expectedStateVersion is required."));
         }
 
-        var parsedSources = ParseScopeSources(request.Sources);
+        var parsedSources = ParseScopeSources(request.Sources, callerFacing);
         if (parsedSources.Error is not null)
             return ParsedIntent.Invalid(parsedSources.Error);
         return ParsedIntent.Scope(new ReplaceScopeLLMModelCatalogIntent(
@@ -402,7 +570,9 @@ internal static class LLMModelCatalogEndpoints
             parsedSources.PlatformSources));
     }
 
-    private static ParsedSources ParseScopeSources(IReadOnlyList<ModelCatalogSourceInput?>? inputs)
+    private static ParsedSources ParseScopeSources(
+        IReadOnlyList<ModelCatalogSourceInput?>? inputs,
+        bool callerFacing)
     {
         if (inputs is null)
             return ParsedSources.Scope(null);
@@ -418,12 +588,15 @@ internal static class LLMModelCatalogEndpoints
             if (!string.IsNullOrWhiteSpace(input.CatalogServiceId))
             {
                 return ParsedSources.Invalid(Error(
+                    callerFacing,
                     StatusCodes.Status400BadRequest,
-                    "SCOPE_CATALOG_SERVICE_FORBIDDEN",
-                    "Scope sources must reference only an exact userServiceId."));
+                    callerFacing ? "AI_MODEL_SOURCE_INVALID" : "SCOPE_CATALOG_SERVICE_FORBIDDEN",
+                    callerFacing
+                        ? "Custom model sources must reference an exact userServiceId."
+                        : "Scope sources must reference only an exact userServiceId."));
             }
 
-            var selection = ParseSelection(input.ModelSelection);
+            var selection = ParseSelection(input.ModelSelection, callerFacing);
             if (selection.Error is not null)
                 return ParsedSources.Invalid(selection.Error);
             sources.Add(new ScopeLLMModelCatalogSourceIntent(
@@ -466,11 +639,14 @@ internal static class LLMModelCatalogEndpoints
         return ParsedSources.Platform(sources);
     }
 
-    private static ParsedSelection ParseSelection(ModelCatalogSelectionInput? input) =>
+    private static ParsedSelection ParseSelection(
+        ModelCatalogSelectionInput? input,
+        bool callerFacing = false) =>
         input?.Mode?.Trim().ToLowerInvariant() switch
         {
             "explicit_models" => ParsedSelection.Valid(new ExplicitLLMModelsIntent(input.ModelIds)),
             _ => ParsedSelection.Invalid(Error(
+                callerFacing,
                 StatusCodes.Status400BadRequest,
                 "INVALID_MODEL_SELECTION",
                 "modelSelection.mode must be explicit_models.")),
@@ -486,6 +662,17 @@ internal static class LLMModelCatalogEndpoints
             view.UpdatedAtUtc,
             MapSources(view.Sources),
             view.EffectiveSource == LLMModelCatalogEffectiveSourceKind.Scope ? "scope" : "platform",
+            MapSources(view.EffectiveSources),
+            view.LastMutationId);
+
+    private static CallerModelCatalogView ToCallerWireView(LLMModelCatalogView view) =>
+        new(
+            ModeValue(view.Mode),
+            view.Configured,
+            view.StateVersion,
+            view.UpdatedAtUtc,
+            MapSources(view.Sources),
+            view.EffectiveSource == LLMModelCatalogEffectiveSourceKind.Scope ? "custom" : "platform",
             MapSources(view.EffectiveSources),
             view.LastMutationId);
 
@@ -549,8 +736,9 @@ internal static class LLMModelCatalogEndpoints
         }
     }
 
-    private static IResult Accepted(UserConfigSaveReceipt receipt) =>
-        Results.Accepted(value: new
+    private static IResult Accepted(UserConfigSaveReceipt receipt, bool includeActorId = true) =>
+        includeActorId
+            ? Results.Accepted(value: new
         {
             accepted = true,
             actorId = receipt.ActorId,
@@ -559,7 +747,16 @@ internal static class LLMModelCatalogEndpoints
             ackStage = receipt.AckStage,
             ackedAt = receipt.AckedAtUtc,
             note = "Command accepted for dispatch. Re-query GET until lastMutationId matches mutationId.",
-        });
+        })
+            : Results.Accepted(value: new
+            {
+                accepted = true,
+                commandId = receipt.CommandId,
+                correlationId = receipt.CorrelationId,
+                ackStage = receipt.AckStage,
+                ackedAt = receipt.AckedAtUtc,
+                note = "Command accepted for dispatch. Re-query GET until lastMutationId matches mutationId.",
+            });
 
     private static IResult ToError(LLMModelCatalogApplicationException exception) =>
         Error(
@@ -573,6 +770,59 @@ internal static class LLMModelCatalogEndpoints
             },
             exception.Code,
             exception.Message);
+
+    private static IResult ToCallerError(LLMModelCatalogApplicationException exception) =>
+        exception.Kind switch
+        {
+            LLMModelCatalogApplicationErrorKind.InvalidRequest => CallerError(
+                StatusCodes.Status400BadRequest,
+                "AI_MODEL_REQUEST_INVALID",
+                "Model settings request is invalid."),
+            LLMModelCatalogApplicationErrorKind.Conflict => CallerError(
+                StatusCodes.Status409Conflict,
+                "AI_MODEL_CONFLICT",
+                "Model settings conflict with the current state."),
+            LLMModelCatalogApplicationErrorKind.AuthenticationRejected => CallerError(
+                StatusCodes.Status401Unauthorized,
+                "AI_MODEL_AUTHENTICATION_REJECTED",
+                "Model source authentication was rejected."),
+            LLMModelCatalogApplicationErrorKind.Forbidden => CallerError(
+                StatusCodes.Status403Forbidden,
+                "AI_MODEL_ACCESS_DENIED",
+                "Model source access was denied."),
+            _ => CallerError(
+                StatusCodes.Status503ServiceUnavailable,
+                "AI_MODEL_SERVICE_UNAVAILABLE",
+                "Model settings are temporarily unavailable."),
+        };
+
+    private static bool TryCreateAccessDeniedResult(
+        HttpContext http,
+        string scopeId,
+        bool callerFacing,
+        out IResult denied)
+    {
+        if (!callerFacing)
+        {
+            return AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(
+                http,
+                scopeId,
+                out denied);
+        }
+
+        if (AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var callerScopeId) &&
+            string.Equals(callerScopeId, scopeId, StringComparison.Ordinal))
+        {
+            denied = Results.Empty;
+            return false;
+        }
+
+        denied = CallerError(
+            StatusCodes.Status403Forbidden,
+            "AI_MODEL_ACCESS_CONTEXT_REQUIRED",
+            "Authenticated caller access context is required.");
+        return true;
+    }
 
     private static IResult PlatformAdminForbidden() =>
         Error(
@@ -657,6 +907,18 @@ internal static class LLMModelCatalogEndpoints
     private static IResult Error(int statusCode, string code, string detail) =>
         Results.Json(new { error = code, detail }, statusCode: statusCode);
 
+    private static IResult Error(
+        bool callerFacing,
+        int statusCode,
+        string code,
+        string message) =>
+        callerFacing
+            ? CallerError(statusCode, code, message)
+            : Error(statusCode, code, message);
+
+    private static IResult CallerError(int statusCode, string code, string message) =>
+        AIWorkspaceEndpoints.Error(statusCode, code, message);
+
     private sealed record PlatformAdminAuthorization(string BearerToken, IResult? Error);
 
     private sealed record ParsedIntent(
@@ -709,6 +971,16 @@ internal sealed record ModelCatalogSelectionInput(string? Mode, IReadOnlyList<st
 internal sealed record ModelCatalogView(
     string OwnerKind,
     string? ScopeId,
+    string Mode,
+    bool Configured,
+    long StateVersion,
+    DateTimeOffset? UpdatedAt,
+    IReadOnlyList<ModelCatalogSourceView> Sources,
+    string EffectiveSource,
+    IReadOnlyList<ModelCatalogSourceView> EffectiveSources,
+    string? LastMutationId);
+
+internal sealed record CallerModelCatalogView(
     string Mode,
     bool Configured,
     long StateVersion,

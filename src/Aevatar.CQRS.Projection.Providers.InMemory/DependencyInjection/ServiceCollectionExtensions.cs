@@ -27,6 +27,8 @@ public static class InMemoryProjectionServiceCollectionExtensions
             provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
         services.AddSingleton<IProjectionDocumentReader<TReadModel, TKey>>(provider =>
             provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
+        services.AddSingleton<IProjectionDocumentMutator<TReadModel, TKey>>(provider =>
+            provider.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, TKey>>());
 
         return services;
     }
@@ -34,7 +36,11 @@ public static class InMemoryProjectionServiceCollectionExtensions
     public static IServiceCollection AddInMemoryGraphProjectionStore(
         this IServiceCollection services)
     {
-        services.AddSingleton<IProjectionGraphStore, InMemoryProjectionGraphStore>();
+        services.AddSingleton<InMemoryProjectionGraphStore>();
+        services.AddSingleton<IProjectionGraphStore>(provider =>
+            provider.GetRequiredService<InMemoryProjectionGraphStore>());
+        services.AddSingleton<IVersionedProjectionGraphStore>(provider =>
+            provider.GetRequiredService<InMemoryProjectionGraphStore>());
 
         return services;
     }

@@ -42,8 +42,10 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId ?? string.Empty,
                 RunId = parentRunId,
+                ExecutionId = request.ExecutionId,
                 Success = false,
                 Error = "workflow_call missing step_id",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             return;
         }
@@ -55,8 +57,10 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = parentStepId,
                 RunId = parentRunId,
+                ExecutionId = request.ExecutionId,
                 Success = false,
                 Error = "workflow_call missing workflow parameter",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             return;
         }
@@ -69,8 +73,10 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = parentStepId,
                 RunId = parentRunId,
+                ExecutionId = request.ExecutionId,
                 Success = false,
                 Error = $"workflow_call lifecycle must be {WorkflowCallLifecycle.AllowedValuesText}, got '{invalidLifecycle}'",
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             return;
         }
@@ -85,6 +91,7 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
             InvocationId = WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId),
             ParentRunId = parentRunId,
             ParentStepId = parentStepId,
+            ParentExecutionId = request.ExecutionId,
             WorkflowName = workflowName,
             Input = request.Input ?? string.Empty,
             Lifecycle = WorkflowCallLifecycle.Normalize(lifecycleRaw),

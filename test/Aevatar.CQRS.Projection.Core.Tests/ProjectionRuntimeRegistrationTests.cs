@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
@@ -550,6 +551,37 @@ public sealed class ProjectionRuntimeRegistrationTests
     }
 
     [Fact]
+    public async Task ProjectionFailureReplayService_ShouldDispatchTypedAutomaticRecoveryCommand()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var service = new ProjectionFailureReplayService(runtime, dispatchPort);
+        var scopeKey = new ProjectionRuntimeScopeKey(
+            "actor-automatic",
+            "projection-automatic",
+            ProjectionRuntimeMode.SessionObservation,
+            "session-automatic");
+        var actorId = ProjectionScopeActorId.Build(scopeKey);
+        runtime.ExistingActorIds.Add(actorId);
+
+        var replayed = await service.ReplayAutomaticallyAsync(
+            scopeKey,
+            observedScopeStateVersion: 17,
+            maxItems: 0);
+
+        replayed.Should().BeTrue();
+        dispatchPort.Dispatched.Should().ContainSingle();
+        var dispatched = dispatchPort.Dispatched[0];
+        dispatched.actorId.Should().Be(actorId);
+        dispatched.command.Route.PublisherActorId.Should().Be("projection.scope.automatic-recovery");
+        dispatched.command.Route.GetTargetActorId().Should().Be(actorId);
+        var command = dispatched.command.Payload!.Unpack<ReplayProjectionFailuresCommand>();
+        command.MaxItems.Should().Be(1);
+        command.AutomaticRecovery.Should().BeTrue();
+        command.ObservedScopeStateVersion.Should().Be(17);
+    }
+
+    [Fact]
     public void ProjectionFailureRetentionPolicy_ShouldTrimOldestFailures()
     {
         var failures = new Google.Protobuf.Collections.RepeatedField<ProjectionFailureDiagnostic>();
@@ -595,6 +627,17 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         registration.Kind.Should().Be("projection.scope");
         registration.ImplementationType.Should().Be(typeof(NonGenericScopeAgent));
+    }
+
+    [Fact]
+    public void ProjectionScopeAgentRegistration_ShouldRespectExplicitConcreteScopeDeclaration()
+    {
+        var registration = ProjectionScopeAgentRegistration.Create<ExplicitScopeAgent>();
+
+        registration.Kind.Should().Be("projection.materialization-scope.explicit-test");
+        registration.ImplementationType.Should().Be(typeof(ExplicitScopeAgent));
+        registration.StateContractType.Should().Be(typeof(ProjectionScopeState));
+        registration.StateSchemaVersion.Should().Be(3);
     }
 
     [Fact]
@@ -956,6 +999,10 @@ public sealed class ProjectionRuntimeRegistrationTests
         public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
             Task.FromResult<IReadOnlyList<System.Type>>([]);
     }
+
+    [GAgent("projection.materialization-scope.explicit-test", StateSchemaVersion = 3)]
+    private sealed class ExplicitScopeAgent
+        : ProjectionMaterializationScopeGAgentBase<TestMaterializationContext>;
 
     private sealed class FallbackScopeAgent<TContext> : IAgent
     {

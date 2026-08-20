@@ -1,3 +1,4 @@
+using System.Reflection;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 
@@ -6,11 +7,20 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 internal static class ProjectionScopeAgentRegistration
 {
     public static AgentRegistration Create<TScopeAgent>()
-        where TScopeAgent : IAgent =>
-        new(
-            Kind: BuildKind(typeof(TScopeAgent)),
-            ImplementationType: typeof(TScopeAgent),
+        where TScopeAgent : IAgent
+    {
+        var scopeAgentType = typeof(TScopeAgent);
+        if (!scopeAgentType.IsGenericType &&
+            scopeAgentType.GetCustomAttribute<GAgentAttribute>(inherit: false) != null)
+        {
+            return AgentRegistration.FromAgentType(scopeAgentType);
+        }
+
+        return new AgentRegistration(
+            Kind: BuildKind(scopeAgentType),
+            ImplementationType: scopeAgentType,
             StateContractType: typeof(ProjectionScopeState));
+    }
 
     private static string BuildKind(Type scopeAgentType)
     {

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
@@ -10,6 +11,7 @@ using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.AI;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using FluentAssertions;
@@ -18,6 +20,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -48,176 +51,41 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 IsAuthorized = endpoint.Metadata.GetMetadata<IAuthorizeData>() is not null,
             })
             .ToArray();
-        routes.Should().Contain(route => route.Pattern == "/ai" && !route.IsAuthorized);
-        routes.Should().Contain(route => route.Pattern == "/ai/{**path}" && !route.IsAuthorized);
-        routes.Should().Contain(route => route.Pattern == "/ai-assets/{**path}" && !route.IsAuthorized);
-        routes.Should().Contain(route => route.Pattern == "/chat" && !route.IsAuthorized);
-        routes.Should().Contain(route => route.Pattern == "/login" && !route.IsAuthorized);
-        routes.Should().Contain(route => route.Pattern == "/auth/callback" && !route.IsAuthorized);
-        routes.Should().Contain(route => route.Pattern == "/scopes" && !route.IsAuthorized);
-        routes.Should().Contain(route => route.Pattern == "/scopes/{**path}" && !route.IsAuthorized);
-        routes.Should().Contain(route => route.Pattern == "/settings" && !route.IsAuthorized);
-        routes.Where(static route => route.Pattern?.StartsWith("/api/ai", StringComparison.Ordinal) == true)
-            .Should()
-            .OnlyContain(static route => route.IsAuthorized);
+        routes.Should().OnlyContain(route =>
+            route.Pattern != null &&
+            route.Pattern.StartsWith("/api/ai", StringComparison.Ordinal) &&
+            route.IsAuthorized);
         routes.Select(static route => route.Pattern).Should().Contain([
             "/api/ai/context",
             "/api/ai/overview",
             "/api/ai/agents",
             "/api/ai/models",
+            "/api/ai/models/personal-default",
+            "/api/ai/models/catalog",
+            "/api/ai/models/catalog/candidates",
+            "/api/ai/models/catalog/candidates/{userServiceId}/models",
             "/api/ai/activity",
             "/api/ai/activity/conversations",
             "/api/ai/activity/runs",
             "/api/ai/activity/runs/{runId}",
         ]);
+        routes.Select(static route => route.Pattern).Should().NotContain([
+            "/ai",
+            "/ai/{**path}",
+            "/ai-assets/{**path}",
+            "/chat",
+            "/login",
+            "/auth/callback",
+            "/scopes",
+            "/scopes/{**path}",
+            "/settings",
+        ]);
     }
 
     [Fact]
-    public async Task AIEntry_ShouldServeDeepLinkWithoutChangingTheOrigin()
+    public async Task Context_ShouldExposeAccountAndOnlyAIProductLinks()
     {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
-
-        var response = await host.Client.GetAsync("/ai/activity/runs/run-alpha?tab=trace&view=full");
-        var body = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        response.Headers.Location.Should().BeNull();
-        response.Headers.CacheControl?.NoStore.Should().BeTrue();
-        body.Should().Contain("data-ai-workspace-shell");
-    }
-
-    [Fact]
-    public async Task TeamsEntry_ShouldServeDeepLinkWithoutChangingTheOrigin()
-    {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
-
-        var response = await host.Client.GetAsync("/scopes/scope-alpha/teams/team-alpha");
-        var body = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        response.Headers.Location.Should().BeNull();
-        response.Headers.CacheControl?.NoStore.Should().BeTrue();
-        body.Should().Contain("data-ai-workspace-shell");
-    }
-
-    [Fact]
-    public async Task AIEntry_WhenAssetsAreMissing_ShouldReturnStructuredUnavailable()
-    {
-        var missingPath = Path.Combine(
-            Path.GetTempPath(),
-            $"aevatar-ai-workspace-missing-{Guid.NewGuid():N}");
-        await using var host = await AIWorkspaceTestHost.StartAsync(missingPath);
-
-        var response = await host.Client.GetAsync("/ai");
-        var body = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, body);
-        body.Should().Contain("AI_CONSOLE_UNAVAILABLE");
-
-        var assetResponse = await host.Client.GetAsync("/ai-assets/umi.01234567.js");
-        assetResponse.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
-        (await assetResponse.Content.ReadAsStringAsync()).Should().Contain("AI_CONSOLE_UNAVAILABLE");
-    }
-
-    [Fact]
-    public async Task AIAssets_WithContentHash_ShouldUseImmutableCaching()
-    {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
-
-        var response = await host.Client.GetAsync("/ai-assets/app.01234567.js");
-        var body = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        response.Content.Headers.ContentType?.MediaType.Should().Be("text/javascript");
-        response.Headers.CacheControl?.Public.Should().BeTrue();
-        response.Headers.CacheControl?.MaxAge.Should().Be(TimeSpan.FromDays(365));
-        body.Should().Be("globalThis.aiWorkspaceVersion = '01234567';");
-    }
-
-    [Fact]
-    public async Task AIAssets_WithoutContentHash_ShouldRequireRevalidation()
-    {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
-
-        var response = await host.Client.GetAsync("/ai-assets/app.test.js");
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        response.Headers.CacheControl?.NoCache.Should().BeTrue();
-        response.Headers.CacheControl?.Extensions
-            .Should()
-            .NotContain(extension => string.Equals(
-                extension.Name,
-                "immutable",
-                StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public async Task AIEntry_WithDottedOpaqueRunId_ShouldServeTheSpaDocument()
-    {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
-
-        var response = await host.Client.GetAsync("/ai/activity/runs/run-alpha.2026-08-18");
-        var body = await response.Content.ReadAsStringAsync();
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        response.Content.Headers.ContentType?.MediaType.Should().Be("text/html");
-        body.Should().Contain("data-ai-workspace-shell");
-    }
-
-    [Fact]
-    public async Task AIAssets_WhenFileDoesNotExist_ShouldReturnNotFound()
-    {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
-
-        var response = await host.Client.GetAsync("/ai-assets/missing.js");
-
-        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
-
-    [Theory]
-    [InlineData("/ai")]
-    [InlineData("/ai/chat")]
-    [InlineData("/login")]
-    [InlineData("/auth/callback")]
-    [InlineData("/scopes/scope-alpha/teams/team-alpha")]
-    [InlineData("/settings")]
-    [InlineData("/ai-assets/app.01234567.js")]
-    public async Task AIWorkspaceWebRoutes_ShouldSupportHead(string path)
-    {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
-        using var request = new HttpRequestMessage(HttpMethod.Head, path);
-
-        var response = await host.Client.SendAsync(request);
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        (await response.Content.ReadAsByteArrayAsync()).Should().BeEmpty();
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void AddAIWorkspace_WithEmptyStaticAssetsPath_ShouldFailOptionsValidation(string value)
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [$"{AIWorkspaceOptions.SectionName}:StaticAssetsPath"] = value,
-            })
-            .Build();
-        var services = new ServiceCollection();
-        services.AddAIWorkspace(configuration);
-        using var provider = services.BuildServiceProvider();
-
-        var action = () => provider.GetRequiredService<IOptions<AIWorkspaceOptions>>().Value;
-
-        action.Should().Throw<OptionsValidationException>()
-            .WithMessage("*AIWorkspace:StaticAssetsPath*");
-    }
-
-    [Fact]
-    public async Task Context_ShouldUseOnlyTheAuthenticatedScopeAndImplementedLinks()
-    {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
+        await using var host = await AIWorkspaceTestHost.StartAsync();
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
         var response = await host.Client.GetAsync("/api/ai/context");
@@ -225,58 +93,229 @@ public sealed class MainnetAIWorkspaceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var json = JsonDocument.Parse(body);
-        json.RootElement.GetProperty("scopeId").GetString().Should().Be("scope-alpha");
+        AssertNoAuthorizationPartitionFields(json.RootElement);
+        json.RootElement.TryGetProperty("scopeId", out _).Should().BeFalse();
+        json.RootElement.GetProperty("account").GetProperty("subject").GetString()
+            .Should().Be("subject-alpha");
+        json.RootElement.GetProperty("account").GetProperty("displayName").GetString()
+            .Should().Be("Alpha User");
         json.RootElement.GetProperty("consistency").GetString().Should().Be("independent_read_models");
-        json.RootElement.GetProperty("pages").GetProperty("agents").GetString().Should().Be("/ai/agents");
-        json.RootElement.GetProperty("pages").GetProperty("activity").GetString().Should().Be("/ai/activity");
+        json.RootElement.GetProperty("pages").GetProperty("agents").GetString().Should().Be("/ai#/agents");
+        json.RootElement.GetProperty("pages").GetProperty("activity").GetString().Should().Be("/ai#/activity");
         var apis = json.RootElement.GetProperty("apis");
+        apis.EnumerateObject().Should().OnlyContain(property =>
+            property.Value.GetString() != null &&
+            property.Value.GetString()!.StartsWith("/api/ai/", StringComparison.Ordinal));
         apis.GetProperty("overview").GetString().Should().Be("/api/ai/overview");
-        apis.GetProperty("ownedAgentProfiles").GetString().Should().Be(
-            "/api/scopes/scope-alpha/agent-profiles");
         apis.GetProperty("models").GetString().Should().Be("/api/ai/models");
+        apis.GetProperty("personalModelDefault").GetString()
+            .Should().Be("/api/ai/models/personal-default");
+        apis.GetProperty("modelCatalog").GetString().Should().Be("/api/ai/models/catalog");
+        apis.GetProperty("modelCandidates").GetString()
+            .Should().Be("/api/ai/models/catalog/candidates");
         apis.GetProperty("activity").GetString().Should().Be("/api/ai/activity");
         apis.GetProperty("conversations").GetString().Should().Be("/api/ai/activity/conversations");
         apis.GetProperty("runs").GetString().Should().Be("/api/ai/activity/runs");
-        apis.TryGetProperty("auditedActions", out _).Should().BeFalse();
-        var features = json.RootElement.GetProperty("features");
-        features.GetProperty("activity").GetProperty("availability").GetString().Should().Be("available");
-        features.GetProperty("activity").GetProperty("page").GetString().Should().Be("/ai/activity");
-        features.GetProperty("activity").GetProperty("api").GetString().Should().Be("/api/ai/activity");
+        var capabilities = json.RootElement.GetProperty("capabilities");
+        capabilities.GetProperty("activity").GetProperty("page").GetString().Should().Be("/ai#/activity");
+        capabilities.GetProperty("activity").GetProperty("api").GetString()
+            .Should().Be("/api/ai/activity");
     }
 
     [Fact]
     public async Task Context_WithAmbiguousScopeClaims_ShouldFailClosed()
     {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
+        await using var host = await AIWorkspaceTestHost.StartAsync();
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha,scope-beta");
 
         var response = await host.Client.GetAsync("/api/ai/context");
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        (await response.Content.ReadAsStringAsync()).Should().Contain("AI_SCOPE_REQUIRED");
+        (await response.Content.ReadAsStringAsync()).Should().Contain("AI_ACCESS_CONTEXT_REQUIRED");
     }
 
     [Fact]
     public async Task Context_WithoutAuthentication_ShouldReturnUnauthorized()
     {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
+        await using var host = await AIWorkspaceTestHost.StartAsync();
 
         var response = await host.Client.GetAsync("/api/ai/context");
+        var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized, body);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("application/json");
+        using var json = JsonDocument.Parse(body);
+        AssertStrictError(json.RootElement, "AI_AUTHENTICATION_REQUIRED");
+    }
+
+    [Theory]
+    [InlineData("{\"routeValue\":")]
+    [InlineData("{\"routeValue\":\"route-a\",\"modelId\":null,\"scopeId\":\"scope-secret\"}")]
+    public async Task ModelMutation_WithMalformedOrUnknownJson_ShouldReturnStrictAIError(string payload)
+    {
+        await using var host = await AIWorkspaceTestHost.StartAsync();
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+        using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+
+        var response = await host.Client.PutAsync("/api/ai/models/personal-default", content);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("application/json");
+        using var json = JsonDocument.Parse(body);
+        AssertStrictError(json.RootElement, "AI_REQUEST_INVALID");
+        body.Should().NotContain("scope-secret");
+    }
+
+    [Fact]
+    public async Task ActivityRuns_WithInvalidTypedQuery_ShouldReturnStrictAIError()
+    {
+        await using var host = await AIWorkspaceTestHost.StartAsync();
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        var response = await host.Client.GetAsync("/api/ai/activity/runs?take=not-an-integer");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("application/json");
+        using var json = JsonDocument.Parse(body);
+        AssertStrictError(json.RootElement, "AI_REQUEST_INVALID");
+        body.Should().NotContain("not-an-integer");
+    }
+
+    [Theory]
+    [InlineData("/admin")]
+    [InlineData("/api/aix/context")]
+    public async Task ErrorContractMiddleware_ForNonAIPaths_ShouldLeaveResponseUntouched(string path)
+    {
+        await using var body = new MemoryStream();
+        var http = new DefaultHttpContext();
+        http.Request.Path = path;
+        http.Response.Body = body;
+        var middleware = new AIWorkspaceErrorContractMiddleware(context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return Task.CompletedTask;
+        });
+
+        await middleware.InvokeAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        body.Length.Should().Be(0);
+        http.Response.ContentType.Should().BeNull();
     }
 
     [Fact]
     public async Task Context_WithAuthenticatedPrincipalWithoutScope_ShouldFailClosed()
     {
-        await using var host = await AIWorkspaceTestHost.StartAsync(null);
+        await using var host = await AIWorkspaceTestHost.StartAsync();
         host.Client.DefaultRequestHeaders.Add("X-Test-Authenticated", "true");
 
         var response = await host.Client.GetAsync("/api/ai/context");
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        body.Should().Contain("AI_SCOPE_REQUIRED");
+        body.Should().Contain("AI_ACCESS_CONTEXT_REQUIRED");
+    }
+
+    [Fact]
+    public async Task Context_WithAuthenticatedScopeButWithoutSubject_ShouldFailClosed()
+    {
+        await using var host = await AIWorkspaceTestHost.StartAsync();
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+        host.Client.DefaultRequestHeaders.Add("X-Test-No-Subject", "true");
+
+        var response = await host.Client.GetAsync("/api/ai/context");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
+        body.Should().Contain("AI_SUBJECT_REQUIRED");
+    }
+
+    [Fact]
+    public async Task QueryEndpoints_WhenDownstreamFailureContainsPartitionVocabulary_ShouldReturnStableAIError()
+    {
+        const string internalCode = "SCOPE_OWNER_AUTHORITY_FAILURE";
+        const string internalMessage =
+            "scopeId scope-secret belongs to Team team-secret and ownerKind scope.";
+        AIWorkspaceQueryResult<T> Failure<T>(AIWorkspaceQueryFailureKind kind) =>
+            AIWorkspaceQueryResult<T>.Fail(kind, internalCode, internalMessage);
+
+        var overview = Substitute.For<IAIWorkspaceOverviewQueryService>();
+        overview.QueryAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Failure<AIWorkspaceOverviewView>(
+                AIWorkspaceQueryFailureKind.InvalidInput)));
+        var agents = Substitute.For<IAIWorkspaceAgentsQueryService>();
+        agents.QueryAsync(
+                Arg.Any<string>(),
+                Arg.Any<AIWorkspaceAgentsQuery>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Failure<AIWorkspaceAgentsView>(
+                AIWorkspaceQueryFailureKind.InvalidCursor)));
+        var activity = Substitute.For<IAIWorkspaceActivityQueryService>();
+        activity.QueryAsync(
+                Arg.Any<string>(),
+                Arg.Any<AIWorkspaceActivityQuery>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Failure<AIWorkspaceActivityView>(
+                AIWorkspaceQueryFailureKind.Unavailable)));
+        activity.QueryConversationsAsync(
+                Arg.Any<string>(),
+                Arg.Any<AIWorkspacePageQuery>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Failure<AIWorkspaceConversationCollectionView>(
+                AIWorkspaceQueryFailureKind.InvalidCursor)));
+        activity.QueryRunsAsync(
+                Arg.Any<string>(),
+                Arg.Any<AIWorkspaceRunsQuery>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Failure<AIWorkspaceRunCollectionView>(
+                AIWorkspaceQueryFailureKind.InvalidInput)));
+        activity.GetRunAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Failure<AIWorkspaceRunDetailView>(
+                AIWorkspaceQueryFailureKind.NotFound)));
+        await using var host = await AIWorkspaceTestHost.StartAsync(
+            agentsQuery: agents,
+            activityQuery: activity,
+            overviewQuery: overview);
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        foreach (var endpoint in new[]
+                 {
+                     (Path: "/api/ai/overview",
+                         Status: HttpStatusCode.BadRequest,
+                         Code: "AI_REQUEST_INVALID"),
+                     (Path: "/api/ai/agents",
+                         Status: HttpStatusCode.BadRequest,
+                         Code: "AI_CURSOR_INVALID"),
+                     (Path: "/api/ai/activity",
+                         Status: HttpStatusCode.ServiceUnavailable,
+                         Code: "AI_WORKSPACE_UNAVAILABLE"),
+                     (Path: "/api/ai/activity/conversations",
+                         Status: HttpStatusCode.BadRequest,
+                         Code: "AI_CURSOR_INVALID"),
+                     (Path: "/api/ai/activity/runs",
+                         Status: HttpStatusCode.BadRequest,
+                         Code: "AI_REQUEST_INVALID"),
+                     (Path: "/api/ai/activity/runs/run-alpha",
+                         Status: HttpStatusCode.NotFound,
+                         Code: "AI_RESOURCE_NOT_FOUND"),
+                 })
+        {
+            var response = await host.Client.GetAsync(endpoint.Path);
+            var body = await response.Content.ReadAsStringAsync();
+
+            response.StatusCode.Should().Be(endpoint.Status, body);
+            using var json = JsonDocument.Parse(body);
+            AssertStrictError(json.RootElement, endpoint.Code);
+            body.Should().NotContain(internalCode);
+            body.Should().NotContain("scope-secret");
+            body.Should().NotContain("team-secret");
+            body.Should().NotContain("ownerKind");
+        }
     }
 
     [Fact]
@@ -335,7 +374,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 ],
             }));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             catalog,
             chatHistory: chatHistory,
             observatory: observatory);
@@ -346,6 +384,7 @@ public sealed class MainnetAIWorkspaceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var json = JsonDocument.Parse(body);
+        AssertNoAuthorizationPartitionFields(json.RootElement);
         json.RootElement.GetProperty("consistency").GetString()
             .Should().Be("independent_read_models");
         json.RootElement.GetProperty("agents").GetProperty("owned")
@@ -386,7 +425,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 });
             });
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             catalog);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
@@ -395,8 +433,8 @@ public sealed class MainnetAIWorkspaceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var json = JsonDocument.Parse(body);
+        AssertNoAuthorizationPartitionFields(json.RootElement);
         var owned = json.RootElement.GetProperty("owned");
-        owned.GetProperty("scopeId").GetString().Should().Be("scope-alpha");
         owned.GetProperty("authorityStateVersion").GetInt64().Should().Be(11);
         owned.GetProperty("items").GetArrayLength().Should().Be(2);
         owned.GetProperty("items")[0].GetProperty("published").GetBoolean().Should().BeTrue();
@@ -405,7 +443,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
             .Should().Be(new string('1', 64));
 
         var templates = json.RootElement.GetProperty("systemTemplates");
-        templates.GetProperty("scopeId").ValueKind.Should().Be(JsonValueKind.Null);
         templates.GetProperty("authorityStateVersion").GetInt64().Should().Be(23);
         templates.GetProperty("items").GetArrayLength().Should().Be(1);
         templates.GetProperty("items")[0].GetProperty("profileId").GetString().Should().Be("system-alpha");
@@ -429,7 +466,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                     Profile("owned-alpha", "owned-alpha", 2, 0x11)));
             });
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             catalog);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
@@ -452,7 +488,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         catalog.GetAsync(Arg.Any<AgentProfileOwner>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<AgentProfileCatalogSnapshot?>(null));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             catalog);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
@@ -479,7 +514,7 @@ public sealed class MainnetAIWorkspaceEndpointsTests
     }
 
     [Fact]
-    public async Task Models_ShouldKeepPersonalAndScopeAuthoritiesIndependent()
+    public async Task Models_ShouldKeepPersonalAndCatalogAuthoritiesIndependent()
     {
         var personal = Substitute.For<IUserLlmPreferenceService>();
         personal.GetSettingsAsync("personal-token", Arg.Any<CancellationToken>())
@@ -511,7 +546,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 [source],
                 "mutation-alpha")));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             personalPreferences: personal,
             modelCatalog: catalog);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
@@ -523,18 +557,18 @@ public sealed class MainnetAIWorkspaceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var json = JsonDocument.Parse(body);
+        AssertNoAuthorizationPartitionFields(json.RootElement);
         json.RootElement.GetProperty("consistency").GetString().Should().Be("independent_authorities");
         var personalDefault = json.RootElement.GetProperty("personalDefault");
-        personalDefault.GetProperty("authorityKind").GetString().Should().Be("authenticated_user");
         personalDefault.GetProperty("authorityStateVersion").ValueKind.Should().Be(JsonValueKind.Null);
         personalDefault.GetProperty("settings").GetProperty("selectionStatus").GetString()
             .Should().Be("system_default");
 
-        var scopeCatalog = json.RootElement.GetProperty("scopeCatalog");
-        scopeCatalog.GetProperty("scopeId").GetString().Should().Be("scope-alpha");
-        scopeCatalog.GetProperty("authorityStateVersion").GetInt64().Should().Be(31);
-        var policy = scopeCatalog.GetProperty("policy");
+        var catalogView = json.RootElement.GetProperty("catalog");
+        catalogView.GetProperty("authorityStateVersion").GetInt64().Should().Be(31);
+        var policy = catalogView.GetProperty("policy");
         policy.GetProperty("mode").GetString().Should().Be("custom_replace");
+        policy.GetProperty("effectiveSource").GetString().Should().Be("custom");
         policy.GetProperty("sources")[0].GetProperty("userServiceId").GetString()
             .Should().Be("user-service-alpha");
         policy.GetProperty("sources")[0].GetProperty("catalogServiceId").ValueKind
@@ -565,7 +599,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 [legacySource, unknownSource],
                 "mutation-legacy")));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             modelCatalog: catalog);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
@@ -575,7 +608,7 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var json = JsonDocument.Parse(body);
         var sources = json.RootElement
-            .GetProperty("scopeCatalog")
+            .GetProperty("catalog")
             .GetProperty("policy")
             .GetProperty("sources");
         sources[0].GetProperty("sourceId").GetString().Should().Be("user:user-service-legacy");
@@ -588,7 +621,7 @@ public sealed class MainnetAIWorkspaceEndpointsTests
     }
 
     [Fact]
-    public async Task Models_WhenScopeCatalogFails_ShouldKeepPersonalSettingsAvailable()
+    public async Task Models_WhenCatalogFails_ShouldKeepPersonalSettingsAvailable()
     {
         var personal = Substitute.For<IUserLlmPreferenceService>();
         personal.GetSettingsAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>())
@@ -610,7 +643,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 "CATALOG_READ_UNAVAILABLE",
                 "Catalog projection is unavailable."));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             personalPreferences: personal,
             modelCatalog: catalog);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
@@ -621,13 +653,13 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         json.RootElement.GetProperty("personalDefault").GetProperty("availability").GetString()
             .Should().Be("available");
-        var scopeCatalog = json.RootElement.GetProperty("scopeCatalog");
-        scopeCatalog.GetProperty("availability").GetString().Should().Be("unavailable");
-        scopeCatalog.GetProperty("authorityStateVersion").ValueKind.Should().Be(JsonValueKind.Null);
-        scopeCatalog.GetProperty("error").GetProperty("code").GetString()
-            .Should().Be("CATALOG_READ_UNAVAILABLE");
-        scopeCatalog.GetProperty("error").GetProperty("message").GetString()
-            .Should().Be("Scope model catalog is temporarily unavailable.");
+        var catalogView = json.RootElement.GetProperty("catalog");
+        catalogView.GetProperty("availability").GetString().Should().Be("unavailable");
+        catalogView.GetProperty("authorityStateVersion").ValueKind.Should().Be(JsonValueKind.Null);
+        catalogView.GetProperty("error").GetProperty("code").GetString()
+            .Should().Be("MODEL_CATALOG_UNAVAILABLE");
+        catalogView.GetProperty("error").GetProperty("message").GetString()
+            .Should().Be("Model catalog is temporarily unavailable.");
     }
 
     [Fact]
@@ -660,7 +692,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 ],
             }));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             chatHistory: chatHistory,
             observatory: observatory);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
@@ -670,6 +701,7 @@ public sealed class MainnetAIWorkspaceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var json = JsonDocument.Parse(body);
+        AssertNoAuthorizationPartitionFields(json.RootElement);
         json.RootElement.GetProperty("consistency").GetString()
             .Should().Be("independent_read_models");
         json.RootElement.GetProperty("conversations").GetProperty("availability").GetString()
@@ -678,6 +710,85 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         runs.GetProperty("availability").GetString().Should().Be("available");
         runs.GetProperty("items")[0].GetProperty("runId").GetString().Should().Be("run-alpha");
         runs.GetProperty("items")[0].GetProperty("authorityStateVersion").GetInt64().Should().Be(19);
+    }
+
+    [Fact]
+    public async Task ActivitySourceEndpoints_WhenUnavailable_ShouldReturnStrictErrors()
+    {
+        var chatHistory = Substitute.For<IChatHistoryQueryPort>();
+        chatHistory.GetIndexAsync(Arg.Any<ChatHistoryIndexPageRequest>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ChatHistoryIndexPage>>(_ => throw new InvalidOperationException("internal conversation source"));
+        var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();
+        observatory.ListActivityRunsForScopeAsync(
+                "scope-alpha",
+                Arg.Any<WorkflowActivityRunFeedFilter>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<WorkflowActivityRunFeedPage>>(_ => throw new InvalidOperationException("internal run source"));
+        await using var host = await AIWorkspaceTestHost.StartAsync(
+            chatHistory: chatHistory,
+            observatory: observatory);
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        var conversations = await host.Client.GetAsync("/api/ai/activity/conversations");
+        var runs = await host.Client.GetAsync("/api/ai/activity/runs");
+
+        conversations.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        using var conversationError = JsonDocument.Parse(await conversations.Content.ReadAsStringAsync());
+        AssertStrictError(conversationError.RootElement, "CONVERSATIONS_UNAVAILABLE");
+        runs.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        using var runError = JsonDocument.Parse(await runs.Content.ReadAsStringAsync());
+        AssertStrictError(runError.RootElement, "WORKFLOW_RUNS_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task ActivitySourceEndpoints_WhenSourceErrorContainsPartitionVocabulary_ShouldIgnoreIt()
+    {
+        const string internalCode = "SCOPE_ACTIVITY_AUTHORITY_FAILURE";
+        const string internalMessage =
+            "scopeId scope-secret belongs to Team team-secret and ownerKind scope.";
+        var activity = Substitute.For<IAIWorkspaceActivityQueryService>();
+        activity.QueryConversationsAsync(
+                Arg.Any<string>(),
+                Arg.Any<AIWorkspacePageQuery>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(AIWorkspaceQueryResult<AIWorkspaceConversationCollectionView>.Success(
+                new AIWorkspaceConversationCollectionView(
+                    "internal_conversation_source",
+                    AIWorkspaceSourceAvailability.Unavailable,
+                    [],
+                    null,
+                    new AIWorkspaceSourceErrorView(internalCode, internalMessage)))));
+        activity.QueryRunsAsync(
+                Arg.Any<string>(),
+                Arg.Any<AIWorkspaceRunsQuery>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(AIWorkspaceQueryResult<AIWorkspaceRunCollectionView>.Success(
+                new AIWorkspaceRunCollectionView(
+                    "internal_run_source",
+                    AIWorkspaceSourceAvailability.Unavailable,
+                    [],
+                    null,
+                    false,
+                    null,
+                    new AIWorkspaceSourceErrorView(internalCode, internalMessage)))));
+        await using var host = await AIWorkspaceTestHost.StartAsync(activityQuery: activity);
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        var conversations = await host.Client.GetAsync("/api/ai/activity/conversations");
+        var conversationBody = await conversations.Content.ReadAsStringAsync();
+        var runs = await host.Client.GetAsync("/api/ai/activity/runs");
+        var runBody = await runs.Content.ReadAsStringAsync();
+
+        conversations.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, conversationBody);
+        using var conversationError = JsonDocument.Parse(conversationBody);
+        AssertStrictError(conversationError.RootElement, "CONVERSATIONS_UNAVAILABLE");
+        runs.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, runBody);
+        using var runError = JsonDocument.Parse(runBody);
+        AssertStrictError(runError.RootElement, "WORKFLOW_RUNS_UNAVAILABLE");
+        (conversationBody + runBody).Should().NotContain(internalCode);
+        (conversationBody + runBody).Should().NotContain("scope-secret");
+        (conversationBody + runBody).Should().NotContain("team-secret");
+        (conversationBody + runBody).Should().NotContain("ownerKind");
     }
 
     [Fact]
@@ -690,7 +801,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new WorkflowActivityRunFeedPage()));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             observatory: observatory);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
@@ -704,6 +814,173 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 filter.Take == 50 &&
                 !filter.IncludeTotalCount &&
                 filter.Origins.Count == 0),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Activity_ShouldMapInternalClassificationsToClosedNeutralValues()
+    {
+        const string internalServiceKind = "aevatar-console.team-chat";
+        var chatHistory = Substitute.For<IChatHistoryQueryPort>();
+        chatHistory.GetIndexAsync(Arg.Any<ChatHistoryIndexPageRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChatHistoryIndexPage(
+                [
+                    new ConversationMeta(
+                        "conversation-alpha",
+                        "Alpha conversation",
+                        "service-alpha",
+                        internalServiceKind,
+                        DateTimeOffset.Parse("2026-08-18T02:00:00Z"),
+                        DateTimeOffset.Parse("2026-08-18T03:00:00Z"),
+                        2,
+                        StateVersion: 17),
+                ],
+                null)));
+        var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();
+        observatory.ListActivityRunsForScopeAsync(
+                "scope-alpha",
+                Arg.Any<WorkflowActivityRunFeedFilter>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new WorkflowActivityRunFeedPage
+            {
+                Items =
+                [
+                    new WorkflowActivityRunFeedRow
+                    {
+                        RunId = "run-alpha",
+                        WorkflowName = "Alpha workflow",
+                        RunOrigin = WorkflowRunOrigins.TeamInvoke,
+                        UpdatedAtUtc = DateTimeOffset.Parse("2026-08-18T04:00:00Z"),
+                        StateVersion = 19,
+                    },
+                ],
+            }));
+        await using var host = await AIWorkspaceTestHost.StartAsync(
+            chatHistory: chatHistory,
+            observatory: observatory);
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        var response = await host.Client.GetAsync("/api/ai/activity");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var json = JsonDocument.Parse(body);
+        var conversation = json.RootElement.GetProperty("conversations").GetProperty("items")[0];
+        conversation.GetProperty("conversationKind").GetString().Should().Be("other");
+        conversation.TryGetProperty("serviceKind", out _).Should().BeFalse();
+        conversation.TryGetProperty("serviceId", out _).Should().BeFalse();
+        json.RootElement.GetProperty("runs").GetProperty("items")[0]
+            .GetProperty("runOrigin").GetString().Should().Be("interactive");
+        AssertStringValuesDoNotContain(
+            json.RootElement,
+            internalServiceKind,
+            WorkflowRunOrigins.TeamInvoke);
+    }
+
+    [Fact]
+    public async Task ActivityRuns_WithNeutralOriginFilters_ShouldTranslateToInternalOrigins()
+    {
+        var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();
+        observatory.ListActivityRunsForScopeAsync(
+                "scope-alpha",
+                Arg.Any<WorkflowActivityRunFeedFilter>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new WorkflowActivityRunFeedPage()));
+        await using var host = await AIWorkspaceTestHost.StartAsync(observatory: observatory);
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        var response = await host.Client.GetAsync(
+            "/api/ai/activity/runs?origins=interactive,integration,automation,development,interactive");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        await observatory.Received(1).ListActivityRunsForScopeAsync(
+            "scope-alpha",
+            Arg.Is<WorkflowActivityRunFeedFilter>(filter => filter.Origins.SequenceEqual(new[]
+            {
+                WorkflowRunOrigins.MemberInvoke,
+                WorkflowRunOrigins.DefaultInvoke,
+                WorkflowRunOrigins.TeamInvoke,
+                WorkflowRunOrigins.AdHocChat,
+                "chat",
+                WorkflowRunOrigins.ServiceInvoke,
+                WorkflowRunOrigins.Webhook,
+                WorkflowRunOrigins.WorkOrder,
+                WorkflowRunOrigins.Provisioned,
+                WorkflowRunOrigins.Draft,
+            })),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ActivityRuns_WithInteractiveOriginFilter_ShouldIncludeHistoricalChatRows()
+    {
+        var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();
+        observatory.ListActivityRunsForScopeAsync(
+                "scope-alpha",
+                Arg.Any<WorkflowActivityRunFeedFilter>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var filter = callInfo.ArgAt<WorkflowActivityRunFeedFilter>(1);
+                return Task.FromResult(new WorkflowActivityRunFeedPage
+                {
+                    Items = filter.Origins.Contains("chat", StringComparer.Ordinal)
+                        ? [
+                            new WorkflowActivityRunFeedRow
+                            {
+                                RunId = "run-historical-chat",
+                                WorkflowName = "Historical chat workflow",
+                                RunOrigin = "chat",
+                                UpdatedAtUtc = DateTimeOffset.Parse("2026-08-18T04:00:00Z"),
+                                StateVersion = 19,
+                            },
+                        ]
+                        : [],
+                });
+            });
+        await using var host = await AIWorkspaceTestHost.StartAsync(observatory: observatory);
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        var response = await host.Client.GetAsync("/api/ai/activity/runs?origins=interactive");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var json = JsonDocument.Parse(body);
+        var run = json.RootElement.GetProperty("items").EnumerateArray().Should().ContainSingle().Which;
+        run.GetProperty("runId").GetString().Should().Be("run-historical-chat");
+        run.GetProperty("runOrigin").GetString().Should().Be("interactive");
+        await observatory.Received(1).ListActivityRunsForScopeAsync(
+            "scope-alpha",
+            Arg.Is<WorkflowActivityRunFeedFilter>(filter => filter.Origins.SequenceEqual(new[]
+            {
+                WorkflowRunOrigins.MemberInvoke,
+                WorkflowRunOrigins.DefaultInvoke,
+                WorkflowRunOrigins.TeamInvoke,
+                WorkflowRunOrigins.AdHocChat,
+                "chat",
+            })),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ActivityRuns_WithInternalOriginFilter_ShouldRejectItAtTheApiBoundary()
+    {
+        var observatory = Substitute.For<IWorkflowRunObservatoryQueryService>();
+        await using var host = await AIWorkspaceTestHost.StartAsync(observatory: observatory);
+        host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
+
+        var response = await host.Client.GetAsync(
+            $"/api/ai/activity/runs?origins={WorkflowRunOrigins.TeamInvoke}");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        using var json = JsonDocument.Parse(body);
+        json.RootElement.GetProperty("code").GetString().Should().Be("INVALID_ACTIVITY_ORIGIN");
+        AssertStringValuesDoNotContain(json.RootElement, WorkflowRunOrigins.TeamInvoke);
+        await observatory.DidNotReceive().ListActivityRunsForScopeAsync(
+            Arg.Any<string>(),
+            Arg.Any<WorkflowActivityRunFeedFilter>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -745,7 +1022,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 ],
             }));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             observatory: observatory);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
@@ -901,6 +1177,7 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                     ScopeId = "scope-alpha",
                     WorkflowName = "Alpha workflow",
                     Status = "completed",
+                    RunOrigin = WorkflowRunOrigins.TeamInvoke,
                     CompletedAtUtc = DateTimeOffset.Parse("2026-08-18T03:59:58Z"),
                     DurationMs = 2_000,
                     UpdatedAtUtc = DateTimeOffset.Parse("2026-08-18T04:00:00Z"),
@@ -975,7 +1252,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 ],
             }));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             observatory: observatory);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
@@ -984,11 +1260,14 @@ public sealed class MainnetAIWorkspaceEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var json = JsonDocument.Parse(body);
+        AssertNoAuthorizationPartitionFields(json.RootElement);
         json.RootElement.GetProperty("summary").GetProperty("runId").GetString().Should().Be("run-alpha");
         json.RootElement.GetProperty("summary").GetProperty("workflowId").GetString().Should().Be("wf-alpha");
         json.RootElement.GetProperty("summary").GetProperty("completedAtUtc").GetDateTimeOffset()
             .Should().Be(DateTimeOffset.Parse("2026-08-18T03:59:58Z"));
         json.RootElement.GetProperty("summary").GetProperty("durationMs").GetDouble().Should().Be(2_000);
+        json.RootElement.GetProperty("summary").GetProperty("runOrigin").GetString()
+            .Should().Be("interactive");
         json.RootElement.GetProperty("summary").GetProperty("inputSummary").GetString()
             .Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
         json.RootElement.GetProperty("finalOutput").GetString()
@@ -1013,6 +1292,7 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         body.Should().NotContain("result-secret");
         body.Should().NotContain("raw-provider-error-secret");
         body.Should().NotContain("actor-alpha");
+        body.Should().NotContain(WorkflowRunOrigins.TeamInvoke);
     }
 
     [Fact]
@@ -1022,7 +1302,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         observatory.GetRunForScopeAsync("scope-alpha", "run-private", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ObservatoryRunDetail?>(null));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             observatory: observatory);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
@@ -1030,7 +1309,7 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound, body);
-        body.Should().Contain("WORKFLOW_RUN_NOT_FOUND");
+        body.Should().Contain("AI_RESOURCE_NOT_FOUND");
     }
 
     [Fact]
@@ -1041,7 +1320,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
             .Returns(_ => Task.FromException<ObservatoryRunDetail?>(
                 new InvalidOperationException("source unavailable")));
         await using var host = await AIWorkspaceTestHost.StartAsync(
-            null,
             observatory: observatory);
         host.Client.DefaultRequestHeaders.Add("X-Test-Scope", "scope-alpha");
 
@@ -1049,7 +1327,63 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, body);
-        body.Should().Contain("WORKFLOW_RUNS_UNAVAILABLE");
+        body.Should().Contain("AI_WORKSPACE_UNAVAILABLE");
+    }
+
+    private static void AssertNoAuthorizationPartitionFields(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                new[]
+                {
+                    "scopeId",
+                    "ownerKind",
+                    "authorityKind",
+                    "scopeCatalog",
+                }.Should().NotContain(property.Name);
+                AssertNoAuthorizationPartitionFields(property.Value);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                AssertNoAuthorizationPartitionFields(item);
+        }
+    }
+
+    private static void AssertStrictError(JsonElement error, string expectedCode)
+    {
+        error.EnumerateObject().Select(static property => property.Name)
+            .Should().BeEquivalentTo("code", "message");
+        error.GetProperty("code").GetString().Should().Be(expectedCode);
+        error.GetProperty("message").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
+    private static void AssertStringValuesDoNotContain(
+        JsonElement element,
+        params string[] forbiddenValues)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                    AssertStringValuesDoNotContain(property.Value, forbiddenValues);
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                    AssertStringValuesDoNotContain(item, forbiddenValues);
+                break;
+            case JsonValueKind.String:
+                var value = element.GetString() ?? string.Empty;
+                foreach (var forbiddenValue in forbiddenValues)
+                {
+                    value.Contains(forbiddenValue, StringComparison.OrdinalIgnoreCase)
+                        .Should().BeFalse($"JSON string values must not expose '{forbiddenValue}'");
+                }
+                break;
+        }
     }
 
     private static AgentProfileCatalogSnapshot Snapshot(
@@ -1092,46 +1426,26 @@ public sealed class MainnetAIWorkspaceEndpointsTests
 
     private sealed class AIWorkspaceTestHost : IAsyncDisposable
     {
-        private AIWorkspaceTestHost(WebApplication app, string? temporaryAssetsPath)
+        private AIWorkspaceTestHost(WebApplication app)
         {
             App = app;
             Client = app.GetTestClient();
-            TemporaryAssetsPath = temporaryAssetsPath;
         }
 
         public WebApplication App { get; }
 
         public HttpClient Client { get; }
 
-        private string? TemporaryAssetsPath { get; }
-
         public static async Task<AIWorkspaceTestHost> StartAsync(
-            string? staticAssetsPath,
             IAgentProfileCatalogQueryPort? catalog = null,
             IUserLlmPreferenceService? personalPreferences = null,
             ILLMModelCatalogPolicyApplicationService? modelCatalog = null,
             IChatHistoryQueryPort? chatHistory = null,
-            IWorkflowRunObservatoryQueryService? observatory = null)
+            IWorkflowRunObservatoryQueryService? observatory = null,
+            IAIWorkspaceAgentsQueryService? agentsQuery = null,
+            IAIWorkspaceActivityQueryService? activityQuery = null,
+            IAIWorkspaceOverviewQueryService? overviewQuery = null)
         {
-            string? temporaryAssetsPath = null;
-            if (staticAssetsPath is null)
-            {
-                temporaryAssetsPath = Path.Combine(
-                    Path.GetTempPath(),
-                    $"aevatar-ai-workspace-{Guid.NewGuid():N}");
-                Directory.CreateDirectory(temporaryAssetsPath);
-                await File.WriteAllTextAsync(
-                    Path.Combine(temporaryAssetsPath, "index.html"),
-                    "<!doctype html><html><body data-ai-workspace-shell></body></html>");
-                await File.WriteAllTextAsync(
-                    Path.Combine(temporaryAssetsPath, "app.test.js"),
-                    "globalThis.aiWorkspaceLoaded = true;");
-                await File.WriteAllTextAsync(
-                    Path.Combine(temporaryAssetsPath, "app.01234567.js"),
-                    "globalThis.aiWorkspaceVersion = '01234567';");
-                staticAssetsPath = temporaryAssetsPath;
-            }
-
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
                 EnvironmentName = Environments.Development,
@@ -1140,7 +1454,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
             builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Aevatar:Authentication:Enabled"] = "true",
-                [$"{AIWorkspaceOptions.SectionName}:StaticAssetsPath"] = staticAssetsPath,
             });
             builder.Services.AddAIWorkspace(builder.Configuration);
             builder.Services.AddAuthentication("test")
@@ -1162,17 +1475,25 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 serviceProvider.GetRequiredService<AgentProfileApplicationService>());
             builder.Services.AddSingleton(
                 personalPreferences ?? Substitute.For<IUserLlmPreferenceService>());
+            builder.Services.AddSingleton(Substitute.For<IUserConfigService>());
             builder.Services.AddSingleton(
                 modelCatalog ?? Substitute.For<ILLMModelCatalogPolicyApplicationService>());
             builder.Services.AddSingleton(chatHistory ?? Substitute.For<IChatHistoryQueryPort>());
             builder.Services.AddSingleton(observatory ?? Substitute.For<IWorkflowRunObservatoryQueryService>());
+            if (agentsQuery is not null)
+                builder.Services.AddSingleton(agentsQuery);
+            if (activityQuery is not null)
+                builder.Services.AddSingleton(activityQuery);
+            if (overviewQuery is not null)
+                builder.Services.AddSingleton(overviewQuery);
 
             var app = builder.Build();
+            app.UseAIWorkspaceErrorContract();
             app.UseAuthentication();
             app.UseAuthorization();
             app.MapAIWorkspaceEndpoints();
             await app.StartAsync();
-            return new AIWorkspaceTestHost(app, temporaryAssetsPath);
+            return new AIWorkspaceTestHost(app);
         }
 
         public async ValueTask DisposeAsync()
@@ -1180,8 +1501,6 @@ public sealed class MainnetAIWorkspaceEndpointsTests
             Client.Dispose();
             await App.StopAsync();
             await App.DisposeAsync();
-            if (TemporaryAssetsPath is not null && Directory.Exists(TemporaryAssetsPath))
-                Directory.Delete(TemporaryAssetsPath, recursive: true);
         }
     }
 
@@ -1197,10 +1516,17 @@ public sealed class MainnetAIWorkspaceEndpointsTests
                 !Request.Headers.ContainsKey("X-Test-Authenticated"))
                 return Task.FromResult(AuthenticateResult.NoResult());
 
-            var claims = Request.Headers["X-Test-Scope"]
+            IEnumerable<Claim> claims = Request.Headers["X-Test-Scope"]
                 .ToString()
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(static scopeId => new Claim("scope_id", scopeId));
+            if (!Request.Headers.ContainsKey("X-Test-No-Subject"))
+            {
+                claims = claims.Concat([
+                    new Claim("sub", "subject-alpha"),
+                    new Claim("preferred_username", "Alpha User"),
+                ]);
+            }
             var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme.Name));
             return Task.FromResult(AuthenticateResult.Success(
                 new AuthenticationTicket(principal, Scheme.Name)));

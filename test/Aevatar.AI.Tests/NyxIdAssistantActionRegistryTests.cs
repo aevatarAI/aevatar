@@ -13,16 +13,22 @@ public sealed class NyxIdAssistantActionRegistryTests
     private const string LegacyRevision = "nyxid-assistant-actions.v4";
     private const string TransitionRevision = "nyxid-assistant-actions.v5";
     private const string LeastScopeRevision = "nyxid-assistant-actions.v6";
-    private const string SupportedRevision = "nyxid-assistant-actions.v7";
+    private const string KeyRotationRevision = "nyxid-assistant-actions.v7";
+    private const string SupportedRevision = "nyxid-assistant-actions.v8";
 
     [Fact]
     public void Load_ShouldPinSchemaVersionAndRevision()
     {
         var registry = NyxIdAssistantActionRegistry.Load(
-            RegistryJsonWithKeyRotation());
+            RegistryJsonWithServiceReauthorize());
 
         registry.SchemaVersion.Should().Be(4);
         registry.RegistryRevision.Should().Be(SupportedRevision);
+        NyxIdAssistantActionRegistry.SupportedRegistryRevision.Should().Be(SupportedRevision);
+
+        var keyRotation = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation());
+        keyRotation.RegistryRevision.Should().Be(KeyRotationRevision);
 
         var legacy = NyxIdAssistantActionRegistry.Load(
             RegistryJson(revision: LegacyRevision));
@@ -132,13 +138,67 @@ public sealed class NyxIdAssistantActionRegistryTests
         registry.TryGetDefinition("key.rotate", out _).Should().BeTrue();
         registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
         NyxIdAssistantActionRegistry.IsActionExecutable(
-                SupportedRevision,
+                KeyRotationRevision,
                 NyxIdAssistantActionKind.KeyRotate)
             .Should().BeTrue();
         NyxIdAssistantActionRegistry.IsActionExecutable(
                 LeastScopeRevision,
                 NyxIdAssistantActionKind.KeyRotate)
             .Should().BeFalse();
+    }
+
+    [Fact]
+    public void Load_ShouldPinServiceReauthorizeInV8ButKeepItClosed()
+    {
+        var registry = NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithServiceReauthorize());
+
+        registry.RegistryRevision.Should().Be(SupportedRevision);
+        registry.TryGetDefinition("service.connect", out _).Should().BeTrue();
+        registry.TryGetDefinition("key.create", out _).Should().BeTrue();
+        registry.TryGetDefinition("key.rotate", out _).Should().BeTrue();
+        registry.TryGetDefinition("service.reauthorize", out _).Should().BeFalse();
+        Action validate = () => registry.ValidateRequest(
+            "service.reauthorize",
+            """{"userServiceId":"us-github-alpha","requestedScopes":["repo"]}""");
+        validate.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+        foreach (var executable in new[]
+                 {
+                     NyxIdAssistantActionKind.ServiceConnect,
+                     NyxIdAssistantActionKind.KeyCreate,
+                     NyxIdAssistantActionKind.KeyRotate,
+                 })
+        {
+            NyxIdAssistantActionRegistry.IsActionExecutable(SupportedRevision, executable)
+                .Should().BeTrue();
+        }
+
+        NyxIdAssistantActionRegistry.IsActionExecutable(
+                SupportedRevision,
+                NyxIdAssistantActionKind.ServiceReauthorize)
+            .Should().BeFalse();
+
+        Action missingReauthorize = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithKeyRotation(revision: SupportedRevision));
+        missingReauthorize.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+
+        Action staleReauthorizeSchema = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithServiceReauthorize(
+                serviceReauthorizeSchema: StaleServiceReauthorizeSchema));
+        staleReauthorizeSchema.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+
+        Action rememberedReauthorization = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithServiceReauthorize(serviceReauthorizeRememberEligible: true));
+        rememberedReauthorization.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
+
+        Action relaxedKeyCreate = () => NyxIdAssistantActionRegistry.Load(
+            RegistryJsonWithServiceReauthorize(keyCreateSchema: KeyCreateSchema));
+        relaxedKeyCreate.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_REGISTRY_INVALID");
     }
 
     [Fact]
@@ -393,7 +453,8 @@ public sealed class NyxIdAssistantActionRegistryTests
                      (RegistryJson(), LegacyRevision),
                      (RegistryJsonWithWaveOneActions(), TransitionRevision),
                      (RegistryJsonWithLeastScopeKeyCreate(), LeastScopeRevision),
-                     (RegistryJsonWithKeyRotation(), SupportedRevision),
+                     (RegistryJsonWithKeyRotation(), KeyRotationRevision),
+                     (RegistryJsonWithServiceReauthorize(), SupportedRevision),
                  })
         {
             var source = new RecordingRegistrySource(payload);
@@ -738,10 +799,11 @@ public sealed class NyxIdAssistantActionRegistryTests
         }
         """;
 
-    private static string RegistryJsonWithKeyRotation() => $$"""
+    private static string RegistryJsonWithKeyRotation(
+        string revision = KeyRotationRevision) => $$"""
         {
           "schema_version": 4,
-          "revision": "{{SupportedRevision}}",
+          "revision": "{{revision}}",
           "actions": [
             {
               "action": "service.connect",
@@ -755,6 +817,50 @@ public sealed class NyxIdAssistantActionRegistryTests
               "action": "key.create",
               "description": "Create a least-scope API key.",
               "params_schema": {{LeastScopeKeyCreateSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
+            },
+            {
+              "action": "key.rotate",
+              "description": "Rotate an API key.",
+              "params_schema": {{KeyRotateSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": false
+            }
+          ]
+        }
+        """;
+
+    private static string RegistryJsonWithServiceReauthorize(
+        string serviceReauthorizeSchema = ServiceReauthorizeSchema,
+        string keyCreateSchema = LeastScopeKeyCreateSchema,
+        bool serviceReauthorizeRememberEligible = false) => $$"""
+        {
+          "schema_version": 4,
+          "revision": "{{SupportedRevision}}",
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a service.",
+              "params_schema": {{ServiceConnectSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            },
+            {
+              "action": "service.reauthorize",
+              "description": "Reauthorize a connected service.",
+              "params_schema": {{serviceReauthorizeSchema}},
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": {{serviceReauthorizeRememberEligible.ToString().ToLowerInvariant()}}
+            },
+            {
+              "action": "key.create",
+              "description": "Create a least-scope API key.",
+              "params_schema": {{keyCreateSchema}},
               "risk": "grant",
               "tier": "v1",
               "remember_eligible": false

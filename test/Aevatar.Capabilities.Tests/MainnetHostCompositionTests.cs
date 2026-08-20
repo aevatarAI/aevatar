@@ -36,6 +36,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Projection.Runtime;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
@@ -340,9 +341,14 @@ public sealed class MainnetHostCompositionTests
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(18);
+        readModelDescriptors.Should().HaveCount(19);
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
+        readModelDescriptors.Should()
+            .ContainSingle(static descriptor => descriptor.Name == "runtime-fleet-capability-authority-current-state");
+        app.Services.GetRequiredService<IProjectionDocumentReader<RuntimeFleetCapabilityAuthorityCurrentStateDocument, string>>()
+            .Should()
+            .NotBeNull();
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "user-agent-api-key-revocation");
         readModelDescriptors.Should()

@@ -406,12 +406,36 @@ public sealed class Neo4jOwnerGraphReplacementIntegrationTests
         string relationshipIndexName)
     {
         await using var session = CreateSession(driver, database, AccessMode.Write);
+        var ownerStateLabel = $"{nodeLabel}OwnerState";
+        var eventLabel = $"{nodeLabel}OwnerEvent";
+        var edgeIdentityLabel = $"{nodeLabel}EdgeIdentity";
+        var pendingFromIndexName =
+            $"projection_graph_v2_pending_from_{edgeIdentityLabel}".ToLowerInvariant();
+        var pendingToIndexName =
+            $"projection_graph_v2_pending_to_{edgeIdentityLabel}".ToLowerInvariant();
+        var edgeIdentityOwnerIndexName =
+            $"projection_graph_v2_edge_identity_owner_{edgeIdentityLabel}".ToLowerInvariant();
+        var versionedOwnerConstraintName =
+            $"projection_graph_v2_owner_{ownerStateLabel}".ToLowerInvariant();
+        var versionedEventConstraintName =
+            $"projection_graph_v2_event_{eventLabel}".ToLowerInvariant();
+        var versionedEdgeConstraintName =
+            $"projection_graph_v2_edge_{edgeIdentityLabel}".ToLowerInvariant();
         foreach (var cypher in new[]
                  {
                      $"MATCH (n:{nodeLabel}) DETACH DELETE n",
+                     $"MATCH (n:{ownerStateLabel}) DETACH DELETE n",
+                     $"MATCH (n:{eventLabel}) DETACH DELETE n",
+                     $"MATCH (n:{edgeIdentityLabel}) DETACH DELETE n",
                      $"DROP INDEX {nodeIndexName} IF EXISTS",
                      $"DROP INDEX {relationshipIndexName} IF EXISTS",
+                     $"DROP INDEX {edgeIdentityOwnerIndexName} IF EXISTS",
+                     $"DROP INDEX {pendingFromIndexName} IF EXISTS",
+                     $"DROP INDEX {pendingToIndexName} IF EXISTS",
                      $"DROP CONSTRAINT {constraintName} IF EXISTS",
+                     $"DROP CONSTRAINT {versionedOwnerConstraintName} IF EXISTS",
+                     $"DROP CONSTRAINT {versionedEventConstraintName} IF EXISTS",
+                     $"DROP CONSTRAINT {versionedEdgeConstraintName} IF EXISTS",
                  })
         {
             var cursor = await session.RunAsync(cypher);

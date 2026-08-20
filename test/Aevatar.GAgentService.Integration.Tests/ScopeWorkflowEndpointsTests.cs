@@ -941,6 +941,7 @@ public sealed class ScopeWorkflowEndpointsTests
         };
         var service = new ScopeWorkflowQueryApplicationService(
             queryPort,
+            queryPort,
             new FakeWorkflowActorBindingReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
@@ -2314,8 +2315,10 @@ public sealed class ScopeWorkflowEndpointsTests
         FakeWorkflowActorBindingReader? bindingReader = null,
         IScopeWorkflowPublishedServiceDescriptorSource? descriptorSource = null)
     {
+        var resolvedQueryPort = queryPort ?? new FakeServiceLifecycleQueryPort();
         return new ScopeWorkflowQueryApplicationService(
-            queryPort ?? new FakeServiceLifecycleQueryPort(),
+            resolvedQueryPort,
+            resolvedQueryPort,
             bindingReader ?? new FakeWorkflowActorBindingReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
@@ -2757,7 +2760,7 @@ public sealed class ScopeWorkflowEndpointsTests
         private static ServiceCommandAcceptedReceipt Accepted() => new("target-actor", "cmd-1", "corr-1");
     }
 
-    private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
+    private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort, IServiceServingQueryPort
     {
         public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
 
@@ -2807,6 +2810,50 @@ public sealed class ScopeWorkflowEndpointsTests
                     service.UpdatedAt)],
                 service.UpdatedAt));
         }
+
+        public async Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default)
+        {
+            var deployments = await GetServiceDeploymentsAsync(identity, ct);
+            if (deployments == null)
+                return null;
+
+            return new ServiceServingSetSnapshot(
+                deployments.ServiceKey,
+                Generation: 1,
+                ActiveRolloutId: string.Empty,
+                Targets: deployments.Deployments
+                    .Where(deployment => string.Equals(
+                        deployment.Status,
+                        ServiceDeploymentStatus.Active.ToString(),
+                        StringComparison.OrdinalIgnoreCase))
+                    .Select(deployment => new ServiceServingTargetSnapshot(
+                        deployment.DeploymentId,
+                        deployment.RevisionId,
+                        deployment.PrimaryActorId,
+                        AllocationWeight: 100,
+                        ServiceServingState.Active.ToString(),
+                        EnabledEndpointIds: []))
+                    .ToArray(),
+                UpdatedAt: deployments.UpdatedAt);
+        }
+
+        public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutSnapshot?>(null);
+
+        public Task<ServiceRolloutCommandObservationSnapshot?> GetServiceRolloutCommandObservationAsync(
+            ServiceIdentity identity,
+            string commandId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
+
+        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default) =>
+            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
     }
 
     private sealed class FakeWorkflowActorBindingReader : IWorkflowActorBindingReader

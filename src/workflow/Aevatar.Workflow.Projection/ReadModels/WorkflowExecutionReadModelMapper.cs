@@ -25,6 +25,7 @@ public sealed class WorkflowExecutionReadModelMapper
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
+            TerminalValueLifecycleFailureKind = source.TerminalValueLifecycleFailureKind,
             CompilationError = source.CompilationError,
             SagaStatus = source.SagaStatus,
             DeadLetterFailedCompensationStepId = source.DeadLetterFailedCompensationStepId,

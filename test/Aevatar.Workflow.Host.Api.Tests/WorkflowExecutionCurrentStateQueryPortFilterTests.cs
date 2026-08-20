@@ -133,7 +133,7 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
             reader.LastQuery.Filters,
             nameof(WorkflowExecutionCurrentStateDocument.SagaStatus),
             ProjectionDocumentFilterOperator.Eq,
-            "CompensationDeadLetter");
+            "WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER");
         ShouldContainStringFilter(
             reader.LastQuery.Filters,
             nameof(WorkflowExecutionCurrentStateDocument.ScopeId),
@@ -168,7 +168,7 @@ public sealed class WorkflowExecutionCurrentStateQueryPortFilterTests
             reader.LastQuery.Filters,
             nameof(WorkflowExecutionCurrentStateDocument.SagaStatus),
             ProjectionDocumentFilterOperator.Eq,
-            "CompensationDeadLetter");
+            "WORKFLOW_SAGA_STATUS_COMPENSATION_DEAD_LETTER");
         ShouldContainStringFilter(
             reader.LastQuery.Filters,
             nameof(WorkflowExecutionCurrentStateDocument.ScopeId),

@@ -61,6 +61,8 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
             await CleanupSchemaAsync(
                 driver,
                 options.Database,
+                nodeLabel,
+                edgeType,
                 constraintName,
                 legacyNodeIndexName,
                 legacyRelationshipIndexName,
@@ -115,6 +117,8 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
             await CleanupSchemaAsync(
                 driver,
                 options.Database,
+                nodeLabel,
+                edgeType,
                 constraintName,
                 preferredNodeIndexName,
                 preferredRelationshipIndexName,
@@ -183,18 +187,39 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
     private static async Task CleanupSchemaAsync(
         IDriver driver,
         string database,
+        string nodeLabel,
+        string edgeType,
         string constraintName,
         params string[] indexNames)
     {
         await using var session = CreateSession(driver, database, AccessMode.Write);
-        foreach (var indexName in indexNames.Distinct(StringComparer.Ordinal))
+        var edgeIdentityLabel = $"{nodeLabel}EdgeIdentity";
+        var versionedIndexNames = new[]
+        {
+            $"projection_graph_v2_pending_from_{edgeIdentityLabel}".ToLowerInvariant(),
+            $"projection_graph_v2_pending_to_{edgeIdentityLabel}".ToLowerInvariant(),
+            $"projection_graph_relationship_scope_edge_id_{edgeType}".ToLowerInvariant(),
+            $"projection_graph_v2_edge_identity_owner_{edgeIdentityLabel}".ToLowerInvariant(),
+        };
+        foreach (var indexName in indexNames
+                     .Concat(versionedIndexNames)
+                     .Distinct(StringComparer.Ordinal))
         {
             var indexCursor = await session.RunAsync($"DROP INDEX {indexName} IF EXISTS");
             await indexCursor.ConsumeAsync();
         }
 
-        var constraintCursor = await session.RunAsync($"DROP CONSTRAINT {constraintName} IF EXISTS");
-        await constraintCursor.ConsumeAsync();
+        var versionedConstraintNames = new[]
+        {
+            $"projection_graph_v2_owner_{nodeLabel}OwnerState".ToLowerInvariant(),
+            $"projection_graph_v2_event_{nodeLabel}OwnerEvent".ToLowerInvariant(),
+            $"projection_graph_v2_edge_{edgeIdentityLabel}".ToLowerInvariant(),
+        };
+        foreach (var name in versionedConstraintNames.Append(constraintName))
+        {
+            var constraintCursor = await session.RunAsync($"DROP CONSTRAINT {name} IF EXISTS");
+            await constraintCursor.ConsumeAsync();
+        }
     }
 
     private static IAsyncSession CreateSession(IDriver driver, string database, AccessMode accessMode)

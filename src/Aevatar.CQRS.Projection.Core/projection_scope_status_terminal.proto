@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+option csharp_namespace = "Aevatar.CQRS.Projection.Core.Orchestration";
+
+import "agent_messages.proto";
+import "projection_scope_messages.proto";
+import "google/protobuf/timestamp.proto";
+
+// State of the terminal status materializer for one source projection scope.
+// It is deliberately not ProjectionScopeState: legacy binaries can neither
+// activate nor mutate it, and it carries no per-envelope bookkeeping.
+message ProjectionScopeStatusTerminalState {
+  string source_scope_actor_id = 1;
+  string contract_id = 2;
+  int64 contract_version = 3;
+  bool active = 4;
+  bool released = 5;
+  int64 activation_generation = 6;
+  // Durable retry for a status write that failed after the observed envelope
+  // was accepted; cleared by the next successful write at or above its version.
+  ProjectionScopeStatusPendingWrite pending_write = 7;
+  google.protobuf.Timestamp updated_at_utc = 8;
+  // Highest source version observed at the time of release (0 if unknown); reported in the
+  // release confirmation to the source scope.
+  int64 released_at_observed_version = 9;
+}
+
+// How a deferred terminal status write failed, and therefore how it recovers.
+enum ProjectionScopeStatusWriteFailureKind {
+  PROJECTION_SCOPE_STATUS_WRITE_FAILURE_KIND_UNSPECIFIED = 0;
+  // The store threw; the same write is retried through durable, backed-off self continuations
+  // until it succeeds or a higher-version terminal write supersedes it.
+  PROJECTION_SCOPE_STATUS_WRITE_FAILURE_KIND_TRANSIENT = 1;
+  // The store rejected the bytes at this version (conflict / gap): retrying the same bytes
+  // cannot heal it, so it is recorded as an explicit failure and only a later higher-version
+  // terminal write supersedes it.
+  PROJECTION_SCOPE_STATUS_WRITE_FAILURE_KIND_REJECTED = 2;
+}
+
+message ProjectionScopeStatusPendingWrite {
+  ProjectionSourceCoordinate source = 1;
+  aevatar.EventEnvelope envelope = 2;
+  int32 attempts = 3;
+  string last_error = 4;
+  google.protobuf.Timestamp deferred_at_utc = 5;
+  ProjectionScopeStatusWriteFailureKind failure_kind = 6;
+  // Attempts crossed the alert threshold: an explicit, observable stalled state (alert +
+  // error log). Retries continue at the capped cadence; the flag clears on recovery.
+  bool stalled = 7;
+  google.protobuf.Timestamp next_retry_at_utc = 8;
+}
+
+message ProjectionScopeStatusTerminalStartedEvent {
+  string source_scope_actor_id = 1;
+  string contract_id = 2;
+  int64 contract_version = 3;
+  int64 activation_generation = 4;
+  google.protobuf.Timestamp occurred_at_utc = 5;
+}
+
+message ProjectionScopeStatusTerminalReleasedEvent {
+  google.protobuf.Timestamp occurred_at_utc = 1;
+  // Highest source version observed when the release was committed (0 if unknown).
+  int64 last_observed_version = 2;
+}
+
+message ProjectionScopeStatusWriteDeferredEvent {
+  ProjectionScopeStatusPendingWrite pending = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionScopeStatusWriteRecoveredEvent {
+  ProjectionSourceCoordinate source = 1;
+  google.protobuf.Timestamp occurred_at_utc = 2;
+}
+
+message ProjectionScopeStatusWriteStalledEvent {
+  ProjectionSourceCoordinate source = 1;
+  int32 attempts = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Durable self continuation (callback scheduler) that retries the pending write.
+message RetryProjectionScopeStatusWriteCommand {
+  ProjectionSourceCoordinate expected_source = 1;
+  int32 attempt = 2;
+}

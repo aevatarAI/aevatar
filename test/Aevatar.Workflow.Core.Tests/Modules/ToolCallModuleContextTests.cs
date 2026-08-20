@@ -15,6 +15,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -1721,6 +1722,68 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_ShouldCorrelateProviderDeliveryAndReconciliationWaterlines()
+    {
+        var clock = new FakeTimeProvider(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero));
+        var logger = new RecordingToolCallLogger();
+        var tool = new BlockingWorkflowTool("timed_tool");
+        var module = CreateModule(tool, logger: logger);
+        var ctx = new RecordingWorkflowContext { Clock = clock };
+        var request = ToolRequest(ctx, tool.Name, "step-timed", "exec-timed");
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+        var invocation = await tool.ReadInvocationAsync();
+        clock.Advance(TimeSpan.FromMilliseconds(37));
+        invocation.Completion.SetResult(WorkflowToolExecutionResult.Success("{}"));
+        var completed = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>();
+
+        completed.ProviderTiming.Should().NotBeNull();
+        completed.ProviderTiming.DispatchId.Should().NotBeNullOrWhiteSpace();
+        completed.ProviderTiming.ExternalExecutionElapsedMs.Should().Be(37);
+        completed.ProviderTiming.Disposition.Should().Be(WorkflowToolCallProviderDisposition.Succeeded);
+        completed.ProviderTiming.DispatchStartedAtUtc.ToDateTimeOffset().Should().Be(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero));
+        completed.ProviderTiming.ProviderReturnedAtUtc.ToDateTimeOffset().Should().Be(
+            new DateTimeOffset(2026, 8, 18, 12, 0, 0, 37, TimeSpan.Zero));
+
+        await module.HandleAsync(ctx.PublishedEnvelope(completed), ctx, CancellationToken.None);
+        // The producer records completion_delivery_producer_confirmed only after its self-publish
+        // returns, so it may land before or after the actor's reconciliation line. Sync on it
+        // (TCS, no polling) AFTER handing the completion to the actor, then assert only the
+        // causally deterministic edges plus the exact waterline set.
+        await logger.WaitForEntryAsync(entry =>
+            Equals(entry.Properties.GetValueOrDefault("Waterline"), "completion_delivery_producer_confirmed") &&
+            Equals(entry.Properties.GetValueOrDefault("DispatchId"), completed.ProviderTiming.DispatchId));
+
+        var observations = logger.Entries
+            .Where(entry => entry.Properties.ContainsKey("Waterline"))
+            .ToList();
+        var waterlines = observations.Select(entry => (string)entry.Properties["Waterline"]!).ToList();
+        waterlines.Should().BeEquivalentTo(
+            "pending_state_persisted",
+            "external_dispatch_started",
+            "provider_returned",
+            "completion_delivery_producer_confirmed",
+            "actor_reconciliation_completed");
+        // Actor persists before the worker dispatches; the worker returns from the provider
+        // before the actor reconciles that dispatch; the worker confirms delivery after it returned.
+        waterlines.IndexOf("pending_state_persisted").Should().BeLessThan(waterlines.IndexOf("external_dispatch_started"));
+        waterlines.IndexOf("external_dispatch_started").Should().BeLessThan(waterlines.IndexOf("provider_returned"));
+        waterlines.IndexOf("provider_returned").Should().BeLessThan(waterlines.IndexOf("actor_reconciliation_completed"));
+        waterlines.IndexOf("provider_returned").Should().BeLessThan(waterlines.IndexOf("completion_delivery_producer_confirmed"));
+        observations.Should().OnlyContain(entry =>
+            Equals(entry.Properties["RunId"], request.RunId) &&
+            Equals(entry.Properties["StepId"], request.StepId) &&
+            Equals(entry.Properties["CallId"], completed.CallId) &&
+            Equals(entry.Properties["ExecutionId"], request.ExecutionId));
+        observations
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.Properties["DispatchId"]?.ToString()))
+            .Select(entry => entry.Properties["DispatchId"])
+            .Should().OnlyContain(dispatchId => Equals(dispatchId, completed.ProviderTiming.DispatchId));
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldNotRedispatchAnInflightStepRequest()
     {
         var tool = new BlockingWorkflowTool("blocking_tool");
@@ -2220,7 +2283,8 @@ public sealed class ToolCallModuleContextTests
     public async Task ToolCallModule_WhenCompletionTransportsRejectResult_ShouldRetryKnownResultBeforeDeadline()
     {
         var tool = new CountingAgentTool("counting_tool", _ => "{}");
-        var module = CreateModule(tool);
+        var logger = new RecordingToolCallLogger();
+        var module = CreateModule(tool, logger: logger);
         var ctx = new RecordingWorkflowContext
         {
             FailAttemptCompletionPublishesRemaining = 1,
@@ -2244,6 +2308,20 @@ public sealed class ToolCallModuleContextTests
             .Should().ContainSingle()
             .Which.Success.Should().BeTrue();
         ctx.LoadState<ToolCallModuleState>("tool_call").PendingExecutions.Should().BeEmpty();
+        var deliveryObservations = logger.Entries
+            .Where(entry => Equals(
+                entry.Properties.GetValueOrDefault("Waterline"),
+                "completion_delivery_producer_confirmed"))
+            .ToList();
+        deliveryObservations.Select(entry => new
+            {
+                Method = entry.Properties["DeliveryMethod"],
+                Acceptance = entry.Properties["DeliveryAcceptance"],
+            })
+            .Should().ContainInOrder(
+                new { Method = (object?)"self_publish", Acceptance = (object?)"unknown" },
+                new { Method = (object?)"durable_callback", Acceptance = (object?)"unknown" },
+                new { Method = (object?)"self_publish", Acceptance = (object?)"confirmed" });
     }
 
     [Fact]
@@ -2295,7 +2373,8 @@ public sealed class ToolCallModuleContextTests
     public async Task ToolCallModule_ShouldSettleTimeoutOnceAndIgnoreLateCompletion()
     {
         var tool = new BlockingWorkflowTool("blocking_tool");
-        var module = CreateModule(tool);
+        var logger = new RecordingToolCallLogger();
+        var module = CreateModule(tool, logger: logger);
         var ctx = new RecordingWorkflowContext();
         var request = ToolRequest(ctx, tool.Name, "step-1", "exec-timeout");
 
@@ -2363,6 +2442,61 @@ public sealed class ToolCallModuleContextTests
             .Should().ContainSingle();
         ctx.LoadState<ToolCallModuleState>("tool_call")
             .CompletionTombstones.Should().ContainSingle();
+        logger.Entries
+            .Where(entry => Equals(
+                entry.Properties.GetValueOrDefault("Waterline"),
+                "actor_reconciliation_completed"))
+            .Select(entry => entry.Properties["ReconciliationDisposition"])
+            .Should().ContainInOrder("timeout_outcome_unknown", "duplicate");
+    }
+
+    [Fact]
+    public async Task ToolCallModule_WhenTrustedCompletionHasNoSuccessor_ShouldReportNoPendingExecution()
+    {
+        var logger = new RecordingToolCallLogger();
+        var module = CreateModule(
+            new CountingAgentTool("unused_tool", _ => "{}"),
+            logger: logger);
+        var ctx = new RecordingWorkflowContext();
+        var completed = new WorkflowToolCallAttemptCompletedEvent
+        {
+            RunId = ctx.RunId,
+            StepId = "step-missing",
+            ExecutionId = "exec-missing",
+            CallId = "call-missing",
+            Attempt = 1,
+            ContinuationId = "continuation-missing",
+            Success = new WorkflowToolCallAttemptSuccessOutcome { ResultJson = "{}" },
+        };
+        var envelope = Envelope(completed);
+        envelope.Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+            ctx.AgentId,
+            TopologyAudience.Self);
+        envelope.Runtime = new EnvelopeRuntime
+        {
+            DeliveryIdentity = new DeliveryIdentity
+            {
+                OperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    "workflow-tool-attempt-completed",
+                    completed.RunId,
+                    completed.StepId,
+                    completed.CallId,
+                    completed.ExecutionId,
+                    completed.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    completed.ContinuationId),
+            },
+        };
+
+        await module.HandleAsync(envelope, ctx, CancellationToken.None);
+
+        ctx.Published.Should().BeEmpty();
+        logger.Entries
+            .Where(entry => Equals(
+                entry.Properties.GetValueOrDefault("Waterline"),
+                "actor_reconciliation_completed"))
+            .Select(entry => entry.Properties["ReconciliationDisposition"])
+            .Should().ContainSingle()
+            .Which.Should().Be("no_pending_execution");
     }
 
     [Fact]
@@ -4264,12 +4398,13 @@ public sealed class ToolCallModuleContextTests
             "user-service-1",
             WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract);
 
-    private static ToolCallModule CreateModule(
+    internal static ToolCallModule CreateModule(
         IWorkflowTool tool,
-        IWorkflowCallerAccessTokenProvider? tokenProvider = null) =>
+        IWorkflowCallerAccessTokenProvider? tokenProvider = null,
+        ILogger<ToolCallModule>? logger = null) =>
         new(
             [new SingleToolSource(tool)],
-            NullLogger<ToolCallModule>.Instance,
+            logger ?? NullLogger<ToolCallModule>.Instance,
             tokenProvider);
 
     private static WorkflowCallerNyxIdAuthority CreateCallerAuthority() =>
@@ -4422,7 +4557,7 @@ public sealed class ToolCallModuleContextTests
         await DrainToolCallContinuationsAsync(module, ctx);
     }
 
-    private static StepRequestEvent ToolRequest(
+    internal static StepRequestEvent ToolRequest(
         RecordingWorkflowContext ctx,
         string toolName,
         string stepId,
@@ -4498,7 +4633,7 @@ public sealed class ToolCallModuleContextTests
         pending.DisplayName.Should().BeEmpty();
     }
 
-    private static EventEnvelope Envelope(
+    internal static EventEnvelope Envelope(
         IMessage evt,
         DateTimeOffset? issuedAt = null,
         string publisherActorId = "test")
@@ -4514,7 +4649,7 @@ public sealed class ToolCallModuleContextTests
         };
     }
 
-    private static EventEnvelope CallbackEnvelope(ScheduledToolCallback callback)
+    internal static EventEnvelope CallbackEnvelope(ScheduledToolCallback callback)
     {
         var envelope = Envelope(callback.Event);
         envelope.Runtime = new EnvelopeRuntime
@@ -4609,7 +4744,7 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
-    private sealed class BlockingWorkflowTool(
+    internal sealed class BlockingWorkflowTool(
         string name,
         WorkflowToolRecoverySafety recoverySafety = WorkflowToolRecoverySafety.Unspecified) : IWorkflowTool
     {
@@ -4639,12 +4774,12 @@ public sealed class ToolCallModuleContextTests
             _invocations.Reader.ReadAsync();
     }
 
-    private sealed record BlockingToolInvocation(
+    internal sealed record BlockingToolInvocation(
         WorkflowToolExecutionRequest Request,
         TaskCompletionSource<WorkflowToolExecutionResult> Completion,
         CancellationToken CancellationToken);
 
-    private sealed record ScheduledToolCallback(
+    internal sealed record ScheduledToolCallback(
         TimeSpan DueTime,
         IMessage Event,
         RuntimeCallbackLease Lease);
@@ -4812,7 +4947,81 @@ public sealed class ToolCallModuleContextTests
         }
     }
 
-    private sealed class RecordingWorkflowContext
+    internal sealed class RecordingToolCallLogger : ILogger<ToolCallModule>
+    {
+        private readonly object _gate = new();
+        private readonly List<LogEntry> _entries = [];
+        private readonly List<(Func<LogEntry, bool> Predicate, TaskCompletionSource<LogEntry> Completion)> _waiters = [];
+
+        public IReadOnlyList<LogEntry> Entries
+        {
+            get
+            {
+                lock (_gate)
+                    return _entries.ToList();
+            }
+        }
+
+        /// <summary>
+        /// Completes when an entry matching <paramref name="predicate"/> has been logged (already
+        /// recorded or arriving later, e.g. from a background tool worker). Deterministic sync
+        /// point; never polls.
+        /// </summary>
+        public Task<LogEntry> WaitForEntryAsync(Func<LogEntry, bool> predicate)
+        {
+            TaskCompletionSource<LogEntry> completion;
+            lock (_gate)
+            {
+                var existing = _entries.FirstOrDefault(predicate);
+                if (existing != null)
+                    return Task.FromResult(existing);
+
+                completion = new TaskCompletionSource<LogEntry>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters.Add((predicate, completion));
+            }
+
+            return completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var properties = state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values
+                    .Where(static value => !string.Equals(value.Key, "{OriginalFormat}", StringComparison.Ordinal))
+                    .ToDictionary(static value => value.Key, static value => value.Value, StringComparer.Ordinal)
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+            var entry = new LogEntry(logLevel, formatter(state, exception), properties);
+            lock (_gate)
+            {
+                _entries.Add(entry);
+                for (var index = _waiters.Count - 1; index >= 0; index--)
+                {
+                    if (!_waiters[index].Predicate(entry))
+                        continue;
+
+                    _waiters[index].Completion.TrySetResult(entry);
+                    _waiters.RemoveAt(index);
+                }
+            }
+        }
+
+        public sealed record LogEntry(
+            LogLevel Level,
+            string Message,
+            IReadOnlyDictionary<string, object?> Properties);
+    }
+
+    internal sealed class RecordingWorkflowContext
         : IWorkflowExecutionContext,
           IWorkflowExecutionRuntimeContextAccessor,
           IWorkflowExecutionStateHost,
@@ -4846,7 +5055,13 @@ public sealed class ToolCallModuleContextTests
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
         public IRuntimeSecretStore? RuntimeSecretStore { get; init; } = new InMemoryRuntimeSecretStore();
         public DateTimeOffset? UtcNowOverride { get; set; }
-        public DateTimeOffset UtcNow => UtcNowOverride ?? TimeProvider.System.GetUtcNow();
+        public TimeProvider Clock { get; init; } = TimeProvider.System;
+        public DateTimeOffset UtcNow => UtcNowOverride ?? Clock.GetUtcNow();
+
+        public long GetTimestamp() => Clock.GetTimestamp();
+
+        public TimeSpan GetElapsedTime(long startingTimestamp) =>
+            Clock.GetElapsedTime(startingTimestamp);
 
         public WorkflowRunExecutionContextState ExecutionContextState { get; } = new();
 
@@ -4914,6 +5129,15 @@ public sealed class ToolCallModuleContextTests
             _publishedOptions.GetValueOrDefault(evt)?.Delivery?.OperationId ?? string.Empty;
 
         public bool FailNextSchedule { get; set; }
+
+        /// <summary>
+        /// When set, every published <see cref="WorkflowToolCallAttemptCompletedEvent"/> is handed
+        /// to this delegate (the actor inbox) BEFORE <see cref="PublishAsync"/> returns to the
+        /// producer, modelling a transport that delivers self-publications synchronously. The
+        /// producer therefore records its delivery waterline only after the actor has already
+        /// reconciled the completion.
+        /// </summary>
+        public Func<EventEnvelope, Task>? InTransportAttemptCompletionDelivery { get; set; }
 
         public TState LoadState<TState>(string scopeKey)
             where TState : class, IMessage<TState>, new()
@@ -5109,7 +5333,10 @@ public sealed class ToolCallModuleContextTests
                 throw new InvalidOperationException("simulated post-publication failure");
             }
 
-            return Task.CompletedTask;
+            return evt is WorkflowToolCallAttemptCompletedEvent &&
+                   InTransportAttemptCompletionDelivery is { } deliverInTransport
+                ? deliverInTransport(PublishedEnvelope(evt))
+                : Task.CompletedTask;
         }
 
         public Task SendToAsync<TEvent>(

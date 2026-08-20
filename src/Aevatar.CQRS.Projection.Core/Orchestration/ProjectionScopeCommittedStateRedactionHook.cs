@@ -57,6 +57,8 @@ internal sealed class ProjectionScopeCommittedStateRedactionHook : ICommittedSta
         }
 
         ProjectionFailureRetentionPolicy.Trim(state.RetainedFailureDiagnostics);
+        if (state.InFlightObservation != null)
+            state.InFlightObservation.Envelope = null;
         context.Published.StateRoot = Any.Pack(state);
     }
 
@@ -74,6 +76,17 @@ internal sealed class ProjectionScopeCommittedStateRedactionHook : ICommittedSta
             failed.Envelope = null;
             failed.Reason = string.Empty;
             stateEvent.EventData = Any.Pack(failed);
+            return;
+        }
+
+        if (eventData.Is(ProjectionScopeObservationStagedEvent.Descriptor))
+        {
+            var staged = eventData.Unpack<ProjectionScopeObservationStagedEvent>();
+            if (staged.Observation?.Envelope == null)
+                return;
+
+            staged.Observation.Envelope = null;
+            stateEvent.EventData = Any.Pack(staged);
             return;
         }
 

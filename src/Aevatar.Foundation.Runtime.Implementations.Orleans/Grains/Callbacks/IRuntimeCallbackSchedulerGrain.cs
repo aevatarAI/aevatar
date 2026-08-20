@@ -24,4 +24,11 @@ public interface IRuntimeCallbackSchedulerGrain : IGrainWithStringKey
         int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified);
 
     Task PurgeAsync();
+
+    Task<long> EnsureRuntimeFleetReconcileTimerAsync() =>
+        Task.FromException<long>(new NotSupportedException(
+            "This callback scheduler grain does not implement the protected fleet reconcile slot."));
+
+    Task<bool> VerifyRuntimeFleetReconcileDeliveryAsync(EventEnvelope envelope) =>
+        Task.FromResult(false);
 }

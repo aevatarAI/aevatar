@@ -123,6 +123,7 @@ public sealed class AevatarInvocationToolSourceTests
             .GetProperty("properties")
             .GetProperty("workflow_id");
         workflowId.GetProperty("description").GetString().Should().Contain("Never guess");
+        doc.RootElement.GetProperty("properties").TryGetProperty("actor_id", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -3429,7 +3430,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task aevatar_start_workflow_with_actor_id_and_wait_ack_reserves_channel_delivery()
+    public async Task StartWorkflow_LegacyActorIdCannotOverrideScopeWorkflowTarget()
     {
         var harness = new Harness();
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
@@ -3449,7 +3450,9 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
-        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor");
+        harness.ScopeWorkflowQuery.Lookups.Should().ContainSingle()
+            .Which.Should().Be(("scope-1", "wf-main"));
+        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor-wf-main");
         harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.CommandIdSeed.Should().Be("call-workflow-actor");
         harness.WorkflowDispatch.Command.CorrelationIdSeed.Should().Be("request-1");
@@ -3471,7 +3474,6 @@ public sealed class AevatarInvocationToolSourceTests
         var output = await tool.ExecuteAsync("""
             {
               "workflow_id": " wf-main ",
-              "actor_id": " workflow-definition-actor ",
               "workflow_yamls": [
                 "  name: first\nsteps: []  ",
                 "   ",
@@ -3488,7 +3490,7 @@ public sealed class AevatarInvocationToolSourceTests
         ErrorCodeOrNull(output).Should().BeNull(output);
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.InlineYamlBundle);
-        harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor");
+        harness.WorkflowDispatch.Command.Source.ActorId.Should().BeNull();
         harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("wf-main");
         harness.WorkflowDispatch.Command.Source.WorkflowYamls.Should().Equal(
             "name: first\nsteps: []",
@@ -3776,15 +3778,6 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Theory]
-    [InlineData(
-        """
-        {
-          "workflow_id": "child-flow",
-          "actor_id": "definition-actor",
-          "inputs": { "prompt": "run child" }
-        }
-        """,
-        "actor_id")]
     [InlineData(
         """
         {
