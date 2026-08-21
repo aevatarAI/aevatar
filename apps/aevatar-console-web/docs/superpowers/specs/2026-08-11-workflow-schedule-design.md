@@ -201,9 +201,25 @@ The UI may present only typed response facts, including:
 Low-level service, actor, command, correlation, credential, or Team fields do
 not belong in the primary product UI.
 
+Selecting an existing Schedule opens its read-only detail before editing. The
+detail is the local history surface for that Schedule and must call the exact
+Workflow-scoped detail endpoint. It shows the observed next and last fire,
+total and failed fire counts, and the returned `recentFires` in newest-first
+order. Each recent fire distinguishes scheduled from manual invocation and
+success from failure using its returned timestamps and error. Loading, empty,
+and detail-request failure remain distinct; a failed detail request must not
+fall back to the collection summary or pretend that no fires exist.
+
+`Recent fires` is intentionally a bounded Schedule-detail window, not a claim
+of complete lifetime Activity. It remains inside Schedule management and does
+not fabricate Run links from actor, command, correlation, or idempotency keys.
+
 ### Edit
 
-Edit hydrates the observed Schedule values and sends a full replacement:
+`Change schedule` enters the editable configuration from the observed detail.
+Cancel returns to that Schedule detail rather than closing the management
+surface or skipping back to the collection. Edit hydrates the observed
+Schedule values and sends a full replacement:
 
 ```text
 PUT /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
