@@ -17,7 +17,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 
-public sealed class AgentTurnToolCatalogMaterializer
+public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCatalogPlanner
 {
     private const string NyxIdRequireServiceToolName = "nyxid_require_service";
     internal const string ProfileTaskRouteIntentId = "nyxid_profile_task_route";
@@ -179,7 +179,8 @@ public sealed class AgentTurnToolCatalogMaterializer
             availableTools,
             toolContext,
             diagnostics,
-            ct);
+            ct,
+            enforceConnectedOperationLimits: true);
         var recoveryNames = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
         if (routeTools.HadFailure || hadMergeFailure ||
@@ -205,6 +206,35 @@ public sealed class AgentTurnToolCatalogMaterializer
             ct);
         if (candidate is null)
         {
+            if (diagnostics.Any(static diagnostic =>
+                    diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierNoMatch))
+            {
+                return CreatePreparation(
+                    sessionId,
+                    candidate: null,
+                    selectedExactSkillRef: null,
+                    AgentProfileTurnAuthorityKind.RestrictedEmpty,
+                    [],
+                    diagnostics);
+            }
+
+            if (diagnostics.Any(static diagnostic =>
+                    diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation))
+            {
+                var clarificationNames = available.Contains("ask_user")
+                    ? new[] { "ask_user" }
+                    : Array.Empty<string>();
+                return CreatePreparation(
+                    sessionId,
+                    candidate: null,
+                    selectedExactSkillRef: null,
+                    clarificationNames.Length == 0
+                        ? AgentProfileTurnAuthorityKind.RestrictedEmpty
+                        : AgentProfileTurnAuthorityKind.Recovery,
+                    clarificationNames,
+                    diagnostics);
+            }
+
             return CreatePreparation(
                 sessionId,
                 candidate: null,
@@ -221,26 +251,29 @@ public sealed class AgentTurnToolCatalogMaterializer
             PolicyRevision = profile.PolicyRevision,
             IntentId = candidate.IntentId,
         };
-        if (profile.ActivationMode != AgentProfileActivationMode.Enforced)
-        {
-            diagnostics.Add(new AgentProfileTurnDiagnostic(
-                AgentProfileTurnDiagnosticCode.ShadowCandidate,
-                candidate.IntentId));
-            return CreatePreparation(
-                sessionId,
-                candidateIdentity,
-                selectedExactSkillRef: null,
-                AgentProfileTurnAuthorityKind.Recovery,
-                recoveryNames,
-                diagnostics);
-        }
-
         var taskPolicy = await ResolvePolicyAsync(
             candidate.TaskToolPolicy,
             availableTools,
             toolContext,
             diagnostics,
-            ct);
+            ct,
+            enforceConnectedOperationLimits: true);
+        if (diagnostics.Any(static diagnostic =>
+                diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation))
+        {
+            var clarificationNames = available.Contains("ask_user")
+                ? new[] { "ask_user" }
+                : Array.Empty<string>();
+            return CreatePreparation(
+                sessionId,
+                candidateIdentity,
+                selectedExactSkillRef: null,
+                clarificationNames.Length == 0
+                    ? AgentProfileTurnAuthorityKind.RestrictedEmpty
+                    : AgentProfileTurnAuthorityKind.Recovery,
+                clarificationNames,
+                diagnostics);
+        }
         if (taskPolicy.HadFailure)
         {
             return CreatePreparation(
@@ -256,6 +289,37 @@ public sealed class AgentTurnToolCatalogMaterializer
         selectedPolicy.UnionWith(taskPolicy.Names);
         var ceiling = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
         ceiling.IntersectWith(selectedPolicy);
+        if (profile.ActivationMode != AgentProfileActivationMode.Enforced)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.ShadowCandidate,
+                candidate.IntentId));
+            AgentTurnToolCatalogProof? shadowCandidateProof = null;
+            try
+            {
+                shadowCandidateProof = AgentTurnToolCatalogProof.CreateShadowCandidate(
+                    SelectTools(availableTools, ceiling),
+                    AgentTurnToolCatalogFactory.ResolveProfileBudget(profile));
+                AgentTurnToolCatalogTelemetry.RecordShadowCandidate(
+                    shadowCandidateProof,
+                    $"{profile.ProfileId}@{profile.PublishedRevision}",
+                    candidate.IntentId);
+            }
+            catch (AgentTurnToolCatalogException exception)
+            {
+                diagnostics.Add(ToCatalogDiagnostic(exception.Failure));
+            }
+
+            return CreatePreparation(
+                sessionId,
+                candidateIdentity,
+                selectedExactSkillRef: null,
+                AgentProfileTurnAuthorityKind.Recovery,
+                recoveryNames,
+                diagnostics,
+                shadowCandidateProof);
+        }
+
         return CreatePreparation(
             sessionId,
             candidateIdentity,
@@ -340,7 +404,8 @@ public sealed class AgentTurnToolCatalogMaterializer
             availableTools,
             toolContext,
             diagnostics,
-            ct);
+            ct,
+            enforceConnectedOperationLimits: true);
         var recoveryNames = new HashSet<string>(eligible, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
 
@@ -436,7 +501,7 @@ public sealed class AgentTurnToolCatalogMaterializer
         ArgumentNullException.ThrowIfNull(toolContext);
         var builtIn = ResolveBuiltInIntent(intent);
         if (builtIn is null)
-            return RestrictedEmptyCatalog();
+            return AgentTurnToolCatalogFactory.RestrictedEmpty();
 
         var diagnostics = new List<AgentProfileTurnDiagnostic>();
         var routeTools = await DiscoverToolSetAsync(
@@ -446,7 +511,7 @@ public sealed class AgentTurnToolCatalogMaterializer
             diagnostics,
             ct);
         if (routeTools.HadFailure)
-            return RestrictedEmptyCatalog(diagnostics);
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
 
         var selectedTools = routeTools.Tools
             .Where(pair => builtIn.ToolNames.Contains(pair.Key) &&
@@ -455,7 +520,7 @@ public sealed class AgentTurnToolCatalogMaterializer
         if (selectedTools.Count != builtIn.ToolNames.Count ||
             !builtIn.ToolNames.All(selectedTools.ContainsKey))
         {
-            return RestrictedEmptyCatalog(diagnostics);
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
         }
 
         return new AgentTurnToolCatalog(
@@ -465,7 +530,8 @@ public sealed class AgentTurnToolCatalogMaterializer
             builtIn.IntentId,
             builtIn.IntentId,
             diagnostics,
-            selectedTools.Values);
+            selectedTools.Values,
+            budget: AgentTurnToolCatalogBudget.ConnectedOperations);
     }
 
     internal async Task<AgentTurnToolCatalog> MaterializeVerifiedAuthorizationContinuationAsync(
@@ -476,7 +542,7 @@ public sealed class AgentTurnToolCatalogMaterializer
     {
         ArgumentNullException.ThrowIfNull(toolContext);
         if ((profile is null) != (committedAuthority is null))
-            return RestrictedEmptyCatalog();
+            return AgentTurnToolCatalogFactory.RestrictedEmpty();
 
         var diagnostics = committedAuthority is null
             ? []
@@ -491,7 +557,7 @@ public sealed class AgentTurnToolCatalogMaterializer
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     AgentProfileTurnDiagnosticCode.ProfileInvalid,
                     "committed_profile_mismatch"));
-                return RestrictedEmptyCatalog(diagnostics);
+                return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
             }
 
             routeToolSetRef = profile.RouteToolSetRef;
@@ -504,7 +570,7 @@ public sealed class AgentTurnToolCatalogMaterializer
             diagnostics,
             ct);
         if (routeTools.HadFailure)
-            return RestrictedEmptyCatalog(diagnostics);
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
 
         var eligible = new HashSet<string>(routeTools.Names, StringComparer.OrdinalIgnoreCase);
         eligible.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
@@ -515,9 +581,10 @@ public sealed class AgentTurnToolCatalogMaterializer
                 routeTools.Tools,
                 toolContext,
                 diagnostics,
-                ct);
+                ct,
+                enforceConnectedOperationLimits: true);
             if (maximum.HadFailure)
-                return RestrictedEmptyCatalog(diagnostics);
+                return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
 
             ApplyMaximumPolicy(eligible, maximum.Names, routeTools.Tools, diagnostics);
         }
@@ -531,8 +598,9 @@ public sealed class AgentTurnToolCatalogMaterializer
                 selectedIntentId: null,
                 candidateIntentId: null,
                 diagnostics,
-                selectedTools)
-            : BuildCatalog(
+                selectedTools,
+                budget: AgentTurnToolCatalogBudget.ConnectedOperations)
+            : AgentTurnToolCatalogFactory.CreateForProfile(
                 profile,
                 eligible,
                 selectedIntentId: null,
@@ -550,7 +618,7 @@ public sealed class AgentTurnToolCatalogMaterializer
         ArgumentNullException.ThrowIfNull(catalog);
         var builtIn = ResolveBuiltInIntent(intent);
         if (builtIn is null)
-            return RestrictedEmptyCatalog(catalog.Diagnostics);
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: catalog.Diagnostics);
 
         var allowed = new HashSet<string>(builtIn.ToolNames, StringComparer.OrdinalIgnoreCase);
         allowed.IntersectWith(catalog.FinalAllowedToolNames);
@@ -564,7 +632,7 @@ public sealed class AgentTurnToolCatalogMaterializer
             !builtIn.ToolNames.All(name =>
                 allowed.Contains(name) && selectedTools.ContainsKey(name)))
         {
-            return RestrictedEmptyCatalog(catalog.Diagnostics);
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: catalog.Diagnostics);
         }
 
         return new AgentTurnToolCatalog(
@@ -574,7 +642,8 @@ public sealed class AgentTurnToolCatalogMaterializer
             builtIn.IntentId,
             catalog.CandidateIntentId,
             catalog.Diagnostics,
-            selectedTools.Values);
+            selectedTools.Values,
+            budget: catalog.Budget);
     }
 
     internal static AgentTurnToolCatalog NarrowToVerifiedUserService(
@@ -592,7 +661,7 @@ public sealed class AgentTurnToolCatalogMaterializer
         if (string.IsNullOrWhiteSpace(userServiceId) ||
             string.IsNullOrWhiteSpace(serviceSlug))
         {
-            return RestrictedEmptyCatalog(catalog.Diagnostics);
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: catalog.Diagnostics);
         }
 
         var selectedTools = catalog.ExactTools
@@ -612,7 +681,7 @@ public sealed class AgentTurnToolCatalogMaterializer
                 static pair => pair.Value,
                 StringComparer.OrdinalIgnoreCase);
         if (selectedTools.Count == 0)
-            return RestrictedEmptyCatalog(catalog.Diagnostics);
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: catalog.Diagnostics);
 
         return new AgentTurnToolCatalog(
             selectedTools.Keys,
@@ -621,7 +690,8 @@ public sealed class AgentTurnToolCatalogMaterializer
             catalog.SelectedIntentId,
             catalog.CandidateIntentId,
             catalog.Diagnostics,
-            selectedTools.Values);
+            selectedTools.Values,
+            budget: catalog.Budget);
     }
 
     private async Task<AgentProfileSkillMember?> SelectCandidateAsync(
@@ -645,7 +715,7 @@ public sealed class AgentTurnToolCatalogMaterializer
         if (aliasMatches.Length > 1)
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
-                AgentProfileTurnDiagnosticCode.ClassifierFailed,
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
                 "alias_collision"));
             return null;
         }
@@ -698,7 +768,9 @@ public sealed class AgentTurnToolCatalogMaterializer
                       StringComparison.Ordinal)))
             {
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
-                    AgentProfileTurnDiagnosticCode.ClassifierFailed,
+                    IsDisambiguationFailure(builtInResult.FailureCode)
+                        ? AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation
+                        : AgentProfileTurnDiagnosticCode.ClassifierFailed,
                     builtInResult.FailureCode ?? "nyxid_builtin_classifier_failed"));
                 return null;
             }
@@ -738,7 +810,9 @@ public sealed class AgentTurnToolCatalogMaterializer
             string.IsNullOrWhiteSpace(result.IntentId))
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
-                AgentProfileTurnDiagnosticCode.ClassifierFailed,
+                IsDisambiguationFailure(result.FailureCode)
+                    ? AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation
+                    : AgentProfileTurnDiagnosticCode.ClassifierFailed,
                 result.FailureCode ?? "failed"));
             return null;
         }
@@ -943,7 +1017,8 @@ public sealed class AgentTurnToolCatalogMaterializer
         IReadOnlyDictionary<string, IAgentTool> availableTools,
         AgentToolExecutionContext toolContext,
         List<AgentProfileTurnDiagnostic> diagnostics,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool enforceConnectedOperationLimits = false)
     {
         if (policy is null)
             return new ToolPolicyResolution(
@@ -967,11 +1042,15 @@ public sealed class AgentTurnToolCatalogMaterializer
             hadFailure |= resolution.HadFailure;
         }
 
-        var selectorSlugs = new HashSet<string>(StringComparer.Ordinal);
+        var selectorKeys = new HashSet<string>(StringComparer.Ordinal);
+        var connectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var selector in policy.ConnectedServiceSelectors)
         {
             if (!IsValidConnectedServiceSelector(selector) ||
-                !selectorSlugs.Add(selector.CatalogServiceSlug))
+                !selectorKeys.Add(string.Concat(
+                    selector.CatalogServiceSlug,
+                    "\0",
+                    selector.EndpointId)))
             {
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     AgentProfileTurnDiagnosticCode.ProfileInvalid,
@@ -986,6 +1065,7 @@ public sealed class AgentTurnToolCatalogMaterializer
                 .Select(static pair => pair.Key)
                 .ToArray();
             names.UnionWith(matches);
+            connectedMatches.UnionWith(matches);
             if (matches.Length == 0)
             {
                 if (selector.Readiness is not null &&
@@ -998,12 +1078,54 @@ public sealed class AgentTurnToolCatalogMaterializer
             }
         }
 
+        if (enforceConnectedOperationLimits &&
+            ConnectedOperationLimitExceeded(connectedMatches, availableTools))
+        {
+            names.ExceptWith(connectedMatches);
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_service_selector_output_over_limit"));
+        }
+
         return new ToolPolicyResolution(names, hadFailure);
+    }
+
+    private static bool ConnectedOperationLimitExceeded(
+        IReadOnlySet<string> names,
+        IReadOnlyDictionary<string, IAgentTool> availableTools)
+    {
+        var readCount = 0;
+        var writeCount = 0;
+        foreach (var name in names)
+        {
+            if (!availableTools.TryGetValue(name, out var tool) ||
+                tool is not IAgentToolOperationAdmissionOwner owner)
+            {
+                continue;
+            }
+
+            switch (owner.OperationAdmission.ExecutionPolicy.Risk)
+            {
+                case AgentToolOperationRisk.ReadOnly:
+                    readCount++;
+                    break;
+                case AgentToolOperationRisk.Write:
+                    writeCount++;
+                    break;
+            }
+        }
+
+        return readCount > AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount ||
+               writeCount > AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedWriteToolCount;
     }
 
     private static bool IsValidConnectedServiceSelector(
         AgentProfileConnectedServiceSelector selector) =>
         NyxIdServiceSlugPolicy.IsCanonical(selector.CatalogServiceSlug) &&
+        (string.IsNullOrEmpty(selector.EndpointId) ||
+         selector.EndpointId.Length <= 256 &&
+         string.Equals(selector.EndpointId, selector.EndpointId.Trim(), StringComparison.Ordinal) &&
+         !selector.EndpointId.Any(char.IsControl)) &&
         selector.AllowedRisks.Count > 0 &&
         selector.AllowedRisks.All(static risk =>
             risk is AgentToolOperationRiskPayload.ReadOnly or AgentToolOperationRiskPayload.Write) &&
@@ -1069,6 +1191,13 @@ public sealed class AgentTurnToolCatalogMaterializer
                 owner.OperationAdmission.CatalogServiceSlug,
                 selector.CatalogServiceSlug,
                 StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(selector.EndpointId) &&
+            (owner.OperationAdmission.Identity is not AgentToolOperationIdentity.PublishedEndpoint endpoint ||
+             !string.Equals(endpoint.EndpointId, selector.EndpointId, StringComparison.Ordinal)))
         {
             return false;
         }
@@ -1290,7 +1419,8 @@ public sealed class AgentTurnToolCatalogMaterializer
         ExactRemoteSkillRef? selectedExactSkillRef,
         AgentProfileTurnAuthorityKind authorityKind,
         IEnumerable<string> ceilingToolNames,
-        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
+        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
+        AgentTurnToolCatalogProof? shadowCandidateProof = null)
     {
         var canonicalCeilingToolNames = CanonicalToolNames(ceilingToolNames);
         var authority = new AgentProfileTurnAuthorityState
@@ -1311,7 +1441,7 @@ public sealed class AgentTurnToolCatalogMaterializer
                 .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
                 .Distinct()
                 .OrderBy(static reason => (int)reason));
-        return AgentProfileTurnAuthorityPreparation.Create(authority, diagnostics);
+        return AgentProfileTurnAuthorityPreparation.Create(authority, diagnostics, shadowCandidateProof);
     }
 
     private static AgentTurnToolCatalogMaterialization BuildMaterialization(
@@ -1338,17 +1468,38 @@ public sealed class AgentTurnToolCatalogMaterializer
                 .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
                 .Distinct()
                 .OrderBy(static reason => (int)reason));
-        var catalog = BuildCatalog(
-            profile,
-            proposal.AuthorityCeilingToolNames,
-            selectedIntentId,
-            committedAuthority.CandidateRoute?.IntentId,
-            selectedSkillPromptLayer,
-            diagnostics,
-            exactTools,
-            hasUnresolvedConnectedServiceSelectors,
-            requiredToolInvocation);
-        return AgentTurnToolCatalogMaterialization.Create(catalog, proposal);
+        try
+        {
+            var catalog = AgentTurnToolCatalogFactory.CreateForProfile(
+                profile,
+                proposal.AuthorityCeilingToolNames,
+                selectedIntentId,
+                committedAuthority.CandidateRoute?.IntentId,
+                selectedSkillPromptLayer,
+                diagnostics,
+                exactTools,
+                hasUnresolvedConnectedServiceSelectors,
+                requiredToolInvocation);
+            return AgentTurnToolCatalogMaterialization.Create(catalog, proposal);
+        }
+        catch (AgentTurnToolCatalogException exception)
+        {
+            var failClosedDiagnostics = diagnostics
+                .Append(ToCatalogDiagnostic(exception.Failure))
+                .ToArray();
+            proposal.AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty;
+            proposal.AuthorityCeilingToolNames.Clear();
+            proposal.DegradationReasons.Clear();
+            proposal.DegradationReasons.Add(
+                committedAuthority.DegradationReasons
+                    .Concat(failClosedDiagnostics.Select(static diagnostic => ToDegradationReason(diagnostic)))
+                    .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
+                    .Distinct()
+                    .OrderBy(static reason => (int)reason));
+            return AgentTurnToolCatalogMaterialization.Create(
+                AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: failClosedDiagnostics),
+                proposal);
+        }
     }
 
     private static IReadOnlyList<string> CanonicalToolNames(IEnumerable<string> names) =>
@@ -1444,6 +1595,12 @@ public sealed class AgentTurnToolCatalogMaterializer
             AgentProfileTurnDegradationReason.ExactSkillIdentityMismatch,
         (AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid, _) =>
             AgentProfileTurnDegradationReason.SelectedSkillBodyInvalid,
+        (AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation, _) =>
+            AgentProfileTurnDegradationReason.CatalogNeedsDisambiguation,
+        (AgentProfileTurnDiagnosticCode.CatalogOverBudget, _) =>
+            AgentProfileTurnDegradationReason.CatalogOverBudget,
+        (AgentProfileTurnDiagnosticCode.SchemaInvalid, _) =>
+            AgentProfileTurnDegradationReason.SchemaInvalid,
         _ => AgentProfileTurnDegradationReason.Unspecified,
     };
 
@@ -1475,6 +1632,12 @@ public sealed class AgentTurnToolCatalogMaterializer
             new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch, reason.ToString()),
         AgentProfileTurnDegradationReason.SelectedSkillBodyInvalid =>
             new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid, reason.ToString()),
+        AgentProfileTurnDegradationReason.CatalogNeedsDisambiguation =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation, reason.ToString()),
+        AgentProfileTurnDegradationReason.CatalogOverBudget =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.CatalogOverBudget, reason.ToString()),
+        AgentProfileTurnDegradationReason.SchemaInvalid =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.SchemaInvalid, reason.ToString()),
         AgentProfileTurnDegradationReason.Unspecified or
             AgentProfileTurnDegradationReason.LegacyAuthorityMissing or
             AgentProfileTurnDegradationReason.MaterializerUnavailable or
@@ -1482,42 +1645,29 @@ public sealed class AgentTurnToolCatalogMaterializer
         _ => null,
     };
 
-    private static AgentTurnToolCatalog BuildCatalog(
-        AgentProfileSnapshot profile,
-        IEnumerable<string> finalNames,
-        string? selectedIntentId,
-        string? candidateIntentId,
-        SelectedSkillPromptLayer? selectedSkillPromptLayer,
-        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
-        IEnumerable<IAgentTool> exactTools,
-        bool hasUnresolvedConnectedServiceSelectors = false,
-        AgentProfileRequiredToolInvocation? requiredToolInvocation = null)
-    {
-        var profileText = new StringBuilder()
-            .Append("Agent profile: ").Append(profile.ProfileId)
-            .Append("\nProfile version: ").Append(profile.ProfileVersion)
-            .Append("\nPolicy revision: ").Append(profile.PolicyRevision);
-        if (!string.IsNullOrWhiteSpace(candidateIntentId))
-            profileText.Append("\nCandidate intent: ").Append(candidateIntentId);
-        if (!string.IsNullOrWhiteSpace(selectedIntentId))
-            profileText.Append("\nSelected intent: ").Append(selectedIntentId);
+    private static AgentProfileTurnDiagnostic ToCatalogDiagnostic(AgentTurnToolCatalogFailure failure) =>
+        failure.Code switch
+        {
+            AgentTurnToolCatalogFailureCode.CatalogOverBudget => new(
+                AgentProfileTurnDiagnosticCode.CatalogOverBudget,
+                failure.Detail),
+            AgentTurnToolCatalogFailureCode.SchemaInvalid => new(
+                AgentProfileTurnDiagnosticCode.SchemaInvalid,
+                failure.ToolName ?? failure.Detail),
+            AgentTurnToolCatalogFailureCode.CatalogNeedsDisambiguation => new(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                failure.Detail),
+            AgentTurnToolCatalogFailureCode.ToolNameCollision => new(
+                AgentProfileTurnDiagnosticCode.ToolNameCollision,
+                failure.ToolName ?? failure.Detail),
+            _ => new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.ProfileInvalid,
+                failure.Code.ToString()),
+        };
 
-        var profileLayer = new ProfileRoutingPromptLayer(
-            profileText.ToString(),
-            new ProfileRoutingPromptProvenance(
-                $"agent-profile:{profile.ProfileId}@{profile.ProfileVersion}"),
-            new PromptLayerBounds(8 * 1024, 2 * 1024));
-        return new AgentTurnToolCatalog(
-            finalNames,
-            profileLayer,
-            selectedSkillPromptLayer,
-            selectedIntentId,
-            candidateIntentId,
-            diagnostics,
-            exactTools,
-            hasUnresolvedConnectedServiceSelectors,
-            requiredToolInvocation);
-    }
+    private static bool IsDisambiguationFailure(string? failureCode) =>
+        !string.IsNullOrWhiteSpace(failureCode) &&
+        failureCode.Contains("ambig", StringComparison.OrdinalIgnoreCase);
 
     private static bool MatchesAlias(string? userMessage, string? alias)
     {
@@ -1553,16 +1703,6 @@ public sealed class AgentTurnToolCatalogMaterializer
         index < 0 ||
         index >= message.Length ||
         (!char.IsLetterOrDigit(message[index]) && message[index] != '_');
-
-    private static AgentTurnToolCatalog RestrictedEmptyCatalog(
-        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null) =>
-        new(
-            [],
-            profilePromptLayer: null,
-            selectedSkillPromptLayer: null,
-            selectedIntentId: null,
-            candidateIntentId: null,
-            diagnostics);
 
     private sealed record ToolPolicyResolution(IReadOnlySet<string> Names, bool HadFailure);
 

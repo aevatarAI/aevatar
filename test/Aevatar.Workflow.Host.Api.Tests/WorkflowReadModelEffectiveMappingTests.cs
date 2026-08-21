@@ -27,7 +27,7 @@ public sealed class WorkflowReadModelEffectiveMappingTests
     // documents must change the value below and rolls out through the startup reindex/alias swap
     // (ElasticsearchProjectionIndexReconcileHostedService); the request path fails closed on drift.
     private const string CurrentStatePhysicalIndex = "/aevatar-workflow-execution-current-states-v7654550d";
-    private const string ReportPhysicalIndex = "/aevatar-workflow-execution-reports-v1f2340b2";
+    private const string ReportPhysicalIndex = "/aevatar-workflow-execution-reports-vf2439f5d";
     private const string ActorBindingPhysicalIndex = "/aevatar-workflow-actor-bindings-v8684cd7c";
 
     [Fact]

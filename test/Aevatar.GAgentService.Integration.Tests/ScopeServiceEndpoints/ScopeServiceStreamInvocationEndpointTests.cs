@@ -1862,6 +1862,7 @@ public sealed class ScopeServiceStreamInvocationEndpointTests : ScopeServiceEndp
         const ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive;
         return new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = workflowName,
             WorkflowYaml = workflowYaml,
             DefinitionActorId = definitionActorId,

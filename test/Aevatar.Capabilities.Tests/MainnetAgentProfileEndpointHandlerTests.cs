@@ -147,7 +147,10 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         payload.RootElement.GetProperty("supportedAgentKinds").EnumerateArray()
             .Select(static item => item.GetString())
-            .Should().Contain(AgentProfilePolicies.NyxIdChatAgentKind);
+            .Should().BeEquivalentTo(
+                AgentProfilePolicies.WorkspaceChatAgentKind,
+                AgentProfilePolicies.ChannelReplyAgentKind,
+                AgentProfilePolicies.NyxIdChatAgentKind);
         payload.RootElement.GetProperty("activationModes").EnumerateArray()
             .Select(static item => item.GetString())
             .Should().BeEquivalentTo("SHADOW", "ENFORCED");

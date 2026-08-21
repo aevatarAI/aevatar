@@ -344,13 +344,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             replyPlan.PrimaryControl,
             replyPlan.PrimaryToolContext);
         var isChannelRelayTurn = IsChannelRelayTurn(toolContext);
-        var tools = turnCatalog is null
+        var effectiveTurnCatalog = turnCatalog;
+        var tools = effectiveTurnCatalog is null
             ? await BuildTurnToolsAsync(
                 disableTools,
                 isChannelRelayTurn,
                 effectiveToolContext,
                 ct)
-            : BuildProfileTools(disableTools, turnCatalog);
+            : BuildProfileTools(disableTools, effectiveTurnCatalog);
         var input = await BuildUserInputPartsAsync(
                 activity,
                 provider,
@@ -358,7 +359,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 ct)
             .ConfigureAwait(false);
         var inputFileRefs = CollectInputFileRefs(input.Parts);
-        effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs);
+        effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs)!;
         var ownerFallbackToolContext = WithInputFileRefs(replyPlan.OwnerFallbackToolContext, inputFileRefs);
         LogChannelLlmToolPlan(
             "actor-step",
@@ -366,7 +367,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             forceDisableTools,
             replyPlan.DisableTools,
             disableTools,
-            turnCatalog,
+            effectiveTurnCatalog,
             effectiveToolContext,
             inputFileRefs,
             tools);
@@ -391,13 +392,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 effectiveToolContext,
                 input.AttachmentVisibilityInstruction,
                 replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null,
-                turnCatalog)),
+                effectiveTurnCatalog)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(turnCatalog),
+            runtime.CreateStepExecutor(effectiveTurnCatalog),
             externalMetadata,
             replyPlan.PrimaryControl,
             effectiveToolContext,
@@ -528,7 +529,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             .ConfigureAwait(false);
         input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
         var inputFileRefs = CollectInputFileRefs(input.Parts);
-        toolContext = WithInputFileRefs(toolContext, inputFileRefs);
+        toolContext = WithInputFileRefs(toolContext, inputFileRefs)!;
         LogChannelLlmToolPlan(
             "direct-reply",
             IsChannelRelayTurn(toolContext),

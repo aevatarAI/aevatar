@@ -49,7 +49,19 @@ public sealed class WorkflowRuntimeOperationProjectionTests
             model: "deepseek-chat",
             provider: "deepseek",
             inputSummary: "Find today's deployment status.",
-            availableToolNames: ["status", "search"]));
+            availableToolNames: ["status", "search"],
+            toolCatalogPolicyVersion: WorkflowToolCatalogPolicies.CurrentVersion,
+            toolCatalogProof: new WorkflowAgentTurnToolCatalogProof
+            {
+                Budget = new WorkflowAgentTurnToolCatalogBudgetProof
+                {
+                    MaximumToolCount = WorkflowToolCatalogPolicies.MaximumWorkflowToolCount,
+                    MaximumSchemaBytes = WorkflowToolCatalogPolicies.MaximumWorkflowSchemaBytes,
+                },
+                ToolCount = 2,
+                SchemaBytes = 384,
+                CatalogDigest = "catalog-digest-alpha",
+            }));
         await ProjectOperationAsync(projector, context, 2, Operation(
             "model-0",
             WorkflowRuntimeOperationKind.Model,
@@ -124,6 +136,10 @@ public sealed class WorkflowRuntimeOperationProjectionTests
         firstModel.Provider.Should().Be("deepseek");
         firstModel.InputSummary.Should().Be("Find today's deployment status.");
         firstModel.AvailableToolNames.Should().Equal("search", "status");
+        firstModel.ToolCatalogPolicyVersion.Should().Be(WorkflowToolCatalogPolicies.CurrentVersion);
+        firstModel.ToolCatalogToolCount.Should().Be(2);
+        firstModel.ToolCatalogSchemaBytes.Should().Be(384);
+        firstModel.ToolCatalogDigest.Should().Be("catalog-digest-alpha");
         firstModel.Output.Should().BeEmpty("a tool-call-only model response is still a distinct operation");
         firstModel.ReasoningContent.Should().Be("A status tool is required.");
         firstModel.FinishReason.Should().Be("tool_calls");
@@ -448,7 +464,9 @@ public sealed class WorkflowRuntimeOperationProjectionTests
         string toolCallId = "",
         string toolName = "",
         string argumentsJson = "",
-        string resultJson = "")
+        string resultJson = "",
+        string toolCatalogPolicyVersion = "",
+        WorkflowAgentTurnToolCatalogProof? toolCatalogProof = null)
     {
         var operation = new WorkflowRuntimeOperationRecordedEvent
         {
@@ -472,6 +490,8 @@ public sealed class WorkflowRuntimeOperationProjectionTests
             ToolName = toolName,
             ArgumentsJson = argumentsJson,
             ResultJson = resultJson,
+            ToolCatalogPolicyVersion = toolCatalogPolicyVersion,
+            ToolCatalogProof = toolCatalogProof,
         };
         if (eventTime.HasValue)
             operation.EventTime = Timestamp.FromDateTimeOffset(eventTime.Value);

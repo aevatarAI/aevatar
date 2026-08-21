@@ -3365,7 +3365,8 @@ function agentProfileStoreWorkingDraft(draft){
   return draft;
 }
 function agentProfileRolloutFromBinding(binding){
-  return {enabled:!!(binding&&binding.enabled),cohortBasisPoints:Number(binding&&binding.cohortBasisPoints||0)};
+  return {enabled:!!(binding&&binding.enabled),cohortBasisPoints:Number(binding&&binding.cohortBasisPoints||10000),
+    previousReviewedTarget:binding&&binding.previousReviewedTarget||null};
 }
 function agentProfileUnionNames(existing,additions){
   var seen=Object.create(null),out=[];
@@ -3716,7 +3717,9 @@ function agentProfileEditorHtml(){
       agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576,{type:'number',readonly:true,disabled:dis})+'</div><div class="ap-disclosure-body"><span class="ap-help">当前 nyxid.chat runtime 固定参数；由服务端 editor options 定义。</span></div></details></section>'+agentProfileDiagnosticsHtml()+'</form>'+
     ((d.ownerKind==='system'&&ACCOUNT&&ACCOUNT.admin)?'<section class="ap-section"><h3>System default rollout</h3><div class="ap-rollout">'+
       agentProfileSelect('Enabled','rolloutEnabled',String(rollout.enabled),[{value:'true',label:'启用'},{value:'false',label:'停用'}],actionDisabled)+
-      agentProfileField('Cohort basis points','cohortBasisPoints',rollout.cohortBasisPoints,{type:'number',min:0,max:10000,disabled:actionDisabled})+
+      agentProfileSelect('Rollout cohort','cohortBasisPoints',String(rollout.cohortBasisPoints),[
+        {value:'500',label:'5% canary'},{value:'2500',label:'25% expanded'},{value:'10000',label:'100% full'}],actionDisabled)+
+      '<span class="ap-help">未命中的新会话固定使用上一版 reviewed Profile；回滚不会进入 unrestricted。</span>'+
       '<button class="btn" data-ap-action="system-default"'+(actionDisabled?' disabled':'')+'>保存 system 默认</button></div></section>':'')+agentProfileActionBarHtml(d,writable)+'</div>';
 }
 function agentProfileCollectFields(root){

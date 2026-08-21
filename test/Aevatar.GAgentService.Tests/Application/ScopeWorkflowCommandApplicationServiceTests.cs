@@ -109,6 +109,7 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             ImplementationKind = ServiceImplementationKind.Workflow,
             WorkflowSpec = new WorkflowServiceRevisionSpec
             {
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                 WorkflowId = WorkflowId,
                 WorkflowName = "test",
                 WorkflowYaml = WorkflowYaml,

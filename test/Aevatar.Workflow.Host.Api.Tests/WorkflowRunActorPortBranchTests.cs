@@ -103,7 +103,7 @@ public sealed class WorkflowRunActorPortBranchTests
 
         var act = () => port.BindWorkflowDefinitionAsync(
             "definition-alpha",
-            "name: direct\nroles: []\nsteps: []\n",
+            "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
             "direct",
             inlineWorkflowYamls: null,
             scopeId: null,
@@ -123,8 +123,8 @@ public sealed class WorkflowRunActorPortBranchTests
     {
         var runtime = new RecordingActorRuntime();
         var definitionAgent = CreateBoundDefinitionAgent(
-            "name: direct\nroles: []\nsteps: []\n",
-            CreateCapabilityAdmissionPlan("name: direct\nroles: []\nsteps: []\n"));
+            "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
+            CreateCapabilityAdmissionPlan("name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n"));
         runtime.StoredActors["definition-alpha"] = new RecordingActor("definition-alpha", definitionAgent);
         var preflight = new RecordingArtifactCompatibilityPreflight();
         var port = CreatePort(runtime, artifactPreflight: preflight);
@@ -147,7 +147,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_WhenExistingDefinitionIsCompatible_ShouldPreflightAuthoritativeArtifactOnce()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var authoritativePlan = CreateCapabilityAdmissionPlan(workflowYaml);
         var definitionAgent = CreateBoundDefinitionAgent(workflowYaml, authoritativePlan);
@@ -180,7 +180,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-once",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             "definition-once",
@@ -189,13 +189,13 @@ public sealed class WorkflowRunActorPortBranchTests
         receipt.ActorId.Should().Be("definition-once");
         definitionAgent.State.Version.Should().Be(1);
         definitionAgent.State.WorkflowName.Should().Be("direct");
-        definitionAgent.State.WorkflowYaml.Should().Be("name: direct\nroles: []\nsteps: []\n");
+        definitionAgent.State.WorkflowYaml.Should().Be("name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n");
     }
 
     [Fact]
     public async Task EnsureDefinitionAsync_WhenBindingProjectionStaysLagged_ShouldNotDuplicateAuthority()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         const string actorId = "definition-projection-lag";
         var eventStore = new InMemoryEventStore();
         var definitionAgent = CreateWorkflowDefinitionAgent(eventStore, actorId);
@@ -250,7 +250,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-preferred",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             "definition-preferred",
@@ -283,7 +283,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 definitionActor.Id,
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             definitionActor.Id,
@@ -298,7 +298,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_WhenExistingDefinitionHasAdmissionPlan_ShouldReuseWithoutRebinding()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
@@ -333,7 +333,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_WhenExistingNonExplicitRevisionIdentityMatches_ShouldReuseWithoutRebinding()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             workflowYaml,
@@ -373,7 +373,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_ShouldLeaveReceiptRunIdEmpty_WhenNoRoutableRunIdentityExists()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
@@ -401,7 +401,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task EnsureDefinitionAsync_WhenExistingExplicitIdentityDiffers_ShouldRejectWithoutRebinding()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
         var runtime = new RecordingActorRuntime();
         var definitionAgent = CreateBoundDefinitionAgent(
@@ -434,7 +434,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_WhenExistingExplicitIdentityDiffers_ShouldRejectBeforeCreatingRun()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
         var runtime = new RecordingActorRuntime();
         var definitionAgent = CreateBoundDefinitionAgent(
@@ -467,7 +467,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task EnsureDefinitionAsync_WhenExplicitBindingIdentityIsMissing_ShouldRequireRebind()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
         var runtime = new RecordingActorRuntime();
         var definitionAgent = CreateBoundDefinitionAgent(workflowYaml, plan);
@@ -495,7 +495,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task EnsureDefinitionAsync_WhenExistingExplicitIdentityMatches_ShouldReuseWithoutRebinding()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
         var runtime = new RecordingActorRuntime();
         var definitionAgent = CreateBoundDefinitionAgent(
@@ -528,7 +528,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task EnsureDefinitionAsync_WhenExistingRevisionOnlyDiffers_ShouldRejectWithoutRebinding()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
@@ -561,7 +561,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
-        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-scope"] = new RecordingActor("definition-scope", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-scope", new StubAgent("run-scope")));
@@ -571,7 +571,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-scope",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive,
                 "scope-user-1"),
@@ -580,6 +580,45 @@ public sealed class WorkflowRunActorPortBranchTests
         var bindEvent = ((RecordingActor)runtime.StoredActors["run-scope"]).LastHandledEnvelope!.Payload!
             .Unpack<BindWorkflowRunDefinitionEvent>();
         bindEvent.ScopeId.Should().Be("scope-user-1");
+        bindEvent.ToolCatalogPolicyVersion.Should().Be(WorkflowToolCatalogPolicies.CurrentVersion);
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_WhenDefinitionUsesLegacyV0Policy_ShouldRequireReissueBeforeNewRun()
+    {
+        const string actorId = "definition-legacy-v0";
+        const string workflowYaml =
+            "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
+        var runtime = new RecordingActorRuntime();
+        runtime.StoredActors[actorId] = new RecordingActor(actorId, new StubAgent(actorId));
+        var bindingReader = new StaticWorkflowActorBindingReader(
+            new Dictionary<string, WorkflowActorBinding?>(StringComparer.Ordinal)
+            {
+                [actorId] = new WorkflowActorBinding(
+                    WorkflowActorKind.Definition,
+                    actorId,
+                    actorId,
+                    string.Empty,
+                    "direct",
+                    workflowYaml,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    ExternalCapabilityExecutionMode.Interactive,
+                    ToolCatalogPolicyVersion: WorkflowToolCatalogPolicies.LegacyV0),
+            });
+        var port = CreatePort(runtime, bindingReader);
+
+        var act = () => port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                actorId,
+                "direct",
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*reissued under the current tool catalog policy*");
+        runtime.CreateRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -596,7 +635,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-2",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -622,7 +661,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-3",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -636,7 +675,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_WhenExistingAdmissionPlanDiffers_ShouldFailWithoutCreatingRun()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var authoritativePlan = CreateCapabilityAdmissionPlan(workflowYaml);
         var definitionAgent = new WorkflowGAgent();
@@ -667,7 +706,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_WhenAdmissionPlanAppearsAfterSnapshot_ShouldFailWithoutCreatingRun()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
@@ -697,7 +736,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_WhenPinnedDefinitionVersionDiffers_ShouldFailWithoutCreatingRun()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
@@ -728,7 +767,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "other";
-        definitionAgent.State.WorkflowYaml = "name: other\nroles: []\nsteps: []\n";
+        definitionAgent.State.WorkflowYaml = "name: other\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-3"] = new RecordingActor("definition-3", definitionAgent);
         var port = CreatePort(runtime);
@@ -737,7 +776,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-3",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -759,7 +798,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-missing",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -782,7 +821,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-4",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -808,7 +847,7 @@ public sealed class WorkflowRunActorPortBranchTests
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*valid workflow definition binding*");
+            .WithMessage("*Workflow YAML is required*");
         runtime.CreateRequests.Should().BeEmpty();
     }
 
@@ -829,7 +868,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-missing-binding",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -856,7 +895,7 @@ public sealed class WorkflowRunActorPortBranchTests
                     "workflow-definition:studio",
                     "workflow-definition:studio:run:old",
                     "studio",
-                    "name: studio\nroles: []\nsteps: []\n",
+                    "name: studio\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                     ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                     SourceVersion: 701),
@@ -866,7 +905,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "workflow-definition:studio",
                 "studio",
-                "name: studio\nroles: []\nsteps: []\n",
+                "name: studio\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -1053,8 +1092,8 @@ public sealed class WorkflowRunActorPortBranchTests
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
-        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
-        definitionAgent.State.InlineWorkflowYamls["child"] = "name: child\nroles: []\nsteps: []\n";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
+        definitionAgent.State.InlineWorkflowYamls["child"] = "name: child\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-inline"] = new RecordingActor("definition-inline", definitionAgent);
         var port = CreatePort(runtime);
@@ -1063,10 +1102,10 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-inline",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    ["child"] = "name: child-updated\nroles: []\nsteps: []\n",
+                    ["child"] = "name: child-updated\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 },
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -1080,7 +1119,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_WhenGlobalDefinitionIsUsedByDifferentScopes_ShouldNotMutateDefinition()
     {
-        const string workflowYaml = "name: studio\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: studio\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var definitionActor = new RecordingActor("workflow-definition:studio", new StubAgent("studio-definition"));
         runtime.StoredActors[definitionActor.Id] = definitionActor;
@@ -1130,7 +1169,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task CreateRunAsync_WhenScopeOwnedDefinitionBelongsToAnotherScope_ShouldFailWithoutRebinding()
     {
-        const string workflowYaml = "name: private\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: private\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var definitionActor = new RecordingActor("scope-definition", new StubAgent("scope-definition"));
         runtime.StoredActors[definitionActor.Id] = definitionActor;
@@ -1194,10 +1233,10 @@ public sealed class WorkflowRunActorPortBranchTests
         runtime.StoredActors[actor.Id] = actor;
         var port = CreatePort(runtime);
         var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
-            "name: direct\nroles: []\nsteps: []\n",
+            "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
             new Dictionary<string, string>
             {
-                ["child"] = "name: child\nroles: []\nsteps: []\n",
+                ["child"] = "name: child\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
             },
             ExternalCapabilityExecutionMode.Interactive,
             [],
@@ -1205,11 +1244,11 @@ public sealed class WorkflowRunActorPortBranchTests
 
         await port.BindWorkflowDefinitionAsync(
             actor.Id,
-            "name: direct\nroles: []\nsteps: []\n",
+            "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
             "direct",
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["child"] = "name: child\nroles: []\nsteps: []\n",
+                ["child"] = "name: child\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
             },
             scopeId: null,
             sourceKind: "service_revision",
@@ -1237,7 +1276,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
-        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-projection"] = new RecordingActor("definition-projection", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-projection", new StubAgent("run-projection")));
@@ -1247,7 +1286,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-projection",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -1264,7 +1303,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
-        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-projection-fail"] = new RecordingActor("definition-projection-fail", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("run-projection-fail", new StubAgent("run-projection-fail")));
@@ -1274,7 +1313,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-projection-fail",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -1309,7 +1348,7 @@ public sealed class WorkflowRunActorPortBranchTests
                     "definition-proxy",
                     string.Empty,
                     "direct",
-                    "name: direct\nroles: []\nsteps: []\n",
+                    "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                     new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             }));
@@ -1318,7 +1357,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-proxy",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -1351,7 +1390,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 string.Empty,
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -1380,7 +1419,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 string.Empty,
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             CancellationToken.None);
@@ -1403,7 +1442,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 string.Empty,
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
                 ScopeId: "scope-a"),
@@ -1439,7 +1478,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-race",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive),
             "definition-race",
@@ -1455,7 +1494,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task EnsureDefinitionAsync_WhenDefinitionCreateRaceWinnerHasDifferentExplicitIdentity_ShouldReject()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var plan = CreateExplicitCapabilityAdmissionPlan("wf-alpha", "rev-alpha");
         var runtime = new RecordingActorRuntime();
         var racedDefinition = new RecordingActor(
@@ -1499,7 +1538,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task EnsureRunAsync_ShouldUseExactRunIdentityAndIdempotentBindingCommand()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
@@ -1541,7 +1580,7 @@ public sealed class WorkflowRunActorPortBranchTests
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
-        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         definitionAgent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
         runtime.StoredActors["definition-stable"] = new RecordingActor("definition-stable", definitionAgent);
         runtime.ActorsToCreate.Enqueue(new RecordingActor("work-order-run-1", new StubAgent("work-order-run-1")));
@@ -1557,7 +1596,7 @@ public sealed class WorkflowRunActorPortBranchTests
             new WorkflowDefinitionBinding(
                 "definition-stable",
                 "direct",
-                "name: direct\nroles: []\nsteps: []\n",
+                "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 ExternalCapabilityExecutionMode.Interactive,
                 "scope-1",
@@ -1572,7 +1611,7 @@ public sealed class WorkflowRunActorPortBranchTests
     [Fact]
     public async Task EnsureRunAndDispatchAsync_ShouldSendOneCombinedExactRunCommand()
     {
-        const string workflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        const string workflowYaml = "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n";
         var runtime = new RecordingActorRuntime();
         var definitionAgent = new WorkflowGAgent();
         definitionAgent.State.WorkflowName = "direct";
@@ -1683,7 +1722,7 @@ public sealed class WorkflowRunActorPortBranchTests
         new(
             definitionActorId,
             "direct",
-            "name: direct\nroles: []\nsteps: []\n",
+            "name: direct\nroles: []\nsteps:\n  - id: execute\n    type: tool_call\n",
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             ExternalCapabilityExecutionMode.Interactive);
 
@@ -1731,6 +1770,7 @@ public sealed class WorkflowRunActorPortBranchTests
         agent.State.WorkflowId = workflowId;
         agent.State.RevisionId = revisionId;
         agent.State.ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        agent.State.ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion;
         return agent;
     }
 
@@ -1963,7 +2003,9 @@ public sealed class WorkflowRunActorPortBranchTests
                     SourceKind: definition.State.SourceKind,
                     CapabilityAdmissionPlan: definition.State.CapabilityAdmissionPlan?.Clone(),
                     WorkflowId: definition.State.WorkflowId,
-                    RevisionId: definition.State.RevisionId),
+                    RevisionId: definition.State.RevisionId,
+                    ToolCatalogPolicyVersion: NormalizeTestPolicyVersion(
+                        definition.State.ToolCatalogPolicyVersion)),
                 WorkflowRunGAgent run => new WorkflowActorBinding(
                     WorkflowActorKind.Run,
                     actor.Id,
@@ -1975,10 +2017,17 @@ public sealed class WorkflowRunActorPortBranchTests
                         static x => x.Key,
                         static x => x.Value,
                         StringComparer.OrdinalIgnoreCase),
-                    run.State.ExpectedExecutionMode),
+                    run.State.ExpectedExecutionMode,
+                    ToolCatalogPolicyVersion: NormalizeTestPolicyVersion(
+                        run.State.ToolCatalogPolicyVersion)),
                 _ => WorkflowActorBinding.Unsupported(actor.Id),
             };
         }
+
+        private static string NormalizeTestPolicyVersion(string? value) =>
+            string.IsNullOrWhiteSpace(value)
+                ? WorkflowToolCatalogPolicies.CurrentVersion
+                : value.Trim();
     }
 
     private sealed class AcceptingArtifactCompatibilityPreflight : IWorkflowArtifactCompatibilityPreflight

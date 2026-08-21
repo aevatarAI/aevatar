@@ -2731,7 +2731,7 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               var refreshingSystemEditor=agentProfileEditorHtml();
               if(!refreshingSystemEditor.includes('data-ap-field="rolloutEnabled" disabled'))
                 throw new Error('cached system rollout fields stay read-only while refreshing');
-              if(!refreshingSystemEditor.includes('data-ap-field="cohortBasisPoints" type="number" value="0" disabled'))
+              if(!refreshingSystemEditor.includes('data-ap-field="cohortBasisPoints" disabled'))
                 throw new Error('cached cohort field stays read-only while refreshing');
               AGENT_PROFILE_STATE.loading=false;
               agentProfileRestoreOwnerSnapshot('mine');
@@ -2912,10 +2912,11 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             `, context);
 
             const rollout = vm.runInContext(
-              "agentProfileRolloutFromBinding({enabled:false,cohortBasisPoints:2750})",
+              "agentProfileRolloutFromBinding({enabled:false,cohortBasisPoints:2500,previousReviewedTarget:{profileId:'prof-previous'}})",
               context);
             assert.equal(rollout.enabled, false);
-            assert.equal(rollout.cohortBasisPoints, 2750);
+            assert.equal(rollout.cohortBasisPoints, 2500);
+            assert.equal(rollout.previousReviewedTarget.profileId, 'prof-previous');
 
             const draft = vm.runInContext(`agentProfileDraftFromFields({
               displayName:'Unsaved name', instructions:'Unsaved instructions',

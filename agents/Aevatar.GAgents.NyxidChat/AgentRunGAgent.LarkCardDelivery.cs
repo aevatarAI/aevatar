@@ -1096,6 +1096,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             return;
 
         var completed = ToLarkCardDeliveryCompletedEvent(completion);
+        if (State.GenerationStep?.AgentProfileSnapshot is not null)
+            completed.AgentProfile = State.GenerationStep.AgentProfileSnapshot.Clone();
         try
         {
             await SendToAsync(targetActorId, completed, CancellationToken.None);

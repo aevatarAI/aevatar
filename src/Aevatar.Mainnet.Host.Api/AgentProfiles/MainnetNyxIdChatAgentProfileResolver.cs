@@ -73,22 +73,24 @@ public sealed class MainnetNyxIdChatAgentProfileResolver : INyxIdChatAgentProfil
         }
 
         var admission = systemBinding.System;
-        if (!admission.Enabled || admission.CohortBasisPoints is <= 0 or > AgentProfilePolicies.FullCohortBasisPoints)
+        if (!admission.Enabled || !AgentProfilePolicies.IsReviewedRolloutCohort(admission.CohortBasisPoints))
         {
             return NyxIdChatAgentProfileResolution.Failure(
                 NyxIdChatAgentProfileResolutionStatus.BindingUnavailable);
         }
-        if (systemBinding.Target is null ||
-            ComputeCohortBucket(systemBinding.Target, request.ConversationActorId) >= admission.CohortBasisPoints)
-        {
-            return systemBinding.Target is null
-                ? NyxIdChatAgentProfileResolution.Failure(NyxIdChatAgentProfileResolutionStatus.BindingUnavailable)
-                : NyxIdChatAgentProfileResolution.Unprofiled();
-        }
+        if (systemBinding.Target is null)
+            return NyxIdChatAgentProfileResolution.Failure(NyxIdChatAgentProfileResolutionStatus.BindingUnavailable);
+
+        var selectedTarget = ComputeCohortBucket(systemBinding.Target, request.ConversationActorId) <
+            admission.CohortBasisPoints
+                ? systemBinding.Target
+                : admission.PreviousReviewedTarget;
+        if (selectedTarget is null)
+            return NyxIdChatAgentProfileResolution.Failure(NyxIdChatAgentProfileResolutionStatus.BindingUnavailable);
 
         return await ResolveBindingAsync(
             systemCatalog!,
-            systemBinding.Target,
+            selectedTarget,
             NyxIdChatAgentProfileSelectionSource.SystemDefault,
             ct);
     }

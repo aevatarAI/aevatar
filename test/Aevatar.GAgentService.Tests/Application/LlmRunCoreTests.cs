@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Responses;
@@ -689,6 +690,91 @@ public sealed class LlmRunCoreTests
             .Which.FailureCode.Should().Be(ToolSetResolveError.UnknownNameCode);
     }
 
+    [Fact]
+    public async Task RunAsync_WithNewRestrictedEmptyProof_ShouldCallModelWithExplicitZeroToolCatalog()
+    {
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "ok", IsLast = true }],
+        ]);
+        var selection = ResponsesRuntimeToolSelectionFactory.Create(
+            new ResponsesToolClassification([], [], [], [], [])
+            {
+                OwnedCatalog = AgentTurnToolCatalogFactory.RestrictedEmpty(),
+            },
+            ResponsesToolChoiceHintPlan.Empty,
+            routeToolSetName: null);
+        var core = new LlmRunCore(
+            provider,
+            [],
+            TestToolSetRegistry.Empty,
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_empty_proof", selection), "run_1", "ApiKey"),
+            new RecordingLlmRunSink());
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().BeNullOrEmpty();
+        request.ToolCatalogProof.Should().NotBeNull();
+        request.ToolCatalogProof!.ToolCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenPinnedProofMatchesRematerializedContract_ShouldUseExactRuntimeObject()
+    {
+        var ingressTool = new RecordingAgentTool("web_search", "{}", description: "search", schema: "{\"type\":\"object\"}");
+        var runtimeTool = new RecordingAgentTool("WEB_SEARCH", "{}", description: "search", schema: "{\"type\":\"object\"}");
+        var profile = PinnedProfile("workspace.default");
+        var selection = PinnedSelection(ingressTool, profile);
+        var registry = Registry("workspace.default", runtimeTool);
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "ok", IsLast = true }],
+        ]);
+        var core = new LlmRunCore(
+            provider,
+            [],
+            registry,
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_matching_proof", selection), "run_1", "ApiKey"),
+            new RecordingLlmRunSink());
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().ContainSingle().Which.Should().BeSameAs(runtimeTool);
+        request.ToolCatalogProof!.CatalogDigest.Should().Be(selection.OwnedCatalogProof.CatalogDigest);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenRematerializedContractDiffersFromPinnedProof_ShouldFailBeforeModel()
+    {
+        var ingressTool = new RecordingAgentTool("web_search", "{}", description: "search", schema: "{\"type\":\"object\"}");
+        var driftedTool = new RecordingAgentTool("web_search", "{}", description: "search changed", schema: "{\"type\":\"object\"}");
+        var profile = PinnedProfile("workspace.default");
+        var selection = PinnedSelection(ingressTool, profile);
+        var provider = new ScriptedLlmProviderFactory([
+            [new LLMStreamChunk { DeltaContent = "must not run", IsLast = true }],
+        ]);
+        var sink = new RecordingLlmRunSink();
+        var core = new LlmRunCore(
+            provider,
+            [],
+            Registry("workspace.default", driftedTool),
+            NullLogger<LlmRunCore>.Instance,
+            new RecordingAgentToolExecutionPort());
+
+        await core.RunAsync(
+            new LlmRunCoreRequest(BuildRunRequest("resp_drifted_proof", selection), "run_1", "ApiKey"),
+            sink);
+
+        provider.Requests.Should().BeEmpty();
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().ContainSingle()
+            .Which.FailureCode.Should().Be("tool_catalog_proof_mismatch");
+    }
+
     private static LlmRunRequested BuildRunRequest(
         string responseId,
         LlmSessionRuntimeToolSelection? selection = null) =>
@@ -732,6 +818,55 @@ public sealed class LlmRunCoreTests
                 },
             },
         };
+
+    private static AgentProfileSnapshot PinnedProfile(string toolSetName) =>
+        AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-runtime",
+            ProfileVersion = "1.0.0",
+            AgentKind = "workspace.chat",
+            PolicyRevision = "policy-1",
+            RouteToolSetRef = toolSetName,
+            PublishedRevision = 1,
+            MaxOwnedToolCount = 8,
+            MaxSchemaBytes = 48 * 1024,
+        });
+
+    private static LlmSessionRuntimeToolSelection PinnedSelection(
+        IAgentTool ingressTool,
+        AgentProfileSnapshot profile)
+    {
+        var catalog = new AgentTurnToolCatalog(
+            [ingressTool.Name],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "web",
+            candidateIntentId: "web",
+            diagnostics: null,
+            exactTools: [ingressTool]);
+        return ResponsesRuntimeToolSelectionFactory.Create(
+            new ResponsesToolClassification(
+                [],
+                [ingressTool],
+                [],
+                [ingressTool.Name],
+                [ingressTool.Name])
+            {
+                OwnedCatalog = catalog,
+            },
+            ResponsesToolChoiceHintPlan.Empty,
+            profile.RouteToolSetRef,
+            profile);
+    }
+
+    private static TestToolSetRegistry Registry(string name, IAgentTool tool) =>
+        new(candidate => string.Equals(candidate, name, StringComparison.Ordinal)
+            ? ToolSetResolveResult.Success(candidate, [new StaticAgentToolSource([tool])])
+            : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                ToolSetResolveError.UnknownNameCode,
+                candidate,
+                "unknown",
+                [])));
 
     private sealed class RecordingLlmRunSink : ILlmRunSink
     {
@@ -944,15 +1079,19 @@ public sealed class LlmRunCoreTests
             ValueTask.FromResult(additiveTools ?? []);
     }
 
-    private sealed class RecordingAgentTool(string name, string resultJson) : IAgentTool
+    private sealed class RecordingAgentTool(
+        string name,
+        string resultJson,
+        string description = "test tool",
+        string schema = "{\"type\":\"object\"}") : IAgentTool
     {
         public List<string> Executions { get; } = [];
 
         public string Name { get; } = name;
 
-        public string Description => "test tool";
+        public string Description => description;
 
-        public string ParametersSchema => """{"type":"object"}""";
+        public string ParametersSchema => schema;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {

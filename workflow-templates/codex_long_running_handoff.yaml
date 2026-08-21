@@ -5,6 +5,7 @@ roles:
     name: Reviewer
     agent_kind: workflow.role-agent
     system_prompt: "Review worker output for correctness and actionable issues."
+    allowed_tools: []
 steps:
   - id: announce_job
     type: emit

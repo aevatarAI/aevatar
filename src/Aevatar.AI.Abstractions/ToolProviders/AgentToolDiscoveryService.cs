@@ -97,18 +97,22 @@ public sealed class AgentToolDiscoveryService : IAgentToolDiscoveryService
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(context);
 
+        var sourceSnapshot = sources.ToArray();
         var exactTools = new Dictionary<string, AgentToolDiscoveryEntry>(StringComparer.OrdinalIgnoreCase);
+        var registeredToolCount = 0;
         using var _ = AgentToolContextScope.Push(context);
-        foreach (var source in sources)
+        foreach (var source in sourceSnapshot)
         {
             if (source is null)
             {
-                return AgentToolDiscoveryResult.Failed(new AgentToolDiscoveryFailure(
+                var failure = new AgentToolDiscoveryFailure(
                     AgentToolDiscoveryFailureCode.SourceFailed,
                     string.Empty,
                     "<null>",
                     string.Empty,
-                    "Tool discovery source cannot be null."));
+                    "Tool discovery source cannot be null.");
+                RecordFailure(failure, registeredToolCount, exactTools.Count);
+                return AgentToolDiscoveryResult.Failed(failure);
             }
 
             var sourceType = source.GetType().FullName ?? source.GetType().Name;
@@ -123,24 +127,41 @@ public sealed class AgentToolDiscoveryService : IAgentToolDiscoveryService
             }
             catch (Exception ex)
             {
-                return AgentToolDiscoveryResult.Failed(new AgentToolDiscoveryFailure(
+                var failure = new AgentToolDiscoveryFailure(
                     AgentToolDiscoveryFailureCode.SourceFailed,
                     string.Empty,
                     sourceType,
                     string.Empty,
-                    $"Tool discovery failed for source '{sourceType}': {ex.GetType().Name}."));
+                    $"Tool discovery failed for source '{sourceType}': {ex.GetType().Name}.");
+                RecordFailure(failure, registeredToolCount, exactTools.Count);
+                return AgentToolDiscoveryResult.Failed(failure);
             }
 
+            if (discovered is null)
+            {
+                var failure = new AgentToolDiscoveryFailure(
+                    AgentToolDiscoveryFailureCode.SourceFailed,
+                    string.Empty,
+                    sourceType,
+                    string.Empty,
+                    $"Tool source '{sourceType}' returned a null discovery result.");
+                RecordFailure(failure, registeredToolCount, exactTools.Count);
+                return AgentToolDiscoveryResult.Failed(failure);
+            }
+
+            registeredToolCount += discovered.Count;
             foreach (var tool in discovered)
             {
                 if (tool is null || string.IsNullOrWhiteSpace(tool.Name))
                 {
-                    return AgentToolDiscoveryResult.Failed(new AgentToolDiscoveryFailure(
+                    var failure = new AgentToolDiscoveryFailure(
                         AgentToolDiscoveryFailureCode.InvalidToolName,
                         string.Empty,
                         sourceType,
                         string.Empty,
-                        $"Tool source '{sourceType}' returned a tool with an empty name."));
+                        $"Tool source '{sourceType}' returned a tool with an empty name.");
+                    RecordFailure(failure, registeredToolCount, exactTools.Count);
+                    return AgentToolDiscoveryResult.Failed(failure);
                 }
 
                 var name = tool.Name.Trim();
@@ -153,13 +174,15 @@ public sealed class AgentToolDiscoveryService : IAgentToolDiscoveryService
                 if (ReferenceEquals(existing.Tool, tool))
                     continue;
 
-                return AgentToolDiscoveryResult.Failed(new AgentToolDiscoveryFailure(
+                var collision = new AgentToolDiscoveryFailure(
                     AgentToolDiscoveryFailureCode.ToolNameCollision,
                     existing.Tool.Name.Trim(),
                     existing.SourceType,
                     sourceType,
                     $"Tool name '{name}' resolved to different exact objects from " +
-                    $"'{existing.SourceType}' and '{sourceType}'."));
+                    $"'{existing.SourceType}' and '{sourceType}'.");
+                RecordFailure(collision, registeredToolCount, exactTools.Count);
+                return AgentToolDiscoveryResult.Failed(collision);
             }
         }
 
@@ -167,6 +190,23 @@ public sealed class AgentToolDiscoveryService : IAgentToolDiscoveryService
             .OrderBy(static entry => entry.Tool.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(static entry => entry.Tool.Name, StringComparer.Ordinal)
             .ToArray();
+        AgentTurnToolCatalogTelemetry.RecordDiscovery(
+            registeredToolCount,
+            entries.Length,
+            "accepted");
         return AgentToolDiscoveryResult.Success(new ReadOnlyCollection<AgentToolDiscoveryEntry>(entries));
+    }
+
+    private static void RecordFailure(
+        AgentToolDiscoveryFailure failure,
+        int registeredToolCount,
+        int discoveredToolCount)
+    {
+        AgentTurnToolCatalogTelemetry.RecordDiscovery(
+            registeredToolCount,
+            discoveredToolCount,
+            "rejected",
+            failure.Code.ToString());
+        AgentTurnToolCatalogTelemetry.RecordRejected(failure.Code.ToString(), "discovery");
     }
 }

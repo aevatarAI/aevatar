@@ -797,6 +797,41 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().NotContain(source => source is ChronoStorageReadAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is ChronoStorageWriteAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is OrnnAuthoringAgentToolSource);
+        var baselineDiscovery = await AgentToolDiscoveryService.Instance.DiscoverAsync(
+            workspace.Sources,
+            AgentToolExecutionContext.Empty);
+        baselineDiscovery.IsSuccess.Should().BeTrue(baselineDiscovery.Failure?.Detail);
+        var baselineCatalog = new AgentTurnToolCatalog(
+            baselineDiscovery.Tools.Select(static tool => tool.Name),
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            diagnostics: null,
+            exactTools: baselineDiscovery.Tools,
+            budget: new AgentTurnToolCatalogBudget(128, int.MaxValue));
+        var baselineSnapshot = string.Join(
+            ",",
+            baselineCatalog.Proof.ToolDescriptors.Select(static descriptor =>
+                $"{descriptor.Name}:{descriptor.SchemaBytes}")) +
+            $"|total:{baselineCatalog.Proof.ToolCount}:{baselineCatalog.Proof.SchemaBytes}" +
+            $"|digest:{baselineCatalog.Proof.CatalogDigest}";
+        baselineSnapshot.Should().Be(
+            "aevatar_get_workflow_template:170," +
+            "aevatar_invoke_gagent:1400," +
+            "aevatar_invoke_member:1403," +
+            "aevatar_invoke_team:1424," +
+            "aevatar_list_workflow_templates:62," +
+            "aevatar_observe_run:646," +
+            "aevatar_read_workflow_run_artifact:999," +
+            "aevatar_start_workflow:1949," +
+            "ask_user:1345," +
+            "ornn_search_skills:148," +
+            "use_skill:1473," +
+            "web_fetch:274," +
+            "web_search:231" +
+            "|total:13:11524" +
+            "|digest:sha256:46788e82f006792a4c606a8784c036a465bd53bba143439bf7eb7e625d3a9932");
         app.Services.GetServices<IAgentToolSource>()
             .Select(static source => source.GetType())
             .Should()

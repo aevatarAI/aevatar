@@ -156,6 +156,9 @@ public sealed partial class WorkflowRunGAgent
 
     string IWorkflowExecutionStateHost.RunOrigin => State.RunOrigin ?? string.Empty;
 
+    string IWorkflowExecutionStateHost.ToolCatalogPolicyVersion =>
+        State.ToolCatalogPolicyVersion ?? string.Empty;
+
     long IWorkflowExecutionStateHost.DefinitionVersion => Math.Max(0, State.DefinitionVersion);
 
     public WorkflowCallerNyxIdAuthority? CallerNyxIdAuthority
@@ -1544,7 +1547,8 @@ public sealed partial class WorkflowRunGAgent
         long bindingGeneration = 0,
         string? reuseAuthorityActorId = null,
         string? bindPublisherActorId = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? toolCatalogPolicyVersion = null)
     {
         if (GetPendingWorkflowCompletion(State) != null)
         {
@@ -1566,6 +1570,8 @@ public sealed partial class WorkflowRunGAgent
         var normalizedReusePolicy = reusePolicy == WorkflowRunActorReusePolicy.Unspecified
             ? WorkflowRunActorReusePolicy.SingleRun
             : reusePolicy;
+        var normalizedToolCatalogPolicyVersion = NormalizeNewToolCatalogPolicyVersion(
+            toolCatalogPolicyVersion);
         var bindDefinitionEvent = new BindWorkflowRunDefinitionEvent
         {
             DefinitionActorId = definitionActorId ?? string.Empty,
@@ -1583,6 +1589,7 @@ public sealed partial class WorkflowRunGAgent
             ReusePolicy = normalizedReusePolicy,
             BindingGeneration = bindingGeneration,
             ReuseAuthorityActorId = reuseAuthorityActorId?.Trim() ?? string.Empty,
+            ToolCatalogPolicyVersion = normalizedToolCatalogPolicyVersion,
         };
         if (initialLineage != null)
             bindDefinitionEvent.InitialLineage = initialLineage.Clone();
@@ -1632,6 +1639,26 @@ public sealed partial class WorkflowRunGAgent
                 "Workflow Run is already bound to a different expected execution mode.");
         }
 
+        if (WorkflowToolCatalogPolicies.IsCurrent(bindDefinitionEvent.ToolCatalogPolicyVersion))
+        {
+            var compilation = EvaluateWorkflowCompilation(
+                bindDefinitionEvent.WorkflowYaml,
+                bindDefinitionEvent.ToolCatalogPolicyVersion);
+            if (!compilation.Compiled)
+                throw new InvalidOperationException(compilation.CompilationError);
+            foreach (var (inlineName, inlineYaml) in bindDefinitionEvent.InlineWorkflowYamls)
+            {
+                var inlineCompilation = EvaluateWorkflowCompilation(
+                    inlineYaml,
+                    bindDefinitionEvent.ToolCatalogPolicyVersion);
+                if (!inlineCompilation.Compiled)
+                {
+                    throw new InvalidOperationException(
+                        $"Inline workflow '{inlineName}' is invalid: {inlineCompilation.CompilationError}");
+                }
+            }
+        }
+
         EnsureWorkflowNameCanBind(workflowName);
         var continuation = BuildDefinitionBindingContinuation(
             executeAfterBind: false,
@@ -1668,7 +1695,8 @@ public sealed partial class WorkflowRunGAgent
             request.ReusePolicy,
             request.BindingGeneration,
             request.ReuseAuthorityActorId,
-            ActiveInboundEnvelope?.Route?.PublisherActorId);
+            bindPublisherActorId: ActiveInboundEnvelope?.Route?.PublisherActorId,
+            toolCatalogPolicyVersion: request.ToolCatalogPolicyVersion);
 
     public override Task<string> GetDescriptionAsync()
     {
@@ -3293,6 +3321,19 @@ public sealed partial class WorkflowRunGAgent
             return;
         }
 
+        if (artifactFact is WorkflowRuntimeOperationRecordedEvent
+            {
+                Kind: WorkflowRuntimeOperationKind.Model,
+                Phase: WorkflowRuntimeOperationPhase.Started,
+            } modelStarted && !IsMatchingToolCatalogProof(modelStarted))
+        {
+            Logger.LogWarning(
+                "Ignore workflow model-start artifact with mismatched tool catalog proof. run={RunId} policy={PolicyVersion}",
+                State.RunId,
+                modelStarted.ToolCatalogPolicyVersion);
+            return;
+        }
+
         var stepCompletionKey = BuildStepCompletionArtifactKey(artifactFact as StepCompletedEvent);
         if (stepCompletionKey != null && State.ProcessedStepCompletionKeys.ContainsKey(stepCompletionKey))
             return;
@@ -3701,6 +3742,31 @@ public sealed partial class WorkflowRunGAgent
         return next;
     }
 
+    private bool IsMatchingToolCatalogProof(WorkflowRuntimeOperationRecordedEvent operation)
+    {
+        if (!WorkflowToolCatalogPolicies.IsCurrent(State.ToolCatalogPolicyVersion))
+        {
+            return string.IsNullOrWhiteSpace(operation.ToolCatalogPolicyVersion) ||
+                   string.Equals(
+                       operation.ToolCatalogPolicyVersion,
+                       State.ToolCatalogPolicyVersion,
+                       StringComparison.Ordinal);
+        }
+
+        var proof = operation.ToolCatalogProof;
+        return string.Equals(
+                   operation.ToolCatalogPolicyVersion,
+                   State.ToolCatalogPolicyVersion,
+                   StringComparison.Ordinal) &&
+               proof?.Budget is
+               {
+                   MaximumToolCount: WorkflowToolCatalogPolicies.MaximumWorkflowToolCount,
+                   MaximumSchemaBytes: WorkflowToolCatalogPolicies.MaximumWorkflowSchemaBytes,
+               } &&
+               proof.ToolCount <= WorkflowToolCatalogPolicies.MaximumWorkflowToolCount &&
+               proof.SchemaBytes <= WorkflowToolCatalogPolicies.MaximumWorkflowSchemaBytes;
+    }
+
     private static WorkflowRunState ApplyWorkflowRuntimeOperationRecorded(
         WorkflowRunState current,
         WorkflowRuntimeOperationRecordedEvent evt)
@@ -3710,6 +3776,12 @@ public sealed partial class WorkflowRunGAgent
 
         var next = current.Clone();
         RecordProcessedArtifactSource(next, evt.Source);
+        if (evt.Kind == WorkflowRuntimeOperationKind.Model &&
+            evt.Phase == WorkflowRuntimeOperationPhase.Started &&
+            evt.ToolCatalogProof != null)
+        {
+            next.LastToolCatalogProof = evt.ToolCatalogProof.Clone();
+        }
         return next;
     }
 
@@ -3811,6 +3883,7 @@ public sealed partial class WorkflowRunGAgent
         next.ReusePolicy = evt.ReusePolicy;
         next.BindingGeneration = evt.BindingGeneration;
         next.ReuseAuthorityActorId = evt.ReuseAuthorityActorId?.Trim() ?? string.Empty;
+        next.ToolCatalogPolicyVersion = evt.ToolCatalogPolicyVersion ?? string.Empty;
         next.Status = BoundStatus;
         next.Input = string.Empty;
         next.FinalOutput = string.Empty;
@@ -3868,7 +3941,9 @@ public sealed partial class WorkflowRunGAgent
             next.InlineWorkflowYamls[normalizedWorkflowName] = workflowYamlValue;
         }
 
-        var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
+        var compileResult = EvaluateWorkflowCompilation(
+            next.WorkflowYaml,
+            next.ToolCatalogPolicyVersion);
         next.Compiled = compileResult.Compiled;
         next.CompilationError = compileResult.CompilationError;
         return next;
@@ -5125,6 +5200,10 @@ public sealed partial class WorkflowRunGAgent
                string.Equals(current.ScheduleId?.Trim(), requested.ScheduleId?.Trim(), StringComparison.Ordinal) &&
                string.Equals(current.WorkflowId?.Trim(), requested.WorkflowId?.Trim(), StringComparison.Ordinal) &&
                string.Equals(current.RevisionId?.Trim(), requested.RevisionId?.Trim(), StringComparison.Ordinal) &&
+               string.Equals(
+                   current.ToolCatalogPolicyVersion?.Trim(),
+                   requested.ToolCatalogPolicyVersion?.Trim(),
+                   StringComparison.Ordinal) &&
                Math.Max(0, current.DefinitionVersion) == Math.Max(0, requested.DefinitionVersion) &&
                current.ExpectedExecutionMode == requested.ExpectedExecutionMode &&
                NormalizeLiveReusePolicy(current.ReusePolicy) == requestedPolicy &&
@@ -6009,7 +6088,9 @@ public sealed partial class WorkflowRunGAgent
         }
     }
 
-    private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)
+    private WorkflowCompilationResult EvaluateWorkflowCompilation(
+        string yaml,
+        string? toolCatalogPolicyVersion = null)
     {
         if (string.IsNullOrWhiteSpace(yaml))
             return WorkflowCompilationResult.Invalid("workflow yaml is empty");
@@ -6017,7 +6098,10 @@ public sealed partial class WorkflowRunGAgent
         try
         {
             var workflow = _parser.Parse(yaml);
-            var errors = ValidateWorkflowDefinition(workflow);
+            var errors = ValidateWorkflowDefinition(
+                workflow,
+                WorkflowToolCatalogPolicies.IsCurrent(
+                    toolCatalogPolicyVersion ?? State.ToolCatalogPolicyVersion));
             if (errors.Count > 0)
                 return WorkflowCompilationResult.Invalid(string.Join("; ", errors));
 
@@ -6104,7 +6188,9 @@ public sealed partial class WorkflowRunGAgent
             return WorkflowCompilationResult.Invalid(ex.Message);
         }
 
-        var validationErrors = ValidateWorkflowDefinition(parsed);
+        var validationErrors = ValidateWorkflowDefinition(
+            parsed,
+            WorkflowToolCatalogPolicies.IsCurrent(State.ToolCatalogPolicyVersion));
         if (validationErrors.Count > 0)
             return WorkflowCompilationResult.Invalid(string.Join("; ", validationErrors));
         if (WorkflowValueLifecyclePolicy.HasDeclarations(parsed))
@@ -6139,6 +6225,7 @@ public sealed partial class WorkflowRunGAgent
             ReusePolicy = State.ReusePolicy,
             BindingGeneration = State.BindingGeneration,
             ReuseAuthorityActorId = State.ReuseAuthorityActorId ?? string.Empty,
+            ToolCatalogPolicyVersion = State.ToolCatalogPolicyVersion ?? string.Empty,
         };
         var continuation = BuildDefinitionBindingContinuation(
             executeAfterBind: true,
@@ -6385,6 +6472,25 @@ public sealed partial class WorkflowRunGAgent
             new(false, error ?? string.Empty, null);
     }
 
-    private List<string> ValidateWorkflowDefinition(WorkflowDefinition workflow) =>
-        WorkflowRunDefinitionValidationSupport.Validate(workflow, _knownModuleStepTypes, _stepExecutorFactory);
+    private List<string> ValidateWorkflowDefinition(
+        WorkflowDefinition workflow,
+        bool requireCurrentToolCatalogPolicy = false) =>
+        WorkflowRunDefinitionValidationSupport.Validate(
+            workflow,
+            _knownModuleStepTypes,
+            _stepExecutorFactory,
+            requireCurrentToolCatalogPolicy);
+
+    private static string NormalizeNewToolCatalogPolicyVersion(string? policyVersion)
+    {
+        var normalized = string.IsNullOrWhiteSpace(policyVersion)
+            ? WorkflowToolCatalogPolicies.LegacyV0
+            : policyVersion.Trim();
+        if (!WorkflowToolCatalogPolicies.IsCurrent(normalized) &&
+            !string.Equals(normalized, WorkflowToolCatalogPolicies.LegacyV0, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workflow tool catalog policy version is unsupported.");
+        }
+        return normalized;
+    }
 }

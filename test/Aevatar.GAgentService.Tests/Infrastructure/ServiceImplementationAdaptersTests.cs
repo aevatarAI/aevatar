@@ -572,6 +572,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowId = "wf-inferred",
                     WorkflowYaml = "name: inferred-workflow",
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
@@ -645,6 +646,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowId = "wf-bundle",
                     WorkflowYaml = workflowYaml,
                     InlineWorkflowYamls = { ["child"] = "name: child" },
@@ -681,6 +683,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowId = "wf-legacy-interactive",
                     WorkflowYaml = workflowYaml,
                 },
@@ -715,6 +718,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowYaml = "invalid",
                 },
             },
@@ -749,6 +753,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowId = "wf-provided",
                     WorkflowName = "provided-workflow",
                     WorkflowYaml = "name: ignored",
@@ -768,7 +773,7 @@ public sealed class ServiceImplementationAdaptersTests
         admission.PersistedRequest!.Plan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
         admission.PersistedRequest.ExpectedExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Interactive);
-        workflowPort.ParseCalls.Should().ContainSingle("name: ignored");
+        workflowPort.ParseCalls.Should().Equal("name: ignored", "name: child");
     }
 
     [Fact]
@@ -845,6 +850,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowId = "wf-alpha",
                     WorkflowYaml = workflowYaml,
                     CapabilityAdmissionPlan = persistedPlan,
@@ -895,6 +901,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowYaml = workflowYaml,
                     CapabilityAdmissionPlan = persistedPlan,
                 },
@@ -941,6 +948,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowYaml = LegacyWorkflowYaml,
                     CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                     {
@@ -987,6 +995,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowId = "wf-rebound",
                     WorkflowYaml = LegacyWorkflowYaml,
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
@@ -1025,6 +1034,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "provided-workflow",
                     WorkflowYaml = "invalid",
                 },
@@ -1054,6 +1064,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "provided-workflow",
                     WorkflowYaml = "name: yaml-workflow",
                 },
@@ -1080,6 +1091,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "wf",
                     WorkflowYaml = string.Empty,
                 },

@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
@@ -1166,10 +1167,11 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             .BuildServiceProvider();
         var agent = new TestRoleGAgent(
             executionPort,
-            [new StaticToolSource([tool])],
+            [tool],
             timeProvider,
             vault,
-            providerFactory)
+            providerFactory,
+            providerFactory is not null)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -1212,18 +1214,76 @@ public sealed class RoleGAgentRecoveryCheckpointTests
 
     private sealed class TestRoleGAgent(
         IAgentToolExecutionPort executionPort,
-        IEnumerable<IAgentToolSource> toolSources,
+        IReadOnlyList<IAgentTool> exactTools,
         TimeProvider timeProvider,
         ISecretVault vault,
-        ILLMProviderFactory? providerFactory)
+        ILLMProviderFactory? providerFactory,
+        bool enableExplicitCatalog)
         : RoleGAgent(
             executionPort,
             llmProviderFactory: providerFactory,
-            toolSources: toolSources,
+            toolSources: [new StaticToolSource(exactTools)],
             timeProvider: timeProvider,
             chatToolRecoverySecretVault: vault)
     {
         public Task PersistForTestAsync(IMessage evt) => PersistDomainEventAsync(evt);
+
+        protected override Task<AgentProfileTurnAuthorityPreparation?> PrepareAgentProfileTurnAuthorityAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            CancellationToken ct)
+        {
+            if (!enableExplicitCatalog)
+                return base.PrepareAgentProfileTurnAuthorityAsync(request, toolContext, ct);
+
+            ct.ThrowIfCancellationRequested();
+            var authority = new AgentProfileTurnAuthorityState
+            {
+                ReconciliationKey = new AgentProfileTurnReconciliationKey
+                {
+                    SessionId = request.SessionId,
+                    Attempt = 1,
+                },
+                CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+                {
+                    ProfileId = "profile-recovery-test",
+                    ProfileVersion = "v1",
+                    PolicyRevision = "policy-v1",
+                    IntentId = "recovery-test-tool",
+                },
+                AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            };
+            authority.AuthorityCeilingToolNames.Add(exactTools.Select(static tool => tool.Name));
+            return Task.FromResult<AgentProfileTurnAuthorityPreparation?>(
+                AgentProfileTurnAuthorityPreparation.Create(authority));
+        }
+
+        protected override Task<AgentTurnToolCatalogMaterialization?> MaterializeCommittedAgentTurnToolCatalogAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            AgentProfileTurnAuthorityState committedAuthority,
+            CancellationToken ct)
+        {
+            if (!enableExplicitCatalog)
+            {
+                return base.MaterializeCommittedAgentTurnToolCatalogAsync(
+                    request,
+                    toolContext,
+                    committedAuthority,
+                    ct);
+            }
+
+            ct.ThrowIfCancellationRequested();
+            var catalog = new AgentTurnToolCatalog(
+                committedAuthority.AuthorityCeilingToolNames,
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
+                candidateIntentId: committedAuthority.CandidateRoute?.IntentId,
+                exactTools: exactTools);
+            return Task.FromResult<AgentTurnToolCatalogMaterialization?>(
+                AgentTurnToolCatalogMaterialization.Create(catalog, committedAuthority.Clone()));
+        }
     }
 
     private class TestTool(string name, AgentToolReplayPolicy replayPolicy) : IAgentTool

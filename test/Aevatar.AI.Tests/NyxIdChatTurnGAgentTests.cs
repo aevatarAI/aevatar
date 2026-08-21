@@ -2899,6 +2899,10 @@ public sealed partial class NyxIdChatTurnGAgentTests
             .Equal("tool-alpha");
         generationExecutor.LlmStepRequests[1].TurnCatalog!.FinalAllowedToolNames.Should()
             .BeEquivalentTo("tool-alpha", "tool-beta");
+        generationExecutor.LlmStepRequests[1].StepState.ToolCatalogProof.Should().Be(
+            generationExecutor.LlmStepRequests[1].TurnCatalog!.Proof.ToPayload());
+        generationExecutor.LlmStepRequests[1].StepState.ToolCatalogPolicyVersion.Should().Be(
+            AgentRunReplyGenerationExecutor.ToolCatalogPolicyVersion);
     }
 
     [Fact]
@@ -2916,9 +2920,6 @@ public sealed partial class NyxIdChatTurnGAgentTests
             new AdmittedProfileTool(
                 "operation-same-instance-other-slug",
                 CreateReadAdmission("us-alpha", "service-other", "endpoint-same-instance")),
-            new AdmittedProfileTool(
-                "operation-beta-read",
-                CreateReadAdmission("us-beta", "service-beta", "endpoint-beta")),
             new NamedProfileTool("global-fallback"),
         ];
         var registry = new BuiltInIntentToolSetRegistry(tools);
@@ -3010,9 +3011,6 @@ public sealed partial class NyxIdChatTurnGAgentTests
             new AdmittedProfileTool(
                 "operation-same-instance-other-slug",
                 CreateReadAdmission("us-alpha", "service-other", "endpoint-same-instance")),
-            new AdmittedProfileTool(
-                "operation-beta-read",
-                CreateReadAdmission("us-beta", "service-beta", "endpoint-beta")),
             new NamedProfileTool("global-fallback"),
         ];
         var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
@@ -3030,7 +3028,6 @@ public sealed partial class NyxIdChatTurnGAgentTests
                     "operation-alpha-read",
                     "operation-same-slug-other-instance",
                     "operation-same-instance-other-slug",
-                    "operation-beta-read",
                     "global-fallback",
                 },
             },

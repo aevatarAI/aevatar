@@ -25,6 +25,11 @@ public static class WorkflowServiceRevisionArtifactBuilder
             ?? throw new InvalidOperationException("service identity is required.");
         var workflowSpec = revisionSpec.WorkflowSpec
             ?? throw new InvalidOperationException("workflow implementation_spec is required.");
+        if (!WorkflowToolCatalogPolicies.IsCurrent(workflowSpec.ToolCatalogPolicyVersion))
+        {
+            throw new InvalidOperationException(
+                "workflow tool catalog policy version must be the current reviewed policy.");
+        }
         if (authorizationDependencies.ServiceGrantPolicy == WorkflowServiceGrantPolicy.Unspecified ||
             !Enum.IsDefined(authorizationDependencies.ServiceGrantPolicy))
         {
@@ -68,6 +73,7 @@ public static class WorkflowServiceRevisionArtifactBuilder
             AuthorizationEvidence = authorizationEvidence,
             CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
             ExecutionMode = capabilityAdmissionPlan.ExecutionMode,
+            ToolCatalogPolicyVersion = workflowSpec.ToolCatalogPolicyVersion,
         };
         workflowPlan.InlineWorkflowYamls.Add(workflowSpec.InlineWorkflowYamls);
 

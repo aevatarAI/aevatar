@@ -300,6 +300,7 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             roles:
               - id: assistant
                 name: Assistant
+                allowed_tools: []
             steps:
               - id: reply
                 type: llm_call
@@ -348,6 +349,7 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             roles:
               - id: assistant
                 name: Assistant
+                allowed_tools: []
             steps:
               - id: reply
                 type: llm_call
@@ -403,6 +405,7 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             roles:
               - id: assistant
                 name: Assistant
+                allowed_tools: []
             steps:
               - id: reply
                 type: llm_call

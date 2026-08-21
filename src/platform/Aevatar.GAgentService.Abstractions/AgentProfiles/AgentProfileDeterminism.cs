@@ -309,6 +309,7 @@ public static class AgentProfileDeterminism
             {
                 var normalized = selector.Clone();
                 normalized.CatalogServiceSlug = normalized.CatalogServiceSlug?.Trim() ?? string.Empty;
+                normalized.EndpointId = normalized.EndpointId?.Trim() ?? string.Empty;
                 var risks = normalized.AllowedRisks
                     .Distinct()
                     .OrderBy(static risk => (int)risk)
@@ -319,6 +320,7 @@ public static class AgentProfileDeterminism
                 return normalized;
             })
             .OrderBy(static selector => selector.CatalogServiceSlug, StringComparer.Ordinal)
+            .ThenBy(static selector => selector.EndpointId, StringComparer.Ordinal)
             .ThenBy(
                 static selector => string.Join(",", selector.AllowedRisks.Select(static risk => (int)risk)),
                 StringComparer.Ordinal)

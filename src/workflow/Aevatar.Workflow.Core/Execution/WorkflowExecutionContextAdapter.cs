@@ -37,6 +37,8 @@ internal sealed class WorkflowExecutionContextAdapter :
 
     public string ScheduleId => _stateHost.ScheduleId;
 
+    public string ToolCatalogPolicyVersion => _stateHost.ToolCatalogPolicyVersion;
+
     public WorkflowCallerNyxIdAuthority? CallerNyxIdAuthority
     {
         get

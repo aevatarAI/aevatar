@@ -288,6 +288,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             []);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -339,6 +340,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -458,6 +460,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -520,6 +523,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -567,6 +571,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -621,6 +626,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -708,6 +714,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -767,6 +774,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -841,6 +849,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -922,6 +931,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -969,6 +979,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1012,6 +1023,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1056,6 +1068,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1106,6 +1119,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1151,6 +1165,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1223,6 +1238,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1270,6 +1286,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1327,6 +1344,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1380,6 +1398,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1426,6 +1445,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1477,6 +1497,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1528,6 +1549,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1645,6 +1667,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             requestTypeUrl: Any.Pack(new StringValue()).TypeUrl);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "wf",
             WorkflowYaml = "name: wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1794,6 +1817,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         };
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "artifact-wf",
             WorkflowYaml = "name: artifact-wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1897,6 +1921,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             primaryActorId: "");
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "artifact-wf",
             WorkflowYaml = "name: artifact-wf",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1999,6 +2024,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         target.Artifact.RevisionId = artifactRevisionId;
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = "workflow",
             WorkflowYaml = "name: workflow",
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,

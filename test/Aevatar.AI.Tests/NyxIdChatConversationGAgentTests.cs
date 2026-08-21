@@ -1435,7 +1435,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
-    public async Task UnprofiledHumanSessionTurn_ShouldInvokePinnedAccountStatusAndSessionsWithoutApproval()
+    public async Task ProfiledHumanSessionTurn_ShouldInvokePinnedAccountStatusAndSessionsWithoutApproval()
     {
         const string conversationActorId = "conversation-pinned-class-r";
         const string sourceReadableBearer = "source-readable-bearer";
@@ -1449,11 +1449,47 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.test" };
         using var apiClient = new NyxIdApiClient(options, new HttpClient(handler));
         var assistantSource = new NyxIdAssistantToolSource(options, apiClient);
+        var assistantTools = await assistantSource.DiscoverToolsAsync();
+        var profileToolNames = expectedToolNames.Concat(activatedToolNames).ToArray();
+        const string profileIntentId = "nyxid-account-status-sessions";
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-pinned-class-r",
+            ProfileVersion = "profile-v1",
+            AgentKind = NyxIdChatServiceDefaults.GAgentKind,
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy(),
+            RecoveryToolPolicy = new AgentProfileToolPolicy(),
+            ClassifierTimeoutMs = 1_000,
+            ExactSkillFetchTimeoutMs = 1_500,
+            MaxSelectedSkillBytes = 256,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        };
+        profile.MaximumToolPolicy.ToolNames.Add(profileToolNames);
+        profile.Members.Add(new AgentProfileSkillMember
+        {
+            IntentId = profileIntentId,
+            RoutingDescription = "Read the caller's NyxID account, status, and sessions.",
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolNames = { profileToolNames },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
+        });
+        profile = AgentProfileSnapshotCodec.Seal(profile);
+        var materializer = new AgentTurnToolCatalogMaterializer(
+            new FixedToolSetRegistry("profile.route", new FixedToolSource(assistantTools)),
+            new ProfileTaskThenIntentClassifier(profileIntentId));
         var provider = new PinnedClassRToolCallProvider(expectedToolNames);
         var eventStore = new InMemoryEventStoreForTests();
         var dispatch = new RecordingActorDispatchPort([], static (_, _) => Task.CompletedTask);
         using var services = BuildEventSourcingServices(eventStore);
-        var agent = CreateController(services, conversationActorId, dispatch);
+        var agent = CreateController(
+            services,
+            conversationActorId,
+            dispatch,
+            materializer);
         await agent.ActivateAsync();
         var start = CreateStartTurnCommand();
         start.ConversationActorId = conversationActorId;
@@ -1475,6 +1511,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 ScopeId = start.ScopeId,
                 CreatedLocally = true,
                 RequestedActorId = conversationActorId,
+                AgentProfile = profile,
                 FirstTurn = start,
             }));
         await DispatchPendingCreationFirstTurnAsync(agent, dispatch);
@@ -1491,7 +1528,10 @@ public sealed partial class NyxIdChatConversationGAgentTests
             interactiveReplyCollector: null,
             relayOptions: null,
             logger: NullLogger<AgentRunReplyGenerationExecutor>.Instance);
-        var turnExecutor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var turnExecutor = new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            new UnavailableNyxIdActionPostconditionPort(),
+            materializer);
         var session = new NyxIdChatTransientExecutionSession();
         var inputCases = new List<NyxIdChatOperationDispatchCommand.InputOneofCase>();
 
@@ -8011,6 +8051,25 @@ public sealed partial class NyxIdChatConversationGAgentTests
         {
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
+            return Task.FromResult(AgentProfileTurnClassificationResult.Matched(intentId));
+        }
+    }
+
+    private sealed class ProfileTaskThenIntentClassifier(string profileIntentId)
+        : IAgentProfileTurnClassifier
+    {
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var intentId = request.Candidates.Any(candidate =>
+                string.Equals(
+                    candidate.IntentId,
+                    AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId,
+                    StringComparison.Ordinal))
+                ? AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId
+                : profileIntentId;
             return Task.FromResult(AgentProfileTurnClassificationResult.Matched(intentId));
         }
     }

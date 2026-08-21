@@ -86,6 +86,7 @@ public sealed class WorkflowActorBindingProjector
             WorkflowId = evt.WorkflowId ?? string.Empty,
             RevisionId = evt.RevisionId ?? string.Empty,
             ExpectedExecutionMode = evt.ExpectedExecutionMode,
+            ToolCatalogPolicyVersion = evt.ToolCatalogPolicyVersion ?? string.Empty,
         };
         if (evt.CapabilityAdmissionPlan is not null)
             document.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan.Clone();
@@ -108,6 +109,7 @@ public sealed class WorkflowActorBindingProjector
             WorkflowYaml = evt.WorkflowYaml ?? string.Empty,
             ScopeId = evt.ScopeId?.Trim() ?? string.Empty,
             ExpectedExecutionMode = evt.ExpectedExecutionMode,
+            ToolCatalogPolicyVersion = evt.ToolCatalogPolicyVersion ?? string.Empty,
         };
         if (evt.CapabilityAdmissionPlan is not null)
             document.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan.Clone();

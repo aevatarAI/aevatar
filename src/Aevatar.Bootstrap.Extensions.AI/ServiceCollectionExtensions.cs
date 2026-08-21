@@ -156,15 +156,16 @@ public static class ServiceCollectionExtensions
             .Register<WorkflowRoleGAgent>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
         services.AddAgentToolExecution();
+        services.TryAddSingleton(sp => new VoiceAgentTurnToolCatalogMaterializer(
+            sp.GetServices<IAgentToolSource>(),
+            ResolveVoiceCredentialProviders(sp),
+            sp.GetService<IAgentToolDiscoveryService>(),
+            sp.GetService<ILogger<VoiceAgentTurnToolCatalogMaterializer>>()));
         services.TryAddSingleton<IVoiceToolInvoker>(sp => new AgentToolVoiceInvoker(
-            sp.GetServices<IAgentToolSource>(),
-            sp.GetRequiredService<IAgentToolExecutionPort>(),
-            ResolveVoiceCredentialProviders(sp),
-            sp.GetService<ILogger<AgentToolVoiceInvoker>>()));
+            sp.GetRequiredService<VoiceAgentTurnToolCatalogMaterializer>(),
+            sp.GetRequiredService<IAgentToolExecutionPort>()));
         services.TryAddSingleton<IVoiceToolCatalog>(sp => new AgentToolVoiceCatalog(
-            sp.GetServices<IAgentToolSource>(),
-            ResolveVoiceCredentialProviders(sp),
-            sp.GetService<ILogger<AgentToolVoiceCatalog>>()));
+            sp.GetRequiredService<VoiceAgentTurnToolCatalogMaterializer>()));
         services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         // Zero-config /ws/voice: auto-provision a never-enabled default voice agent on first connect by
         // committing the same enable voice-presence/enable issues. The attach path (ActorOwnedVoiceRealtimeSession)

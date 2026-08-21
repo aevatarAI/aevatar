@@ -112,7 +112,8 @@ public sealed class AgentProfileContractsTests
         systemAdmission.Should().NotBeNull();
         systemAdmission!.Fields.InFieldNumberOrder().Select(x => x.Name).Should().Equal(
             "enabled",
-            "cohort_basis_points");
+            "cohort_basis_points",
+            "previous_reviewed_target");
 
         AgentProfileDefaultBinding.Descriptor.Fields.InFieldNumberOrder()
             .Select(x => x.Name)

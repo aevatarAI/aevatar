@@ -497,6 +497,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "wf",
                     WorkflowYaml = "name: wf",
                     DefinitionActorId = "workflow-definition-1",

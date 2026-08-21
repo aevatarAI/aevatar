@@ -88,7 +88,8 @@ public sealed record WorkflowDefinitionBinding(
     WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
     string WorkflowId = "",
     string RevisionId = "",
-    long DefinitionVersion = 0);
+    long DefinitionVersion = 0,
+    string ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion);
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,
@@ -117,7 +118,8 @@ public sealed record WorkflowActorBinding(
     string SourceKind = "",
     WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
     string WorkflowId = "",
-    string RevisionId = "")
+    string RevisionId = "",
+    string ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion)
 {
     public static WorkflowActorBinding Unsupported(string actorId) =>
         new(
@@ -128,7 +130,8 @@ public sealed record WorkflowActorBinding(
             string.Empty,
             string.Empty,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-            ExternalCapabilityExecutionMode.Unspecified);
+            ExternalCapabilityExecutionMode.Unspecified,
+            ToolCatalogPolicyVersion: WorkflowToolCatalogPolicies.LegacyV0);
 
     public bool IsWorkflowCapable => ActorKind != WorkflowActorKind.Unsupported;
 
@@ -353,7 +356,21 @@ public interface IWorkflowDefinitionParser
         string workflowYaml,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Parses a definition for a new publication/binding. Unlike legacy replay parsing, this
+    /// applies the current workflow tool-catalog policy gate.
+    /// </summary>
+    Task<WorkflowYamlParseResult> ParseWorkflowYamlForPublicationAsync(
+        string workflowYaml,
+        CancellationToken ct = default) =>
+        ParseWorkflowYamlAsync(workflowYaml, ct);
+
     Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
         IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
         CancellationToken ct = default);
+
+    Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleForPublicationAsync(
+        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+        CancellationToken ct = default) =>
+        ParseInlineWorkflowBundleAsync(inlineWorkflowDocuments, ct);
 }

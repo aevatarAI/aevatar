@@ -294,6 +294,7 @@ internal sealed class FileBackedWorkflowCatalogPort
                     : definition.SourceKind.Trim(),
                 CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
                 ExpectedExecutionMode = definition.ExpectedExecutionMode,
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(PublisherActorId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation

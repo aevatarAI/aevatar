@@ -45,17 +45,17 @@ Profile 选择只发生在新建 `nyxid.chat` Conversation 时，优先级固定
 ```text
 create request 显式 caller/system reference
   -> 当前 scope 对 nyxid.chat 的默认 binding
-  -> system 对 nyxid.chat 的默认 binding（enabled + cohort admission）
+  -> system 对对应 agent kind 的默认 binding（enabled + candidate/previous cohort admission）
   -> genuinely unprofiled
 ```
 
-用户 default binding 只能引用自己的 Profile 或已发布的 `system/` Profile，并固定为 enabled + full cohort。只有 system default binding 可以配置 `enabled` 与 `cohortBasisPoints`。Cohort 只控制之后创建的实例，不改变已有实例。
+用户 default binding 只能引用自己的 Profile 或已发布的 `system/` Profile，并固定为 full cohort。只有 system default binding 可以配置 `enabled` 与 `cohortBasisPoints`。合法阶段固定为 `500 -> 2500 -> 10000` basis points。System binding 的 actor-owned state 同时持有 candidate `target` 和 `previous_reviewed_target`；cohort 未命中的新实例使用 previous reviewed snapshot，而不是 unprofiled。Partial rollout 缺上一版 baseline 或跳阶段都 fail closed。Cohort 只控制之后创建的实例，不改变已有实例。
 
 如果某一级存在明确 binding，但目标 unpublished、disabled、不可见、protected read model 尚未物化或 digest 无效，创建必须返回 typed `AGENT_PROFILE_UNAVAILABLE` 或 `AGENT_PROFILE_INTEGRITY_FAILURE`。不得降级到下一优先级，也不得进入 unrestricted path。只有完全没有 binding 才是 genuinely unprofiled。
 
 Conversation 创建时从 protected execution read model 读取一次 snapshot，并把 clone 固化到自己的 Protobuf state。Profile revision B 只影响之后创建的 Conversation；已经绑定 revision A 的实例不 hot-upgrade、不 lazy rebind、不 replay/backfill。Host/Actor 重启恢复 actor state 与持久化 read model，不需要 Profile 文件，也不在 create/turn 路径重新访问管理 API 或 Ornn。Turn-time 对已固化 exact skill 的受限读取仍遵循既有 `AgentTurnToolCatalogMaterializer` 契约，不改变这里的 create-time 权威边界。
 
-## Route admission 与全量 rollout
+## Route admission、shadow 与 rollout
 
 系统默认 binding 只负责选择 sealed Profile，不得通过改写所有 caller 的 route policy 或扩大
 `workspace.default` 来模拟 Profile。新 Conversation 的 direct-chat route 按以下规则与已选 Profile 对账：
@@ -65,11 +65,9 @@ Conversation 创建时从 protected execution read model 读取一次 snapshot�
 - route policy 显式写出的 tool set 不被覆盖，任何 drift 都 fail closed；
 - 未选 Profile 的创建请求保持既有 fallback 行为。
 
-全用户启用的标准顺序是：先部署上述 route admission 语义；再创建、validate、publish system-owned
-Profile；用显式 system reference 创建新 Conversation 做 canary；最后把 system default binding 设为
-enabled + `10000` basis points，并再次用无显式 reference 的新 Conversation 验证。scope default binding
-继续高于 system default。Published revision 与 Conversation snapshot 都不可原地修改，因此每次发布或
-binding 变更后的验证都必须创建新 Conversation，旧 Conversation 不代表 rollout 结果。
+Shadow Profile 会计算候选 exact catalog、schema bytes 和 digest 并写入 shadow telemetry，但不改变模型 schema、prompt layer 或 executor exact objects。进入 enforced rollout 前，必须先有一个 100% reviewed baseline；新 candidate 依次按 `5% -> 25% -> 100%` 推进，每一步都用真实新 Conversation 验证 typed tool call 与 terminal receipt。未命中的新 Conversation 固定到 `previous_reviewed_target`。Rollback 只能把 candidate 切回 previous reviewed target 并设为 100%，不得清空 binding 或回到 unrestricted。
+
+scope default binding 继续高于 system default。Published revision 与 Conversation snapshot 都不可原地修改，因此每次发布或 binding 变更后的验证都必须创建新 Conversation，旧 Conversation 不代表 rollout 结果。完整 catalog/预算、telemetry 和生产矩阵见 [agent-turn-tool-catalog.md](agent-turn-tool-catalog.md)。
 
 Route/Profile admission 失败统一返回 `ADMISSION_UNAVAILABLE`；只有 observation/projection lifecycle
 确实不可用时才返回 `PROJECTION_UNAVAILABLE`。这两个错误不得互相兜底或复用文案。
@@ -117,4 +115,4 @@ alias 继续遵守同一 boundary 规则。
 - `Aevatar.Tools.AgentProfileRollout` CLI、reviewed release spec、packages 和 resolved Profile artifacts；
 - Actor-backed read model 不可用时回退本地文件的双轨逻辑。
 
-治理门禁 `tools/ci/agent_profile_governance_guard.sh` 校验 committed authority、protected execution reader、静态 `agent-profile.nyxid-chat` tool set，并拒绝 legacy config/class、runtime Profile 文件读取、进程内 Profile registry、动态 Profile tool-set 和逐消息 Profile override 回归。
+治理门禁 `tools/ci/agent_profile_governance_guard.sh` 校验 committed authority、protected execution reader、静态 route tool set，并拒绝 legacy config/class、runtime Profile 文件读取、进程内 Profile registry、动态 Profile tool-set 和逐消息 Profile override 回归。`tools/ci/agent_turn_tool_catalog_guard.sh` 另外固定 shadow candidate proof、5%→25%→100% 阶段和 `previous_reviewed_target` rollback 语义。

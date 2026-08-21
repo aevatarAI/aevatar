@@ -1787,6 +1787,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
             ImplementationKind = ServiceImplementationKind.Workflow,
             WorkflowSpec = new WorkflowServiceRevisionSpec
             {
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                 WorkflowName = "legacy-workflow",
                 WorkflowYaml = "name: legacy-workflow\nsteps: []",
                 DefinitionActorId = "workflow-definition-legacy",
@@ -1939,6 +1940,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
             ImplementationKind = ServiceImplementationKind.Workflow,
             WorkflowSpec = new WorkflowServiceRevisionSpec
             {
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                 WorkflowId = workflowId,
                 WorkflowName = "explicit-request",
                 WorkflowYaml = workflowYaml,
@@ -1983,6 +1985,7 @@ public sealed class ServiceRevisionCatalogGAgentTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "legacy-workflow",
                     WorkflowYaml = "name: legacy-workflow\nsteps: []",
                     DefinitionActorId = "workflow-definition-legacy",

@@ -425,7 +425,7 @@ public sealed class WorkflowRoleGAgentMappingTests
     }
 
     [Fact]
-    public async Task WorkflowRoleGAgent_ShouldMapWorkflowToolScopeToAiVisibility()
+    public async Task WorkflowRoleGAgent_ShouldExcludeUnavailableAllowedToolFromExactCatalog()
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
@@ -437,8 +437,10 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = "session-1",
             Prompt = "hello",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             AgentToolScope = new WorkflowAgentToolScope
             {
+                RestrictAllowedToolNames = true,
                 AllowedToolNames = { "search" },
             },
         });
@@ -446,8 +448,11 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.ToolContext.Should().NotBeNull();
         provider.LastRequest.ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
-        provider.LastRequest.ToolContext.ToolVisibility.Allows("search").Should().BeTrue();
+        provider.LastRequest.ToolContext.ToolVisibility.Allows("search").Should().BeFalse();
         provider.LastRequest.ToolContext.ToolVisibility.Allows("calendar").Should().BeFalse();
+        provider.LastRequest.Tools.Should().BeNull();
+        provider.LastRequest.ToolCatalogProof.Should().NotBeNull();
+        provider.LastRequest.ToolCatalogProof!.ToolCount.Should().Be(0);
     }
 
     [Fact]
@@ -455,7 +460,8 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
-        var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
+        var exactTool = new StaticAgentTool("nyxid_calendar_create_event");
+        var source = new RecordingToolSource(exactTool);
         var registry = new RecordingToolSetRegistry(source);
         var (agent, _) = CreateAgent(provider, publisher, registry);
         agent.AddTool(new StaticAgentTool("nyxid_proxy"));
@@ -464,14 +470,68 @@ public sealed class WorkflowRoleGAgentMappingTests
 
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().ContainSingle(tool => tool.Name == "nyxid_calendar_create_event");
+        provider.LastRequest.Tools!.Should().ContainSingle().Which.Should().BeSameAs(exactTool);
         provider.LastRequest.Tools.Should().NotContain(tool => tool.Name == "nyxid_proxy");
         provider.LastRequest.ToolContext!.InvocationSurface.Should().Be(AgentToolInvocationSurface.WorkflowLlmToolLoop);
+        provider.LastRequest.ToolCatalogProof.Should().NotBeNull();
+        provider.LastRequest.ToolCatalogProof!.Budget.Should().Be(AgentTurnToolCatalogBudget.WorkflowOrAdmin);
+        provider.LastRequest.ToolCatalogProof.ToolDescriptors.Should().ContainSingle()
+            .Which.Origin.Should().Be(AgentTurnToolOrigin.Workflow);
+        provider.LastRequest.ToolCatalogProof.CatalogDigest.Should().NotBeNullOrWhiteSpace();
 
         await agent.HandleWorkflowLlmExecutionIntent(BuildConnectedServiceIntent("token-b", "session-b"));
 
         source.AccessTokens.Should().Equal("token-a", "token-b");
         source.InvocationSurfaces.Should().OnlyContain(surface => surface == AgentToolInvocationSurface.WorkflowLlmToolLoop);
         registry.ResolvedNames.Should().Equal("nyxid.connected_services", "nyxid.connected_services");
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_CurrentPolicyWithoutExplicitToolScope_ShouldFailBeforeModelInvocation()
+    {
+        var provider = new RecordingLlmProvider();
+        var (agent, _) = CreateAgent(provider, new RecordingEventPublisher());
+        agent.AddTool(new StaticAgentTool("legacy_static_tool"));
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-no-scope",
+            StepId = "reply",
+            SessionId = "session-no-scope",
+            Prompt = "hello",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+        });
+
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WhenRequestSourcesCollide_ShouldFailBeforeModelInvocation()
+    {
+        var provider = new RecordingLlmProvider();
+        var registry = new FixedSourcesToolSetRegistry(
+        [
+            new RecordingToolSource(new StaticAgentTool("duplicate_tool")),
+            new RecordingToolSource(new StaticAgentTool("duplicate_tool")),
+        ]);
+        var (agent, _) = CreateAgent(provider, new RecordingEventPublisher(), registry);
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-collision",
+            StepId = "reply",
+            SessionId = "session-collision",
+            Prompt = "run",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+            AgentToolScope = new WorkflowAgentToolScope
+            {
+                RestrictAllowedToolNames = true,
+                RestrictToolSets = true,
+                ToolSetRefs = { "nyxid.connected_services" },
+            },
+        });
+
+        provider.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -519,6 +579,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = "session-empty-static",
             Prompt = "schedule only",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             AgentToolScope = new WorkflowAgentToolScope
             {
                 RestrictAllowedToolNames = true,
@@ -539,6 +600,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = sessionId,
             Prompt = "create an event",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             CallerCredential = new WorkflowCallerCredential { BearerToken = token },
             WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
             {
@@ -548,6 +610,8 @@ public sealed class WorkflowRoleGAgentMappingTests
             },
             AgentToolScope = new WorkflowAgentToolScope
             {
+                RestrictAllowedToolNames = true,
+                RestrictToolSets = true,
                 AllowedToolNames = { "search" },
                 ToolSetRefs = { "nyxid.connected_services" },
             },
@@ -643,6 +707,14 @@ public sealed class WorkflowRoleGAgentMappingTests
             ResolvedNames.Add(name);
             return ToolSetResolveResult.Success(name, [source]);
         }
+    }
+
+    private sealed class FixedSourcesToolSetRegistry(IReadOnlyList<IAgentToolSource> sources) : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => ["nyxid.connected_services"];
+
+        public ToolSetResolveResult Resolve(string? name) =>
+            ToolSetResolveResult.Success(name ?? "nyxid.connected_services", sources);
     }
 
     private static (TestWorkflowRoleGAgent Agent, InMemoryEventStore EventStore) CreateAgent(

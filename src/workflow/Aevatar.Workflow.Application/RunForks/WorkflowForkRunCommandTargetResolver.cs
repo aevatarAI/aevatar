@@ -97,7 +97,8 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                         : null,
                     WorkflowId: preservesSourceArtifacts ? seedView.WorkflowId : string.Empty,
                     RevisionId: preservesSourceArtifacts ? seedView.RevisionId : string.Empty,
-                    DefinitionVersion: preservesSourceArtifacts ? Math.Max(0, seedView.DefinitionVersion) : 0),
+                    DefinitionVersion: preservesSourceArtifacts ? Math.Max(0, seedView.DefinitionVersion) : 0,
+                    ToolCatalogPolicyVersion: WorkflowToolCatalogPolicies.CurrentVersion),
                 ct).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -151,7 +152,9 @@ internal sealed class WorkflowForkRunCommandTargetResolver
                     "Workflow YAML is required."));
         }
 
-        var parseResult = await _definitionParser.ParseWorkflowYamlAsync(workflowYaml, ct).ConfigureAwait(false);
+        var parseResult = await _definitionParser
+            .ParseWorkflowYamlForPublicationAsync(workflowYaml, ct)
+            .ConfigureAwait(false);
         if (!parseResult.Succeeded)
         {
             return WorkflowForkRunValidationResult.Failure(

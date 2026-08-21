@@ -2454,6 +2454,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             RunId = runId,
             UseSourceActivityDeliveryContext = State.ProducedUseSourceActivityDeliveryContext,
         };
+        if (State.GenerationStep?.AgentProfileSnapshot is not null)
+            ready.AgentProfile = State.GenerationStep.AgentProfileSnapshot.Clone();
         if (workflowRunDelivery is not null)
             ready.WorkflowRunDelivery = workflowRunDelivery.Clone();
         ready.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));

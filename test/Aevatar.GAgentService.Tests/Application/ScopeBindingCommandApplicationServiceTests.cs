@@ -2621,6 +2621,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = workflowName,
                     WorkflowYaml = workflowYaml,
                     WorkflowId = effectiveWorkflowId,
@@ -2681,6 +2682,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowId = revisionId,
                     RevisionId = revisionId,
                     WorkflowName = workflowName,

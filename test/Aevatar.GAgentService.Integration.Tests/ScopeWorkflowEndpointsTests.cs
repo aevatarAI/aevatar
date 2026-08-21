@@ -685,6 +685,7 @@ public sealed class ScopeWorkflowEndpointsTests
                 {
                     WorkflowPlan = new WorkflowServiceDeploymentPlan
                     {
+                        ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                         WorkflowName = "approval",
                         WorkflowYaml = "name: approval\nsteps: []\n",
                         DefinitionActorId = "definition-actor-1",

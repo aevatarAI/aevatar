@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using FluentAssertions;
+using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 
 namespace Aevatar.AI.ToolProviders.ToolSetRegistry.Tests;
 
@@ -81,6 +83,38 @@ public sealed class AgentToolDiscoveryServiceTests
             cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ShouldEmitRegisteredDiscoveredAndRejectedTelemetry()
+    {
+        var measurements = new ConcurrentDictionary<string, ConcurrentBag<long>>(StringComparer.Ordinal);
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (string.Equals(
+                    instrument.Meter.Name,
+                    AgentTurnToolCatalogTelemetry.MeterName,
+                    StringComparison.Ordinal))
+            {
+                meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
+            measurements.GetOrAdd(instrument.Name, static _ => []).Add(measurement));
+        listener.Start();
+
+        var result = await AgentToolDiscoveryService.Instance.DiscoverAsync(
+            [
+                new StaticSource([new StaticTool("read_state")]),
+                new StaticSource([new StaticTool("READ_STATE")]),
+            ],
+            Context);
+
+        result.IsSuccess.Should().BeFalse();
+        measurements[AgentTurnToolCatalogTelemetry.RegisteredCounterName].Should().Contain(2);
+        measurements[AgentTurnToolCatalogTelemetry.DiscoveredCounterName].Should().Contain(1);
+        measurements[AgentTurnToolCatalogTelemetry.RejectedCounterName].Should().Contain(1);
     }
 
     private sealed class CapturingSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource

@@ -12,6 +12,7 @@ using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
 using WorkflowCapabilityAdmissionPlanIntegrity = Aevatar.Workflow.Abstractions.WorkflowCapabilityAdmissionPlanIntegrity;
+using WorkflowToolCatalogPolicies = Aevatar.Workflow.Abstractions.WorkflowToolCatalogPolicies;
 
 namespace Aevatar.GAgentService.Integration.Tests;
 
@@ -217,6 +218,7 @@ public sealed class ScopeServiceTeamStreamMultipartTests : ScopeServiceEndpointT
         const ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive;
         return new WorkflowServiceDeploymentPlan
         {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             WorkflowName = workflowName,
             WorkflowYaml = workflowYaml,
             DefinitionActorId = definitionActorId,

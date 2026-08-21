@@ -444,7 +444,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     {
         var workflowSpec = revisionSpec.WorkflowSpec
             ?? throw new InvalidOperationException("workflow implementation_spec is required.");
-        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowSpec.WorkflowYaml, ct);
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlForPublicationAsync(workflowSpec.WorkflowYaml, ct);
         if (!parse.Succeeded)
             throw new InvalidOperationException(parse.Error);
         var resolvedWorkflowName = string.IsNullOrWhiteSpace(workflowSpec.WorkflowName)
@@ -613,6 +613,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                         DefinitionActorId = definitionActorIdPrefix,
                         CapabilityAdmissionPlan = capabilityAdmissionPlan,
                         ExpectedExecutionMode = executionMode,
+                        ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     },
                 };
                 ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(
@@ -809,7 +810,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             if (string.IsNullOrWhiteSpace(workflowYaml))
                 throw new InvalidOperationException("workflowYamls must not contain empty YAML entries.");
 
-            var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
+            var parse = await _workflowDefinitionParser.ParseWorkflowYamlForPublicationAsync(workflowYaml, ct);
             if (!parse.Succeeded)
                 throw new InvalidOperationException(parse.Error);
 

@@ -55,6 +55,17 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
         var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var workflowYaml = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
         var inlineWorkflowYamls = ScopeWorkflowCapabilityConventions.NormalizeInlineWorkflowYamls(request.InlineWorkflowYamls);
+        var publicationParse = await _workflowDefinitionParser
+            .ParseWorkflowYamlForPublicationAsync(workflowYaml, ct);
+        if (!publicationParse.Succeeded)
+            throw new InvalidOperationException(publicationParse.Error);
+        foreach (var (inlineName, inlineYaml) in inlineWorkflowYamls)
+        {
+            var inlineParse = await _workflowDefinitionParser
+                .ParseWorkflowYamlForPublicationAsync(inlineYaml, ct);
+            if (!inlineParse.Succeeded)
+                throw new InvalidOperationException($"Inline workflow '{inlineName}' is invalid: {inlineParse.Error}");
+        }
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
         var explicitRequestConfirmations = admissionContext?.ExplicitRequestConfirmations;
@@ -161,6 +172,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
                 DefinitionActorId = definitionActorIdPrefix,
                 CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 ExpectedExecutionMode = executionMode,
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             },
         };
         ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(revisionSpec.WorkflowSpec.InlineWorkflowYamls, inlineWorkflowYamls);
@@ -228,7 +240,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
     {
         var workflowSpec = revisionSpec.WorkflowSpec
             ?? throw new InvalidOperationException("workflow implementation_spec is required.");
-        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowSpec.WorkflowYaml, ct);
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlForPublicationAsync(workflowSpec.WorkflowYaml, ct);
         if (!parse.Succeeded)
             throw new InvalidOperationException(parse.Error);
 

@@ -3297,6 +3297,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowId = revisionId,
                     WorkflowName = "workflow",
                     WorkflowYaml = workflowYaml,

@@ -3041,28 +3041,34 @@ public sealed class NyxIdChatConversationGAgent
         NyxIdChatStartTurnCommand command)
     {
         var profile = State.AgentProfile;
-        if (profile is null || profile.ActivationMode == AgentProfileActivationMode.Shadow)
+        if (profile is null)
             return null;
 
         if (_turnCatalogMaterializer is null)
-            return RestrictedEmptyAuthority(
-                command.TurnId,
-                AgentProfileTurnDegradationReason.MaterializerUnavailable);
+        {
+            return profile.ActivationMode == AgentProfileActivationMode.Shadow
+                ? null
+                : RestrictedEmptyAuthority(
+                    command.TurnId,
+                    AgentProfileTurnDegradationReason.MaterializerUnavailable);
+        }
 
         try
         {
             var toolContext = LLMControlContextMapper.FromPayload(command.LlmControl)
                 .ToToolContext(BuildActorOwnedToolContext(command.ToolContext));
             var llmControl = LLMControlContextMapper.FromPayload(command.LlmControl);
-            return (await _turnCatalogMaterializer.PrepareNyxIdChatAsync(
+            var preparation = await _turnCatalogMaterializer.PrepareNyxIdChatAsync(
                     profile,
                     command.TurnId.Trim(),
                     BuildExecutionPrompt(command),
                     registeredTools: [],
                     toolContext,
                     llmControl,
-                    CancellationToken.None))
-                .Authority;
+                    CancellationToken.None);
+            return profile.ActivationMode == AgentProfileActivationMode.Shadow
+                ? null
+                : preparation.Authority;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -3070,9 +3076,11 @@ public sealed class NyxIdChatConversationGAgent
                 exception,
                 "Agent profile turn authority preparation failed closed. turn={TurnId}",
                 command.TurnId);
-            return RestrictedEmptyAuthority(
-                command.TurnId,
-                AgentProfileTurnDegradationReason.MaterializationFailed);
+            return profile.ActivationMode == AgentProfileActivationMode.Shadow
+                ? null
+                : RestrictedEmptyAuthority(
+                    command.TurnId,
+                    AgentProfileTurnDegradationReason.MaterializationFailed);
         }
     }
 

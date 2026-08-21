@@ -423,11 +423,12 @@ roles:
 
 - `workflow roles` 与 `role yaml` 共用同一份解析归一化逻辑（`RoleConfigurationNormalizer`）。
 - `agent_kind` 是 role-level actor lifecycle 入口，可指向任意已注册 primary `[GAgent]` kind；step 只使用 `target_role` / `role`，不得通过参数选择 CLR 类型或 actor id。
-- `allowed_tools` 是 role actor 上 agent tool 可见范围的上限；未配置表示兼容旧行为的全量工具，配置为空数组表示默认不暴露工具。
+- `allowed_tools` 是 role actor 上 agent tool 可见范围的上限。采用 `workflow-agent-turn-tool-catalog/v1` 的新建/重发 definition 必须显式提供该字段；缺失会在 publish/bind 前失败，空数组表示 restricted empty。只有已经提交的 v0 run 保留“缺失等于旧全量”的历史语义，且部署后不能再据此创建新 run。
 - `tool_sets` 是独立的 typed request-time source refs，不编码成静态 tool name。`allowed_tools` 与 `tool_sets` 两个维度分别合并：step 未声明某维度时继承 role，双方都声明时才对该维度求交，显式空数组只清空对应维度。有效 scope 写入 `WorkflowStepParameters.agent_tool_scope`，再由 `WorkflowLlmExecutionIntent.agent_tool_scope` 传给 AI 边界。
 - `llm_call` step 可在根部配置 `allowed_tools` 继续收窄本次调用；静态工具维度映射到 `AgentToolExecutionContext.ToolVisibility`，named tool-set 维度保持 request-time source refs。
 - Studio 的 `nyxid.connected_services` 每 turn 使用当前 caller token live resolve/discover，结果只存在 request-local catalog；resolution/discovery/collision failure 对本次动态工具 fail closed，不缓存为 role actor 或 process fact。
 - 工具可见范围同时作用于 provider 看到的 `LLMRequest.Tools` 和 streaming tool executor 的实际 lookup；未授权工具调用会得到 not-available tool result，不会执行工具。
+- 每个新 run 固定 `tool_catalog_policy_version`、最终 catalog proof 与 digest；workflow role 通过共享 discovery 和 catalog factory 重新物化 exact objects 并核对 proof，超出 16 个 owned tools 或 128 KiB canonical schema 会在 admission 阶段失败，不在运行时截断或回退。统一契约见 [agent-turn-tool-catalog.md](agent-turn-tool-catalog.md)。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
 - Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):

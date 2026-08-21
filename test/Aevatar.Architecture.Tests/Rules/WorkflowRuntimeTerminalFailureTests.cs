@@ -782,8 +782,15 @@ public sealed class WorkflowRuntimeTerminalFailureTests
                 ? block.Statements[0]
                 : statement;
             return DirectStatementExpressions(directStatement)
-                .OfType<AwaitExpressionSyntax>()
-                .Select(awaitExpression => awaitExpression.Expression)
+                .Select(static expression => expression switch
+                {
+                    AwaitExpressionSyntax awaitExpression => awaitExpression.Expression,
+                    AssignmentExpressionSyntax
+                    {
+                        Right: AwaitExpressionSyntax awaitExpression,
+                    } => awaitExpression.Expression,
+                    _ => null,
+                })
                 .OfType<InvocationExpressionSyntax>()
                 .Any(invocation => GetInvocationName(invocation) == invocationName);
         }

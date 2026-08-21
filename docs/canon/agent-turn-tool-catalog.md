@@ -1,0 +1,160 @@
+---
+title: "Agent Turn Tool Catalog"
+status: active
+owner: architecture
+last_updated: 2026-08-21
+---
+
+# Agent Turn Tool Catalog
+
+本文定义所有用户面 LLM generation 的工具目录不变量。系统注册目录和 route ceiling 可以很大；一次模型 turn 最终看到的 Aevatar-owned 工具必须是 request-local、强类型、小规模、可解释的 exact catalog，并与执行准入使用同一份 proof。
+
+```text
+intent_scope = intent_candidates UNION anticipated_continuations
+
+effective_tools =
+    route_ceiling
+  INTERSECT profile_or_definition_ceiling
+  INTERSECT intent_scope
+  INTERSECT caller_authority
+  INTERSECT runtime_availability
+```
+
+求交集之后不存在无条件 union。0-tool 是有效的 restricted-empty catalog；`null` 不得表示 unrestricted。一次 `ChatStreamAsync(maxRounds)` 只物化一次 final catalog，后续 tool round 不改变 schema、exact object fence 或 digest。
+
+## 权威主干
+
+`ToolSetRegistry` 只拥有静态 include topology。`AgentToolDiscoveryService` 是 resolve 后唯一的 request-scoped 动态发现主干：它在 typed `AgentToolExecutionContext` 下发现 exact objects，不缓存 caller、connection、session 或 authority 事实，并对大小写不敏感的同名不同 object fail closed。
+
+所有入口按同一顺序处理：
+
+1. 解析 route ceiling 和 immutable profile/definition snapshot。
+2. request-local 发现 exact tools；duplicate、invalid schema 或 source failure 返回 typed failure。
+3. 与 intent、caller authority、runtime availability 求交集。
+4. 在预算内构造 `AgentTurnToolCatalog` 和 `AgentTurnToolCatalogProof`。
+5. 把同一 proof 同时用于 model declarations、`AgentToolVisibilityScope`、exact object fence、持久化和 telemetry。
+6. 跨 actor/off-grain 边界只携带 typed proof；执行端重新发现 exact objects 后逐项验证。任何 digest/schema/origin/selector mismatch 都在模型或副作用前拒绝，不能回退 DI 全量工具。
+
+Proof 的 catalog digest 覆盖 lowercase canonical name、exact description、递归 canonical JSON schema、origin 和 exact operation selector digest。JSON object property 使用 Ordinal 排序，array 顺序保留；secret、arguments、token、caller identity、时间戳和随机数不进入 digest。
+
+## Tool-set topology
+
+| Tool set | 语义 | 默认面 |
+|---|---|---|
+| `chat.core` | `ask_user` | public text |
+| `web.runtime` | `web_search`、`web_fetch` | public text |
+| `skill.runtime` | `ornn_search_skills`、`use_skill` | public text |
+| `skill.authoring` | Ornn publish/update/validation | opt-in authoring |
+| `aevatar.invoke` | typed service/GAgent/team/member/workflow invocation | public text ceiling |
+| `aevatar.observe` | run observe 与 artifact read | public text ceiling |
+| `responses.state` | Responses-owned state，例如 `TodoWrite` | Responses opt-in |
+| `nyxid.assistant.admission` | 窄 readiness/admission | NyxID Assistant intent |
+| `nyxid.connected_services` | request-local exact operations | typed selector only |
+| `nyxid.privileged` | proxy/admin/key/approval/node | privileged opt-in |
+| `nyxid.execution` | SSH/code/Codex execution | execution opt-in |
+| `storage.read` / `storage.write` | storage read 与 mutation | coding/sandbox opt-in |
+| `channel.lark` / `channel.telegram` | channel-specific actions | channel route only |
+| `studio.local` | Studio local provisioning | Studio workflow only |
+
+`workspace.default` 只组合 `chat.core + web.runtime + skill.runtime + aevatar.invoke + aevatar.observe`。它不包含 skill authoring、NyxID privileged/execution、storage write、完整 channel、Studio、Responses state 或 connected-service 全集。`lark.self_notify` 显式组合自己的 channel set；Voice 不继承整个 workspace ceiling。
+
+Responses ingress 在边界兼容客户端的 `WebFetch` / `WebSearch` aliases，但内部 route 只保留 `web_fetch` / `web_search` canonical schema。Caller-declared forwarded tools 不冒充 Aevatar-owned tools，Aevatar 不执行它们；owned 与 forwarded count/bytes 分别记录。
+
+## Final-catalog budgets
+
+| Turn class | Aevatar-owned count | Canonical schema | 额外约束 |
+|---|---:|---:|---|
+| ordinary text / channel / `nyxid.chat` | 8 | 48 KiB | 无 |
+| connected exact operations | 计入 ordinary 8 | 计入 48 KiB | read ≤ 3，write ≤ 1 |
+| voice realtime | 6 | 32 KiB | persisted snapshot/proof 必须同预算 |
+| workflow LLM | 16 | 128 KiB | definition scope 必须显式 |
+| admin / skill authoring | 16 | 128 KiB | opt-in profile |
+| coding / sandbox | 6 | 64 KiB | opt-in profile |
+
+超过预算必须 typed fail closed，不静默截断。Reviewed profile 的 sealed `max_owned_tool_count` 和 `max_schema_bytes` 只能进一步缩小对应 route 上限。
+
+## Boundary-specific rules
+
+### Responses, Messages, Chat Completions
+
+三入口在 ownership classification 之前共用 `ResponsesOwnedToolCatalogPlanner`，固定 profile snapshot、exact catalog 和 proof。Caller-forwarded declarations 单独分类、单独计量，不能进入 Aevatar executor。Off-grain `LlmRunCore` 重新物化后必须验证 persisted proof；显式 profile/tool-set 解析失败不能降级为 always-on providers。
+
+### Role、Channel 与 NyxID Assistant
+
+Direct Role、Lark/Telegram relay 和 NyxID Chat 都必须生成 typed proof。普通 no-match 是 restricted empty；需要澄清时只暴露 `ask_user`。Connected-service selector 只能从 caller-authorized typed presentation index 选择 exact endpoint：read 最多 3 个、write 最多 1 个；missing、ambiguous、timeout 或多 write 只会缩权或要求澄清。
+
+Channel 的首个 profiled AgentRun 在模型调用前将 sealed profile snapshot、turn authority、catalog proof 和 policy version 持久化到 run actor。Run 的每个后续 LLM/tool/approval continuation 都从这些 typed facts 精确重物化并验 proof，不能重新读取当前 binding。终态 ready 或 CardKit completion 将 profile snapshot 回传给 Conversation actor；Conversation 以 `ConversationAgentProfilePinnedEvent` 固化首个快照，后续 run 从 actor state 注入同一快照。不同快照只能产生 `agent_profile_pin_mismatch` typed failure，不能热替换，也不能由进程内 conversation registry 兜底。
+
+NyxID 继续拥有 caller/service/credential/resource authorization。缺连接时复用 typed readiness/connection card，不输出 CLI fallback。普通 route 不暴露 raw proxy、admin/key/node、SSH/Codex execution。Unattended workflow/channel/schedule 保留 typed Agent Key；短时 delegation token 只做请求准入。
+
+### Workflow
+
+新建、重新发布或重新绑定的 workflow 使用 `workflow-agent-turn-tool-catalog/v1`。每个 direct 或 parameterized `llm_call` 必须在 step/role 显式声明 `allowed_tools`；空数组表示静态工具维度 restricted empty，缺字段、duplicate 或超过 16 个工具在发布前拒绝。`tool_sets` 是 definition scope 中独立、显式的 request-time dynamic source 维度，只能物化被引用 set 的 exact tools，且不能扩大 caller authority；最终静态工具与动态工具合并后仍受 workflow catalog 预算约束。
+
+历史已绑定 run 的 unversioned definition 继续按 legacy v0 replay；不得从 v0 definition 新建 run。重新发布/绑定后进入 v1，run state、model-start artifact、projection 都持久化 policy version、tool descriptors、schema bytes 和 catalog digest。
+
+### Voice
+
+Voice allowlist 只通过共享 discovery 和 `VoiceAgentTurnToolCatalogMaterializer` 物化。空 allowlist 是 restricted empty，不是 unrestricted。Session readiness、endpoint、module 和 invoker 传递同一 persisted snapshot/proof，最大 6 tools / 32 KiB；schema mismatch 或 proof drift 在执行前拒绝。
+
+## Measured baseline
+
+机器可读基线位于 [`tools/ci/agent_turn_tool_catalog_baseline.json`](../../tools/ci/agent_turn_tool_catalog_baseline.json)，由 Mainnet composition test 和 architecture guard 固定。
+
+| `workspace.default` | Source families | Raw tools | Unique tools | Canonical schema bytes | Digest |
+|---|---:|---:|---:|---:|---|
+| commit `5af59719f` | 18 | 70 | 68 | 48,328 | legacy manifest，无统一 digest |
+| issue #3512 | 5 named sets | 13 | 13 | 11,524 | `sha256:46788e82f006792a4c606a8784c036a465bd53bba143439bf7eb7e625d3a9932` |
+
+Unique tool count 下降 80.9%，canonical schema bytes 下降 76.2%，超过 60% 验收线。这个 13-tool 数字是 route ceiling snapshot，不是每轮模型注入目标；ordinary final catalog 仍受 intent/profile 求交集和 8-tool 上限约束，普通回答可以是 0-tool。
+
+## Shadow、rollout 与 rollback
+
+Shadow Profile 必须完整计算候选 authority、exact descriptors、schema bytes 和 candidate digest，并记录 `shadow` telemetry；它不得把候选 schema、prompt layer 或 exact objects交给模型/执行器。执行继续使用该入口原本的 typed baseline catalog。
+
+System default binding 持久化两个强类型 target：candidate `target` 与 `previous_reviewed_target`。Rollout 只影响创建后的新 conversation/session/run，已有实例继续使用创建时 pin 的 immutable snapshot。合法阶段固定为：
+
+```text
+reviewed baseline at 100%
+  -> new candidate at 5%
+  -> same candidate at 25%
+  -> same candidate at 100%
+```
+
+Partial rollout 没有 `previous_reviewed_target` 时以 `ROLLOUT_BASELINE_REQUIRED` 拒绝；跳阶段以 `ROLLOUT_STAGE_INVALID` 拒绝。Cohort 未命中的新实例解析 previous reviewed snapshot，不是 unprofiled。Rollback 只能把 target 切回 previous reviewed target 并设为 100%；原 candidate 成为新的 previous target，因此回滚也不进入 unrestricted。
+
+每个阶段必须用真实新会话验证 typed tool call 与 terminal receipt，再推进下一阶段。旧会话只能证明旧 snapshot，没有 rollout 验收价值。Rollback 后同样创建新会话确认 previous reviewed digest 已 pin。
+
+## Telemetry 与告警
+
+Meter/Activity source 为 `Aevatar.GenAI`。低基数 metrics 固定记录：
+
+- `registered`、`discovered`、`authority`、`final`、`forwarded`、`filtered`、`rejected`、`restricted_empty`；
+- `schema_bytes`、`degradation`、`tool_round`、`outcome`、`time_to_first_output`。
+
+Digest、profile identity 和 intent identity 只写 trace attributes，不作为 metric tags。Deny reason 使用 typed enum；不得记录 token、arguments、connection identity 或完整 tool payload。Rollout 需比较 invalid tool-call rate、task success、authorization correctness 和 TTFT；任何授权错误或明显回归都停止推进并 rollback。
+
+## Production verification matrix
+
+每次上线至少用本地已登录的 NyxID CLI 经 `nyxid proxy request aevatar ...` 创建新会话验证：
+
+| Case | 必须观察的证据 |
+|---|---|
+| ordinary answer | 0-tool typed proof + terminal completion |
+| clarification | exact `ask_user` typed call |
+| web | `web_search` / `web_fetch` call + result + terminal receipt |
+| Ornn | `ornn_search_skills` / `use_skill` exact call + terminal receipt |
+| Aevatar | start/invoke 后 observe/artifact receipt |
+| readiness | typed NyxID connection card，无 CLI fallback |
+| connected service | exact read；write approval；multi-connection ambiguity 只出现 `ask_user` |
+| channels | Lark/Telegram relay 的 proof 与 terminal delivery receipt |
+| direct ingress | Responses/Messages/Chat Completions 行为一致 |
+| unattended | typed Agent Key workflow receipt |
+| voice | ≤6/32 KiB persisted restricted proof |
+| negative | forged hidden tool、schema mismatch、over-budget 均在副作用前拒绝 |
+
+Assistant prose、连接状态或“代码已部署”都不是成功证据。生产只做只读日志/资源观测；不得直接变更、exec、重启或 port-forward production pod。需要生产状态变更时必须写明“待运维执行后确认”。
+
+## Governance
+
+`tools/ci/agent_turn_tool_catalog_guard.sh` 接入 repository architecture guards，固定 forbidden default membership、duplicate handling、预算、digest/baseline、workflow v1、Voice proof、shadow observation 和 5%→25%→100% rollout。任何 snapshot 变化都必须同时更新实现、测试、manifest 与本文，并在 PR 说明原因和新的实测数据。

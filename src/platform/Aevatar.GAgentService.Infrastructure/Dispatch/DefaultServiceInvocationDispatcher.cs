@@ -165,7 +165,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             SourceKind: "service_revision",
             CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
             WorkflowId: bindingIdentity.WorkflowId,
-            RevisionId: bindingIdentity.RevisionId);
+            RevisionId: bindingIdentity.RevisionId,
+            ToolCatalogPolicyVersion: plan.ToolCatalogPolicyVersion);
         var requestedRunId = request.RequestedRunId?.Trim() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(requestedRunId))
         {

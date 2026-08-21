@@ -1454,6 +1454,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
                                 WorkflowId = includeExplicitBindingIdentity ? workflowId : string.Empty,
                                 RevisionId = includeExplicitBindingIdentity ? revisionId : string.Empty,
                                 ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                                 CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                                 {
                                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -1487,6 +1488,7 @@ public sealed class ScopeWorkflowCatalogueBackfillHostedServiceTests
                     {
                         WorkflowName = revision.WorkflowName,
                         DefinitionActorId = revision.PreparedArtifact?.DeploymentPlan.WorkflowPlan.DefinitionActorId ?? string.Empty,
+                        ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     },
                 },
                 Status = ServiceRevisionStatus.Published,

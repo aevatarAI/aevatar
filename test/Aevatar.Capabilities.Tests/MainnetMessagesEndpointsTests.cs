@@ -272,12 +272,15 @@ public sealed class MainnetMessagesEndpointsTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["get_weather", "aevatar_invoke_gagent"]);
+            .Should().Equal("get_weather");
         var tool = provider.LastRequest.Tools.Single(static tool => tool.Name == "get_weather");
         tool.Description.Should().Be("Look up the weather.");
         tool.ParametersSchema.Should().Contain("\"city\"");
         tool.IsReadOnly.Should().BeTrue();
+        var command = app.Services.GetRequiredService<MessagesRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
     }
 
     [Fact]
@@ -447,7 +450,7 @@ public sealed class MainnetMessagesEndpointsTests
     }
 
     [Fact]
-    public async Task PostMessages_WhenResponsesToolProviderRegistered_ShouldInjectSharedAevatarTools()
+    public async Task PostMessages_WhenResponsesToolProviderRegisteredWithoutReviewedCatalog_ShouldNotAutoInjectTools()
     {
         var provider = new MessagesRecordingLLMProvider
         {
@@ -494,7 +497,14 @@ public sealed class MainnetMessagesEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         provider.LastRequest.Should().NotBeNull();
         var toolNames = provider.LastRequest!.Tools?.Select(static tool => tool.Name).ToArray() ?? [];
-        toolNames.Should().Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill", "WebSearch"]);
+        toolNames.Should().Equal("WebSearch");
+        var command = app.Services.GetRequiredService<MessagesRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ToolSelection.ForwardedTools.Should().ContainSingle(tool => tool.ToolName == "WebSearch");
+        command.ToolSelection.SubstitutedToolNames.Should().BeEmpty();
+        command.ToolSelection.AdditiveToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
     }
 
     [Fact]
@@ -729,7 +739,12 @@ public sealed class MainnetMessagesEndpointsTests
         var queryPort = MessagesStaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
             GAgentToolHintAction("target-agent"),
             []));
-        await using var app = await CreateAppAsync(provider, chatRoutePolicyQueryPort: queryPort);
+        await using var app = await CreateAppAsync(
+            provider,
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: new FixedResponsesOwnedToolCatalogPlanner(
+                ToolSetNames.WorkspaceDefault,
+                new MessagesStubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent")));
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/messages")
@@ -772,7 +787,8 @@ public sealed class MainnetMessagesEndpointsTests
         IResponsesCallerScopeResolver? callerScopeResolver = null,
         IResponsesToolProvider? responsesToolProvider = null,
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
-        IResponsesRouteResolver? routeResolver = null)
+        IResponsesRouteResolver? routeResolver = null,
+        IResponsesOwnedToolCatalogPlanner? ownedToolCatalogPlanner = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -810,6 +826,8 @@ public sealed class MainnetMessagesEndpointsTests
         });
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
+        if (ownedToolCatalogPlanner != null)
+            builder.Services.AddSingleton(ownedToolCatalogPlanner);
 
         var app = builder.Build();
         app.MapMessagesApiEndpoints();

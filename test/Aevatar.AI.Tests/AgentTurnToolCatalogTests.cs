@@ -1,10 +1,22 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using FluentAssertions;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 
 namespace Aevatar.AI.Tests;
 
 public sealed class AgentTurnToolCatalogTests
 {
+    [Fact]
+    public void CatalogFailureDegradationReasons_ShouldKeepStableWireValues()
+    {
+        ((int)AgentProfileTurnDegradationReason.CatalogNeedsDisambiguation).Should().Be(16);
+        ((int)AgentProfileTurnDegradationReason.CatalogOverBudget).Should().Be(17);
+        ((int)AgentProfileTurnDegradationReason.SchemaInvalid).Should().Be(18);
+    }
+
     [Fact]
     public void CatalogDigest_ShouldBeStableAcrossOneHundredInputPermutations()
     {
@@ -43,6 +55,23 @@ public sealed class AgentTurnToolCatalogTests
         first.Proof.CatalogDigest.Should().Be(second.Proof.CatalogDigest);
         first.Proof.ToolDescriptors[0].CanonicalSchemaJson
             .Should().Be(second.Proof.ToolDescriptors[0].CanonicalSchemaJson);
+    }
+
+    [Fact]
+    public void CatalogDigest_ShouldMatchCanonicalSnapshot()
+    {
+        var catalog = NewCatalog(
+            [
+                new TestTool(
+                    "lookup",
+                    "Lookup one resource",
+                    "{\"required\":[\"id\"],\"properties\":{\"id\":{\"type\":\"string\"}},\"type\":\"object\"}"),
+            ],
+            AgentTurnToolCatalogBudget.Ordinary,
+            AgentTurnToolOrigin.RouteToolSet);
+
+        catalog.Proof.CatalogDigest.Should().Be(
+            "sha256:ac8a952508a88afb07f3ab8cbcfa47688a65e394bff4f6720fbf60eec498e6c0");
     }
 
     [Fact]
@@ -170,6 +199,92 @@ public sealed class AgentTurnToolCatalogTests
         proof.ToolDescriptors.Should().BeEmpty();
         proof.Budget.Should().BeSameAs(AgentTurnToolCatalogBudget.Voice);
         proof.AssertMatchesExactTools([]);
+    }
+
+    [Fact]
+    public void PersistedProof_ShouldRoundTripAndValidateRematerializedExactContracts()
+    {
+        var ingressTool = new TestTool(
+            "lookup",
+            "Lookup",
+            "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}}}");
+        var catalog = NewCatalog([ingressTool], AgentTurnToolCatalogBudget.Ordinary);
+
+        var restored = AgentTurnToolCatalogProofPayloadMapper.FromPayload(catalog.Proof.ToPayload());
+        var rematerializedTool = new TestTool(
+            "LOOKUP",
+            "Lookup",
+            "{\"properties\":{\"id\":{\"type\":\"string\"}},\"type\":\"object\"}");
+
+        restored.CatalogDigest.Should().Be(catalog.Proof.CatalogDigest);
+        restored.AssertMatchesExactTools([rematerializedTool]);
+    }
+
+    [Fact]
+    public void PersistedProof_ShouldRejectTamperedOverBudgetSummaryBeforeRematerialization()
+    {
+        var catalog = NewCatalog(
+            [new TestTool("lookup", "Lookup", "{}")],
+            AgentTurnToolCatalogBudget.Ordinary);
+        var payload = catalog.Proof.ToPayload();
+        payload.Budget.MaximumToolCount = 0;
+
+        var act = () => AgentTurnToolCatalogProofPayloadMapper.FromPayload(payload);
+
+        act.Should().Throw<AgentTurnToolCatalogException>()
+            .Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.CatalogProofMismatch);
+    }
+
+    [Fact]
+    public void CatalogTelemetry_ShouldEmitLowCardinalityCountsAndKeepDigestOnTrace()
+    {
+        var measurements = new ConcurrentDictionary<string, ConcurrentBag<long>>(StringComparer.Ordinal);
+        var instruments = new ConcurrentBag<string>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (!string.Equals(
+                    instrument.Meter.Name,
+                    AgentTurnToolCatalogTelemetry.MeterName,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            instruments.Add(instrument.Name);
+            listener.EnableMeasurementEvents(instrument);
+        };
+        meterListener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
+            measurements.GetOrAdd(instrument.Name, static _ => []).Add(measurement));
+        meterListener.Start();
+
+        var completedActivities = new ConcurrentBag<Activity>();
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = static source => string.Equals(
+                source.Name,
+                AgentTurnToolCatalogTelemetry.ActivitySourceName,
+                StringComparison.Ordinal),
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllData,
+            ActivityStopped = completedActivities.Add,
+        };
+        ActivitySource.AddActivityListener(activityListener);
+
+        var catalog = NewCatalog(
+            [new TestTool("lookup", "Lookup", "{\"type\":\"object\"}")],
+            AgentTurnToolCatalogBudget.Ordinary);
+
+        measurements[AgentTurnToolCatalogTelemetry.AuthorityCounterName].Should().Contain(1);
+        measurements[AgentTurnToolCatalogTelemetry.FinalCounterName].Should().Contain(1);
+        measurements[AgentTurnToolCatalogTelemetry.SchemaBytesCounterName]
+            .Should().Contain(value => value > 0);
+        instruments.Should().NotContain(name => name.Contains("digest", StringComparison.OrdinalIgnoreCase));
+        completedActivities
+            .Select(activity =>
+                activity.GetTagItem("aevatar.agent_turn_tool_catalog.digest")?.ToString())
+            .Should()
+            .Contain(catalog.Proof.CatalogDigest);
     }
 
     private static AgentTurnToolCatalog NewCatalog(

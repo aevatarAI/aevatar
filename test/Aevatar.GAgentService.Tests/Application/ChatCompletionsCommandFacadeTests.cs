@@ -863,7 +863,8 @@ public sealed class ChatCompletionsCommandFacadeTests
         command.Messages.Should().ContainSingle().Which.ToolCalls.Should().ContainSingle()
             .Which.Arguments.Fields["city"].StringValue.Should().Be("Paris");
         command.ToolSelection.ToolChoiceHintArguments.Fields["actor_id"].StringValue.Should().Be("member-1");
-        command.ToolSelection.OwnedToolNames.Should().ContainSingle("get_weather");
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty("caller declarations are forwarded unless the pinned catalog owns them");
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
         var declaration = command.ToolSelection.ForwardedTools.Should().ContainSingle().Subject;
         declaration.Parameters.Fields["type"].StringValue.Should().Be("object");
         declaration.Parameters.Fields["properties"].StructValue.Fields["city"].StructValue.Fields["type"]
@@ -897,7 +898,7 @@ public sealed class ChatCompletionsCommandFacadeTests
             responseFormat);
 
     [Fact]
-    public async Task CreateAsync_ShouldPersistRouteToolSetNameIntoRunCommand()
+    public async Task CreateAsync_WithoutPinnedProfile_ShouldPersistRestrictedEmptyCatalog()
     {
         var dispatch = new RecordingActorDispatchPort();
         var facade = CreateFacade(
@@ -915,8 +916,10 @@ public sealed class ChatCompletionsCommandFacadeTests
 
         result.Error.Should().BeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
-        // Off-grain run re-resolves this name to re-materialize the route tool set.
-        command.ToolSelection.ToolSetName.Should().Be("workspace.default");
+        command.ToolSelection.ToolSetName.Should().BeEmpty();
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
+        command.ToolSelection.ToolCatalogPolicyVersion.Should().Be(ResponsesOwnedToolCatalogPlanner.PolicyVersion);
     }
 
     private static ChatCompletionsCommandFacade CreateFacade(

@@ -3779,7 +3779,8 @@ const response = await fetch("{{invokePath}}", {
             SourceKind: "service_revision",
             CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
             WorkflowId: bindingIdentity.WorkflowId,
-            RevisionId: bindingIdentity.RevisionId);
+            RevisionId: bindingIdentity.RevisionId,
+            ToolCatalogPolicyVersion: plan.ToolCatalogPolicyVersion);
     }
 
     private static string ResolveWorkflowServiceDefinitionActorId(

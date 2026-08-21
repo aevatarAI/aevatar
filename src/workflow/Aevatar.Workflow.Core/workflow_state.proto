@@ -92,6 +92,7 @@ message WorkflowState
   string workflow_id = 20;
   string revision_id = 21;
   ExternalCapabilityExecutionMode expected_execution_mode = 22;
+  string tool_catalog_policy_version = 23;
 }
 
 message WorkflowRunState
@@ -240,6 +241,8 @@ message WorkflowRunState
   // this execution-only payload; the authoritative actor clears it after the
   // workflow kernel commits its first state checkpoint.
   aevatar.workflow.StartWorkflowEvent pending_start_workflow = 65;
+  string tool_catalog_policy_version = 66;
+  aevatar.workflow.WorkflowAgentTurnToolCatalogProof last_tool_catalog_proof = 67;
 }
 
 message WorkflowRunDefinitionBindingContinuationState

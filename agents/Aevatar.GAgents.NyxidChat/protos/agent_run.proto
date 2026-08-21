@@ -349,6 +349,12 @@ message AgentRunReplyStepState {
   bool empty_reply_retry = 25;
   repeated AgentRunPendingToolAuthorization pending_tool_authorizations = 26;
   bool pending_tool_authorization_consumed = 27;
+  // Immutable authority pinned before the first user-facing model call. Exact tool objects are
+  // request-local and are therefore re-materialized from these typed facts on replay/retry.
+  aevatar.ai.AgentProfileSnapshot agent_profile_snapshot = 28;
+  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 29;
+  aevatar.ai.AgentTurnToolCatalogProofPayload tool_catalog_proof = 30;
+  string tool_catalog_policy_version = 31;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these

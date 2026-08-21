@@ -1331,6 +1331,7 @@ internal sealed class SubWorkflowOrchestrator
                 WorkflowYaml = yaml,
                 ScopeId = state.ScopeId ?? string.Empty,
                 DefinitionVersion = 0,
+                ToolCatalogPolicyVersion = state.ToolCatalogPolicyVersion ?? string.Empty,
             };
 
             foreach (var (inlineWorkflowName, inlineWorkflowYaml) in state.InlineWorkflowYamls)
@@ -1366,6 +1367,7 @@ internal sealed class SubWorkflowOrchestrator
                 ? state.ScopeId ?? string.Empty
                 : pending.ScopeId,
             DefinitionVersion = pending.DefinitionVersion,
+            ToolCatalogPolicyVersion = state.ToolCatalogPolicyVersion ?? string.Empty,
         };
 
         foreach (var (inlineWorkflowName, inlineWorkflowYaml) in pending.InlineWorkflowYamls.Count > 0
@@ -1704,6 +1706,9 @@ internal sealed class SubWorkflowOrchestrator
             InlineWorkflowYamls = { inlineWorkflowYamls },
             RevisionId = definition.RevisionId ?? string.Empty,
             DefinitionVersion = Math.Max(0, definition.DefinitionVersion),
+            ToolCatalogPolicyVersion = string.IsNullOrWhiteSpace(definition.ToolCatalogPolicyVersion)
+                ? state.ToolCatalogPolicyVersion ?? string.Empty
+                : definition.ToolCatalogPolicyVersion,
             ExpectedExecutionMode = state.ExpectedExecutionMode,
             // Implement (issue #3252):
             //   Behavior: child workflow runs expose their parent/root run lineage as typed bind facts.

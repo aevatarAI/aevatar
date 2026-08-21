@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -251,6 +252,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
             {
                 WorkflowName = definition.WorkflowName,
                 WorkflowYaml = definition.WorkflowYaml,
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             },
         };
 

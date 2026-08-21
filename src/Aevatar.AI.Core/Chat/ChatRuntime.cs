@@ -1318,6 +1318,7 @@ public sealed class ChatRuntime
             if (current.LLMInvocationStarted != null)
             {
                 started = current.LLMInvocationStarted;
+                AgentTurnToolCatalogTelemetry.RecordToolRound(request.ToolCatalogProof, round);
                 yield return current;
                 continue;
             }
@@ -1333,6 +1334,9 @@ public sealed class ChatRuntime
 
         if (failure is not null)
         {
+            AgentTurnToolCatalogTelemetry.RecordOutcome(
+                request.ToolCatalogProof,
+                failure is OperationCanceledException ? "cancelled" : "failed");
             if (started is null)
             {
                 ExceptionDispatchInfo.Capture(failure).Throw();
@@ -1357,6 +1361,10 @@ public sealed class ChatRuntime
         var result = roundScope.RequireResult();
         if (started is null)
             yield break;
+
+        AgentTurnToolCatalogTelemetry.RecordOutcome(
+            request.ToolCatalogProof,
+            result.FinishReason ?? "success");
 
         yield return new LLMStreamChunk
         {
@@ -1411,6 +1419,7 @@ public sealed class ChatRuntime
         IReadOnlyList<IAgentTool> authorizedTools = [];
         var authorizedToolManager = ToolCallLoop.CreateRequestToolManager(authorizedTools);
         var authorizedToolContext = AgentToolExecutionContext.Empty;
+        var firstOutputRecorded = false;
 
         var llmBridge = new LLMCallMiddlewareBridge();
         var middlewareTask = MiddlewarePipeline.RunLLMCallAsync(
@@ -1493,7 +1502,16 @@ public sealed class ChatRuntime
                 }
 
                 if (normalizedChunk != null)
+                {
+                    if (!firstOutputRecorded && IsModelOutputChunk(normalizedChunk))
+                    {
+                        AgentTurnToolCatalogTelemetry.RecordTimeToFirstOutput(
+                            llmCallContext.Request.ToolCatalogProof,
+                            Stopwatch.GetElapsedTime(llmStartedAt));
+                        firstOutputRecorded = true;
+                    }
                     yield return normalizedChunk;
+                }
             }
 
             var finalizedToolCalls = toolCalls.BuildToolCalls();
@@ -1558,6 +1576,12 @@ public sealed class ChatRuntime
             authorizedTools,
             authorizedToolContext);
     }
+
+    private static bool IsModelOutputChunk(LLMStreamChunk chunk) =>
+        !string.IsNullOrEmpty(chunk.DeltaContent) ||
+        chunk.DeltaContentPart is not null ||
+        !string.IsNullOrEmpty(chunk.DeltaReasoningContent) ||
+        chunk.DeltaToolCall is not null;
 
     internal async Task<StreamingRoundResult> ExecuteSingleLlmStepAsync(
         ILLMProvider provider,

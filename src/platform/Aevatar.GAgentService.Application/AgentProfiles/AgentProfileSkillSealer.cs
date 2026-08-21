@@ -183,19 +183,22 @@ public sealed class AgentProfileSkillSealer : IAgentProfileSkillSealer
         var maximumToolSetRefs = maximum?.ToolSetRefs.ToHashSet(StringComparer.Ordinal) ?? [];
         var toolNames = policy?.ToolNames.ToHashSet(StringComparer.Ordinal) ?? [];
         var toolSetRefs = policy?.ToolSetRefs.ToHashSet(StringComparer.Ordinal) ?? [];
-        var maximumSelectors = maximum?.ConnectedServiceSelectors
-            .GroupBy(static selector => selector.CatalogServiceSlug, StringComparer.Ordinal)
-            .ToDictionary(
-                static group => group.Key,
-                static group => group.First(),
-                StringComparer.Ordinal) ?? [];
         var selectorsWithinMaximum = policy?.ConnectedServiceSelectors.All(selector =>
-            maximumSelectors.TryGetValue(selector.CatalogServiceSlug, out var maximumSelector) &&
-            selector.AllowedRisks.All(maximumSelector.AllowedRisks.Contains) &&
-            (selector.Readiness is null ||
-             maximumSelector.Readiness is not null &&
-             selector.Readiness.RequestedScopes.All(
-                 maximumSelector.Readiness.RequestedScopes.Contains))) ?? true;
+            maximum?.ConnectedServiceSelectors.Any(maximumSelector =>
+                string.Equals(
+                    selector.CatalogServiceSlug,
+                    maximumSelector.CatalogServiceSlug,
+                    StringComparison.Ordinal) &&
+                (string.IsNullOrEmpty(maximumSelector.EndpointId) ||
+                 string.Equals(
+                     selector.EndpointId,
+                     maximumSelector.EndpointId,
+                     StringComparison.Ordinal)) &&
+                selector.AllowedRisks.All(maximumSelector.AllowedRisks.Contains) &&
+                (selector.Readiness is null ||
+                 maximumSelector.Readiness is not null &&
+                 selector.Readiness.RequestedScopes.All(
+                     maximumSelector.Readiness.RequestedScopes.Contains))) == true) ?? true;
         return toolNames.IsSubsetOf(maximumToolNames) &&
                toolSetRefs.IsSubsetOf(maximumToolSetRefs) &&
                selectorsWithinMaximum

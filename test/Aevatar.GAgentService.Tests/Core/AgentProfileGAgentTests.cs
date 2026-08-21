@@ -248,6 +248,8 @@ public sealed class AgentProfileGAgentTests
             ClassifierTimeoutMs = 15_000,
             ExactSkillFetchTimeoutMs = 15_000,
             MaxSelectedSkillBytes = 24576,
+            MaxOwnedToolCount = 8,
+            MaxSchemaBytes = 48 * 1024,
             MaximumToolPolicy = new AgentProfileToolPolicy(),
             RecoveryToolPolicy = new AgentProfileToolPolicy(),
         },

@@ -152,6 +152,7 @@ public static partial class ServiceEndpoints
                     WorkflowName = workflowRequest?.WorkflowName ?? string.Empty,
                     WorkflowYaml = workflowRequest?.WorkflowYaml ?? string.Empty,
                     DefinitionActorId = workflowRequest?.DefinitionActorId ?? string.Empty,
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                 };
                 if (workflowRequest?.InlineWorkflowYamls != null)
                 {

@@ -258,74 +258,40 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
     }
 
     [Fact]
-    public async Task UnprofiledDirectEffectRetry_ShouldRebuildBaseRouteAndExecuteGenerationTwo()
+    public async Task UnprofiledDirectEffectPlan_ShouldNotMintDurableAuthorityOrDispatchTool()
     {
         var tool = new RetryEffectTool();
         var executor = CreateTurnExecutor(tool);
-        var (state, _) = await BuildReconciledNotAppliedStateAsync(
-            executor,
-            tool,
-            profiled: false);
-        var effect = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
-        var retry = NyxIdChatControlCommands.Retry(
-            state,
-            BuildRetryCommand(effect, "valid-grant-token", expectedStateVersion: 20),
-            stateVersion: 20,
-            Now);
-
-        retry.ShouldCommit.Should().BeTrue();
-        retry.ShouldDispatch.Should().BeTrue();
-        retry.NextCommand.Should().NotBeNull();
-        retry.NextCommand!.Key.OperationGeneration.Should().Be(2);
-        retry.NextCommand.Tool.AgentProfile.Should().BeNull();
-        retry.NextCommand.Tool.AgentProfileTurnAuthority.Should().BeNull();
-        var result = await executor.ExecuteAsync(
-            retry.NextCommand,
-            new NyxIdChatTransientExecutionSession(),
+        var llmKey = Key("step-llm", "operation-llm", generation: 1);
+        var initialState = ActiveLlmState(llmKey, tool.Name, profiled: false);
+        var session = new NyxIdChatTransientExecutionSession();
+        var llmResult = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = llmKey.Clone(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "Create the approval record.",
+                        SessionId = "turn-alpha",
+                        ScopeId = "scope-alpha",
+                        ToolContext = ToolContext("unprofiled-token"),
+                    },
+                },
+            },
+            session,
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
 
-        result.Result.Failure.Should().BeNull(result.Result.Failure?.ToString());
-        result.Result.Tool.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
-        tool.ExecutionTokens.Should().Equal("uncertain-token", "valid-grant-token");
-        Encoding.UTF8.GetString(retry.State.ToByteArray()).Should().NotContain("valid-grant-token");
-        retry.State.ToString().Should().NotContain("valid-grant-token");
-    }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task UnprofiledDirectEffectRetry_WhenCurrentBaseRouteDrifts_ShouldFailClosed(
-        bool removeTool)
-    {
-        var tool = new RetryEffectTool();
-        var executor = CreateTurnExecutor(tool);
-        var (state, _) = await BuildReconciledNotAppliedStateAsync(
-            executor,
-            tool,
-            profiled: false);
-        var effect = state.ActiveTask.Steps.Single(step => step.Kind == NyxIdChatStepKind.Tool);
-        var retry = NyxIdChatControlCommands.Retry(
-            state,
-            BuildRetryCommand(effect, "valid-grant-token", expectedStateVersion: 30),
-            stateVersion: 30,
-            Now);
-        if (removeTool)
-            tool.IsBaseRouteAvailable = false;
-        else
-            tool.DescriptionOverride = "The current base route exposes a different contract.";
-
-        var result = await executor.ExecuteAsync(
-            retry.NextCommand!,
-            new NyxIdChatTransientExecutionSession(),
-            static (_, _) => Task.CompletedTask,
-            CancellationToken.None);
-
-        result.Result.Failure.Should().NotBeNull();
-        result.Result.Failure.FailureCode.Should().Be(
-            NyxIdChatTurnOperationExecutor.ToolAuthorizationMismatchCode);
-        result.Result.Failure.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotStarted);
-        tool.ExecutionTokens.Should().Equal("uncertain-token");
+        llmResult.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
+        var call = llmResult.Result.Llm.ToolCalls.Should().ContainSingle().Subject;
+        call.OperationAdmission.Should().BeNull();
+        var planned = NyxIdChatTaskLifecycle.ApplyOperationResult(initialState, llmResult.Result, Now);
+        planned.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        planned.NextCommand.Should().BeNull(
+            "restricted-empty turns cannot dispatch a model-invented hidden tool");
+        tool.ExecutionTokens.Should().BeEmpty();
     }
 
     [Theory]

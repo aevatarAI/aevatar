@@ -32,8 +32,9 @@ public sealed class ChatRouteResolver
 
         if (snapshot is null)
         {
-            return ApplyDefaultToolSet(
+            return ApplyDefaults(
                 _fallbackProvider.GetFallbackDecision().Clone(),
+                input.SourceKind,
                 implicitToolSetNameOverride,
                 replaceExisting: !string.IsNullOrWhiteSpace(implicitToolSetNameOverride));
         }
@@ -56,13 +57,15 @@ public sealed class ChatRouteResolver
                 continue;
             }
 
-            return ApplyDefaultToolSet(
+            return ApplyDefaults(
                 NewDecision(rule.Action, matchedRuleId: rule.RuleId, usedFallback: false),
+                input.SourceKind,
                 implicitToolSetNameOverride);
         }
 
-        return ApplyDefaultToolSet(
+        return ApplyDefaults(
             NewDecision(snapshot.DefaultTarget, matchedRuleId: string.Empty, usedFallback: false),
+            input.SourceKind,
             implicitToolSetNameOverride);
     }
 
@@ -104,19 +107,37 @@ public sealed class ChatRouteResolver
             ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
-    private ChatRouteDecision ApplyDefaultToolSet(
+    private ChatRouteDecision ApplyDefaults(
         ChatRouteDecision decision,
+        ChatSourceKind sourceKind,
         string? implicitToolSetNameOverride,
         bool replaceExisting = false)
     {
         var toolSetName = string.IsNullOrWhiteSpace(implicitToolSetNameOverride)
             ? _options.Value.Defaults.DefaultForwardToModelToolSetName
             : implicitToolSetNameOverride;
-        if (string.IsNullOrWhiteSpace(toolSetName))
-            return decision;
-
-        ApplyDefaultToolSet(decision.Action?.ForwardToModel, toolSetName, replaceExisting);
+        if (!string.IsNullOrWhiteSpace(toolSetName))
+            ApplyDefaultToolSet(decision.Action?.ForwardToModel, toolSetName, replaceExisting);
+        ApplyDefaultProfileKind(decision.Action?.ForwardToModel, sourceKind);
         return decision;
+    }
+
+    private static void ApplyDefaultProfileKind(ForwardToModel? forwardToModel, ChatSourceKind sourceKind)
+    {
+        if (forwardToModel is null ||
+            forwardToModel.ProfileKind != ChatRouteAgentProfileKind.Unspecified)
+        {
+            return;
+        }
+
+        forwardToModel.ProfileKind = sourceKind switch
+        {
+            ChatSourceKind.Direct => ChatRouteAgentProfileKind.NyxidChat,
+            ChatSourceKind.NyxRelay => ChatRouteAgentProfileKind.ChannelReply,
+            ChatSourceKind.NyxResponses => ChatRouteAgentProfileKind.WorkspaceChat,
+            ChatSourceKind.Voice => ChatRouteAgentProfileKind.WorkspaceChat,
+            _ => ChatRouteAgentProfileKind.WorkspaceChat,
+        };
     }
 
     private static void ApplyDefaultToolSet(

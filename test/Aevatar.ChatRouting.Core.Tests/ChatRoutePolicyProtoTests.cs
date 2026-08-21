@@ -40,6 +40,12 @@ public sealed class ChatRoutePolicyProtoTests
             {
                 ModelName = "chrono-llm/gpt-5.5",
                 ToolSetRef = new ChatRouteToolSetRef { Name = "workspace.default" },
+                ProfileKind = ChatRouteAgentProfileKind.WorkspaceChat,
+                ProfileRef = new ChatRouteAgentProfileRef
+                {
+                    OwnerKind = ChatRouteAgentProfileReferenceOwnerKind.System,
+                    ProfileSlug = "workspace-default",
+                },
                 ToolChoiceHint = new ChatRouteToolChoiceHint
                 {
                     ToolName = "aevatar_invoke_gagent",
@@ -71,6 +77,9 @@ public sealed class ChatRoutePolicyProtoTests
         parsed.Should().Be(action);
         parsed.ActionCase.Should().Be(ChatRouteAction.ActionOneofCase.ForwardToModel);
         parsed.ForwardToModel.ToolSetRef.Name.Should().Be("workspace.default");
+        parsed.ForwardToModel.ProfileKind.Should().Be(ChatRouteAgentProfileKind.WorkspaceChat);
+        parsed.ForwardToModel.ProfileRef.OwnerKind.Should().Be(ChatRouteAgentProfileReferenceOwnerKind.System);
+        parsed.ForwardToModel.ProfileRef.ProfileSlug.Should().Be("workspace-default");
         parsed.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("aevatar_invoke_gagent");
         parsed.ForwardToModel.ToolChoiceHint.PrefilledArguments.Fields["actor_id"].StringValue
             .Should()

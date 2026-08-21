@@ -1172,6 +1172,101 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_ExactEndpointSelector_ShouldAdmitOnlyThatPublishedOperation()
+    {
+        IAgentTool[] tools =
+        [
+            new AdmittedTestTool(
+                "nyxop_github_read_alpha",
+                CreateReadAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    "endpoint-read-alpha",
+                    "api-github")),
+            new AdmittedTestTool(
+                "nyxop_github_read_beta",
+                CreateReadAdmission(
+                    "us-github-beta",
+                    "api-github-beta",
+                    "endpoint-read-beta",
+                    "api-github")),
+        ];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        var taskSelector = ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly);
+        taskSelector.EndpointId = "endpoint-read-beta";
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(taskSelector);
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle()
+            .Which.Should().Be("nyxop_github_read_beta");
+        var owner = catalog.ExactTools.Values.Should().ContainSingle().Subject
+            .Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
+        owner.OperationAdmission.Identity.Should().Be(
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-read-beta"));
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_ConnectedSelectorOverLimit_ShouldExposeOnlyClarificationTool()
+    {
+        var connectedTools = Enumerable.Range(1, 4)
+            .Select(index => (IAgentTool)new AdmittedTestTool(
+                $"nyxop_github_read_{index}",
+                CreateReadAdmission(
+                    $"us-github-{index}",
+                    $"api-github-{index}",
+                    $"endpoint-read-{index}",
+                    "api-github")))
+            .ToArray();
+        IAgentTool[] tools = [.. connectedTools, new TestTool("ask_user")];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("ask_user");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("ask_user");
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_LiteralMaximum_ShouldDiagnoseFilteredConnectedServiceToolsByKind()
     {
         IAgentTool[] tools =
@@ -1311,7 +1406,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
-    public async Task MaterializeAsync_DuplicateAlias_ShouldUseRecoveryWithoutFetching()
+    public async Task MaterializeAsync_DuplicateAlias_ShouldRequireDisambiguationWithoutFetching()
     {
         var tools = NewTools("recovery", "task", "extra");
         var profile = BuildProfile(withAlias: true);
@@ -1332,21 +1427,21 @@ public sealed class AgentTurnToolCatalogMaterializerTests
                 CancellationToken.None);
         var catalog = result.Catalog;
 
-        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
         catalog.SelectedIntentId.Should().BeNull();
         catalog.CandidateIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
         result.Preparation.Diagnostics.Should().Contain(diagnostic =>
-            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation &&
             diagnostic.Detail == "alias_collision");
         result.Preparation.Authority.DegradationReasons.Should().Equal(
-            AgentProfileTurnDegradationReason.ClassifierFailed);
+            AgentProfileTurnDegradationReason.CatalogNeedsDisambiguation);
         classifier.CallCount.Should().Be(0);
         fetcher.CallCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task MaterializeAsync_AliasPrefixWithoutBoundary_ShouldUseClassifierAndRecovery()
+    public async Task MaterializeAsync_AliasPrefixWithoutBoundary_ShouldUseClassifierAndRestrictOnNoMatch()
     {
         var tools = NewTools("recovery", "task", "extra");
         var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch());
@@ -1361,7 +1456,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
                 ToolContext(),
                 CancellationToken.None);
 
-        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
         catalog.SelectedIntentId.Should().BeNull();
         catalog.CandidateIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
@@ -1372,7 +1467,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
-    public async Task MaterializeAsync_BlankMessage_ShouldUseClassifierAndRecoveryWithoutFetching()
+    public async Task MaterializeAsync_BlankMessage_ShouldUseClassifierAndRestrictWithoutFetching()
     {
         var tools = NewTools("recovery", "task", "extra");
         var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch());
@@ -1387,7 +1482,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
                 ToolContext(),
                 CancellationToken.None);
 
-        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
         catalog.SelectedIntentId.Should().BeNull();
         catalog.CandidateIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
@@ -1428,7 +1523,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
-    public async Task MaterializeAsync_ClassifierNoMatch_ShouldUseRecoveryOnly()
+    public async Task MaterializeAsync_ClassifierNoMatch_ShouldUseRestrictedEmptyCatalog()
     {
         var tools = NewTools("recovery", "task", "extra");
         var fetcher = new RecordingFetcher(SuccessfulFetch());
@@ -1445,7 +1540,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
                 ToolContext(),
                 CancellationToken.None);
 
-        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
         catalog.SelectedIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
         catalog.Diagnostics.Should().Contain(diagnostic =>
@@ -1600,26 +1695,26 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
-    public async Task MaterializeAsync_Shadow_ShouldKeepCandidateDiagnosticWithoutFetchingOrResolvingTaskPolicy()
+    public async Task MaterializeAsync_Shadow_ShouldObserveCandidateProofWithoutChangingExecutionCatalog()
     {
         var tools = NewTools("recovery", "task", "extra");
         var registry = RegistryWithRoute(tools);
         var profile = BuildProfile(withAlias: true);
         profile.ActivationMode = AgentProfileActivationMode.Shadow;
-        profile.Members[0].TaskToolPolicy.ToolSetRefs.Add("candidate-only");
         var fetcher = new RecordingFetcher(SuccessfulFetch());
 
-        var catalog = await NewMaterializer(
+        var result = await NewMaterializer(
                 registry,
                 new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
                 fetcher)
-            .MaterializeAsync(
+            .MaterializeWithPreparationAsync(
                 SealProfile(profile),
                 "/alpha",
                 "token",
                 tools,
                 ToolContext(),
                 CancellationToken.None);
+        var catalog = result.Catalog;
 
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
         catalog.CandidateIntentId.Should().Be("intent-alpha");
@@ -1627,8 +1722,15 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         catalog.SelectedSkillPromptLayer.Should().BeNull();
         catalog.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ShadowCandidate);
+        result.Preparation.ShadowCandidateProof.Should().NotBeNull();
+        result.Preparation.ShadowCandidateProof!.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().Equal("recovery", "task");
+        result.Preparation.ShadowCandidateProof.ToolCount.Should().Be(2);
+        result.Preparation.ShadowCandidateProof.CatalogDigest.Should().StartWith("sha256:");
         fetcher.CallCount.Should().Be(0);
-        registry.ResolveCalls.Should().NotContain("candidate-only");
+        registry.ResolveCalls.Should().Equal(
+            ["profile.route", "profile.route"],
+            "the test materializes the unchanged recovery catalog after observing the candidate proof");
     }
 
     [Fact]

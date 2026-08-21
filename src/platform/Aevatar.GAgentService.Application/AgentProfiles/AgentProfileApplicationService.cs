@@ -335,8 +335,12 @@ public sealed class AgentProfileApplicationService : IAgentProfileCatalogApplica
         }
         else
         {
-            if (request.CohortBasisPoints is < 0 or > AgentProfilePolicies.FullCohortBasisPoints)
-                throw new ArgumentOutOfRangeException(nameof(request.CohortBasisPoints));
+            if (!AgentProfilePolicies.IsReviewedRolloutCohort(request.CohortBasisPoints))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.CohortBasisPoints),
+                    "System Agent Profile rollout stages are fixed at 5%, 25%, and 100%.");
+            }
             command.System = new AgentProfileSystemBindingAdmission
             {
                 Enabled = request.Enabled,

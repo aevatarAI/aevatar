@@ -37,7 +37,8 @@ public sealed class ResponsesCommandFacade(
     ILogger<ResponsesCommandFacade> logger,
     IOptions<ResponsesIngressOptions>? ingressOptions = null,
     IOwnerLlmConfigSource? ownerLlmConfigSource = null,
-    ILlmRunExecutor? llmRunExecutor = null) : IResponsesCommandFacade
+    ILlmRunExecutor? llmRunExecutor = null,
+    IResponsesOwnedToolCatalogPlanner? ownedToolCatalogPlanner = null) : IResponsesCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
 
@@ -474,10 +475,27 @@ public sealed class ResponsesCommandFacade(
         if (toolPlan.Error is not null)
             return ExecutionPlanResult.FromError(toolPlan.Error);
 
+        var ownedCatalogPlan = ownedToolCatalogPlanner is null
+            ? new ResponsesOwnedToolCatalogPlan(
+                Aevatar.AI.Core.AgentProfiles.AgentTurnToolCatalogFactory.RestrictedEmpty(),
+                null,
+                string.Empty,
+                null)
+            : await ownedToolCatalogPlanner.PlanAsync(
+                routeAction,
+                callerScope.ScopeId,
+                normalized.ResponseId,
+                normalized.Prompt ?? string.Empty,
+                toolProviderContext.ToolContext,
+                ct).ConfigureAwait(false);
+        if (ownedCatalogPlan.Error is not null)
+            return ExecutionPlanResult.FromError(ownedCatalogPlan.Error);
+
         var toolClassification = await toolClassificationService.ClassifyAsync(
             normalized.DeclaredTools,
             toolProviderContext,
             toolPlan.AdditionalToolProviders,
+            ownedCatalogPlan.Catalog,
             ct);
         var routedModel = string.IsNullOrWhiteSpace(forwardToModel?.ModelName)
             ? normalized.Model
@@ -546,7 +564,8 @@ public sealed class ResponsesCommandFacade(
             toolClassification,
             toolPlan.ToolChoiceHintPlan,
             createdAt,
-            toolPlan.ResolvedToolSetName));
+            ownedCatalogPlan.ResolvedToolSetName,
+            ownedCatalogPlan.ProfileSnapshot));
     }
 
     private async Task<ResponsesCreateCommandResult> ExecuteNonStreamingAsync(
@@ -690,6 +709,7 @@ public sealed class ResponsesCommandFacade(
                 normalized.ResponseId,
                 new LLMRequestCallerCredentials(bearerToken)),
             Tools = toolClassification.EffectiveTools,
+            ToolCatalogProof = toolClassification.OwnedCatalog?.Proof,
             ToolContext = toolContext,
             LlmControl = new LLMControlContext(
                 NyxIdAccessToken: null,
@@ -1010,7 +1030,8 @@ public sealed class ResponsesCommandFacade(
             plan.ToolClassification,
             plan.ToolChoiceHintPlan,
             plan.CreatedAt,
-            plan.ResolvedToolSetName);
+            plan.ResolvedToolSetName,
+            plan.ProfileSnapshot);
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
@@ -1034,7 +1055,8 @@ public sealed class ResponsesCommandFacade(
             plan.ToolClassification,
             plan.ToolChoiceHintPlan,
             plan.CreatedAt,
-            plan.ResolvedToolSetName);
+            plan.ResolvedToolSetName,
+            plan.ProfileSnapshot);
         return new LlmRunExecutorRequest(
             plan.Session.ActorId,
             plan.Session.ResponseId,
@@ -1049,7 +1071,8 @@ public sealed class ResponsesCommandFacade(
         ResponsesToolClassification toolClassification,
         ResponsesToolChoiceHintPlan toolChoiceHintPlan,
         DateTimeOffset requestedAt,
-        string toolSetName)
+        string toolSetName,
+        AgentProfileSnapshot? profileSnapshot)
     {
         var command = new LlmRunRequested
         {
@@ -1071,7 +1094,7 @@ public sealed class ResponsesCommandFacade(
             command.RouteTarget = request.RouteTarget.Clone();
         command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
         command.ToolSelection = ResponsesRuntimeToolSelectionFactory.Create(
-            toolClassification, toolChoiceHintPlan, toolSetName);
+            toolClassification, toolChoiceHintPlan, toolSetName, profileSnapshot);
         return command;
     }
 

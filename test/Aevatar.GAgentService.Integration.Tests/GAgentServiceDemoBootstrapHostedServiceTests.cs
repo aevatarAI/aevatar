@@ -255,6 +255,7 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
                 {
                     WorkflowPlan = new WorkflowServiceDeploymentPlan
                     {
+                        ToolCatalogPolicyVersion = spec.ToolCatalogPolicyVersion,
                         WorkflowName = spec.WorkflowName,
                         WorkflowYaml = spec.WorkflowYaml,
                         WorkflowId = string.IsNullOrWhiteSpace(spec.WorkflowId)

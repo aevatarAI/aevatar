@@ -37,7 +37,8 @@ public class WorkflowRoleGAgent(
     IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null,
     RoleChatExecutionOptions? chatExecutionOptions = null,
     TimeProvider? timeProvider = null,
-    ISecretVault? chatToolRecoverySecretVault = null)
+    ISecretVault? chatToolRecoverySecretVault = null,
+    IAgentToolDiscoveryService? toolDiscoveryService = null)
     : RoleGAgent(
         toolExecutionPort,
         llmProviderFactory,
@@ -58,6 +59,8 @@ public class WorkflowRoleGAgent(
     private readonly IToolSetRegistry? _toolSetRegistry = toolSetRegistry;
     private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider = callerAccessTokenProvider;
     private readonly TimeProvider _workflowTimeProvider = timeProvider ?? TimeProvider.System;
+    private readonly IAgentToolDiscoveryService _toolDiscoveryService =
+        toolDiscoveryService ?? AgentToolDiscoveryService.Instance;
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
@@ -315,9 +318,13 @@ public class WorkflowRoleGAgent(
             ? await RefreshCallerTokenAsync(toolContext, ct)
             : toolContext;
         ct.ThrowIfCancellationRequested();
-        var catalog = await BuildRequestToolCatalogAsync(ToToolScope(continuation), effectiveContext, ct);
+        var catalog = await BuildRequestToolCatalogAsync(
+            ToToolScope(continuation),
+            effectiveContext,
+            continuation.ToolCatalogPolicyVersion,
+            ct);
         ct.ThrowIfCancellationRequested();
-        var tool = catalog?.ExactTools.GetValueOrDefault(pending.ToolName)
+        var tool = catalog.ExactTools.GetValueOrDefault(pending.ToolName)
                    ?? throw new InvalidOperationException(
                        $"Approved workflow tool '{pending.ToolName}' is no longer available.");
         return (tool, effectiveContext);
@@ -423,10 +430,10 @@ public class WorkflowRoleGAgent(
         var catalog = await BuildRequestToolCatalogAsync(
             ToToolScope(continuation),
             executionContext,
+            continuation.ToolCatalogPolicyVersion,
             ct);
         ct.ThrowIfCancellationRequested();
-        return catalog?.ExactTools.GetValueOrDefault(intent.ToolName)
-               ?? Tools.Get(intent.ToolName);
+        return catalog.ExactTools.GetValueOrDefault(intent.ToolName);
     }
 
     protected override async Task OnRoleChatSessionTerminalCommittedAsync(
@@ -1039,6 +1046,7 @@ public class WorkflowRoleGAgent(
             RoutePreference = intent.RoutePreference ?? string.Empty,
             TimeoutMs = intent.TimeoutMs,
             DirectParentRoleChatSessionId = directParentRoleChatSessionId,
+            ToolCatalogPolicyVersion = intent.ToolCatalogPolicyVersion ?? string.Empty,
             RestrictToolSets = intent.AgentToolScope?.RestrictToolSets == true,
             RestrictAllowedToolNames = intent.AgentToolScope?.RestrictAllowedToolNames == true,
         };
@@ -1101,6 +1109,7 @@ public class WorkflowRoleGAgent(
             SessionId = continuation.SessionId,
             TimeoutMs = continuation.TimeoutMs,
             AgentToolScope = ToToolScope(continuation),
+            ToolCatalogPolicyVersion = continuation.ToolCatalogPolicyVersion,
         };
 
     private static LLMControlContextPayload BuildContinuationLlmControl(
@@ -1372,12 +1381,16 @@ public class WorkflowRoleGAgent(
         }
         await EnsureSessionTextStartedAsync(request.SessionId, streamCt);
         streamCt.ThrowIfCancellationRequested();
-        var turnCatalog = await BuildRequestToolCatalogAsync(intent.AgentToolScope, toolContext, streamCt);
+        var turnCatalog = await BuildRequestToolCatalogAsync(
+            intent.AgentToolScope,
+            toolContext,
+            intent.ToolCatalogPolicyVersion,
+            streamCt);
         streamCt.ThrowIfCancellationRequested();
         var firstIntentFileRef = intent.InputFileRefs.FirstOrDefault();
         var firstToolContextFileRef = toolContext.InputFileRefs.FirstOrDefault();
         Logger.LogWarning(
-            "Workflow LLM request tool catalog resolved. runId={RunId} stepId={StepId} sessionId={SessionId} intentInputFileRefCount={IntentInputFileRefCount} requestInputPartCount={RequestInputPartCount} toolContextInputFileRefCount={ToolContextInputFileRefCount} toolSetRefCount={ToolSetRefCount} routeOwnedToolCount={ExactToolCount} routeOwnedToolNames={ExactToolNames} firstIntentFileId={FirstIntentFileId} firstIntentArtifactId={FirstIntentArtifactId} firstIntentMediaType={FirstIntentMediaType} firstToolContextFileId={FirstToolContextFileId} firstToolContextArtifactId={FirstToolContextArtifactId} firstToolContextMediaType={FirstToolContextMediaType}",
+            "Workflow LLM request tool catalog resolved. runId={RunId} stepId={StepId} sessionId={SessionId} intentInputFileRefCount={IntentInputFileRefCount} requestInputPartCount={RequestInputPartCount} toolContextInputFileRefCount={ToolContextInputFileRefCount} toolSetRefCount={ToolSetRefCount} ownedToolCount={ExactToolCount} schemaBytes={SchemaBytes} catalogDigest={CatalogDigest} ownedToolNames={ExactToolNames} firstIntentFileId={FirstIntentFileId} firstIntentArtifactId={FirstIntentArtifactId} firstIntentMediaType={FirstIntentMediaType} firstToolContextFileId={FirstToolContextFileId} firstToolContextArtifactId={FirstToolContextArtifactId} firstToolContextMediaType={FirstToolContextMediaType}",
             intent.RunId ?? string.Empty,
             intent.StepId ?? string.Empty,
             intent.SessionId ?? string.Empty,
@@ -1385,16 +1398,17 @@ public class WorkflowRoleGAgent(
             inputParts.Count,
             toolContext.InputFileRefs.Count,
             intent.AgentToolScope?.ToolSetRefs.Count ?? 0,
-            turnCatalog?.ExactTools.Count ?? 0,
-            turnCatalog is null ? string.Empty : string.Join(',', turnCatalog.ExactTools.Keys),
+            turnCatalog.Proof.ToolCount,
+            turnCatalog.Proof.SchemaBytes,
+            turnCatalog.Proof.CatalogDigest,
+            string.Join(',', turnCatalog.ExactTools.Keys),
             firstIntentFileRef?.FileId ?? string.Empty,
             firstIntentFileRef?.ArtifactId ?? string.Empty,
             firstIntentFileRef?.MediaType ?? string.Empty,
             firstToolContextFileRef?.FileId ?? string.Empty,
             firstToolContextFileRef?.ArtifactId ?? string.Empty,
             firstToolContextFileRef?.MediaType ?? string.Empty);
-        if (turnCatalog is not null)
-            toolContext = AddRequestToolsToVisibility(toolContext, turnCatalog.ExactTools.Keys);
+        toolContext = AddRequestToolsToVisibility(toolContext, turnCatalog.ExactTools.Keys);
         var metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
                 new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
@@ -1500,6 +1514,8 @@ public class WorkflowRoleGAgent(
                                 Model = started.Model,
                                 Provider = started.Provider,
                                 InputSummary = started.InputSummary,
+                                ToolCatalogProof = turnCatalog.Proof.ToPayload(),
+                                ToolCatalogPolicyVersion = intent.ToolCatalogPolicyVersion ?? string.Empty,
                             };
                             progress.ModelStarted.AvailableToolNames.Add(started.AvailableToolNames);
                         },
@@ -1679,94 +1695,132 @@ public class WorkflowRoleGAgent(
         return false;
     }
 
-    private async Task<AgentTurnToolCatalog?> BuildRequestToolCatalogAsync(
+    private async Task<AgentTurnToolCatalog> BuildRequestToolCatalogAsync(
         WorkflowAgentToolScope? scope,
         AgentToolExecutionContext toolContext,
+        string? toolCatalogPolicyVersion,
         CancellationToken ct)
     {
-        if (_toolSetRegistry is null || scope?.ToolSetRefs.Count is not > 0)
-            return null;
-
-        var tools = new List<IAgentTool>();
-        var resolutionFailures = 0;
-        var discoveryFailures = 0;
-        var collisions = 0;
-        using var _ = AgentToolContextScope.Push(toolContext);
-        foreach (var toolSetRef in scope.ToolSetRefs
-                     .Where(static name => !string.IsNullOrWhiteSpace(name))
-                     .Select(static name => name.Trim())
-                     .Distinct(StringComparer.Ordinal))
+        var isCurrentPolicy = WorkflowToolCatalogPolicies.IsCurrent(toolCatalogPolicyVersion);
+        if (isCurrentPolicy && scope is null)
         {
-            ToolSetResolveResult resolved;
-            try
+            throw new AgentTurnToolCatalogException(new AgentTurnToolCatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogNeedsDisambiguation,
+                "Current workflow tool catalog policy requires an explicit agent tool scope."));
+        }
+
+        var budget = isCurrentPolicy
+            ? AgentTurnToolCatalogBudget.WorkflowOrAdmin
+            : new AgentTurnToolCatalogBudget(int.MaxValue, int.MaxValue);
+
+        var registeredTools = Tools.GetAll()
+            .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
+            .ToArray();
+        var allowedStaticNames = (scope is not null &&
+                                  (scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0)
+                ? scope.AllowedToolNames
+                : registeredTools.Select(static tool => tool.Name))
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(static name => name.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var selectedStaticTools = registeredTools
+            .Where(tool => allowedStaticNames.Contains(tool.Name))
+            .ToArray();
+
+        var toolSetRefs = (scope?.ToolSetRefs ?? [])
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(static name => name.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        IReadOnlyList<IAgentTool> requestTools = [];
+        if (toolSetRefs.Length > 0)
+        {
+            if (_toolSetRegistry is null)
             {
-                resolved = _toolSetRegistry.Resolve(toolSetRef);
-            }
-            catch (Exception)
-            {
-                resolutionFailures++;
-                continue;
+                Logger.LogWarning(
+                    "Workflow tool catalog restricted because the requested tool-set registry is unavailable. toolSetRefCount={ToolSetRefCount}",
+                    toolSetRefs.Length);
+                return AgentTurnToolCatalogFactory.RestrictedEmpty(
+                    budget,
+                    [new AgentProfileTurnDiagnostic(
+                        AgentProfileTurnDiagnosticCode.ToolSetUnavailable,
+                        "workflow_tool_set_registry_unavailable")]);
             }
 
-            if (!resolved.IsSuccess)
+            var sources = new List<IAgentToolSource>();
+            foreach (var toolSetRef in toolSetRefs)
             {
-                resolutionFailures++;
-                continue;
-            }
-
-            foreach (var source in resolved.Sources)
-            {
+                ToolSetResolveResult resolved;
                 try
                 {
-                    tools.AddRange(await source.DiscoverToolsAsync(ct));
-                    ct.ThrowIfCancellationRequested();
+                    resolved = _toolSetRegistry.Resolve(toolSetRef);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     throw;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    discoveryFailures++;
+                    throw new ToolSetResolutionException(
+                        new ToolSetResolveError(
+                            ToolSetResolveError.ResolutionFailedCode,
+                            toolSetRef,
+                            $"Tool set '{toolSetRef}' could not be resolved.",
+                            _toolSetRegistry.GetRegisteredNames()),
+                        ex);
                 }
-            }
-        }
 
-        var exactTools = new List<IAgentTool>();
-        foreach (var group in tools
-                     .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
-                     .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
-        {
-            var exact = group.First();
-            if (group.Any(tool => !ReferenceEquals(tool, exact)))
+                if (!resolved.IsSuccess)
+                    throw new ToolSetResolutionException(resolved.Error!);
+
+                sources.AddRange(resolved.Sources);
+            }
+
+            var discovery = await _toolDiscoveryService
+                .DiscoverAsync(
+                    sources.Distinct<IAgentToolSource>(ReferenceEqualityComparer.Instance),
+                    toolContext,
+                    ct)
+                .ConfigureAwait(false);
+            if (!discovery.IsSuccess)
             {
-                collisions++;
-                continue;
+                Logger.LogWarning(
+                    "Workflow tool catalog discovery failed closed. code={FailureCode} tool={ToolName} source={SourceType} conflictingSource={ConflictingSourceType}",
+                    discovery.Failure!.Code,
+                    discovery.Failure.ToolName,
+                    discovery.Failure.SourceType,
+                    discovery.Failure.ConflictingSourceType);
+                throw new AgentToolDiscoveryException(discovery.Failure);
             }
 
-            exactTools.Add(exact);
-        }
-        if (resolutionFailures + discoveryFailures + collisions > 0)
-        {
-            Logger.LogWarning(
-                "Workflow request tools degraded. resolution_failures={ResolutionFailures} discovery_failures={DiscoveryFailures} collisions={Collisions}",
-                resolutionFailures,
-                discoveryFailures,
-                collisions);
+            requestTools = discovery.Tools;
         }
 
-        var allowedNames = (scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0
-                ? scope.AllowedToolNames
-                : Tools.GetAll().Select(static tool => tool.Name))
-            .Concat(exactTools.Select(static tool => tool.Name));
-        return new AgentTurnToolCatalog(
+        var selections = selectedStaticTools
+            .Concat(requestTools)
+            .Select(static tool => new AgentTurnToolSelection(
+                tool,
+                AgentTurnToolOrigin.Workflow))
+            .ToArray();
+        var allowedNames = allowedStaticNames
+            .Concat(requestTools.Select(static tool => tool.Name));
+        var catalog = new AgentTurnToolCatalog(
             allowedNames,
             profilePromptLayer: null,
             selectedSkillPromptLayer: null,
             selectedIntentId: null,
             candidateIntentId: null,
             diagnostics: null,
-            exactTools);
+            exactToolSelections: selections,
+            hasUnresolvedConnectedServiceSelectors: false,
+            requiredToolInvocation: null,
+            budget: budget);
+        Logger.LogInformation(
+            "Workflow turn tool catalog frozen. toolCount={ToolCount} schemaBytes={SchemaBytes} digest={CatalogDigest}",
+            catalog.Proof.ToolCount,
+            catalog.Proof.SchemaBytes,
+            catalog.Proof.CatalogDigest);
+        return catalog;
     }
 
     private static AgentToolExecutionContext AddRequestToolsToVisibility(

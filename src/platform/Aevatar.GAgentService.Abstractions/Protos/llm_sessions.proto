@@ -225,6 +225,13 @@ message LlmSessionRuntimeToolSelection {
   // Empty = no route tool set (run uses only the always-on DI providers). See task
   // 06-21-offgrain-run-route-toolset-drop.
   string tool_set_name = 8;
+  // Frozen Aevatar-owned catalog proof selected at ingress. Forwarded declarations are
+  // intentionally outside this proof because Aevatar never executes them.
+  aevatar.ai.AgentTurnToolCatalogProofPayload owned_catalog_proof = 9;
+  // Immutable published profile pinned when the run is created. Null remains readable
+  // only for legacy commands; newly profiled runs fail closed when it is unavailable.
+  aevatar.ai.AgentProfileSnapshot profile_snapshot = 10;
+  string tool_catalog_policy_version = 11;
 }
 
 message LlmRunRequested {

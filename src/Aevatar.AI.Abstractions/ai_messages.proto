@@ -337,6 +337,7 @@ message WorkflowLlmToolApprovalContinuation {
   // The role-chat session whose committed ContinuationPrepared checkpoint
   // directly owns this continuation target. This is not the workflow session id.
   string direct_parent_role_chat_session_id = 13;
+  string tool_catalog_policy_version = 14;
 }
 
 message WorkflowLlmCompletionDeliveryContext {
@@ -790,6 +791,8 @@ message RoleChatModelStartedProgress {
   string provider = 4;
   string input_summary = 5;
   repeated string available_tool_names = 6;
+  AgentTurnToolCatalogProofPayload tool_catalog_proof = 7;
+  string tool_catalog_policy_version = 8;
 }
 
 message RoleChatModelCompletedProgress {
@@ -1003,6 +1006,9 @@ message AgentProfileConnectedServiceSelector {
   // caller-visible exact operation. Presence opts into deterministic typed
   // readiness; requested scopes are copied unchanged into the readiness call.
   AgentProfileConnectedServiceReadiness readiness = 3;
+  // Optional exact published operation identity. Empty keeps the selector at
+  // the catalog-service boundary; a value narrows it to one published endpoint.
+  string endpoint_id = 4;
 }
 
 message AgentProfileConnectedServiceReadiness {
@@ -1060,8 +1066,52 @@ message AgentProfileSnapshot {
   AgentProfileActivationMode activation_mode = 16;
   string instructions = 17;
   int64 published_revision = 18;
+  // Sealed upper bounds for the final Aevatar-owned catalog. Presence is required
+  // for newly published profiles; legacy pinned snapshots remain readable.
+  optional int32 max_owned_tool_count = 20;
+  optional int32 max_schema_bytes = 21;
   reserved 19;
   reserved "published_snapshot_sha256";
+}
+
+enum AgentTurnToolOriginPayload {
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_AGENT_RUNTIME = 1;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_ROUTE_TOOL_SET = 2;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_AGENT_PROFILE = 3;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_CONNECTED_SERVICE = 4;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_RESPONSES_STATE = 5;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_CALLER_FORWARDED = 6;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_WORKFLOW = 7;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_VOICE = 8;
+}
+
+message AgentTurnToolCatalogBudgetPayload {
+  int32 maximum_tool_count = 1;
+  int32 maximum_schema_bytes = 2;
+  int32 maximum_connected_read_tool_count = 3;
+  int32 maximum_connected_write_tool_count = 4;
+}
+
+message AgentTurnToolDescriptorPayload {
+  string name = 1;
+  string description = 2;
+  bytes canonical_schema_json = 3;
+  string schema_sha256 = 4;
+  AgentTurnToolOriginPayload origin = 5;
+  string selector_digest = 6;
+}
+
+// Durable, replayable proof for one immutable Aevatar-owned model tool catalog.
+// It intentionally contains no credentials, caller identity, arguments, time, or randomness.
+message AgentTurnToolCatalogProofPayload {
+  repeated AgentTurnToolDescriptorPayload tool_descriptors = 1;
+  AgentTurnToolCatalogBudgetPayload budget = 2;
+  int32 tool_count = 3;
+  int32 schema_bytes = 4;
+  int32 connected_read_tool_count = 5;
+  int32 connected_write_tool_count = 6;
+  string catalog_digest = 7;
 }
 
 message AgentProfileBoundEvent {
@@ -1099,6 +1149,9 @@ enum AgentProfileTurnDegradationReason {
   AGENT_PROFILE_TURN_DEGRADATION_REASON_LEGACY_AUTHORITY_MISSING = 13;
   AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZER_UNAVAILABLE = 14;
   AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZATION_FAILED = 15;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_CATALOG_NEEDS_DISAMBIGUATION = 16;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_CATALOG_OVER_BUDGET = 17;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_SCHEMA_INVALID = 18;
 }
 
 message AgentProfileTurnReconciliationKey {

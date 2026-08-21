@@ -32,7 +32,8 @@ public sealed class ChatCompletionsCommandFacade(
     TimeSpan? observationTimeout = null,
     IOptions<ResponsesIngressOptions>? ingressOptions = null,
     IOwnerLlmConfigSource? ownerLlmConfigSource = null,
-    ILlmRunExecutor? llmRunExecutor = null) : IChatCompletionsCommandFacade
+    ILlmRunExecutor? llmRunExecutor = null,
+    IResponsesOwnedToolCatalogPlanner? ownedToolCatalogPlanner = null) : IChatCompletionsCommandFacade
 {
     private static readonly TimeSpan DefaultObservationTimeout = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _observationTimeout =
@@ -334,10 +335,27 @@ public sealed class ChatCompletionsCommandFacade(
         if (toolPlan.Error is not null)
             return ExecutionPlanResult.FromError(toolPlan.Error);
 
+        var ownedCatalogPlan = ownedToolCatalogPlanner is null
+            ? new ResponsesOwnedToolCatalogPlan(
+                Aevatar.AI.Core.AgentProfiles.AgentTurnToolCatalogFactory.RestrictedEmpty(),
+                null,
+                string.Empty,
+                null)
+            : await ownedToolCatalogPlanner.PlanAsync(
+                routeAction,
+                callerScope.ScopeId,
+                normalized.CompletionId,
+                BuildRouteContentHint(normalized),
+                toolProviderContext.ToolContext,
+                ct).ConfigureAwait(false);
+        if (ownedCatalogPlan.Error is not null)
+            return ExecutionPlanResult.FromError(ownedCatalogPlan.Error);
+
         var toolClassification = await toolClassificationService.ClassifyAsync(
             normalized.DeclaredTools,
             toolProviderContext,
             toolPlan.AdditionalToolProviders,
+            ownedCatalogPlan.Catalog,
             ct: ct);
         string effectiveModel;
         string? resolvedRoutePreference;
@@ -406,7 +424,8 @@ public sealed class ChatCompletionsCommandFacade(
             toolClassification,
             toolPlan.ToolChoiceHintPlan,
             createdAt,
-            toolPlan.ResolvedToolSetName));
+            ownedCatalogPlan.ResolvedToolSetName,
+            ownedCatalogPlan.ProfileSnapshot));
     }
 
     // Refactor (iter344/cluster-001):
@@ -545,6 +564,7 @@ public sealed class ChatCompletionsCommandFacade(
                 normalized.CompletionId,
                 new LLMRequestCallerCredentials(bearerToken)),
             Tools = toolClassification.EffectiveTools,
+            ToolCatalogProof = toolClassification.OwnedCatalog?.Proof,
             ToolContext = toolContext,
             LlmControl = new LLMControlContext(
                 NyxIdAccessToken: null,
@@ -660,7 +680,8 @@ public sealed class ChatCompletionsCommandFacade(
             plan.ToolClassification,
             plan.ToolChoiceHintPlan,
             plan.CreatedAt,
-            plan.ResolvedToolSetName);
+            plan.ResolvedToolSetName,
+            plan.ProfileSnapshot);
         var envelope = ServiceCommandEnvelopeFactory.Create(
             plan.Session.ActorId,
             command,
@@ -684,7 +705,8 @@ public sealed class ChatCompletionsCommandFacade(
             plan.ToolClassification,
             plan.ToolChoiceHintPlan,
             plan.CreatedAt,
-            plan.ResolvedToolSetName);
+            plan.ResolvedToolSetName,
+            plan.ProfileSnapshot);
         return new LlmRunExecutorRequest(
             plan.Session.ActorId,
             plan.Session.ResponseId,
@@ -702,7 +724,8 @@ public sealed class ChatCompletionsCommandFacade(
         ResponsesToolClassification toolClassification,
         ResponsesToolChoiceHintPlan toolChoiceHintPlan,
         DateTimeOffset requestedAt,
-        string toolSetName)
+        string toolSetName,
+        AgentProfileSnapshot? profileSnapshot)
     {
         var command = new LlmRunRequested
         {
@@ -724,7 +747,7 @@ public sealed class ChatCompletionsCommandFacade(
             command.RouteTarget = request.RouteTarget.Clone();
         command.Messages.AddRange(request.Messages.Select(ToRuntimeMessage));
         command.ToolSelection = ResponsesRuntimeToolSelectionFactory.Create(
-            toolClassification, toolChoiceHintPlan, toolSetName);
+            toolClassification, toolChoiceHintPlan, toolSetName, profileSnapshot);
         return command;
     }
 

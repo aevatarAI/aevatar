@@ -371,6 +371,7 @@ public sealed class ServiceInvocationResolutionServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "document_file_extract",
                     WorkflowYaml = "name: document_file_extract\nsteps: []",
                     ExecutionMode = ExternalCapabilityExecutionMode.Interactive,

@@ -766,11 +766,14 @@ public sealed class NyxIdChatTurnOperationExecutor
                         AuthorizationContinuationCapabilityUnavailableMessage,
                         NyxIdChatEffectEvidence.NotStarted);
             }
+
+            RepinRematerializedTurnCatalog(session, session.TurnCatalog);
         }
         else if (isContinuation && command.Llm.RematerializeTurnCatalog)
         {
             session.TurnCatalog = await MaterializeTurnCatalogAsync(command.Llm, request, ct)
-                .ConfigureAwait(false);
+                                      .ConfigureAwait(false) ?? RestrictedEmptyCatalog();
+            RepinRematerializedTurnCatalog(session, session.TurnCatalog);
         }
         else if (!isContinuation && session.TurnCatalog is null)
         {
@@ -2519,6 +2522,23 @@ public sealed class NyxIdChatTurnOperationExecutor
         {
             return RestrictedEmptyCatalog();
         }
+    }
+
+    private static void RepinRematerializedTurnCatalog(
+        NyxIdChatTransientExecutionSession session,
+        AgentTurnToolCatalog catalog)
+    {
+        if (session.StepState is null)
+            return;
+
+        // A verified authorization continuation starts a new user-facing model
+        // generation with a newly materialized exact catalog. Keep the same turn
+        // authority, but replace the prior generation's proof before execution so
+        // retries/replay verify this catalog rather than accepting catalog drift.
+        session.StepState = session.StepState.Clone();
+        session.StepState.ToolCatalogProof = catalog.Proof.ToPayload();
+        session.StepState.ToolCatalogPolicyVersion =
+            AgentRunReplyGenerationExecutor.ToolCatalogPolicyVersion;
     }
 
     private static bool IsBuiltInIntent(NyxIdChatTurnIntent intent) =>

@@ -3,6 +3,7 @@ roles:
   - id: assistant
     name: Assistant
     system_prompt: "You are a helpful assistant."
+    allowed_tools: []
 steps:
   - id: answer
     type: llm_call

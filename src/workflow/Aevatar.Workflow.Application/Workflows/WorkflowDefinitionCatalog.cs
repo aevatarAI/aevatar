@@ -44,6 +44,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             name: Assistant
             system_prompt: |
               You are a helpful assistant. Answer the user clearly and concisely.
+            allowed_tools: []
         steps:
           - id: reply
             type: llm_call
@@ -79,14 +80,10 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// </para>
     ///
     /// <para>
-    /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
-    /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
-    /// <c>ToolVisibility</c>). It INCLUDES Studio team/member/draft creation, web authoring research, member workflow binding,
-    /// Studio managed-runtime-safe Aevatar invocation, <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES
-    /// both the Lark <c>scheduled_agent_creator</c>, unmanaged workflow starts, and the hanging loose-definition tools
-    /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>);
-    /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
-    /// unreliable while a tool is visible).
+    /// The compatibility role declares an explicit empty static <c>allowed_tools</c> scope and opts into only the
+    /// bounded <c>studio.local</c> tool set. That set remains below the workflow per-turn budget and excludes Lark,
+    /// unmanaged workflow starts, loose-definition tools, NyxID privileged/execution, storage writes, and skill authoring.
+    /// New product Studio chat uses server-owned profiles outside this compatibility wrapper.
     /// </para>
     /// </summary>
     public static string BuiltInStudioYaml { get; } = $$"""
@@ -275,8 +272,9 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                    `name` is required.
                    Do NOT use keys from other workflow dialects — no {{WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}}.
                    The parser rejects unknown keys and the bind fails.
-                 - roles: list of {id, name, system_prompt}; omit provider/model unless the user asks
-                   for a specific one.
+                 - roles: list of {id, name, system_prompt, allowed_tools}; every role used by
+                   `llm_call` must declare `allowed_tools`, and an empty list is valid. Omit
+                   provider/model unless the user asks for a specific one.
                  - steps: list of {id, type, target_role, capability, parameters, next, branches}; step ids unique;
                    primitive options live under parameters, with string values. The typed `capability` field
                    is reserved for a selected external operation descriptor or descriptor-miss fallback request and is
@@ -302,6 +300,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                          name: Analyst
                          system_prompt: |
                            Summarize the input concisely.
+                         allowed_tools: []
                      steps:
                        - id: summarize
                          type: llm_call
@@ -317,10 +316,12 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                          name: Request Builder
                          system_prompt: |
                            Convert the run input into the external tool's requested arguments.
+                         allowed_tools: []
                        - id: result_summarizer
                          name: Result Summarizer
                          system_prompt: |
                            Summarize the tool result for the user.
+                         allowed_tools: []
                      steps:
                        - id: build_request
                          type: llm_call
@@ -415,44 +416,9 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 calls Lark, Telegram, or another external messaging API requested by the user.
               - The owning scope and your credentials come from the session; do not ask the user for scope,
                 channel, owner, or tokens.
-            allowed_tools:
-              - aevatar_list_teams
-              - aevatar_create_team
-              - aevatar_get_team
-              - aevatar_create_member
-              - aevatar_create_member_workflow_draft
-              - aevatar_list_members
-              - aevatar_get_member
-              - aevatar_list_schedules
-              - aevatar_get_schedule
-              - aevatar_list_workflows
-              - aevatar_list_workflow_templates
-              - aevatar_get_workflow_template
-              - aevatar_bind_member_workflow
-              - aevatar_schedule_member_workflow
-              - aevatar_provision_workflow_schedule
-              - aevatar_invoke_gagent
-              - aevatar_invoke_team
-              - aevatar_invoke_member
-              - aevatar_observe_run
-              - aevatar_read_workflow_run_artifact
-              - web_search
-              - web_fetch
-              - nyxid_status
-              - nyxid_account
-              - nyxid_catalog
-              - nyxid_llm_status
-              - nyxid_services
-              - nyxid_require_service
-              - nyxid_request_key_create
-              - list_external_workflow_capabilities
-              - inspect_external_workflow_capability_readiness
-              - preview_workflow_explicit_requests
-              - ornn_search_skills
-              - use_skill
+            allowed_tools: []
             tool_sets:
               - studio.local
-              - nyxid.connected_services
         steps:
           - id: reply
             type: llm_call
@@ -594,7 +560,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             "      When generating YAML, follow this schema strictly:",
             $"      - Authorable top-level keys: {WorkflowYamlRootSchema.FormatAuthorableRootFields()}",
             $"      - Do NOT use top-level keys from other workflow dialects, including {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}",
-            "      - roles: list of {id, name, system_prompt}; prefer omitting provider/model so runtime default is used",
+            "      - roles: list of {id, name, system_prompt, allowed_tools}; every role used by llm_call must declare allowed_tools, and an empty list is valid; prefer omitting provider/model so runtime default is used",
             "      - steps: list of {id, type, role, parameters, next, branches}",
             "      - Step objects may only use these root keys: id, type, role, target_role, parameters, next, branches, children, retry, on_error, timeout_ms",
             "      - Do NOT add unsupported step-level fields such as description, title, summary, notes, input_schema, output_schema, metadata, or examples",
@@ -642,6 +608,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             "          name: Reviewer",
             "          system_prompt: |",
             "            Summarize the incoming review and mention urgent when escalation is needed.",
+            "          allowed_tools: []",
             "      steps:",
             "        - id: summarize_review",
             "          type: llm_call",
@@ -673,10 +640,12 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             "      Copy the field structure from the examples above. Do not invent extra fields.",
             string.Empty,
             "      Always output exactly one of: a direct answer OR a ```yaml block. Never both.",
+            "    allowed_tools: []",
             "  - id: assistant",
             "    name: Assistant",
             "    system_prompt: |",
             "      You are a helpful assistant. Answer the user clearly and concisely.",
+            "    allowed_tools: []",
             string.Empty,
             "steps:",
             "  - id: capture_input",

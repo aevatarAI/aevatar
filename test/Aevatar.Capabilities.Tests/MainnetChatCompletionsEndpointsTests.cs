@@ -277,7 +277,9 @@ public sealed class MainnetChatCompletionsEndpointsTests
         command.ToolSelection.ForwardedTools.Select(static tool => tool.ToolName)
             .Should()
             .Contain("get_weather");
-        command.ToolSelection.AdditiveToolNames.Should().Contain("aevatar_invoke_team");
+        command.ToolSelection.AdditiveToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
         command.ToolSelection.ForwardedTools.Single(static tool => tool.ToolName == "get_weather")
             .ParametersJson.Should().Contain("\"city\"");
     }
@@ -339,7 +341,10 @@ public sealed class MainnetChatCompletionsEndpointsTests
             observationRuntime: ChatCompletionsObservationScenarioBuilder.ForText(string.Empty)
                 .WithToolCallDelta("call_team_1", "aevatar_invoke_team", """{"team_id":"team-1"}""")
                 .WithCompletedToolCall("call_team_1", "aevatar_invoke_team", """{"team_id":"team-1"}""")
-                .Build());
+                .Build(),
+            ownedToolCatalogPlanner: new FixedResponsesOwnedToolCatalogPlanner(
+                ToolSetNames.WorkspaceDefault,
+                new ChatCompletionsStubAgentTool("aevatar_invoke_team", "Invoke a team")));
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
@@ -450,7 +455,7 @@ public sealed class MainnetChatCompletionsEndpointsTests
     }
 
     [Fact]
-    public async Task PostChatCompletions_WhenResponsesToolProviderRegistered_ShouldInjectSharedAevatarTools()
+    public async Task PostChatCompletions_WhenResponsesToolProviderRegisteredWithoutReviewedCatalog_ShouldNotAutoInjectTools()
     {
         var provider = new ChatCompletionsRecordingLLMProvider();
         var toolProvider = new ChatCompletionsRecordingResponsesToolProvider(
@@ -493,9 +498,11 @@ public sealed class MainnetChatCompletionsEndpointsTests
         provider.LastRequest.Should().BeNull();
         var command = app.Services.GetRequiredService<ChatCompletionsRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
-        command.ToolSelection.SubstitutedToolNames.Should().Contain("WebSearch");
-        command.ToolSelection.AdditiveToolNames.Should().Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill"]);
-        command.ToolSelection.OwnedToolNames.Should().Contain(["WebSearch", "use_skill", "ornn_search_skills", "ornn_publish_skill"]);
+        command.ToolSelection.ForwardedTools.Should().ContainSingle(tool => tool.ToolName == "WebSearch");
+        command.ToolSelection.SubstitutedToolNames.Should().BeEmpty();
+        command.ToolSelection.AdditiveToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
     }
 
     [Fact]
@@ -521,7 +528,8 @@ public sealed class MainnetChatCompletionsEndpointsTests
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
         IResponsesRouteResolver? routeResolver = null,
         IResponsesToolProvider? responsesToolProvider = null,
-        ChatCompletionsObservationRuntime? observationRuntime = null)
+        ChatCompletionsObservationRuntime? observationRuntime = null,
+        IResponsesOwnedToolCatalogPlanner? ownedToolCatalogPlanner = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -558,6 +566,8 @@ public sealed class MainnetChatCompletionsEndpointsTests
         });
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
+        if (ownedToolCatalogPlanner != null)
+            builder.Services.AddSingleton(ownedToolCatalogPlanner);
 
         var app = builder.Build();
         app.MapChatCompletionsApiEndpoints();

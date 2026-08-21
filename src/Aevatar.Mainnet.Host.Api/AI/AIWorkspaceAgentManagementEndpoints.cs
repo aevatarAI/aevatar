@@ -92,8 +92,17 @@ internal static class AIWorkspaceAgentManagementEndpoints
             ActivationModes: ["SHADOW", "ENFORCED"],
             SideEffectClasses: ["READ_ONLY", "EXTERNAL_HANDOFF", "SERVICE_CALL", "MAINTENANCE"],
             AgentSources: [MyAgentsSource, SystemAgentsSource],
-            SupportedAgentKinds: [AgentProfilePolicies.NyxIdChatAgentKind],
-            AllowedRouteToolSetRefs: [AgentProfilePolicies.NyxIdChatRouteToolSet],
+            SupportedAgentKinds:
+            [
+                AgentProfilePolicies.WorkspaceChatAgentKind,
+                AgentProfilePolicies.ChannelReplyAgentKind,
+                AgentProfilePolicies.NyxIdChatAgentKind,
+            ],
+            AllowedRouteToolSetRefs:
+            [
+                AgentProfilePolicies.WorkspaceChatRouteToolSet,
+                AgentProfilePolicies.NyxIdChatRouteToolSet,
+            ],
             RuntimeParameters: new AIWorkspaceAgentRuntimeParametersResponse(
                 AgentProfileValidationLimits.RequiredMaxPlanSteps,
                 AgentProfileValidationLimits.RequiredHandoffTtlSeconds,

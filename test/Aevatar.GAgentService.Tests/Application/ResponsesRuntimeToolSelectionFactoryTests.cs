@@ -11,13 +11,29 @@ public sealed class ResponsesRuntimeToolSelectionFactoryTests
         IReadOnlyList<ResponsesApplicationToolDeclaration>? forwarded = null,
         IReadOnlyList<string>? substituted = null,
         IReadOnlyList<string>? additive = null,
-        IReadOnlyList<string>? owned = null) =>
-        new(
+        IReadOnlyList<string>? owned = null)
+    {
+        var ownedNames = owned ?? [];
+        var tools = ownedNames.Select(static name => (IAgentTool)new TestTool(name)).ToArray();
+        var catalog = new AgentTurnToolCatalog(
+            ownedNames,
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            diagnostics: null,
+            exactTools: tools,
+            exactToolOrigin: AgentTurnToolOrigin.ResponsesState);
+        return new ResponsesToolClassification(
             forwarded ?? [],
-            EffectiveTools: [],
+            EffectiveTools: tools,
             substituted ?? [],
             additive ?? [],
-            owned ?? []);
+            ownedNames)
+        {
+            OwnedCatalog = catalog,
+        };
+    }
 
     [Fact]
     public void Create_ShouldCopyClassificationNameLists()
@@ -189,5 +205,15 @@ public sealed class ResponsesRuntimeToolSelectionFactoryTests
         selection.OwnedToolNames.Should().BeEmpty();
         selection.ToolSetName.Should().BeEmpty();
         selection.ToolChoiceHintName.Should().BeEmpty();
+    }
+
+    private sealed class TestTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public bool IsReadOnly => true;
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 }

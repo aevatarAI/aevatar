@@ -345,6 +345,10 @@ message WorkflowRuntimeOperationReadModel {
   string reasoning_content = 22;
   int64 started_progress_sequence = 23;
   int64 completed_progress_sequence = 24;
+  string tool_catalog_policy_version = 25;
+  int32 tool_catalog_tool_count = 26;
+  int32 tool_catalog_schema_bytes = 27;
+  string tool_catalog_digest = 28;
 }
 
 message WorkflowExecutionTimelineEvent {

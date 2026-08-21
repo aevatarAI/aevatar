@@ -1388,10 +1388,15 @@ public class RoleGAgentReplayContractTests
     {
         var store = new InMemoryEventStoreForTests();
         var provider = new AuthorizationThenSuccessLlmProviderFactory();
+        var tool = new AuthorizationRequiredTool();
         var services = BuildServices(store, collection =>
             collection.AddSingleton<IAgentToolSource>(
-                new StaticToolSource([new AuthorizationRequiredTool()])));
-        var agent = CreateAgent(services, "role-authorization-blocker", provider);
+                new StaticToolSource([tool])));
+        var agent = CreateExplicitToolAgent(
+            services,
+            "role-authorization-blocker",
+            provider,
+            [tool]);
         await agent.ActivateAsync();
         await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
@@ -1412,7 +1417,11 @@ public class RoleGAgentReplayContractTests
         });
 
         provider.StreamCallCount.Should().Be(2);
-        agent.State.Sessions["turn-blocked"].Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+        var blockedDiagnostics = agent.State.Sessions["turn-blocked"].ToString();
+        agent.State.Sessions["turn-blocked"].Outcome.Should().Be(
+            RoleChatSessionOutcome.Blocked,
+            "blocked session was {0}",
+            blockedDiagnostics);
         agent.State.Sessions["turn-next"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
         var completions = (await store.GetEventsAsync("role-authorization-blocker"))
             .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
@@ -2580,6 +2589,26 @@ public class RoleGAgentReplayContractTests
         return agent;
     }
 
+    private static RoleGAgent CreateExplicitToolAgent(
+        IServiceProvider services,
+        string actorId,
+        ILLMProviderFactory providerFactory,
+        IReadOnlyList<IAgentTool> exactTools)
+    {
+        var agent = new ExplicitToolRoleGAgent(
+            services.GetRequiredService<IAgentToolExecutionPort>(),
+            providerFactory,
+            exactTools,
+            services.GetRequiredService<ISecretVault>())
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
+        AssignActorId(agent, actorId);
+        return agent;
+    }
+
     private static ProfiledRoleGAgent CreateProfiledAgent(
         IServiceProvider services,
         string actorId,
@@ -3359,6 +3388,63 @@ public class RoleGAgentReplayContractTests
                 candidateIntentId: committedAuthority.CandidateRoute?.IntentId);
             return Task.FromResult<AgentTurnToolCatalogMaterialization?>(
                 AgentTurnToolCatalogMaterialization.Create(catalog, reconcileProposal));
+        }
+    }
+
+    private sealed class ExplicitToolRoleGAgent(
+        IAgentToolExecutionPort toolExecutionPort,
+        ILLMProviderFactory providerFactory,
+        IReadOnlyList<IAgentTool> exactTools,
+        ISecretVault secretVault)
+        : RoleGAgent(
+            toolExecutionPort,
+            providerFactory,
+            toolSources: [new StaticToolSource(exactTools)],
+            chatToolRecoverySecretVault: secretVault)
+    {
+        protected override Task<AgentProfileTurnAuthorityPreparation?> PrepareAgentProfileTurnAuthorityAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var authority = new AgentProfileTurnAuthorityState
+            {
+                ReconciliationKey = new AgentProfileTurnReconciliationKey
+                {
+                    SessionId = request.SessionId,
+                    Attempt = 1,
+                },
+                CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+                {
+                    ProfileId = "profile-explicit-tools",
+                    ProfileVersion = "v1",
+                    PolicyRevision = "policy-v1",
+                    IntentId = "explicit-tools",
+                },
+                AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            };
+            authority.AuthorityCeilingToolNames.Add(exactTools.Select(static tool => tool.Name));
+            return Task.FromResult<AgentProfileTurnAuthorityPreparation?>(
+                AgentProfileTurnAuthorityPreparation.Create(authority));
+        }
+
+        protected override Task<AgentTurnToolCatalogMaterialization?> MaterializeCommittedAgentTurnToolCatalogAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            AgentProfileTurnAuthorityState committedAuthority,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var catalog = new AgentTurnToolCatalog(
+                committedAuthority.AuthorityCeilingToolNames,
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
+                candidateIntentId: committedAuthority.CandidateRoute?.IntentId,
+                exactTools: exactTools);
+            return Task.FromResult<AgentTurnToolCatalogMaterialization?>(
+                AgentTurnToolCatalogMaterialization.Create(catalog, committedAuthority.Clone()));
         }
     }
 

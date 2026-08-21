@@ -563,6 +563,10 @@ internal static class WorkflowExecutionArtifactMaterializationSupport
                     .Select(static name => name.Trim())
                     .Distinct(StringComparer.Ordinal)
                     .OrderBy(static name => name, StringComparer.Ordinal));
+            operation.ToolCatalogPolicyVersion = evt.ToolCatalogPolicyVersion ?? string.Empty;
+            operation.ToolCatalogToolCount = Math.Max(0, evt.ToolCatalogProof?.ToolCount ?? 0);
+            operation.ToolCatalogSchemaBytes = Math.Max(0, evt.ToolCatalogProof?.SchemaBytes ?? 0);
+            operation.ToolCatalogDigest = evt.ToolCatalogProof?.CatalogDigest ?? string.Empty;
             operation.ToolCallId = FirstNonEmpty(evt.ToolCallId, operation.ToolCallId);
             operation.ToolName = FirstNonEmpty(evt.ToolName, operation.ToolName);
             if (evt.ProgressSequence > 0 && eventTime.HasValue)

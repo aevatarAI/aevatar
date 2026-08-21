@@ -306,11 +306,12 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["get_weather", "aevatar_invoke_gagent", "aevatar_invoke_team", "aevatar_start_workflow"]);
+            .Should().Equal("get_weather");
         var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
             .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.ToolSelection.ForwardedTools.Should().ContainSingle(tool => tool.ToolName == "get_weather");
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
         command.ToolSelection.ForwardedTools.Single(tool => tool.ToolName == "get_weather").SchemaHash
             .Should().Be(ResponsesToolSchemaHashes.Compute(parametersJson));
         sessions.ForwardedToolCalls.Should().BeEmpty();
@@ -348,7 +349,15 @@ public sealed class MainnetResponsesEndpointsTests
         var toolProvider = new RecordingResponsesToolProvider(
             [new StubAgentTool("Task", "Aevatar task dispatcher")],
             [new StubAgentTool("aevatar_notes", "Aevatar notes")]);
-        await using var app = await CreateAppAsync(provider, sessions, responsesToolProvider: toolProvider);
+        var catalogPlanner = new FixedResponsesOwnedToolCatalogPlanner(
+            ToolSetNames.WorkspaceDefault,
+            new StubAgentTool("Task", "Aevatar task dispatcher"),
+            new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"));
+        await using var app = await CreateAppAsync(
+            provider,
+            sessions,
+            responsesToolProvider: toolProvider,
+            ownedToolCatalogPlanner: catalogPlanner);
         var client = app.GetTestClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
@@ -378,8 +387,8 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["Task", "aevatar_notes", "aevatar_invoke_gagent"]);
+            .Should().Contain(["Task", "aevatar_invoke_gagent"])
+            .And.NotContain("aevatar_notes");
         var taskTool = provider.LastRequest.Tools.Single(static tool => tool.Name == "Task");
         taskTool.Description.Should().Be("Task substitute");
         taskTool.ParametersSchema.Should().Be("""{"type":"object","properties":{}}""");
@@ -518,7 +527,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task ResponsesUserSkillsToolProvider_ShouldBridgeOnlySkillMainlineTools()
+    public async Task ResponsesUserSkillsToolProvider_ShouldBridgeOnlySkillRuntimeTools()
     {
         var services = new ServiceCollection();
         services.AddSkills(_ => { });
@@ -541,7 +550,7 @@ public sealed class MainnetResponsesEndpointsTests
 
         tools.Select(static tool => tool.Name)
             .Should()
-            .Equal("use_skill", "ornn_search_skills", "ornn_publish_skill", "ornn_update_skill");
+            .Equal("use_skill", "ornn_search_skills");
     }
 
     [Fact]
@@ -588,7 +597,7 @@ public sealed class MainnetResponsesEndpointsTests
     }
 
     [Fact]
-    public async Task PostResponses_WhenSkillBridgeProviderRegistered_ShouldForwardSkillToolsToLlmRequest()
+    public async Task PostResponses_WhenSkillBridgeProviderRegisteredWithoutReviewedCatalog_ShouldNotAutoInjectTools()
     {
         var provider = new RecordingLLMProvider
         {
@@ -630,10 +639,11 @@ public sealed class MainnetResponsesEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         provider.LastRequest.Should().NotBeNull();
-        provider.LastRequest!.Tools.Should().NotBeNull();
-        provider.LastRequest.Tools.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["use_skill", "ornn_search_skills", "ornn_publish_skill"]);
+        provider.LastRequest!.Tools.Should().BeNullOrEmpty();
+        var command = app.Services.GetRequiredService<ResponsesRecordingActorDispatchPort>()
+            .Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.ToolSelection.OwnedToolNames.Should().BeEmpty();
+        command.ToolSelection.OwnedCatalogProof.ToolCount.Should().Be(0);
     }
 
     [Fact]
@@ -1613,6 +1623,7 @@ public sealed class MainnetResponsesEndpointsTests
             DefaultToolSetRoutingOptions()));
         builder.Services.AddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         builder.Services.AddSingleton<IResponsesRouteResolver>(new RecordingResponsesRouteResolver());
+        builder.Services.AddSingleton<IResponsesOwnedToolCatalogPlanner>(GAgentOwnedToolCatalogPlanner());
 
         await using var app = builder.Build();
         app.UseAuthentication();
@@ -1935,11 +1946,11 @@ public sealed class MainnetResponsesEndpointsTests
         var body = await response.Content.ReadAsStringAsync();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
-        // Built-ins are dropped; function-typed tools and default route tools reach the LLM provider.
+        // Built-ins are dropped; the caller-declared function remains forwarded while the
+        // unprofiled endpoint does not auto-union route tools.
         provider.LastRequest!.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["Bash", "aevatar_invoke_gagent"]);
+            .Should().Equal("Bash");
     }
 
     [Fact]
@@ -2148,8 +2159,7 @@ public sealed class MainnetResponsesEndpointsTests
         provider.LastRequest!.Model.Should().Be("routed-tool-model");
         provider.LastRequest.Tools.Should().NotBeNull();
         provider.LastRequest.Tools!.Select(static tool => tool.Name)
-            .Should()
-            .Contain(["do_thing", "aevatar_invoke_gagent", "aevatar_invoke_team", "aevatar_start_workflow"]);
+            .Should().Equal("do_thing");
     }
 
     [Fact]
@@ -2195,7 +2205,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2245,7 +2256,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2301,7 +2313,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2338,7 +2351,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2376,7 +2390,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2413,7 +2428,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2449,7 +2465,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2489,7 +2506,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: GAgentOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2525,7 +2543,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: TeamOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2572,7 +2591,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: TeamOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2618,7 +2638,8 @@ public sealed class MainnetResponsesEndpointsTests
         await using var app = await CreateAppAsync(
             provider,
             responseSessions,
-            chatRoutePolicyQueryPort: queryPort);
+            chatRoutePolicyQueryPort: queryPort,
+            ownedToolCatalogPlanner: TeamOwnedToolCatalogPlanner());
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
         {
@@ -2673,7 +2694,8 @@ public sealed class MainnetResponsesEndpointsTests
         IResponsesRouteResolver? routeResolver = null,
         IChatRoutePolicyQueryPort? chatRoutePolicyQueryPort = null,
         ILlmSessionRunObservationService? observationService = null,
-        string? ingressDefaultModel = null)
+        string? ingressDefaultModel = null,
+        IResponsesOwnedToolCatalogPlanner? ownedToolCatalogPlanner = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -2738,6 +2760,8 @@ public sealed class MainnetResponsesEndpointsTests
         });
         if (responsesToolProvider != null)
             builder.Services.AddSingleton(responsesToolProvider);
+        if (ownedToolCatalogPlanner != null)
+            builder.Services.AddSingleton(ownedToolCatalogPlanner);
 
         var app = builder.Build();
         app.MapResponsesApiEndpoints();
@@ -3261,6 +3285,16 @@ public sealed class MainnetResponsesEndpointsTests
                 new("team_id", teamId),
                 new("endpoint_id", endpointId),
             ]);
+
+    private static IResponsesOwnedToolCatalogPlanner GAgentOwnedToolCatalogPlanner() =>
+        new FixedResponsesOwnedToolCatalogPlanner(
+            ToolSetNames.WorkspaceDefault,
+            new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"));
+
+    private static IResponsesOwnedToolCatalogPlanner TeamOwnedToolCatalogPlanner() =>
+        new FixedResponsesOwnedToolCatalogPlanner(
+            ToolSetNames.WorkspaceDefault,
+            new StubAgentTool("aevatar_invoke_team", "Invoke a team"));
 
     private static ChatRouteAction ToolHintAction(
         string toolName,

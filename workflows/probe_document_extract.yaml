@@ -25,6 +25,7 @@ roles:
       Output STRICT JSON only, no markdown fences: {"extracted": true|false, "preview":
       "<first 200 chars of extracted text, else empty>", "note": "<error text verbatim if extraction
       failed, else empty>"}. Never invent file content.
+    allowed_tools: []
 
 steps:
   - id: extract_file

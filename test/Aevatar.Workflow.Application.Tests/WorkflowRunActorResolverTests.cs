@@ -40,7 +40,9 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register(
+        RegisterPublishedWorkflow(
+            registry,
+            actorPort,
             "direct",
             "name: direct\nroles: []\nsteps: []\n",
             ExternalCapabilityExecutionMode.Interactive);
@@ -64,7 +66,9 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register(
+        RegisterPublishedWorkflow(
+            registry,
+            actorPort,
             "direct",
             "name: direct\nroles: []\nsteps: []\n",
             ExternalCapabilityExecutionMode.Interactive);
@@ -89,7 +93,9 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register(
+        RegisterPublishedWorkflow(
+            registry,
+            actorPort,
             "auto",
             "name: auto\nroles: []\nsteps: []\n",
             ExternalCapabilityExecutionMode.Interactive);
@@ -113,7 +119,9 @@ public sealed class WorkflowRunActorResolverTests
     {
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register(
+        RegisterPublishedWorkflow(
+            registry,
+            actorPort,
             "review",
             "name: review\nroles: []\nsteps: []\n",
             ExternalCapabilityExecutionMode.Interactive);
@@ -138,7 +146,9 @@ public sealed class WorkflowRunActorResolverTests
         var bindingReader = new ThrowingWorkflowActorBindingReader();
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register(
+        RegisterPublishedWorkflow(
+            registry,
+            actorPort,
             "direct",
             "name: direct\nroles: []\nsteps: []\n",
             ExternalCapabilityExecutionMode.Interactive);
@@ -1037,7 +1047,9 @@ public sealed class WorkflowRunActorResolverTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), ExternalCapabilityExecutionMode.Interactive));
         var actorPort = new RecordingWorkflowRunActorPort();
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register(
+        RegisterPublishedWorkflow(
+            registry,
+            actorPort,
             "direct",
             latestYaml,
             ExternalCapabilityExecutionMode.Interactive);
@@ -1101,7 +1113,9 @@ public sealed class WorkflowRunActorResolverTests
             CreateRunException = new InvalidOperationException("boom"),
         };
         var registry = new InMemoryWorkflowDefinitionCatalog();
-        registry.Register(
+        RegisterPublishedWorkflow(
+            registry,
+            actorPort,
             "direct",
             "name: direct\nroles: []\nsteps: []\n",
             ExternalCapabilityExecutionMode.Interactive);
@@ -1361,6 +1375,17 @@ public sealed class WorkflowRunActorResolverTests
                 : null;
 
         public IReadOnlyList<string> GetNames() => _definitions.Keys.OrderBy(static x => x, StringComparer.Ordinal).ToArray();
+    }
+
+    private static void RegisterPublishedWorkflow(
+        InMemoryWorkflowDefinitionCatalog registry,
+        RecordingWorkflowRunActorPort parser,
+        string name,
+        string yaml,
+        ExternalCapabilityExecutionMode expectedExecutionMode)
+    {
+        registry.Register(name, yaml, expectedExecutionMode);
+        parser.ParseResults[yaml] = WorkflowYamlParseResult.Success(name);
     }
 
     private sealed class FakeActor : IActor

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -114,6 +115,12 @@ public sealed class AgentRunLarkCardDeliveryTests
         var publisher = new RecordingEventPublisher();
         var scheduler = new RecordingCallbackScheduler();
         var agent = CreateAgent(runner, publisher: publisher, scheduler: scheduler);
+        agent.State.GenerationStep.AgentProfileSnapshot = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-channel-alpha",
+            ProfileVersion = "profile-v1",
+            PublishedRevision = 1,
+        };
 
         await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("partial")));
         await DispatchPendingSelfEventsAsync(agent, publisher);
@@ -159,6 +166,7 @@ public sealed class AgentRunLarkCardDeliveryTests
         completed.CardMessageId.Should().Be("om-card-ok");
         completed.OutboundText.Should().Be("final");
         completed.DeliveryFailure.Should().BeNull();
+        completed.AgentProfile.Should().Be(agent.State.GenerationStep.AgentProfileSnapshot);
         var delivery = agent.State.RecentDeliveries.Should().ContainSingle().Subject;
         delivery.DeliveryKind.Should().Be(DeliveryKind.StreamingCard);
         delivery.Status.Should().Be(DeliveryStatus.Succeeded);

@@ -14,6 +14,33 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowDefinitionParserExternalCapabilityTests
 {
+    [Fact]
+    public async Task DefinitionParser_ForPublication_ShouldRejectLlmWithoutExplicitToolScope()
+    {
+        const string workflowYaml =
+            "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant";
+        var parser = new WorkflowDefinitionParser([new WorkflowCoreModulePack()]);
+
+        var legacyResult = await parser.ParseWorkflowYamlAsync(workflowYaml);
+        var publicationResult = await parser.ParseWorkflowYamlForPublicationAsync(workflowYaml);
+
+        legacyResult.Succeeded.Should().BeTrue(legacyResult.Error);
+        publicationResult.Succeeded.Should().BeFalse();
+        publicationResult.Error.Should().Contain("must declare an explicit allowed_tools scope");
+    }
+
+    [Fact]
+    public async Task DefinitionParser_ForPublication_ShouldAcceptExplicitRestrictedEmptyToolScope()
+    {
+        const string workflowYaml =
+            "name: main\nroles:\n  - id: assistant\n    name: Assistant\n    allowed_tools: []\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant";
+        var parser = new WorkflowDefinitionParser([new WorkflowCoreModulePack()]);
+
+        var result = await parser.ParseWorkflowYamlForPublicationAsync(workflowYaml);
+
+        result.Succeeded.Should().BeTrue(result.Error);
+    }
+
     [Theory]
     [MemberData(nameof(InvalidNyxIdAuthoringCases))]
     public async Task DefinitionParser_ShouldReturnTypedReadiness_ForInvalidNyxIdAuthoring(

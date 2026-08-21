@@ -75,6 +75,7 @@ public sealed class AgentTurnToolCatalogException : InvalidOperationException
         : base(failure.Detail)
     {
         Failure = failure;
+        AgentTurnToolCatalogTelemetry.RecordRejected(failure.Code.ToString(), "final");
     }
 
     public AgentTurnToolCatalogFailure Failure { get; }
@@ -184,12 +185,40 @@ public sealed class AgentTurnToolCatalogProof
 
     public string CatalogDigest { get; }
 
-    public static AgentTurnToolCatalogProof RestrictedEmpty(AgentTurnToolCatalogBudget? budget = null) =>
-        new([], budget ?? AgentTurnToolCatalogBudget.Ordinary)
+    public static AgentTurnToolCatalogProof RestrictedEmpty(AgentTurnToolCatalogBudget? budget = null)
+    {
+        var proof = new AgentTurnToolCatalogProof([], budget ?? AgentTurnToolCatalogBudget.Ordinary)
         {
             ConnectedReadToolCount = 0,
             ConnectedWriteToolCount = 0,
         };
+        AgentTurnToolCatalogTelemetry.RecordRestrictedEmptyProof(proof);
+        return proof;
+    }
+
+    public static AgentTurnToolCatalogProof CreateShadowCandidate(
+        IEnumerable<IAgentTool> exactTools,
+        AgentTurnToolCatalogBudget budget)
+    {
+        ArgumentNullException.ThrowIfNull(exactTools);
+        var selections = new Dictionary<string, AgentTurnToolSelection>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tool in exactTools)
+        {
+            ArgumentNullException.ThrowIfNull(tool);
+            var name = NormalizeToolName(tool.Name);
+            if (selections.TryGetValue(name, out var existing) && !ReferenceEquals(existing.Tool, tool))
+            {
+                throw new AgentTurnToolCatalogException(new AgentTurnToolCatalogFailure(
+                    AgentTurnToolCatalogFailureCode.ToolNameCollision,
+                    $"Shadow candidate tool name '{name}' resolves to different exact objects.",
+                    name));
+            }
+
+            selections[name] = new AgentTurnToolSelection(tool);
+        }
+
+        return CreateForSelections(selections.Values, budget);
+    }
 
     public void AssertMatchesExactTools(IEnumerable<IAgentTool> tools)
     {
@@ -244,7 +273,7 @@ public sealed class AgentTurnToolCatalogProof
             rebuilt.Add(current);
             if (descriptor.Origin == AgentTurnToolOrigin.ConnectedService)
             {
-                if (tool.IsReadOnly)
+                if (IsConnectedReadTool(tool))
                     connectedReadCount++;
                 else
                     connectedWriteCount++;
@@ -288,6 +317,45 @@ public sealed class AgentTurnToolCatalogProof
             selectorDigest);
     }
 
+    internal static AgentTurnToolCatalogProof CreateForSelections(
+        IEnumerable<AgentTurnToolSelection> selections,
+        AgentTurnToolCatalogBudget budget)
+    {
+        ArgumentNullException.ThrowIfNull(selections);
+        ArgumentNullException.ThrowIfNull(budget);
+        budget.Validate();
+        var materialized = selections
+            .Select(selection => (Selection: selection, Descriptor: Describe(selection)))
+            .OrderBy(static item => item.Descriptor.Name, StringComparer.Ordinal)
+            .ToArray();
+        var descriptors = materialized.Select(static item => item.Descriptor).ToArray();
+        var connected = materialized
+            .Where(static item => item.Descriptor.Origin == AgentTurnToolOrigin.ConnectedService)
+            .ToArray();
+        var connectedReadCount = connected.Count(static item => IsConnectedReadTool(item.Selection.Tool));
+        var connectedWriteCount = connected.Length - connectedReadCount;
+        var schemaBytes = descriptors.Sum(static descriptor => descriptor.SchemaBytes);
+        if (descriptors.Length > budget.MaximumToolCount ||
+            schemaBytes > budget.MaximumSchemaBytes ||
+            connectedReadCount > budget.MaximumConnectedReadToolCount ||
+            connectedWriteCount > budget.MaximumConnectedWriteToolCount)
+        {
+            throw new AgentTurnToolCatalogException(new AgentTurnToolCatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogOverBudget,
+                $"Final tool catalog exceeds its typed budget (tools={descriptors.Length}/{budget.MaximumToolCount}, schema_bytes={schemaBytes}/{budget.MaximumSchemaBytes}, connected_reads={connectedReadCount}/{budget.MaximumConnectedReadToolCount}, connected_writes={connectedWriteCount}/{budget.MaximumConnectedWriteToolCount})."));
+        }
+
+        var exactToolsByName = materialized.ToDictionary(
+            static item => item.Descriptor.Name,
+            static item => item.Selection.Tool,
+            StringComparer.OrdinalIgnoreCase);
+        return new AgentTurnToolCatalogProof(descriptors, budget, exactToolsByName)
+        {
+            ConnectedReadToolCount = connectedReadCount,
+            ConnectedWriteToolCount = connectedWriteCount,
+        };
+    }
+
     internal static string NormalizeToolName(string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -303,7 +371,12 @@ public sealed class AgentTurnToolCatalogProof
     internal static string Sha256(ReadOnlySpan<byte> bytes) =>
         "sha256:" + Convert.ToHexStringLower(SHA256.HashData(bytes));
 
-    private static byte[] CanonicalizeSchema(string toolName, string? schema)
+    internal static bool IsConnectedReadTool(IAgentTool tool) =>
+        tool is IAgentToolOperationAdmissionOwner owner
+            ? owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
+            : tool.IsReadOnly;
+
+    internal static byte[] CanonicalizeSchema(string toolName, string? schema)
     {
         try
         {
@@ -444,12 +517,13 @@ public sealed class AgentTurnToolCatalog
         ArgumentNullException.ThrowIfNull(budget);
         budget.Validate();
 
+        var selectionSnapshot = exactToolSelections.ToArray();
         FinalAllowedToolNames = finalAllowedToolNames
             .Where(static name => !string.IsNullOrWhiteSpace(name))
             .Select(static name => name.Trim())
             .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
         ToolVisibility = new AgentToolVisibilityScope(FinalAllowedToolNames);
-        _selections = FreezeSelections(exactToolSelections, FinalAllowedToolNames);
+        _selections = FreezeSelections(selectionSnapshot, FinalAllowedToolNames);
         ExactTools = _selections.ToFrozenDictionary(
             static pair => pair.Key,
             static pair => pair.Value.Tool,
@@ -463,6 +537,18 @@ public sealed class AgentTurnToolCatalog
         Diagnostics = CopyDiagnostics(diagnostics);
         HasUnresolvedConnectedServiceSelectors = hasUnresolvedConnectedServiceSelectors;
         RequiredToolInvocation = requiredToolInvocation?.Normalize();
+        var authorityToolCount = selectionSnapshot.Count(static selection => selection?.Tool is not null);
+        var filteredToolCount = Math.Max(
+            0,
+            Math.Max(authorityToolCount, FinalAllowedToolNames.Count) - Proof.ToolCount);
+        AgentTurnToolCatalogTelemetry.RecordCatalog(
+            Proof,
+            authorityToolCount,
+            filteredToolCount,
+            Diagnostics,
+            ProfilePromptLayer?.Provenance.Source,
+            SelectedIntentId ?? CandidateIntentId,
+            HasUnresolvedConnectedServiceSelectors);
     }
 
     public IReadOnlySet<string> FinalAllowedToolNames { get; }
@@ -586,40 +672,8 @@ public sealed class AgentTurnToolCatalog
 
     private static AgentTurnToolCatalogProof BuildProof(
         IEnumerable<AgentTurnToolSelection> selections,
-        AgentTurnToolCatalogBudget budget)
-    {
-        var materialized = selections
-            .Select(selection => (Selection: selection, Descriptor: AgentTurnToolCatalogProof.Describe(selection)))
-            .OrderBy(static item => item.Descriptor.Name, StringComparer.Ordinal)
-            .ToArray();
-        var descriptors = materialized.Select(static item => item.Descriptor).ToArray();
-        var connected = materialized
-            .Where(static item => item.Descriptor.Origin == AgentTurnToolOrigin.ConnectedService)
-            .ToArray();
-        var connectedReadCount = connected.Count(static item => item.Selection.Tool.IsReadOnly);
-        var connectedWriteCount = connected.Length - connectedReadCount;
-        var schemaBytes = descriptors.Sum(static descriptor => descriptor.SchemaBytes);
-        if (descriptors.Length > budget.MaximumToolCount ||
-            schemaBytes > budget.MaximumSchemaBytes ||
-            connectedReadCount > budget.MaximumConnectedReadToolCount ||
-            connectedWriteCount > budget.MaximumConnectedWriteToolCount)
-        {
-            throw new AgentTurnToolCatalogException(new AgentTurnToolCatalogFailure(
-                AgentTurnToolCatalogFailureCode.CatalogOverBudget,
-                $"Final tool catalog exceeds its typed budget (tools={descriptors.Length}/{budget.MaximumToolCount}, schema_bytes={schemaBytes}/{budget.MaximumSchemaBytes}, connected_reads={connectedReadCount}/{budget.MaximumConnectedReadToolCount}, connected_writes={connectedWriteCount}/{budget.MaximumConnectedWriteToolCount})."));
-        }
-
-        var exactToolsByName = materialized.ToDictionary(
-            static item => item.Descriptor.Name,
-            static item => item.Selection.Tool,
-            StringComparer.OrdinalIgnoreCase);
-        var proof = new AgentTurnToolCatalogProof(descriptors, budget, exactToolsByName)
-        {
-            ConnectedReadToolCount = connectedReadCount,
-            ConnectedWriteToolCount = connectedWriteCount,
-        };
-        return proof;
-    }
+        AgentTurnToolCatalogBudget budget) =>
+        AgentTurnToolCatalogProof.CreateForSelections(selections, budget);
 
     private static IReadOnlyList<AgentProfileTurnDiagnostic> CopyDiagnostics(
         IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics)

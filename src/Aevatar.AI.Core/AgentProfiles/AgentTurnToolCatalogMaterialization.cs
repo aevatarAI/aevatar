@@ -7,25 +7,31 @@ public sealed class AgentProfileTurnAuthorityPreparation
 {
     private readonly AgentProfileTurnAuthorityState _authority;
     private readonly IReadOnlyList<AgentProfileTurnDiagnostic> _diagnostics;
+    private readonly AgentTurnToolCatalogProof? _shadowCandidateProof;
 
     private AgentProfileTurnAuthorityPreparation(
         AgentProfileTurnAuthorityState authority,
-        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
+        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
+        AgentTurnToolCatalogProof? shadowCandidateProof)
     {
         _authority = authority.Clone();
         _diagnostics = diagnostics.ToArray();
+        _shadowCandidateProof = shadowCandidateProof;
     }
 
     public AgentProfileTurnAuthorityState Authority => _authority.Clone();
 
     public IReadOnlyList<AgentProfileTurnDiagnostic> Diagnostics => _diagnostics.ToArray();
 
+    public AgentTurnToolCatalogProof? ShadowCandidateProof => _shadowCandidateProof;
+
     public static AgentProfileTurnAuthorityPreparation Create(
         AgentProfileTurnAuthorityState authority,
-        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null)
+        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null,
+        AgentTurnToolCatalogProof? shadowCandidateProof = null)
     {
         ArgumentNullException.ThrowIfNull(authority);
-        return new AgentProfileTurnAuthorityPreparation(authority, diagnostics ?? []);
+        return new AgentProfileTurnAuthorityPreparation(authority, diagnostics ?? [], shadowCandidateProof);
     }
 }
 

@@ -645,6 +645,8 @@ message BindWorkflowRunDefinitionEvent
   // Parent WorkflowRunGAgent that owns singleton reuse. Empty for single-run
   // actors. The live bind handler verifies this against the envelope publisher.
   string reuse_authority_actor_id = 17;
+  // Empty only on committed legacy v0 runs. Every new bind uses the current reviewed policy.
+  string tool_catalog_policy_version = 19;
 }
 
 // Idempotent provisioning command for a stable Run actor identity. The first
@@ -669,6 +671,7 @@ message BindWorkflowDefinitionEvent
   string workflow_id = 8;
   string revision_id = 9;
   ExternalCapabilityExecutionMode expected_execution_mode = 10;
+  string tool_catalog_policy_version = 11;
 }
 
 enum WorkflowServiceGrantPolicy {
@@ -1110,6 +1113,7 @@ message WorkflowDefinitionSnapshot
   string scope_id = 5;
   int32 definition_version = 6;
   string revision_id = 7;
+  string tool_catalog_policy_version = 8;
 }
 message SubWorkflowDefinitionResolveRequestedEvent
 {
@@ -1385,6 +1389,8 @@ message WorkflowRuntimeOperationRecordedEvent
   WorkflowArtifactSourceIdentity source = 22;
   int64 progress_sequence = 23;
   string reasoning_content = 24;
+  string tool_catalog_policy_version = 25;
+  WorkflowAgentTurnToolCatalogProof tool_catalog_proof = 26;
 }
 
 message WorkflowLlmExecutionIntent
@@ -1414,6 +1420,7 @@ message WorkflowLlmExecutionIntent
   string scope_id = 18;
   // Per-schedule correlation id threaded from the owning workflow run for tool audit identity.
   string schedule_id = 19;
+  string tool_catalog_policy_version = 20;
 }
 
 message WorkflowToolRuntimeContextPayload
@@ -1431,6 +1438,48 @@ message WorkflowAgentToolScope
   repeated string tool_set_refs = 2;
   bool restrict_allowed_tool_names = 3;
   bool restrict_tool_sets = 4;
+}
+
+enum WorkflowAgentTurnToolOrigin
+{
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_UNSPECIFIED = 0;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_AGENT_RUNTIME = 1;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_ROUTE_TOOL_SET = 2;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_AGENT_PROFILE = 3;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_CONNECTED_SERVICE = 4;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_RESPONSES_STATE = 5;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_CALLER_FORWARDED = 6;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_WORKFLOW = 7;
+  WORKFLOW_AGENT_TURN_TOOL_ORIGIN_VOICE = 8;
+}
+
+message WorkflowAgentTurnToolDescriptorProof
+{
+  string name = 1;
+  string description = 2;
+  bytes canonical_schema_json = 3;
+  string schema_sha256 = 4;
+  WorkflowAgentTurnToolOrigin origin = 5;
+  string selector_digest = 6;
+}
+
+message WorkflowAgentTurnToolCatalogBudgetProof
+{
+  int32 maximum_tool_count = 1;
+  int32 maximum_schema_bytes = 2;
+  int32 maximum_connected_read_tool_count = 3;
+  int32 maximum_connected_write_tool_count = 4;
+}
+
+message WorkflowAgentTurnToolCatalogProof
+{
+  repeated WorkflowAgentTurnToolDescriptorProof tool_descriptors = 1;
+  WorkflowAgentTurnToolCatalogBudgetProof budget = 2;
+  int32 tool_count = 3;
+  int32 schema_bytes = 4;
+  int32 connected_read_tool_count = 5;
+  int32 connected_write_tool_count = 6;
+  string catalog_digest = 7;
 }
 
 message WorkflowLlmInvocationStartedEvent

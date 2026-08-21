@@ -199,7 +199,8 @@ public sealed record ResponsesCreateCommandPlan(
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
     DateTimeOffset CreatedAt,
-    string ResolvedToolSetName = "");
+    string ResolvedToolSetName = "",
+    AgentProfileSnapshot? ProfileSnapshot = null);
 
 public sealed record ResponsesCreateCommandResult(
     ResponsesCommandError? Error,
@@ -259,7 +260,8 @@ public sealed record MessagesCreateCommandPlan(
     AgentToolExecutionContext ToolContext,
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
-    string ResolvedToolSetName = "");
+    string ResolvedToolSetName = "",
+    AgentProfileSnapshot? ProfileSnapshot = null);
 
 public sealed record ChatCompletionsCreateCommandPlan(
     NormalizedChatCompletionsCommand Normalized,
@@ -268,7 +270,8 @@ public sealed record ChatCompletionsCreateCommandPlan(
     ResponsesToolClassification ToolClassification,
     ResponsesToolChoiceHintPlan ToolChoiceHintPlan,
     DateTimeOffset CreatedAt,
-    string ResolvedToolSetName = "");
+    string ResolvedToolSetName = "",
+    AgentProfileSnapshot? ProfileSnapshot = null);
 
 public sealed record MessagesCreateCommandResult(
     ResponsesCommandError? Error,

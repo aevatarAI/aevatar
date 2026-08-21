@@ -62,6 +62,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -200,6 +201,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -302,6 +304,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -355,6 +358,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -409,6 +413,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = workflowYaml,
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -810,6 +815,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,

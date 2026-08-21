@@ -104,6 +104,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<SkillFrontmatterParser>(),
             sp.GetService<ILogger<AgentTurnToolCatalogMaterializer>>(),
             toolDiscoveryService: sp.GetRequiredService<IAgentToolDiscoveryService>()));
+        services.TryAddSingleton<IAgentProfileTurnToolCatalogPlanner>(sp =>
+            sp.GetRequiredService<AgentTurnToolCatalogMaterializer>());
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();

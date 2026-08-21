@@ -70,6 +70,8 @@ internal interface IWorkflowExecutionStateHost
 
     string RunOrigin => string.Empty;
 
+    string ToolCatalogPolicyVersion => WorkflowToolCatalogPolicies.LegacyV0;
+
     long DefinitionVersion => 0;
 
     WorkflowExecutionRuntimeContext RuntimeContext { get; }

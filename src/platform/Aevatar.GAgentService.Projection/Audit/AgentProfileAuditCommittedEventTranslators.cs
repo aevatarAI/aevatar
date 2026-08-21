@@ -134,6 +134,12 @@ public sealed class AgentProfileNamespaceStateChangedAuditTranslator : IAuditCom
             annotations["enabled"] = binding.System.Enabled ? "true" : "false";
             annotations["cohort_basis_points"] = AgentProfileAuditFields.Number(
                 binding.System.CohortBasisPoints);
+            if (binding.System.PreviousReviewedTarget is { } previous)
+            {
+                annotations["previous_reviewed_profile_id"] = previous.ProfileId;
+                annotations["previous_reviewed_published_revision"] =
+                    AgentProfileAuditFields.Number(previous.PublishedRevision);
+            }
         }
 
         return new CommittedAuditSeed(

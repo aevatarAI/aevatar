@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -278,13 +279,15 @@ public sealed class ResponsesCommandFacadeTests
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort();
+        var invokeTool = new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent");
         var facade = CreateFacade(
             sessionPort: sessions,
             dispatchPort: dispatch,
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(GAgentToolHintAction("member-1")),
-            toolSetRegistry: new StaticToolSetRegistry([
-                new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"),
-            ]));
+            toolSetRegistry: new StaticToolSetRegistry([invokeTool]),
+            ownedToolCatalogPlanner: new StaticOwnedToolCatalogPlanner(
+                "workspace.default",
+                [invokeTool]));
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
             "client-model",
@@ -331,13 +334,15 @@ public sealed class ResponsesCommandFacadeTests
                 },
             },
         };
+        var invokeTool = new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent");
         var facade = CreateFacade(
             sessionPort: sessions,
             dispatchPort: dispatch,
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(action),
-            toolSetRegistry: new StaticToolSetRegistry([
-                new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"),
-            ]));
+            toolSetRegistry: new StaticToolSetRegistry([invokeTool]),
+            ownedToolCatalogPlanner: new StaticOwnedToolCatalogPlanner(
+                "workspace.default",
+                [invokeTool]));
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
             "client-model",
@@ -1112,7 +1117,8 @@ public sealed class ResponsesCommandFacadeTests
         string? defaultIngressModel = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         ResponsesIngressOptions? ingressOptions = null,
-        ILlmRunExecutor? llmRunExecutor = null)
+        ILlmRunExecutor? llmRunExecutor = null,
+        IResponsesOwnedToolCatalogPlanner? ownedToolCatalogPlanner = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         var options = ingressOptions ?? (defaultIngressModel is null
@@ -1131,7 +1137,48 @@ public sealed class ResponsesCommandFacadeTests
             NullLogger<ResponsesCommandFacade>.Instance,
             options is null ? null : Options.Create(options),
             ownerLlmConfigSource,
-            llmRunExecutor);
+            llmRunExecutor,
+            ownedToolCatalogPlanner);
+    }
+
+    private sealed class StaticOwnedToolCatalogPlanner(
+        string toolSetName,
+        IReadOnlyList<IAgentTool> tools) : IResponsesOwnedToolCatalogPlanner
+    {
+        private readonly AgentProfileSnapshot _profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-test",
+            ProfileVersion = "1.0.0",
+            AgentKind = "workspace.chat",
+            PolicyRevision = "policy-test",
+            RouteToolSetRef = toolSetName,
+            PublishedRevision = 1,
+            MaxOwnedToolCount = AgentTurnToolCatalogBudget.Ordinary.MaximumToolCount,
+            MaxSchemaBytes = AgentTurnToolCatalogBudget.Ordinary.MaximumSchemaBytes,
+        });
+
+        public Task<ResponsesOwnedToolCatalogPlan> PlanAsync(
+            ChatRouteAction? routeAction,
+            string scopeId,
+            string turnIdentity,
+            string userMessage,
+            AgentToolExecutionContext toolContext,
+            CancellationToken ct = default)
+        {
+            var catalog = new AgentTurnToolCatalog(
+                tools.Select(static tool => tool.Name),
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: "invoke",
+                candidateIntentId: "invoke",
+                diagnostics: null,
+                exactTools: tools);
+            return Task.FromResult(new ResponsesOwnedToolCatalogPlan(
+                catalog,
+                _profile,
+                toolSetName,
+                null));
+        }
     }
 
     private static OwnerLlmConfig OwnerConfig(string modelId) => new(
