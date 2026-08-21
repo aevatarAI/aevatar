@@ -73,4 +73,7 @@
     <EmbeddedResource Include="Voice\voice-console.html" />
     <EmbeddedResource Include="Skills\workflow-skills.html" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\workflow-templates\**\*.yaml" Link="workflow-templates\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

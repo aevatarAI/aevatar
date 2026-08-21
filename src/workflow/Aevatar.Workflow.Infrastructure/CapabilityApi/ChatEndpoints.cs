@@ -1260,7 +1260,9 @@ public static class WorkflowCapabilityEndpoints
         WorkflowChatRunInteractionResult result,
         CancellationToken ct)
     {
-        var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.FailureDetail);
+        var (code, message) = result.FailureDetail == null
+            ? ChatRunStartErrorMapper.ToCommandError(result.Error)
+            : ChatRunStartErrorMapper.ToCommandError(result.FailureDetail);
         await writer.WriteAsync(
             new WorkflowRunEventEnvelope
             {
