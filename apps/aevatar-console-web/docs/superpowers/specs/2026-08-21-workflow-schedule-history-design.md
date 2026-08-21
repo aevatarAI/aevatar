@@ -1,6 +1,6 @@
 # Workflow Schedule Management and History Design Specification
 
-**Status:** Design baseline awaiting product review
+**Status:** Approved for implementation
 
 **Extends:**
 [Workflow Schedule vNext Design Specification](./2026-08-11-workflow-schedule-design.md)
@@ -348,4 +348,3 @@ and History are separate PNGs so each state can be reviewed at readable size.
   distinct.
 - All timestamps follow the application locale and Schedule timezone.
 - The implementation requires no backend contract change.
-

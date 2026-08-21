@@ -50,6 +50,13 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '请重试加载最近的工作流运行记录。',
     'workflowActivityVNext.activity.removeWorkflowFilterAria':
       '移除工作流筛选条件 {workflowId}',
+    'workflowActivityVNext.activity.removeScheduleFilterAria':
+      '移除计划任务筛选条件 {scheduleId}',
+    'workflowActivityVNext.activity.scheduleFilterLabel':
+      '计划任务：{scheduleId}',
+    'workflowActivityVNext.activity.removeOriginFilterAria':
+      '移除来源筛选条件 {origin}',
+    'workflowActivityVNext.activity.originFilterContextLabel': '来源：{origin}',
     'workflowActivityVNext.activity.workflowFilterInvalidDescription':
       '此活动链接不包含工作流身份。',
     'workflowActivityVNext.activity.workflowFilterInvalidTitle':
@@ -518,14 +525,32 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.verified': '已验证',
     'workflowActivityVNext.settings.notVerified': '未验证',
     'workflowActivityVNext.settings.workflowExecution': '工作流执行',
-    'workflowActivityVNext.schedule.actionAccepted':
-      '计划任务操作已受理，正在刷新工作流计划列表…',
+    'workflowActivityVNext.schedule.actionAccepted': '计划任务操作已受理。',
     'workflowActivityVNext.schedule.backToSchedules': '返回计划任务列表',
     'workflowActivityVNext.schedule.change': '修改计划任务',
     'workflowActivityVNext.schedule.completedAt': '完成于 {date}',
-    'workflowActivityVNext.schedule.detailLoadFailed': '无法加载计划任务详情',
+    'workflowActivityVNext.schedule.detailLoadFailed': '无法加载计划任务',
     'workflowActivityVNext.schedule.detailLoading': '正在加载计划任务详情…',
     'workflowActivityVNext.schedule.detailTitle': '计划任务详情',
+    'workflowActivityVNext.schedule.historyLoading': '正在加载历史记录…',
+    'workflowActivityVNext.schedule.historyLoadFailed': '无法加载历史记录',
+    'workflowActivityVNext.schedule.overview': '概览',
+    'workflowActivityVNext.schedule.history': '历史记录',
+    'workflowActivityVNext.schedule.recentAttempts': '最近尝试',
+    'workflowActivityVNext.schedule.historyDescription':
+      '计划任务尝试可能在创建工作流运行之前失败。',
+    'workflowActivityVNext.schedule.viewRelatedRuns':
+      '在活动记录中查看相关运行',
+    'workflowActivityVNext.schedule.scheduledTime': '计划时间',
+    'workflowActivityVNext.schedule.source': '来源',
+    'workflowActivityVNext.schedule.result': '结果',
+    'workflowActivityVNext.schedule.completedTime': '完成时间',
+    'workflowActivityVNext.schedule.technicalDetails': '技术详情',
+    'workflowActivityVNext.schedule.noAttempts': '暂无尝试记录',
+    'workflowActivityVNext.schedule.scheduledAttemptFailed':
+      '定时尝试未能启动工作流。',
+    'workflowActivityVNext.schedule.manualAttemptFailed':
+      '手动尝试未能启动工作流。',
     'workflowActivityVNext.schedule.enable': '启用',
     'workflowActivityVNext.schedule.failed': '失败',
     'workflowActivityVNext.schedule.failedCount': '{count} 次失败',
@@ -533,7 +558,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.lastFire': '上次触发',
     'workflowActivityVNext.schedule.manual': '手动触发',
     'workflowActivityVNext.schedule.nextFireLabel': '下次触发',
-    'workflowActivityVNext.schedule.noFires': '尚无触发记录',
+    'workflowActivityVNext.schedule.noFires': '暂无尝试记录',
     'workflowActivityVNext.schedule.pause': '暂停',
     'workflowActivityVNext.schedule.recentFires': '最近触发记录',
     'workflowActivityVNext.schedule.runNow': '立即运行',
@@ -551,11 +576,22 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.cronSummary': 'Cron：{cron}',
     'workflowActivityVNext.schedule.hourly': '每小时',
     'workflowActivityVNext.schedule.daily': '每天',
-    'workflowActivityVNext.schedule.deleteAccepted':
-      '计划任务删除请求已受理，正在刷新工作流计划列表…',
+    'workflowActivityVNext.schedule.everyWeekdaySummary': '每个工作日 {time}',
+    'workflowActivityVNext.schedule.everyDaySummary': '每天 {time}',
+    'workflowActivityVNext.schedule.customRecurrence': '自定义计划',
+    'workflowActivityVNext.schedule.deleteAccepted': '计划任务删除请求已受理。',
     'workflowActivityVNext.schedule.deleteAria': '删除 {name}',
     'workflowActivityVNext.schedule.disableAria': '停用 {name}',
     'workflowActivityVNext.schedule.disabled': '已停用',
+    'workflowActivityVNext.schedule.paused': '已暂停',
+    'workflowActivityVNext.schedule.more': '更多',
+    'workflowActivityVNext.schedule.moreActionsAria': '更多计划任务操作',
+    'workflowActivityVNext.schedule.editAction': '编辑计划任务',
+    'workflowActivityVNext.schedule.deleteConfirmTitle': '删除 {name}？',
+    'workflowActivityVNext.schedule.deleteConfirmDescription':
+      '{name} 将停止按计划运行。',
+    'workflowActivityVNext.schedule.deleteAction': '删除计划任务',
+    'workflowActivityVNext.schedule.keepSchedule': '保留计划任务',
     'workflowActivityVNext.schedule.editAria': '编辑 {name}',
     'workflowActivityVNext.schedule.editTitle': '编辑计划任务',
     'workflowActivityVNext.schedule.empty': '暂无计划任务',
@@ -570,6 +606,12 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.new': '新建计划任务',
     'workflowActivityVNext.schedule.noPrompt': '无运行输入',
     'workflowActivityVNext.schedule.nextFire': '下次 {date}',
+    'workflowActivityVNext.schedule.noUpcomingAttempt': '暂无后续尝试',
+    'workflowActivityVNext.schedule.nextScheduled': '下次计划时间',
+    'workflowActivityVNext.schedule.lastAttempt': '上次尝试',
+    'workflowActivityVNext.schedule.totalAttempts': '尝试总数',
+    'workflowActivityVNext.schedule.failedAttempts': '失败尝试',
+    'workflowActivityVNext.schedule.advancedDetails': '高级详情',
     'workflowActivityVNext.schedule.nextFiveFires': '接下来的五次触发时间',
     'workflowActivityVNext.schedule.open': '计划任务',
     'workflowActivityVNext.schedule.openAria': '管理 {name} 的计划任务',
@@ -606,8 +648,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.time': '时间',
     'workflowActivityVNext.schedule.timezone': '时区',
     'workflowActivityVNext.schedule.title': '计划任务',
-    'workflowActivityVNext.schedule.updateAccepted':
-      '计划任务更新请求已受理，正在刷新工作流计划任务。',
+    'workflowActivityVNext.schedule.updateAccepted': '计划任务更新请求已受理。',
     'workflowActivityVNext.schedule.useRepeatBuilder': '使用重复规则构建器',
     'workflowActivityVNext.schedule.unavailableDescription':
       '请先发布可运行的工作流，再创建周期性计划任务。',

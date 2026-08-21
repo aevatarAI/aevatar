@@ -8,6 +8,7 @@ import {
 } from '@testing-library/react';
 import * as React from 'react';
 import { workflowScheduleApi } from '@/shared/api/workflowScheduleApi';
+import { history } from '@/shared/navigation/history';
 import WorkflowScheduleSurface from './WorkflowScheduleSurface';
 
 jest.mock('@/shared/api/workflowScheduleApi', () => ({
@@ -22,6 +23,10 @@ jest.mock('@/shared/api/workflowScheduleApi', () => ({
     runNow: jest.fn(),
     update: jest.fn(),
   },
+}));
+
+jest.mock('@/shared/navigation/history', () => ({
+  history: { push: jest.fn() },
 }));
 
 const mockedWorkflowScheduleApi = jest.mocked(workflowScheduleApi);
@@ -535,7 +540,7 @@ describe('WorkflowScheduleSurface', () => {
     ).toHaveClass('wa-vnext__schedule-empty-title');
   });
 
-  it('opens authoritative Schedule details with recent fires before editing', async () => {
+  it('opens a selected Schedule on Overview and returns through the stable header', async () => {
     const schedule = createScheduleSummary();
     mockedWorkflowScheduleApi.list.mockResolvedValue({
       items: [schedule],
@@ -586,30 +591,235 @@ describe('WorkflowScheduleSurface', () => {
       ),
     );
     expect(
-      screen.getByText('Schedule details', { selector: '.ant-modal-title' }),
+      screen.getByText('Daily workflow run', {
+        selector: '.ant-modal-title *',
+      }),
     ).toBeVisible();
-    expect(await screen.findByText('Recent fires')).toBeVisible();
-    expect(screen.getByText('Succeeded')).toBeVisible();
-    expect(screen.getByText('Failed')).toBeVisible();
-    expect(screen.getByText('Scheduled')).toBeVisible();
-    expect(screen.getByText('Manual')).toBeVisible();
-    expect(screen.getByText('Workflow invocation failed')).toBeVisible();
-    expect(screen.getByText('12 total')).toBeVisible();
-    expect(screen.getByText('1 failed')).toBeVisible();
+    expect(screen.getByText('Weekly review')).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('tab', { name: 'History' })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+    expect(screen.queryByText('Recent attempts')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Change schedule' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to schedules' }));
     expect(
-      screen.getByText('Edit schedule', { selector: '.ant-modal-title' }),
+      screen.getByText('Schedules', { selector: '.ant-modal-title' }),
     ).toBeVisible();
-    expect(screen.getByRole('textbox', { name: 'Schedule name' })).toHaveValue(
-      'Daily workflow run',
+    expect(
+      screen.queryByRole('button', { name: 'Back to schedules' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('presents Schedule Overview with primary actions and guarded lifecycle actions', async () => {
+    const schedule = createScheduleSummary({
+      prompt: 'Summarize new feedback.',
+    });
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get.mockResolvedValue({
+      schedule,
+      recentFires: [
+        {
+          scheduledFireAt: '2026-08-20T01:00:00Z',
+          completedAt: '2026-08-20T01:02:00Z',
+          idempotencyKey: 'schedule-alpha:fire:1',
+          error: '',
+          manual: false,
+        },
+      ],
+    });
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByText('Every weekday at 09:00')).toBeVisible();
+    expect(screen.getByText('Enabled')).toBeVisible();
+    expect(screen.getByText('Timezone')).toBeVisible();
+    expect(screen.getByText('Asia/Shanghai')).toBeVisible();
+    expect(screen.getByText('Next scheduled')).toBeVisible();
+    expect(screen.getByText('Last attempt')).toBeVisible();
+    expect(screen.getByText('Total attempts')).toBeVisible();
+    expect(screen.getByText('Failed attempts')).toBeVisible();
+    expect(screen.getByText('Run input')).toBeVisible();
+    expect(screen.getByText('Summarize new feedback.')).toBeVisible();
+    expect(screen.getByText('Advanced details')).toBeVisible();
+    expect(screen.getByText('0 9 * * 1-5')).not.toBeVisible();
+
+    expect(screen.getByRole('button', { name: 'Run now' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Edit schedule' })).toBeVisible();
     expect(
-      screen.getByText('Schedule details', { selector: '.ant-modal-title' }),
+      screen.queryByRole('button', { name: 'Pause' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Delete schedule' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'More schedule actions' }),
+    );
+    expect(
+      await screen.findByRole('menuitem', { name: 'Pause' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete schedule' }));
+
+    expect(
+      await screen.findByText('Delete Daily workflow run?', {
+        selector: '.ant-modal-confirm-title',
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Daily workflow run will stop running on schedule.'),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps Edit as a temporary mode that returns to Overview', async () => {
+    const schedule = createScheduleSummary();
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get.mockResolvedValue({
+      schedule,
+      recentFires: [],
+    });
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Edit schedule' }),
+    );
+
+    expect(
+      screen.getByText('Daily workflow run', {
+        selector: '.ant-modal-title *',
+      }),
     ).toBeVisible();
-    expect(screen.getByText('Recent fires')).toBeVisible();
+    expect(
+      screen.getByRole('heading', { name: 'Edit schedule' }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('tab', { name: 'History' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
+  it('keeps History focused on recent attempts and hands actual Runs to Activity', async () => {
+    const schedule = createScheduleSummary();
+    const onClose = jest.fn();
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get.mockResolvedValue({
+      schedule,
+      recentFires: [
+        {
+          scheduledFireAt: '2026-08-20T01:00:00Z',
+          completedAt: '2026-08-20T01:02:00Z',
+          idempotencyKey: 'schedule-alpha:fire:1',
+          error: 'Capability admission rejected the scheduled request.',
+          manual: false,
+        },
+        {
+          scheduledFireAt: '2026-08-19T03:00:00Z',
+          completedAt: '2026-08-19T03:01:00Z',
+          idempotencyKey: 'schedule-alpha:manual:1',
+          error: '',
+          manual: true,
+        },
+      ],
+    });
+
+    renderSurface(true, 'modal', onClose, 'list');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Recent attempts' }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole('columnheader', { name: 'Scheduled time' }),
+    ).toBeVisible();
+    expect(screen.getByRole('columnheader', { name: 'Source' })).toBeVisible();
+    expect(screen.getByRole('columnheader', { name: 'Result' })).toBeVisible();
+    expect(
+      screen.getByRole('columnheader', { name: 'Completed time' }),
+    ).toBeVisible();
+    expect(screen.getByText('Scheduled')).toBeVisible();
+    expect(screen.getByText('Manual')).toBeVisible();
+    expect(screen.getByText('Failed')).toBeVisible();
+    expect(screen.getByText('Succeeded')).toBeVisible();
+    expect(
+      screen.getByText('The scheduled attempt could not start the Workflow.'),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(
+        'Capability admission rejected the scheduled request.',
+      ),
+    ).not.toBeVisible();
+    expect(screen.getByText('Technical details')).toBeInTheDocument();
+    expect(screen.queryByText('schedule-alpha:fire:1')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(
+      screen.getByText('Capability admission rejected the scheduled request.'),
+    ).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole('link', { name: 'View related runs in Activity' }),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(history.push).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha&origin=schedule',
+    );
+  });
+
+  it('shows a bounded History empty state when no attempts have been recorded', async () => {
+    const schedule = createScheduleSummary({
+      lastFireAt: null,
+      fireCount: 0,
+      failureCount: 0,
+    });
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get.mockResolvedValue({
+      schedule,
+      recentFires: [],
+    });
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
+
+    expect(await screen.findByText('No attempts yet')).toBeInTheDocument();
+    expect(screen.queryByText('No fires yet')).not.toBeInTheDocument();
   });
 
   it('keeps a detail failure distinct from an empty recent-fire result', async () => {
@@ -637,20 +847,19 @@ describe('WorkflowScheduleSurface', () => {
     );
 
     await waitFor(() =>
-      expect(
-        screen.getByText("Schedule details couldn't be loaded"),
-      ).toBeVisible(),
+      expect(screen.getByText("Schedule couldn't be loaded")).toBeVisible(),
     );
-    expect(screen.queryByText('No fires yet')).not.toBeInTheDocument();
+    expect(screen.queryByText('No attempts yet')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() =>
       expect(workflowScheduleApi.get).toHaveBeenCalledTimes(2),
     );
-    expect(await screen.findByText('No fires yet')).toBeVisible();
+    fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
+    expect(await screen.findByText('No attempts yet')).toBeVisible();
     expect(
-      screen.queryByText("Schedule details couldn't be loaded"),
+      screen.queryByText("Schedule couldn't be loaded"),
     ).not.toBeInTheDocument();
   });
 });

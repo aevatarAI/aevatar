@@ -46,6 +46,13 @@ const workflowActivityVNextMessages = {
     'Try again to load recent workflow runs.',
   'workflowActivityVNext.activity.removeWorkflowFilterAria':
     'Remove workflow filter {workflowId}',
+  'workflowActivityVNext.activity.removeScheduleFilterAria':
+    'Remove schedule filter {scheduleId}',
+  'workflowActivityVNext.activity.scheduleFilterLabel':
+    'Schedule: {scheduleId}',
+  'workflowActivityVNext.activity.removeOriginFilterAria':
+    'Remove source filter {origin}',
+  'workflowActivityVNext.activity.originFilterContextLabel': 'Source: {origin}',
   'workflowActivityVNext.activity.workflowFilterInvalidDescription':
     'This Activity link does not contain a workflow identity.',
   'workflowActivityVNext.activity.workflowFilterInvalidTitle':
@@ -556,15 +563,34 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.verified': 'Verified',
   'workflowActivityVNext.settings.notVerified': 'Not verified',
   'workflowActivityVNext.settings.workflowExecution': 'Workflow execution',
-  'workflowActivityVNext.schedule.actionAccepted':
-    'Schedule action accepted. Refreshing the Workflow schedule list…',
+  'workflowActivityVNext.schedule.actionAccepted': 'Schedule action accepted.',
   'workflowActivityVNext.schedule.backToSchedules': 'Back to schedules',
   'workflowActivityVNext.schedule.change': 'Change schedule',
   'workflowActivityVNext.schedule.completedAt': 'Completed {date}',
   'workflowActivityVNext.schedule.detailLoadFailed':
-    "Schedule details couldn't be loaded",
+    "Schedule couldn't be loaded",
   'workflowActivityVNext.schedule.detailLoading': 'Loading schedule details…',
   'workflowActivityVNext.schedule.detailTitle': 'Schedule details',
+  'workflowActivityVNext.schedule.historyLoading': 'Loading history…',
+  'workflowActivityVNext.schedule.historyLoadFailed':
+    "History couldn't be loaded",
+  'workflowActivityVNext.schedule.overview': 'Overview',
+  'workflowActivityVNext.schedule.history': 'History',
+  'workflowActivityVNext.schedule.recentAttempts': 'Recent attempts',
+  'workflowActivityVNext.schedule.historyDescription':
+    'Schedule attempts can fail before a Workflow Run exists.',
+  'workflowActivityVNext.schedule.viewRelatedRuns':
+    'View related runs in Activity',
+  'workflowActivityVNext.schedule.scheduledTime': 'Scheduled time',
+  'workflowActivityVNext.schedule.source': 'Source',
+  'workflowActivityVNext.schedule.result': 'Result',
+  'workflowActivityVNext.schedule.completedTime': 'Completed time',
+  'workflowActivityVNext.schedule.technicalDetails': 'Technical details',
+  'workflowActivityVNext.schedule.noAttempts': 'No attempts yet',
+  'workflowActivityVNext.schedule.scheduledAttemptFailed':
+    'The scheduled attempt could not start the Workflow.',
+  'workflowActivityVNext.schedule.manualAttemptFailed':
+    'The manual attempt could not start the Workflow.',
   'workflowActivityVNext.schedule.enable': 'Enable',
   'workflowActivityVNext.schedule.failed': 'Failed',
   'workflowActivityVNext.schedule.failedCount': '{count} failed',
@@ -572,7 +598,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.lastFire': 'Last fire',
   'workflowActivityVNext.schedule.manual': 'Manual',
   'workflowActivityVNext.schedule.nextFireLabel': 'Next fire',
-  'workflowActivityVNext.schedule.noFires': 'No fires yet',
+  'workflowActivityVNext.schedule.noFires': 'No attempts yet',
   'workflowActivityVNext.schedule.pause': 'Pause',
   'workflowActivityVNext.schedule.recentFires': 'Recent fires',
   'workflowActivityVNext.schedule.runNow': 'Run now',
@@ -590,11 +616,24 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.cronSummary': 'Cron: {cron}',
   'workflowActivityVNext.schedule.hourly': 'Every hour',
   'workflowActivityVNext.schedule.daily': 'Every day',
+  'workflowActivityVNext.schedule.everyWeekdaySummary':
+    'Every weekday at {time}',
+  'workflowActivityVNext.schedule.everyDaySummary': 'Every day at {time}',
+  'workflowActivityVNext.schedule.customRecurrence': 'Custom schedule',
   'workflowActivityVNext.schedule.deleteAccepted':
-    'Schedule deletion accepted. Refreshing the Workflow schedule list…',
+    'Schedule deletion accepted.',
   'workflowActivityVNext.schedule.deleteAria': 'Delete {name}',
   'workflowActivityVNext.schedule.disableAria': 'Disable {name}',
   'workflowActivityVNext.schedule.disabled': 'Disabled',
+  'workflowActivityVNext.schedule.paused': 'Paused',
+  'workflowActivityVNext.schedule.more': 'More',
+  'workflowActivityVNext.schedule.moreActionsAria': 'More schedule actions',
+  'workflowActivityVNext.schedule.editAction': 'Edit schedule',
+  'workflowActivityVNext.schedule.deleteConfirmTitle': 'Delete {name}?',
+  'workflowActivityVNext.schedule.deleteConfirmDescription':
+    '{name} will stop running on schedule.',
+  'workflowActivityVNext.schedule.deleteAction': 'Delete schedule',
+  'workflowActivityVNext.schedule.keepSchedule': 'Keep schedule',
   'workflowActivityVNext.schedule.editAria': 'Edit {name}',
   'workflowActivityVNext.schedule.editTitle': 'Edit schedule',
   'workflowActivityVNext.schedule.empty': 'No schedules yet',
@@ -609,6 +648,12 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.new': 'New schedule',
   'workflowActivityVNext.schedule.noPrompt': 'No prompt',
   'workflowActivityVNext.schedule.nextFire': 'Next {date}',
+  'workflowActivityVNext.schedule.noUpcomingAttempt': 'No upcoming attempt',
+  'workflowActivityVNext.schedule.nextScheduled': 'Next scheduled',
+  'workflowActivityVNext.schedule.lastAttempt': 'Last attempt',
+  'workflowActivityVNext.schedule.totalAttempts': 'Total attempts',
+  'workflowActivityVNext.schedule.failedAttempts': 'Failed attempts',
+  'workflowActivityVNext.schedule.advancedDetails': 'Advanced details',
   'workflowActivityVNext.schedule.nextFiveFires': 'Next five fire times',
   'workflowActivityVNext.schedule.open': 'Schedules',
   'workflowActivityVNext.schedule.openAria': 'Manage schedules for {name}',
@@ -646,8 +691,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.time': 'Time',
   'workflowActivityVNext.schedule.timezone': 'Timezone',
   'workflowActivityVNext.schedule.title': 'Schedules',
-  'workflowActivityVNext.schedule.updateAccepted':
-    'Schedule update accepted. Refreshing Workflow schedules.',
+  'workflowActivityVNext.schedule.updateAccepted': 'Schedule update accepted.',
   'workflowActivityVNext.schedule.useRepeatBuilder': 'use the repeat builder',
   'workflowActivityVNext.schedule.unavailableDescription':
     'Publish a runnable Workflow before creating a recurring schedule.',

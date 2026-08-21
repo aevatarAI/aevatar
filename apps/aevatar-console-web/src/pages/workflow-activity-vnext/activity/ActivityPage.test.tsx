@@ -154,6 +154,49 @@ describe('Workflow Activity vNext Activity ledger', () => {
     );
   });
 
+  it('shows Schedule-origin context when Activity is opened from Schedule history', async () => {
+    mockSearch = '?workflowId=wf-alpha&schedule=schedule-alpha&origin=schedule';
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    await waitFor(() =>
+      expect(mockListActivityRuns).toHaveBeenCalledWith('scope-alpha', {
+        status: undefined,
+        origins: ['schedule'],
+        definitionActorIds: undefined,
+        scheduleIds: ['schedule-alpha'],
+        workflowId: 'wf-alpha',
+        searchText: undefined,
+        fromUtc: undefined,
+        toUtc: undefined,
+        take: 25,
+        cursor: undefined,
+        includeTotalCount: true,
+      }),
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Remove workflow filter wf-alpha' }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('button', {
+        name: 'Remove schedule filter schedule-alpha',
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Remove source filter schedule' }),
+    ).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Remove schedule filter schedule-alpha',
+      }),
+    );
+    expect(history.replace).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&origin=schedule',
+    );
+  });
+
   it('does not query global runs when the workflow filter is empty', async () => {
     mockSearch = '?workflowId=';
 

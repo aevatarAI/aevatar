@@ -224,6 +224,77 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       }),
     [replaceParams],
   );
+  const clearScheduleFilter = React.useCallback(
+    () => replaceParam('schedule', ''),
+    [replaceParam],
+  );
+  const clearOriginFilter = React.useCallback(
+    () => replaceParam('origin', ''),
+    [replaceParam],
+  );
+
+  const originLabel = origin
+    ? origin === 'schedule'
+      ? t('workflowActivityVNext.activity.originSchedule', 'Schedule')
+      : origin
+    : '';
+
+  const filterContext =
+    workflowFilterPresent || schedule || originLabel ? (
+      <Space wrap>
+        {workflowFilterPresent ? (
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.activity.removeWorkflowFilterAria',
+              'Remove workflow filter {workflowId}',
+              { workflowId: workflowId || 'invalid' },
+            )}
+            icon={<CloseOutlined />}
+            onClick={clearWorkflowFilter}
+          >
+            {t(
+              'workflowActivityVNext.activity.workflowFilterLabel',
+              'Workflow: {workflowId}',
+              { workflowId: workflowId || 'Invalid' },
+            )}
+          </Button>
+        ) : null}
+        {schedule ? (
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.activity.removeScheduleFilterAria',
+              'Remove schedule filter {scheduleId}',
+              { scheduleId: schedule },
+            )}
+            icon={<CloseOutlined />}
+            onClick={clearScheduleFilter}
+          >
+            {t(
+              'workflowActivityVNext.activity.scheduleFilterLabel',
+              'Schedule: {scheduleId}',
+              { scheduleId: schedule },
+            )}
+          </Button>
+        ) : null}
+        {originLabel ? (
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.activity.removeOriginFilterAria',
+              'Remove source filter {origin}',
+              { origin },
+            )}
+            icon={<CloseOutlined />}
+            onClick={clearOriginFilter}
+          >
+            {t(
+              'workflowActivityVNext.activity.originFilterContextLabel',
+              'Source: {origin}',
+              { origin: originLabel },
+            )}
+          </Button>
+        ) : null}
+      </Space>
+    ) : null;
 
   React.useEffect(() => {
     if (!rawStatus || status) return;
@@ -462,25 +533,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
       scopeId={scopeId}
       title={t('workflowActivityVNext.activity.title', 'Activity')}
     >
-      {workflowFilterPresent ? (
-        <Space wrap>
-          <Button
-            aria-label={t(
-              'workflowActivityVNext.activity.removeWorkflowFilterAria',
-              'Remove workflow filter {workflowId}',
-              { workflowId: workflowId || 'invalid' },
-            )}
-            icon={<CloseOutlined />}
-            onClick={clearWorkflowFilter}
-          >
-            {t(
-              'workflowActivityVNext.activity.workflowFilterLabel',
-              'Workflow: {workflowId}',
-              { workflowId: workflowId || 'Invalid' },
-            )}
-          </Button>
-        </Space>
-      ) : null}
+      {filterContext}
       <div className="wa-vnext__toolbar">
         <Input
           allowClear

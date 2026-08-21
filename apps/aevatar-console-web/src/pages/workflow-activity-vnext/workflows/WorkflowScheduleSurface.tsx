@@ -1,23 +1,27 @@
 import {
+  ArrowLeftOutlined,
   CalendarOutlined,
   DeleteOutlined,
+  DownOutlined,
   EditOutlined,
-  EyeOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getLocale } from '@umijs/max';
 import {
   Alert,
   Button,
   Drawer,
+  Dropdown,
   Input,
   Modal,
   Select,
   Space,
   Switch,
+  Tabs,
   Tag,
 } from 'antd';
 import React from 'react';
@@ -28,8 +32,8 @@ import {
   workflowScheduleApi,
 } from '@/shared/api/workflowScheduleApi';
 import { t } from '@/shared/i18n/messages';
+import { history } from '@/shared/navigation/history';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
-import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
 
 type WorkflowScheduleSurfaceProps = {
   readonly initialView?: ScheduleSurfaceView;
@@ -52,6 +56,7 @@ type ScheduleForm = {
 
 type CreationStep = 'configure' | 'previewing' | 'review';
 type ScheduleSurfaceView = 'list' | 'detail' | 'form';
+type ScheduleDetailTab = 'overview' | 'history';
 type RepeatPreset = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly';
 
 const weekdayValues = ['1', '2', '3', '4', '5', '6', '0'] as const;
@@ -176,16 +181,69 @@ function formFromSchedule(schedule: WorkflowScheduleSummary): ScheduleForm {
   };
 }
 
-function formatScheduleDate(value: string | null): string {
+function formatScheduleDate(value: string | null, timezone?: string): string {
   if (!value)
     return t('workflowActivityVNext.common.unavailable', 'Unavailable');
   const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : new Intl.DateTimeFormat(undefined, {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      }).format(date);
+  if (Number.isNaN(date.getTime())) return value;
+
+  try {
+    return new Intl.DateTimeFormat(getLocale(), {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      ...(timezone ? { timeZone: timezone } : {}),
+    }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat(getLocale(), {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(date);
+  }
+}
+
+function scheduleRecurrenceSummary(cronExpression: string): string {
+  const repeat = repeatFromCron(cronExpression);
+  if (!repeat) {
+    return t(
+      'workflowActivityVNext.schedule.customRecurrence',
+      'Custom schedule',
+    );
+  }
+  if (repeat.preset === 'hourly') {
+    return t('workflowActivityVNext.schedule.hourly', 'Every hour');
+  }
+  if (repeat.preset === 'weekdays') {
+    return t(
+      'workflowActivityVNext.schedule.everyWeekdaySummary',
+      'Every weekday at {time}',
+      { time: repeat.time },
+    );
+  }
+  if (repeat.preset === 'weekly') {
+    return t(
+      'workflowActivityVNext.schedule.weeklySummary',
+      'Every {day} at {time}',
+      {
+        day: t(
+          `workflowActivityVNext.schedule.weekday.${repeat.weeklyDay}`,
+          repeat.weeklyDay,
+        ),
+        time: repeat.time,
+      },
+    );
+  }
+  if (repeat.preset === 'monthly') {
+    return t(
+      'workflowActivityVNext.schedule.monthlySummary',
+      'Every month on day {day} at {time}',
+      { day: repeat.monthlyDay, time: repeat.time },
+    );
+  }
+  return t(
+    'workflowActivityVNext.schedule.everyDaySummary',
+    'Every day at {time}',
+    { time: repeat.time },
+  );
 }
 
 function errorMessage(error: unknown): string {
@@ -217,6 +275,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     React.useState<WorkflowScheduleSummary | null>(null);
   const [selectedSchedule, setSelectedSchedule] =
     React.useState<WorkflowScheduleSummary | null>(null);
+  const [detailTab, setDetailTab] =
+    React.useState<ScheduleDetailTab>('overview');
   const [form, setForm] = React.useState<ScheduleForm>(() => emptyForm());
   const [repeatPreset, setRepeatPreset] =
     React.useState<RepeatPreset>('weekdays');
@@ -229,9 +289,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   );
   const [saving, setSaving] = React.useState(false);
   const [actionScheduleId, setActionScheduleId] = React.useState<string | null>(
-    null,
-  );
-  const [acceptedMessage, setAcceptedMessage] = React.useState<string | null>(
     null,
   );
   const [pendingObservationScheduleId, setPendingObservationScheduleId] =
@@ -280,6 +337,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setCreationStep('configure');
     setEditingSchedule(null);
     setSelectedSchedule(null);
+    setDetailTab('overview');
     setForm(emptyForm());
     setRepeatPreset('weekdays');
     setRepeatTime('09:00');
@@ -287,7 +345,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setMonthlyDay('1');
     setCronMode(false);
     setPreview(null);
-    setAcceptedMessage(null);
     setPendingObservationScheduleId(null);
   }, [initialView, mode, open, workflowId]);
 
@@ -324,6 +381,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   const openDetail = (schedule: WorkflowScheduleSummary) => {
     setSelectedSchedule(schedule);
     setEditingSchedule(null);
+    setDetailTab('overview');
     setSurfaceView('detail');
   };
 
@@ -419,10 +477,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
           editingSchedule.scheduleId,
           input,
         );
-        setAcceptedMessage(
+        toast.success(
           t(
             'workflowActivityVNext.schedule.updateAccepted',
-            'Schedule update accepted. Refreshing Workflow schedules.',
+            'Schedule update accepted.',
           ),
         );
         setSurfaceView('detail');
@@ -482,10 +540,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
           workflowId,
           schedule.scheduleId,
         );
-      setAcceptedMessage(
+      toast.success(
         t(
           'workflowActivityVNext.schedule.actionAccepted',
-          'Schedule action accepted. Refreshing the Workflow schedule list…',
+          'Schedule action accepted.',
         ),
       );
       await refreshSchedules();
@@ -505,10 +563,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         workflowId,
         schedule.scheduleId,
       );
-      setAcceptedMessage(
+      toast.success(
         t(
           'workflowActivityVNext.schedule.deleteAccepted',
-          'Schedule deletion accepted. Refreshing the Workflow schedule list…',
+          'Schedule deletion accepted.',
         ),
       );
       await refreshSchedules();
@@ -519,6 +577,32 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     } finally {
       setActionScheduleId(null);
     }
+  };
+
+  const confirmDeleteSchedule = (schedule: WorkflowScheduleSummary) => {
+    Modal.confirm({
+      cancelText: t(
+        'workflowActivityVNext.schedule.keepSchedule',
+        'Keep schedule',
+      ),
+      content: t(
+        'workflowActivityVNext.schedule.deleteConfirmDescription',
+        '{name} will stop running on schedule.',
+        { name: schedule.displayName },
+      ),
+      okButtonProps: { danger: true },
+      okText: t(
+        'workflowActivityVNext.schedule.deleteAction',
+        'Delete schedule',
+      ),
+      onOk: () => deleteSchedule(schedule),
+      focusable: { autoFocusButton: 'cancel' },
+      title: t(
+        'workflowActivityVNext.schedule.deleteConfirmTitle',
+        'Delete {name}?',
+        { name: schedule.displayName },
+      ),
+    });
   };
 
   const weekdayLabel = (value: WeekdayValue) =>
@@ -577,17 +661,40 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setCronMode((current) => !current);
   };
 
-  const surfaceTitle = editingSchedule
-    ? t('workflowActivityVNext.schedule.editTitle', 'Edit schedule')
-    : surfaceView === 'detail'
-      ? t('workflowActivityVNext.schedule.detailTitle', 'Schedule details')
-      : surfaceView === 'list'
-        ? mode === 'modal'
-          ? t('workflowActivityVNext.schedule.title', 'Schedules')
-          : workflowName
-        : creationStep === 'review'
-          ? t('workflowActivityVNext.schedule.reviewTitle', 'Review schedule')
-          : t('workflowActivityVNext.schedule.new', 'New schedule');
+  const returnToScheduleList = () => {
+    setSelectedSchedule(null);
+    setEditingSchedule(null);
+    setDetailTab('overview');
+    setSurfaceView('list');
+  };
+
+  const selectedScheduleTitle = selectedSchedule ? (
+    <div className="wa-vnext__schedule-selected-title">
+      <Button
+        aria-label={t(
+          'workflowActivityVNext.schedule.backToSchedules',
+          'Back to schedules',
+        )}
+        icon={<ArrowLeftOutlined />}
+        onClick={returnToScheduleList}
+        type="text"
+      />
+      <div>
+        <strong>{selectedSchedule.displayName}</strong>
+        <span>{workflowName}</span>
+      </div>
+    </div>
+  ) : null;
+
+  const surfaceTitle =
+    selectedScheduleTitle ??
+    (surfaceView === 'list'
+      ? mode === 'modal'
+        ? t('workflowActivityVNext.schedule.title', 'Schedules')
+        : workflowName
+      : creationStep === 'review'
+        ? t('workflowActivityVNext.schedule.reviewTitle', 'Review schedule')
+        : t('workflowActivityVNext.schedule.new', 'New schedule'));
 
   const workflowContext = (
     <div className="wa-vnext__schedule-context">
@@ -625,7 +732,13 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
 
   const formFields = (
     <>
-      {workflowContext}
+      {editingSchedule ? (
+        <h2 className="wa-vnext__schedule-form-title">
+          {t('workflowActivityVNext.schedule.editTitle', 'Edit schedule')}
+        </h2>
+      ) : (
+        workflowContext
+      )}
       <section className="wa-vnext__schedule-section">
         <label
           className="wa-vnext__modal-field"
@@ -1013,9 +1126,6 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
           </Button>
         </Space>
       </div>
-      {acceptedMessage ? (
-        <Alert showIcon type="info" title={acceptedMessage} />
-      ) : null}
       {schedules.isPending ? (
         <div className="wa-vnext__state wa-vnext__state--compact" role="status">
           <p>
@@ -1039,88 +1149,54 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         />
       ) : schedules.data?.items.length ? (
         <div className="wa-vnext__schedule-list">
-          {schedules.data.items.map((schedule) => {
-            const actionPending = actionScheduleId === schedule.scheduleId;
-            return (
-              <div className="wa-vnext__schedule-row" key={schedule.scheduleId}>
-                <div className="wa-vnext__schedule-row-main">
-                  <div className="wa-vnext__schedule-row-heading">
-                    <strong>{schedule.displayName}</strong>
-                    <Tag color={schedule.enabled ? 'green' : 'default'}>
-                      {schedule.enabled
-                        ? t('workflowActivityVNext.schedule.enabled', 'Enabled')
-                        : t(
-                            'workflowActivityVNext.schedule.disabled',
-                            'Disabled',
-                          )}
-                    </Tag>
-                  </div>
-                  <code>{schedule.cronExpression}</code>
-                  <span>
-                    {schedule.timezone} ·{' '}
-                    {t(
-                      'workflowActivityVNext.schedule.nextFire',
-                      'Next {date}',
-                      { date: formatScheduleDate(schedule.nextFireAt) },
-                    )}
-                  </span>
-                </div>
-                <Space wrap>
-                  <Button
-                    aria-label={t(
-                      'workflowActivityVNext.schedule.viewAria',
-                      'View {name}',
-                      { name: schedule.displayName },
-                    )}
-                    className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                    icon={<EyeOutlined />}
-                    onClick={() => openDetail(schedule)}
-                  />
-                  <Button
-                    aria-label={t(
-                      schedule.enabled
-                        ? 'workflowActivityVNext.schedule.disableAria'
-                        : 'workflowActivityVNext.schedule.enableAria',
-                      schedule.enabled ? 'Disable {name}' : 'Enable {name}',
-                      { name: schedule.displayName },
-                    )}
-                    disabled={actionPending}
-                    icon={
-                      schedule.enabled ? <StopOutlined /> : <CalendarOutlined />
-                    }
-                    loading={actionPending}
-                    onClick={() =>
-                      void changeState(
-                        schedule,
-                        schedule.enabled ? 'disable' : 'enable',
+          {schedules.data.items.map((schedule) => (
+            <button
+              aria-label={t(
+                'workflowActivityVNext.schedule.viewAria',
+                'View {name}',
+                { name: schedule.displayName },
+              )}
+              className="wa-vnext__schedule-row"
+              key={schedule.scheduleId}
+              onClick={() => openDetail(schedule)}
+              type="button"
+            >
+              <span className="wa-vnext__schedule-row-main">
+                <span className="wa-vnext__schedule-row-heading">
+                  <strong>{schedule.displayName}</strong>
+                  <Tag color={schedule.enabled ? 'green' : 'default'}>
+                    {schedule.enabled
+                      ? t('workflowActivityVNext.schedule.enabled', 'Enabled')
+                      : t('workflowActivityVNext.schedule.paused', 'Paused')}
+                  </Tag>
+                </span>
+                <span>
+                  {scheduleRecurrenceSummary(schedule.cronExpression)}
+                </span>
+                <span>
+                  {schedule.timezone} ·{' '}
+                  {schedule.enabled && schedule.nextFireAt
+                    ? t(
+                        'workflowActivityVNext.schedule.nextFire',
+                        'Next {date}',
+                        {
+                          date: formatScheduleDate(
+                            schedule.nextFireAt,
+                            schedule.timezone,
+                          ),
+                        },
                       )
-                    }
-                  />
-                  <Button
-                    aria-label={t(
-                      'workflowActivityVNext.schedule.runNowAria',
-                      'Run {name} now',
-                      { name: schedule.displayName },
-                    )}
-                    disabled={actionPending || !schedule.enabled}
-                    icon={<PlayCircleOutlined />}
-                    onClick={() => void changeState(schedule, 'runNow')}
-                  />
-                  <Button
-                    aria-label={t(
-                      'workflowActivityVNext.schedule.deleteAria',
-                      'Delete {name}',
-                      { name: schedule.displayName },
-                    )}
-                    danger
-                    disabled={actionPending}
-                    icon={<DeleteOutlined />}
-                    onClick={() => void deleteSchedule(schedule)}
-                  />
-                </Space>
-              </div>
-            );
-          })}
+                    : t(
+                        'workflowActivityVNext.schedule.noUpcomingAttempt',
+                        'No upcoming attempt',
+                      )}
+                </span>
+              </span>
+              <span aria-hidden="true" className="wa-vnext__schedule-row-arrow">
+                ›
+              </span>
+            </button>
+          ))}
         </div>
       ) : (
         <div className="wa-vnext__schedule-empty">
@@ -1138,14 +1214,183 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     </div>
   );
 
+  const activityHref = scheduleDetail.data
+    ? `/scopes/${scopeId}/workflow-activity-vnext/activity?${new URLSearchParams(
+        [
+          ['workflowId', workflowId],
+          ['schedule', scheduleDetail.data.schedule.scheduleId],
+          ['origin', 'schedule'],
+        ],
+      ).toString()}`
+    : null;
+
+  const historyView = scheduleDetail.data ? (
+    <section className="wa-vnext__schedule-history">
+      <header className="wa-vnext__schedule-history-header">
+        <div>
+          <h2>
+            {t(
+              'workflowActivityVNext.schedule.recentAttempts',
+              'Recent attempts',
+            )}
+          </h2>
+          <p>
+            {t(
+              'workflowActivityVNext.schedule.historyDescription',
+              'Schedule attempts can fail before a Workflow Run exists.',
+            )}
+          </p>
+        </div>
+        {activityHref ? (
+          <a
+            href={activityHref}
+            onClick={(event) => {
+              event.preventDefault();
+              onClose();
+              history.push(activityHref);
+            }}
+          >
+            {t(
+              'workflowActivityVNext.schedule.viewRelatedRuns',
+              'View related runs in Activity',
+            )}
+          </a>
+        ) : null}
+      </header>
+      {scheduleDetail.data.recentFires.length ? (
+        <div className="wa-vnext__schedule-history-table-wrap">
+          <table className="wa-vnext__schedule-history-table">
+            <thead>
+              <tr>
+                <th scope="col">
+                  {t(
+                    'workflowActivityVNext.schedule.scheduledTime',
+                    'Scheduled time',
+                  )}
+                </th>
+                <th scope="col">
+                  {t('workflowActivityVNext.schedule.source', 'Source')}
+                </th>
+                <th scope="col">
+                  {t('workflowActivityVNext.schedule.result', 'Result')}
+                </th>
+                <th scope="col">
+                  {t(
+                    'workflowActivityVNext.schedule.completedTime',
+                    'Completed time',
+                  )}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {scheduleDetail.data.recentFires.map((fire) => {
+                const failed = Boolean(fire.error.trim());
+                const source = fire.manual
+                  ? t('workflowActivityVNext.schedule.manual', 'Manual')
+                  : t('workflowActivityVNext.schedule.scheduled', 'Scheduled');
+                return (
+                  <React.Fragment
+                    key={`${fire.idempotencyKey}:${fire.completedAt}`}
+                  >
+                    <tr>
+                      <td>
+                        <time dateTime={fire.scheduledFireAt}>
+                          {formatScheduleDate(
+                            fire.scheduledFireAt,
+                            scheduleDetail.data.schedule.timezone,
+                          )}
+                        </time>
+                      </td>
+                      <td>{source}</td>
+                      <td>
+                        <Tag color={failed ? 'red' : 'green'}>
+                          {failed
+                            ? t(
+                                'workflowActivityVNext.schedule.failed',
+                                'Failed',
+                              )
+                            : t(
+                                'workflowActivityVNext.schedule.succeeded',
+                                'Succeeded',
+                              )}
+                        </Tag>
+                      </td>
+                      <td>
+                        <time dateTime={fire.completedAt}>
+                          {formatScheduleDate(
+                            fire.completedAt,
+                            scheduleDetail.data.schedule.timezone,
+                          )}
+                        </time>
+                      </td>
+                    </tr>
+                    {failed ? (
+                      <tr className="wa-vnext__schedule-history-error-row">
+                        <td colSpan={4}>
+                          <p>
+                            {t(
+                              fire.manual
+                                ? 'workflowActivityVNext.schedule.manualAttemptFailed'
+                                : 'workflowActivityVNext.schedule.scheduledAttemptFailed',
+                              fire.manual
+                                ? 'The manual attempt could not start the Workflow.'
+                                : 'The scheduled attempt could not start the Workflow.',
+                            )}
+                          </p>
+                          <details>
+                            <summary>
+                              {t(
+                                'workflowActivityVNext.schedule.technicalDetails',
+                                'Technical details',
+                              )}
+                            </summary>
+                            <code>{fire.error}</code>
+                          </details>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="wa-vnext__schedule-empty wa-vnext__schedule-empty--history">
+          <h3>
+            {t('workflowActivityVNext.schedule.noAttempts', 'No attempts yet')}
+          </h3>
+        </div>
+      )}
+    </section>
+  ) : null;
+
   const detailView = (
     <div className="wa-vnext__schedule-detail">
+      <Tabs
+        activeKey={detailTab}
+        items={[
+          {
+            key: 'overview',
+            label: t('workflowActivityVNext.schedule.overview', 'Overview'),
+          },
+          {
+            key: 'history',
+            label: t('workflowActivityVNext.schedule.history', 'History'),
+          },
+        ]}
+        onChange={(key) => setDetailTab(key as ScheduleDetailTab)}
+      />
       {scheduleDetail.isPending ? (
         <div className="wa-vnext__state wa-vnext__state--compact" role="status">
           <p>
             {t(
-              'workflowActivityVNext.schedule.detailLoading',
-              'Loading schedule details…',
+              detailTab === 'history'
+                ? 'workflowActivityVNext.schedule.historyLoading'
+                : 'workflowActivityVNext.schedule.detailLoading',
+              detailTab === 'history'
+                ? 'Loading history…'
+                : 'Loading schedule details…',
             )}
           </p>
         </div>
@@ -1159,255 +1404,218 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
           description={errorMessage(scheduleDetail.error)}
           showIcon
           title={t(
-            'workflowActivityVNext.schedule.detailLoadFailed',
-            "Schedule details couldn't be loaded",
+            detailTab === 'history'
+              ? 'workflowActivityVNext.schedule.historyLoadFailed'
+              : 'workflowActivityVNext.schedule.detailLoadFailed',
+            detailTab === 'history'
+              ? "History couldn't be loaded"
+              : "Schedule couldn't be loaded",
           )}
           type="error"
         />
       ) : scheduleDetail.data ? (
-        <>
-          <div className="wa-vnext__schedule-context">
-            <strong>
-              {workflowName} ·{' '}
-              {t('workflowActivityVNext.schedule.published', 'Published')}
-            </strong>
-            <Tag
-              color={scheduleDetail.data.schedule.enabled ? 'green' : 'default'}
-            >
-              {scheduleDetail.data.schedule.enabled
-                ? t('workflowActivityVNext.schedule.enabled', 'Enabled')
-                : t('workflowActivityVNext.schedule.disabled', 'Disabled')}
-            </Tag>
-          </div>
-          {acceptedMessage ? (
-            <Alert showIcon title={acceptedMessage} type="info" />
-          ) : null}
-          <dl className="wa-vnext__schedule-detail-facts">
-            <div>
-              <dt>
-                {t(
-                  'workflowActivityVNext.schedule.scheduleName',
-                  'Schedule name',
+        detailTab === 'overview' ? (
+          <div className="wa-vnext__schedule-overview">
+            <section className="wa-vnext__schedule-overview-summary">
+              <Tag
+                color={
+                  scheduleDetail.data.schedule.enabled ? 'green' : 'default'
+                }
+              >
+                {scheduleDetail.data.schedule.enabled
+                  ? t('workflowActivityVNext.schedule.enabled', 'Enabled')
+                  : t('workflowActivityVNext.schedule.paused', 'Paused')}
+              </Tag>
+              <h2>
+                {scheduleRecurrenceSummary(
+                  scheduleDetail.data.schedule.cronExpression,
                 )}
-              </dt>
-              <dd>{scheduleDetail.data.schedule.displayName}</dd>
-            </div>
-            <div>
-              <dt>
-                {t('workflowActivityVNext.schedule.nextFireLabel', 'Next fire')}
-              </dt>
-              <dd>
-                {formatScheduleDate(scheduleDetail.data.schedule.nextFireAt)}
-              </dd>
-            </div>
-            <div>
-              <dt>
-                {t('workflowActivityVNext.schedule.lastFire', 'Last fire')}
-              </dt>
-              <dd>
-                {formatScheduleDate(scheduleDetail.data.schedule.lastFireAt)}
-              </dd>
-            </div>
-            <div>
-              <dt>
-                {t('workflowActivityVNext.schedule.totalFires', 'Total fires')}
-              </dt>
-              <dd>
+              </h2>
+              <p>
+                <span>
+                  {t('workflowActivityVNext.schedule.timezone', 'Timezone')}
+                </span>{' '}
+                {scheduleDetail.data.schedule.timezone}
+              </p>
+            </section>
+            <div className="wa-vnext__schedule-overview-actions">
+              <Button
+                disabled={
+                  actionScheduleId ===
+                    scheduleDetail.data.schedule.scheduleId ||
+                  !scheduleDetail.data.schedule.enabled
+                }
+                icon={<PlayCircleOutlined />}
+                onClick={() =>
+                  void changeState(scheduleDetail.data.schedule, 'runNow')
+                }
+                type="primary"
+              >
+                {t('workflowActivityVNext.schedule.runNow', 'Run now')}
+              </Button>
+              <Button icon={<EditOutlined />} onClick={openEdit}>
                 {t(
-                  'workflowActivityVNext.schedule.totalCount',
-                  '{count} total',
-                  {
-                    count: scheduleDetail.data.schedule.fireCount,
+                  'workflowActivityVNext.schedule.editAction',
+                  'Edit schedule',
+                )}
+              </Button>
+              <Dropdown
+                menu={{
+                  items: [
+                    {
+                      icon: scheduleDetail.data.schedule.enabled ? (
+                        <StopOutlined />
+                      ) : (
+                        <CalendarOutlined />
+                      ),
+                      key: 'toggle',
+                      label: scheduleDetail.data.schedule.enabled
+                        ? t('workflowActivityVNext.schedule.pause', 'Pause')
+                        : t('workflowActivityVNext.schedule.enable', 'Enable'),
+                    },
+                    { type: 'divider' },
+                    {
+                      danger: true,
+                      icon: <DeleteOutlined />,
+                      key: 'delete',
+                      label: t(
+                        'workflowActivityVNext.schedule.deleteAction',
+                        'Delete schedule',
+                      ),
+                    },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === 'delete') {
+                      confirmDeleteSchedule(scheduleDetail.data.schedule);
+                      return;
+                    }
+                    void changeState(
+                      scheduleDetail.data.schedule,
+                      scheduleDetail.data.schedule.enabled
+                        ? 'disable'
+                        : 'enable',
+                    );
                   },
-                )}
-              </dd>
+                }}
+                trigger={['click']}
+              >
+                <Button
+                  aria-label={t(
+                    'workflowActivityVNext.schedule.moreActionsAria',
+                    'More schedule actions',
+                  )}
+                  disabled={
+                    actionScheduleId === scheduleDetail.data.schedule.scheduleId
+                  }
+                  icon={<DownOutlined />}
+                  iconPlacement="end"
+                >
+                  {t('workflowActivityVNext.schedule.more', 'More')}
+                </Button>
+              </Dropdown>
             </div>
-            <div>
-              <dt>
-                {t(
-                  'workflowActivityVNext.schedule.failedFires',
-                  'Failed fires',
-                )}
-              </dt>
-              <dd>
-                {t(
-                  'workflowActivityVNext.schedule.failedCount',
-                  '{count} failed',
-                  { count: scheduleDetail.data.schedule.failureCount },
-                )}
-              </dd>
-            </div>
-            <div>
-              <dt>
-                {t('workflowActivityVNext.schedule.cron', 'Cron expression')}
-              </dt>
-              <dd>
-                <code>{scheduleDetail.data.schedule.cronExpression}</code>
-              </dd>
-            </div>
-            <div>
-              <dt>
-                {t('workflowActivityVNext.schedule.timezone', 'Timezone')}
-              </dt>
-              <dd>{scheduleDetail.data.schedule.timezone}</dd>
-            </div>
-            <div>
-              <dt>
-                {t('workflowActivityVNext.schedule.promptReview', 'Run input')}
-              </dt>
-              <dd>
-                {scheduleDetail.data.schedule.prompt.trim()
-                  ? scheduleDetail.data.schedule.prompt
-                  : t('workflowActivityVNext.schedule.noPrompt', 'No prompt')}
-              </dd>
-            </div>
-          </dl>
-          <section className="wa-vnext__schedule-detail-history">
-            <div className="wa-vnext__schedule-detail-history-header">
-              <h3>
-                {t(
-                  'workflowActivityVNext.schedule.recentFires',
-                  'Recent fires',
-                )}
-              </h3>
-            </div>
-            {scheduleDetail.data.recentFires.length ? (
-              <div className="wa-vnext__schedule-fire-list">
-                {scheduleDetail.data.recentFires.map((fire) => {
-                  const failed = Boolean(fire.error.trim());
-                  return (
-                    <div
-                      className="wa-vnext__schedule-fire-row"
-                      key={`${fire.idempotencyKey}:${fire.completedAt}`}
-                    >
-                      <div className="wa-vnext__schedule-fire-heading">
-                        <Space size={6} wrap>
-                          <Tag color={failed ? 'red' : 'green'}>
-                            {failed
-                              ? t(
-                                  'workflowActivityVNext.schedule.failed',
-                                  'Failed',
-                                )
-                              : t(
-                                  'workflowActivityVNext.schedule.succeeded',
-                                  'Succeeded',
-                                )}
-                          </Tag>
-                          <Tag>
-                            {fire.manual
-                              ? t(
-                                  'workflowActivityVNext.schedule.manual',
-                                  'Manual',
-                                )
-                              : t(
-                                  'workflowActivityVNext.schedule.scheduled',
-                                  'Scheduled',
-                                )}
-                          </Tag>
-                        </Space>
-                      </div>
-                      <div className="wa-vnext__schedule-fire-times">
-                        <span>
-                          {t(
-                            'workflowActivityVNext.schedule.scheduledAt',
-                            'Scheduled {date}',
-                            { date: formatScheduleDate(fire.scheduledFireAt) },
-                          )}
-                        </span>
-                        <span>
-                          {t(
-                            'workflowActivityVNext.schedule.completedAt',
-                            'Completed {date}',
-                            { date: formatScheduleDate(fire.completedAt) },
-                          )}
-                        </span>
-                      </div>
-                      {failed ? (
-                        <p className="wa-vnext__schedule-fire-error">
-                          {fire.error}
-                        </p>
-                      ) : null}
-                    </div>
-                  );
-                })}
+            <dl className="wa-vnext__schedule-detail-facts">
+              <div>
+                <dt>
+                  {t(
+                    'workflowActivityVNext.schedule.nextScheduled',
+                    'Next scheduled',
+                  )}
+                </dt>
+                <dd>
+                  {scheduleDetail.data.schedule.enabled &&
+                  scheduleDetail.data.schedule.nextFireAt
+                    ? formatScheduleDate(
+                        scheduleDetail.data.schedule.nextFireAt,
+                        scheduleDetail.data.schedule.timezone,
+                      )
+                    : t(
+                        'workflowActivityVNext.schedule.noUpcomingAttempt',
+                        'No upcoming attempt',
+                      )}
+                </dd>
               </div>
-            ) : (
-              <div className="wa-vnext__schedule-empty wa-vnext__schedule-empty--history">
-                <p>
-                  {t('workflowActivityVNext.schedule.noFires', 'No fires yet')}
-                </p>
+              <div>
+                <dt>
+                  {t(
+                    'workflowActivityVNext.schedule.lastAttempt',
+                    'Last attempt',
+                  )}
+                </dt>
+                <dd>
+                  {formatScheduleDate(
+                    scheduleDetail.data.schedule.lastFireAt,
+                    scheduleDetail.data.schedule.timezone,
+                  )}
+                  {scheduleDetail.data.recentFires[0] ? (
+                    <span>
+                      {' · '}
+                      {scheduleDetail.data.recentFires[0].error.trim()
+                        ? t('workflowActivityVNext.schedule.failed', 'Failed')
+                        : t(
+                            'workflowActivityVNext.schedule.succeeded',
+                            'Succeeded',
+                          )}
+                    </span>
+                  ) : null}
+                </dd>
               </div>
-            )}
-          </section>
-        </>
+              <div>
+                <dt>
+                  {t(
+                    'workflowActivityVNext.schedule.totalAttempts',
+                    'Total attempts',
+                  )}
+                </dt>
+                <dd>{scheduleDetail.data.schedule.fireCount}</dd>
+              </div>
+              <div>
+                <dt>
+                  {t(
+                    'workflowActivityVNext.schedule.failedAttempts',
+                    'Failed attempts',
+                  )}
+                </dt>
+                <dd>{scheduleDetail.data.schedule.failureCount}</dd>
+              </div>
+            </dl>
+            {scheduleDetail.data.schedule.prompt.trim() ? (
+              <section className="wa-vnext__schedule-run-input">
+                <h3>
+                  {t(
+                    'workflowActivityVNext.schedule.promptReview',
+                    'Run input',
+                  )}
+                </h3>
+                <p>{scheduleDetail.data.schedule.prompt}</p>
+              </section>
+            ) : null}
+            <details className="wa-vnext__schedule-advanced-details">
+              <summary>
+                {t(
+                  'workflowActivityVNext.schedule.advancedDetails',
+                  'Advanced details',
+                )}
+              </summary>
+              <dl>
+                <div>
+                  <dt>
+                    {t(
+                      'workflowActivityVNext.schedule.cron',
+                      'Cron expression',
+                    )}
+                  </dt>
+                  <dd>
+                    <code>{scheduleDetail.data.schedule.cronExpression}</code>
+                  </dd>
+                </div>
+              </dl>
+            </details>
+          </div>
+        ) : (
+          historyView
+        )
       ) : null}
-      <footer className="wa-vnext__schedule-footer">
-        <Button
-          onClick={() => {
-            setSelectedSchedule(null);
-            setSurfaceView('list');
-          }}
-        >
-          {t(
-            'workflowActivityVNext.schedule.backToSchedules',
-            'Back to schedules',
-          )}
-        </Button>
-        {scheduleDetail.data ? (
-          <Space wrap>
-            <Button
-              disabled={
-                actionScheduleId === scheduleDetail.data.schedule.scheduleId ||
-                !scheduleDetail.data.schedule.enabled
-              }
-              icon={<PlayCircleOutlined />}
-              onClick={() =>
-                void changeState(scheduleDetail.data.schedule, 'runNow')
-              }
-            >
-              {t('workflowActivityVNext.schedule.runNow', 'Run now')}
-            </Button>
-            <Button icon={<EditOutlined />} onClick={openEdit}>
-              {t('workflowActivityVNext.schedule.change', 'Change schedule')}
-            </Button>
-            <Button
-              disabled={
-                actionScheduleId === scheduleDetail.data.schedule.scheduleId
-              }
-              icon={
-                scheduleDetail.data.schedule.enabled ? (
-                  <StopOutlined />
-                ) : (
-                  <CalendarOutlined />
-                )
-              }
-              loading={
-                actionScheduleId === scheduleDetail.data.schedule.scheduleId
-              }
-              onClick={() =>
-                void changeState(
-                  scheduleDetail.data.schedule,
-                  scheduleDetail.data.schedule.enabled ? 'disable' : 'enable',
-                )
-              }
-            >
-              {scheduleDetail.data.schedule.enabled
-                ? t('workflowActivityVNext.schedule.pause', 'Pause')
-                : t('workflowActivityVNext.schedule.enable', 'Enable')}
-            </Button>
-            <Button
-              danger
-              disabled={
-                actionScheduleId === scheduleDetail.data.schedule.scheduleId
-              }
-              icon={<DeleteOutlined />}
-              onClick={() => void deleteSchedule(scheduleDetail.data.schedule)}
-            >
-              {t('workflowActivityVNext.common.delete', 'Delete')}
-            </Button>
-          </Space>
-        ) : null}
-      </footer>
     </div>
   );
 
