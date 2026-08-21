@@ -168,6 +168,9 @@ message AgentToolExecutionContextPayload {
   AgentChatInvocationContextPayload chat = 17;
   aevatar.ai.tool_providers.AgentToolExecutionOwner execution_owner = 18;
   aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 19;
+  // Server-sealed NyxID credential handle inherited by nested workflow/service calls.
+  // Never contains raw bearer or Agent Key material.
+  aevatar.credentials.DurableCallerCredentialRef durable_nyx_id_credential = 20;
 }
 
 enum AgentChatInvocationSurfacePayload {

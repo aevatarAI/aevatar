@@ -76,4 +76,10 @@ public sealed class CredentialReferenceProtoContractTests
         parsed.SubjectId.ShouldBe(reference.SubjectId);
         parsed.SourceKind.ShouldBe(DurableCallerCredentialSourceKind.ScheduledDispatch);
     }
+
+    [Fact]
+    public void DurableCallerCredentialSourceKind_ShouldReserveChannelRegistrationIdentity()
+    {
+        ((int)DurableCallerCredentialSourceKind.ChannelRegistration).ShouldBe(4);
+    }
 }

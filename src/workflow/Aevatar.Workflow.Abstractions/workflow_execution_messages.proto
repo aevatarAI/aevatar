@@ -701,6 +701,10 @@ message WorkflowRunExecutionStartedEvent
   string workflow_correlation_id = 12;
   string current_turn_id = 13;
   WorkflowRunLineage lineage = 14;
+  // Actor-owned outbox intent for the self StartWorkflowEvent. It is committed
+  // atomically with the run-start fact and cleared by the first kernel state
+  // checkpoint, so activation can recover the persist-before-publish crash gap.
+  StartWorkflowEvent pending_start_workflow = 15;
 }
 message WorkflowRunExecutionContextDelta
 {

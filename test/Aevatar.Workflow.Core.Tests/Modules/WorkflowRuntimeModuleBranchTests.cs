@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
@@ -529,6 +530,59 @@ public sealed class WorkflowRuntimeModuleBranchTests
 
         var intent = DispatchedLlmIntent(ctx);
         intent.SenderNyxIdAccessToken.Should().Be("sender-token-llm");
+    }
+
+    [Theory]
+    [InlineData("llm_call")]
+    [InlineData("evaluate")]
+    [InlineData("reflect")]
+    public async Task NyxIdLlmModules_WithChannelAgentKey_ShouldSuppressUserTokenAndPropagateAgentKeyHandle(
+        string stepType)
+    {
+        IEventModule<IWorkflowExecutionContext> module = stepType switch
+        {
+            "llm_call" => new LLMCallModule(),
+            "evaluate" => new EvaluateModule(),
+            "reflect" => new ReflectModule(),
+            _ => throw new ArgumentOutOfRangeException(nameof(stepType)),
+        };
+        var ctx = new RecordingWorkflowContext();
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            DurableCallerCredential = new DurableCallerCredentialRef
+            {
+                Ref = "secret://channel-agent-key",
+                Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                OwnerScopeKey = "scope-channel",
+                SubjectId = "agent-key-channel",
+                SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+            },
+            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+        };
+        ctx.RuntimeContext.ApplySenderNyxIdAccessToken("short-lived-user-token");
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = $"{stepType}-channel-agent-key",
+                StepType = stepType,
+                RunId = "run-channel-agent-key",
+                Input = "prompt",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var intent = DispatchedLlmIntent(ctx);
+        intent.SenderNyxIdAccessToken.Should().BeEmpty();
+        intent.CallerCredential.Should().NotBeNull();
+        intent.CallerCredential.BearerToken.Should().BeEmpty();
+        intent.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
+        intent.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        intent.CallerCredential.DurableCallerCredential.Should().NotBeNull();
+        intent.CallerCredential.DurableCallerCredential.Ref.Should()
+            .Be("secret://channel-agent-key");
+        intent.CallerCredential.DurableCallerCredential.SourceKind.Should()
+            .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
     }
 
     [Fact]

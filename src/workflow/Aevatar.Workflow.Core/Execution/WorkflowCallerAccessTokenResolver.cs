@@ -12,13 +12,15 @@ internal static class WorkflowCallerAccessTokenResolver
     {
         ArgumentNullException.ThrowIfNull(credential);
         var bearer = WorkflowCallerCredentialTokens.ParseOptional(credential.BearerToken);
-        var preservesWebhookBindingAgentKey =
-            credential.DurableCallerCredential?.SourceKind ==
-            Aevatar.Foundation.Abstractions.Credentials.DurableCallerCredentialSourceKind.WebhookBinding;
+        var preservesDurableAgentKey = credential.DurableCallerCredential?.SourceKind is
+            Aevatar.Foundation.Abstractions.Credentials.DurableCallerCredentialSourceKind.WebhookBinding or
+            Aevatar.Foundation.Abstractions.Credentials.DurableCallerCredentialSourceKind.ChannelRegistration;
+        if (preservesDurableAgentKey)
+            return credential;
+
         var shouldRefreshProxyDelegation =
             credential.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
-            credential.NyxIdAuthority != null &&
-            !preservesWebhookBindingAgentKey;
+            credential.NyxIdAuthority != null;
         if (bearer.IsValid && !shouldRefreshProxyDelegation)
             return credential;
         if (credential.NyxIdAuthority == null)

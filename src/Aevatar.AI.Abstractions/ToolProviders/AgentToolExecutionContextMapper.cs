@@ -177,6 +177,7 @@ public static class AgentToolExecutionContextMapper
             Chat = FromChatPayload(payload.Chat),
             InputFileRefs = FromInputFileRefsPayload(payload.InputFileRefs),
             ExecutionOwner = payload.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
+            DurableNyxIdCredential = payload.DurableNyxIdCredential?.Clone(),
             OperationAdmission =
                 AgentToolOperationAdmissionPayloadMapper.FromPayload(payload.OperationAdmission),
         };
@@ -238,6 +239,7 @@ public static class AgentToolExecutionContextMapper
             InvocationSurface = ToInvocationSurfacePayload(context.InvocationSurface),
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
             ExecutionOwner = context.ExecutionOwner?.Clone() ?? new AgentToolExecutionOwner(),
+            DurableNyxIdCredential = context.DurableNyxIdCredential?.Clone(),
         };
 
         if (context.OperationAdmission is not null)

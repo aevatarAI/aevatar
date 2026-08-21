@@ -551,8 +551,10 @@ public sealed partial class WorkflowRunGAgent
         await base.OnActivateAsync(ct);
         if (await RecoverPendingWorkflowCompletionAsync(ct))
             return;
-        await DrainPendingDefinitionBindingContinuationAsync(ct);
+        var definitionStartDispatched = await DrainPendingDefinitionBindingContinuationAsync(ct);
         InstallCognitiveModules();
+        if (!definitionStartDispatched)
+            await RecoverPendingWorkflowStartAsync(ct);
         await RecoverPendingWorkflowExecutionDispatchAsync(ct);
         await RecoverTerminalNotificationAsync(ct);
         await RecoverToolCallActorLocalStateAsync(ct);
@@ -573,6 +575,25 @@ public sealed partial class WorkflowRunGAgent
 
         await DispatchPendingInteractiveActionContinuationsAsync(ct);
         await ResumeCompensationAsync(ct);
+    }
+
+    private async Task RecoverPendingWorkflowStartAsync(CancellationToken ct)
+    {
+        var pending = State.PendingStartWorkflow?.Clone();
+        if (pending == null ||
+            IsTerminalStatus(State.Status) ||
+            !string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        Logger.LogWarning(
+            "Recovering committed workflow start dispatch. actor={ActorId} run={RunId} workflow={WorkflowName} generation={BindingGeneration}",
+            Id,
+            pending.RunId,
+            pending.WorkflowName,
+            pending.BindingGeneration);
+        await PublishStartWorkflowOrTerminalFailureAsync(pending, sessionId: string.Empty, ct);
     }
 
     private async Task RecoverPendingWorkflowExecutionDispatchAsync(CancellationToken ct)
@@ -619,7 +640,10 @@ public sealed partial class WorkflowRunGAgent
         await base.OnCommittedStatePublicationRecoveredAsync(envelope, ct);
         if (await RecoverPendingWorkflowCompletionAsync(ct))
             return;
-        await DrainPendingDefinitionBindingContinuationAsync(ct);
+        var definitionStartDispatched = await DrainPendingDefinitionBindingContinuationAsync(ct);
+        InstallCognitiveModules();
+        if (!definitionStartDispatched)
+            await RecoverPendingWorkflowStartAsync(ct);
         await RecoverTerminalNotificationAsync(ct);
         await RecoverToolCallActorLocalStateAsync(ct);
         await DispatchPendingInteractiveActionContinuationsAsync(ct);
@@ -1879,6 +1903,17 @@ public sealed partial class WorkflowRunGAgent
             return null;
         }
 
+        var start = new StartWorkflowEvent
+        {
+            WorkflowName = _compiledWorkflow.Name,
+            Input = executionInput,
+            RunId = runId,
+            ForkSeed = request.ForkSeed,
+            BindingGeneration = State.BindingGeneration,
+            ValueRepresentation = valueRepresentation,
+        };
+        start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
+
         var executionStarted = new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
@@ -1897,21 +1932,11 @@ public sealed partial class WorkflowRunGAgent
                 ? request.ConversationContext?.CurrentTurnId ?? string.Empty
                 : request.CurrentTurnId,
             Lineage = BuildExecutionStartLineage(request.ForkSeed, State.Lineage, runId),
+            PendingStartWorkflow = start.Clone(),
         };
         if (request.CompletionNotificationTarget != null)
             executionStarted.CompletionNotificationTarget = request.CompletionNotificationTarget.Clone();
         await PersistDomainEventAsync(executionStarted);
-
-        var start = new StartWorkflowEvent
-        {
-            WorkflowName = _compiledWorkflow.Name,
-            Input = executionInput,
-            RunId = runId,
-            ForkSeed = request.ForkSeed,
-            BindingGeneration = State.BindingGeneration,
-            ValueRepresentation = valueRepresentation,
-        };
-        start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
         return start;
     }
 
@@ -3967,6 +3992,7 @@ public sealed partial class WorkflowRunGAgent
         next.CompensationOriginFailedStepId = string.Empty;
         next.TerminalWorkflowCompletionRecorded = false;
         next.PendingCompensationCompletion = null;
+        next.PendingStartWorkflow = evt.PendingStartWorkflow?.Clone();
         next.CompletionNotificationTarget = evt.CompletionNotificationTarget?.Clone();
         next.LastCommandId = string.IsNullOrWhiteSpace(evt.WorkflowCommandId)
             ? current.LastCommandId
@@ -4316,6 +4342,8 @@ public sealed partial class WorkflowRunGAgent
             return next;
 
         next.ExecutionStates[scopeKey] = evt.State;
+        if (string.Equals(scopeKey, WorkflowExecutionKernel.ModuleStateKey, StringComparison.Ordinal))
+            next.PendingStartWorkflow = null;
         return next;
     }
 
@@ -4615,6 +4643,7 @@ public sealed partial class WorkflowRunGAgent
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         ClearExecutionStatesPreservingToolCallCleanup(next);
         next.ExecutionContext = new WorkflowRunExecutionContextState();
+        next.PendingStartWorkflow = null;
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         next.PendingSubWorkflowInvocations.Clear();
@@ -4642,6 +4671,7 @@ public sealed partial class WorkflowRunGAgent
         next.TerminalWorkflowCompletionRecorded = true;
         next.PendingCompensationCompletion = null;
         next.ExecutionContext = new WorkflowRunExecutionContextState();
+        next.PendingStartWorkflow = null;
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         NormalizeTerminalWorkflowExecutionState(next);
@@ -4691,6 +4721,7 @@ public sealed partial class WorkflowRunGAgent
         ApplyTerminalTiming(next, evt.CompletedAtUtc);
         ClearExecutionStatesPreservingToolCallCleanup(next);
         next.ExecutionContext = new WorkflowRunExecutionContextState();
+        next.PendingStartWorkflow = null;
         next.PendingSubWorkflowDefinitionResolutions.Clear();
         next.PendingSubWorkflowDefinitionResolutionIndexByInvocationId.Clear();
         next.PendingSubWorkflowInvocations.Clear();
@@ -6189,11 +6220,11 @@ public sealed partial class WorkflowRunGAgent
         return continuation;
     }
 
-    private async Task DrainPendingDefinitionBindingContinuationAsync(CancellationToken ct)
+    private async Task<bool> DrainPendingDefinitionBindingContinuationAsync(CancellationToken ct)
     {
         var continuation = State.PendingDefinitionBindingContinuation?.Clone();
         if (continuation == null || string.IsNullOrWhiteSpace(continuation.ContinuationId))
-            return;
+            return false;
 
         if (!continuation.CleanupCompleted)
         {
@@ -6215,21 +6246,23 @@ public sealed partial class WorkflowRunGAgent
             }, ct);
             continuation = State.PendingDefinitionBindingContinuation?.Clone();
             if (continuation == null)
-                return;
+                return false;
         }
 
         RebuildCompiledWorkflowCache();
         InstallCognitiveModules();
+        var startDispatched = false;
         if (continuation.ExecuteAfterBind)
-            await DrainDynamicDefinitionStartAsync(continuation, ct);
+            startDispatched = await DrainDynamicDefinitionStartAsync(continuation, ct);
 
         await PersistDomainEventAsync(new WorkflowRunDefinitionBindingContinuationClearedEvent
         {
             ContinuationId = continuation.ContinuationId,
         }, ct);
+        return startDispatched;
     }
 
-    private async Task DrainDynamicDefinitionStartAsync(
+    private async Task<bool> DrainDynamicDefinitionStartAsync(
         WorkflowRunDefinitionBindingContinuationState continuation,
         CancellationToken ct)
     {
@@ -6239,13 +6272,22 @@ public sealed partial class WorkflowRunGAgent
         if (!string.Equals(State.Status, BoundStatus, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            return false;
         }
 
         await EnsureAgentTreeAsync();
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
+        var start = State.PendingStartWorkflow?.Clone() ?? new StartWorkflowEvent
+        {
+            WorkflowName = _compiledWorkflow.Name,
+            Input = continuation.ExecutionInput,
+            RunId = runId,
+            BindingGeneration = State.BindingGeneration,
+            ValueRepresentation = NormalizePersistedValueRepresentation(
+                continuation.ValueRepresentation),
+        };
         if (string.Equals(State.Status, BoundStatus, StringComparison.OrdinalIgnoreCase))
         {
             var replacementExecutionContext =
@@ -6263,24 +6305,18 @@ public sealed partial class WorkflowRunGAgent
                 Attempt = State.ForkAttempt,
                 StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 CurrentTurnId = State.CurrentTurnId,
+                PendingStartWorkflow = start.Clone(),
             }, ct);
         }
 
         if (!string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
-            return;
+            return false;
 
         await PublishStartWorkflowOrTerminalFailureAsync(
-            new StartWorkflowEvent
-            {
-                WorkflowName = _compiledWorkflow.Name,
-                Input = continuation.ExecutionInput,
-                RunId = runId,
-                BindingGeneration = State.BindingGeneration,
-                ValueRepresentation = NormalizePersistedValueRepresentation(
-                    continuation.ValueRepresentation),
-            },
+            start,
             sessionId: string.Empty,
             ct);
+        return true;
     }
 
     private IReadOnlyCollection<string> CaptureRoleActorIdsFromCurrentDefinition()

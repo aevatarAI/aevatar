@@ -394,7 +394,7 @@ internal sealed class ChannelWorkflowResultDeliveryRepairService
             {
                 var stored = await _secretVault.PutAsync(
                     new StoreSecretRequest(
-                        CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                        CredentialSecretPurposes.ChannelNyxIdAgentKey,
                         registration.ScopeId,
                         rotated.ApiKeyId,
                         rotated.FullKey,
@@ -550,7 +550,7 @@ internal sealed class ChannelWorkflowResultDeliveryRepairService
         !string.IsNullOrWhiteSpace(reference.Ref) &&
         string.Equals(
             reference.Purpose,
-            CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
             StringComparison.Ordinal) &&
         string.Equals(reference.OwnerScopeKey, registration.ScopeId, StringComparison.Ordinal);
 

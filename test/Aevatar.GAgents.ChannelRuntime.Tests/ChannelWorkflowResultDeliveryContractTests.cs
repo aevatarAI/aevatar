@@ -438,8 +438,14 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         IServiceInvocationResolutionPort? serviceInvocationResolutionPort = null,
         IServiceInvocationDispatcher? serviceInvocationDispatcher = null,
         IInvokeAdmissionAuthorizer? admissionAuthorizer = null,
-        ILogger<AevatarInvocationDispatcher>? logger = null) =>
-        new(
+        ILogger<AevatarInvocationDispatcher>? logger = null)
+    {
+        var readinessPort = Substitute.For<IChannelNyxIdAgentKeyReadinessPort>();
+        readinessPort.EnsureReadyAsync(
+                Arg.Any<DurableCallerCredentialRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ChannelNyxIdAgentKeyReadinessResult.Succeeded);
+        return new AevatarInvocationDispatcher(
             actorDispatchPort,
             Substitute.For<IGAgentActorRegistryQueryPort>(),
             teamEntryMemberResolver ?? Substitute.For<ITeamEntryMemberResolver>(),
@@ -453,7 +459,9 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
             Substitute.For<IGAgentRunTerminalQueryPort>(),
             Substitute.For<IWorkflowExecutionQueryApplicationService>(),
             deliveryRegistration,
-            logger ?? NullLogger<AevatarInvocationDispatcher>.Instance);
+            logger ?? NullLogger<AevatarInvocationDispatcher>.Instance,
+            channelAgentKeyReadinessPort: readinessPort);
+    }
 
     private static ChatActivity BuildInboundActivity(string registrationId) =>
         new()

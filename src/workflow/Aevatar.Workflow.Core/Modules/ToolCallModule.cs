@@ -1313,7 +1313,19 @@ public sealed partial class ToolCallModule :
         ToolApprovalGrant? approvalGrant = null,
         WorkflowCapabilityInvocationAdmission? admission = null)
     {
+        var usesChannelAgentKey =
+            WorkflowRunExecutionContextStateAccess.TryGetDurableCallerCredential(
+                ctx,
+                out var durableCredential) &&
+            durableCredential.DurableCallerCredential?.SourceKind ==
+            DurableCallerCredentialSourceKind.ChannelRegistration;
         var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
+        if (usesChannelAgentKey && !credential.Found)
+        {
+            throw new InvalidOperationException(
+                "The channel bot Agent Key is unavailable for workflow tool execution.");
+        }
+
         var callerCredential = credential.Found
             ? await WorkflowCallerAccessTokenResolver.ResolveAsync(
                 credential.Credential,
@@ -1343,7 +1355,7 @@ public sealed partial class ToolCallModule :
             IdempotencyKey: request.IdempotencyKey ?? string.Empty,
             ScheduleId: ctx.ScheduleId ?? string.Empty,
             InvocationAdmission: admission,
-            LlmControl: GetLlmControl(ctx),
+            LlmControl: GetLlmControl(ctx, suppressSenderNyxIdAccessToken: usesChannelAgentKey),
             IssuedAtUnixMs: issuedAtUnixMs,
             UnattendedInvocationPermit: unattendedPermit);
     }
@@ -1403,10 +1415,13 @@ public sealed partial class ToolCallModule :
         admission.Capability.NyxIdUserRequest.ExecutionPolicy is { } policy &&
         policy.Risk == NyxIdOperationRisk.Write;
 
-    private static WorkflowLlmControlContext? GetLlmControl(IWorkflowExecutionContext ctx)
+    private static WorkflowLlmControlContext? GetLlmControl(
+        IWorkflowExecutionContext ctx,
+        bool suppressSenderNyxIdAccessToken)
     {
         var hasLlm = WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm);
-        var senderToken = ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor
+        var senderToken = !suppressSenderNyxIdAccessToken &&
+                          ctx is IWorkflowExecutionRuntimeContextAccessor runtimeAccessor
             ? Normalize(runtimeAccessor.RuntimeContext.SenderNyxIdAccessToken)
             : null;
         if (!hasLlm && senderToken is null)

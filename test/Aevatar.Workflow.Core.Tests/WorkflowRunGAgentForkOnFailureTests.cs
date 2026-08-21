@@ -770,10 +770,14 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             ScopeId = "scope-1",
         }));
 
-        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+        var started = CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
             .Should()
             .ContainSingle()
-            .Which.RunId.Should().Be(runId);
+            .Subject;
+        started.RunId.Should().Be(runId);
+        started.PendingStartWorkflow.Should().NotBeNull();
+        started.PendingStartWorkflow.RunId.Should().Be(runId);
+        started.PendingStartWorkflow.Input.Should().Be("hello");
         var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
             .Should()
             .ContainSingle()
@@ -784,6 +788,7 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         completed.Error.Should().NotContain("super-secret-token");
         completed.Error.Should().NotContain("Bearer");
         harness.Agent.State.FinalError.Should().Be(completed.Error);
+        harness.Agent.State.PendingStartWorkflow.Should().BeNull();
     }
 
     [Fact]
@@ -799,10 +804,13 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             Input = "direct-input",
         }));
 
-        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+        var started = CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
             .Should()
             .ContainSingle()
-            .Which.Input.Should().Be("direct-input");
+            .Subject;
+        started.Input.Should().Be("direct-input");
+        started.PendingStartWorkflow.Should().NotBeNull();
+        started.PendingStartWorkflow.Input.Should().Be("direct-input");
         var completed = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
             .Should()
             .ContainSingle()
@@ -812,6 +820,7 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         completed.Error.Should().StartWith("start_dispatch_failed: failed during start_dispatch: ");
         completed.Error.Should().NotContain("super-secret-token");
         completed.Error.Should().NotContain("Bearer");
+        harness.Agent.State.PendingStartWorkflow.Should().BeNull();
     }
 
     [Fact]

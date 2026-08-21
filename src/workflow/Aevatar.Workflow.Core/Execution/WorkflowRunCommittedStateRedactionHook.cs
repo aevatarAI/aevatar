@@ -54,6 +54,7 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
         {
             var startedEvent = context.Published.StateEvent.EventData.Unpack<WorkflowRunExecutionStartedEvent>();
             RedactExecutionContextDelta(startedEvent.ExecutionContextDelta);
+            startedEvent.PendingStartWorkflow = null;
             context.Published.StateEvent.EventData = Any.Pack(startedEvent);
         }
 
@@ -68,6 +69,7 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
         state.ExecutionContext = WorkflowRunExecutionContextStateAccess.RedactedClone(state.ExecutionContext);
         if (state.Initiator != null)
             state.Initiator.BindingId = string.Empty;
+        state.PendingStartWorkflow = null;
         RedactSecureInputExecutionState(state);
         RedactConnectorCallExecutionState(state);
         RedactToolCallExecutionState(state);

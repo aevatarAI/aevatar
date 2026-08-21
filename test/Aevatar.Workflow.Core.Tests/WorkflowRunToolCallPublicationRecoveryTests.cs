@@ -29,6 +29,72 @@ namespace Aevatar.Workflow.Core.Tests;
 public sealed class WorkflowRunToolCallPublicationRecoveryTests
 {
     [Fact]
+    public async Task Activation_WhenStartIntentWasCommittedBeforeSelfDispatch_ShouldRepublishUntilKernelCheckpoint()
+    {
+        const string actorId = "run-start-outbox-recovery";
+        var store = new InMemoryEventStore();
+        var seed = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out _);
+        await seed.ActivateAsync();
+        await BindToolWorkflowAsync(seed, actorId);
+        var start = new StartWorkflowEvent
+        {
+            RunId = actorId,
+            WorkflowName = "tool_recovery",
+            Input = "recover-me",
+            BindingGeneration = seed.State.BindingGeneration,
+            ValueRepresentation = WorkflowExecutionValueRepresentation.Legacy,
+        };
+        await PersistForTestAsync(seed, new WorkflowRunExecutionStartedEvent
+        {
+            RunId = actorId,
+            WorkflowName = start.WorkflowName,
+            Input = start.Input,
+            StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            PendingStartWorkflow = start.Clone(),
+        });
+
+        seed.State.PendingStartWorkflow.Should().NotBeNull();
+
+        var recovered = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out var recoveryPublisher);
+        await recovered.ActivateAsync();
+
+        var republished = recoveryPublisher.Published
+            .Where(static publication => publication.Audience == TopologyAudience.Self)
+            .Select(static publication => publication.Event)
+            .OfType<StartWorkflowEvent>()
+            .Should().ContainSingle().Subject;
+        republished.ToByteString().Should().Equal(start.ToByteString());
+
+        await recovered.HandleEventAsync(EnvelopeFrom(actorId, republished));
+
+        recovered.State.PendingStartWorkflow.Should().BeNull();
+        recovered.State.ExecutionStates.Should().ContainKey(WorkflowExecutionKernel.ModuleStateKey);
+
+        var afterCheckpoint = CreateAgent(
+            actorId,
+            store,
+            new RecordingCallbackScheduler(),
+            out _,
+            out var afterCheckpointPublisher);
+        await afterCheckpoint.ActivateAsync();
+
+        afterCheckpointPublisher.Published
+            .Select(static publication => publication.Event)
+            .OfType<StartWorkflowEvent>()
+            .Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PendingAttemptCommit_WhenPublicationHookFails_ShouldRecoverOriginalPersistenceFactOnReactivation()
     {
         const string actorId = "run-tool-attempt-fact-recovery";

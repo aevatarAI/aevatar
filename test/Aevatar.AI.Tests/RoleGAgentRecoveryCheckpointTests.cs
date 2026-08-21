@@ -796,6 +796,70 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         executionPort.Requests.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ActorRecovery_WhenChannelAgentKeyIsSealed_ShouldResolveAgentKeyWithoutUserBearer()
+    {
+        const string agentKey = "channel-agent-key-primary";
+        var vault = CreateVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            "scope-channel",
+            "key-channel",
+            agentKey,
+            "channel Agent Key recovery",
+            Now.AddHours(24)));
+        var durableReference = new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = "key-channel",
+            SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+            SecretReference = stored.Reference.Clone(),
+        };
+        var tool = new TestTool("channel-agent-key-tool", AgentToolReplayPolicy.ReadOnlyRetryable);
+        var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"ok\":true}"));
+        var provider = new CountingProviderFactory("channel Agent Key recovery completed");
+        var fixture = await CreateFixtureAsync(
+            "role-channel-agent-key-recovery",
+            vault: vault,
+            tool: tool,
+            executionPort: executionPort,
+            providerFactory: provider);
+        var context = ToolContext(fixture.ActorId, "session-a") with
+        {
+            Credentials = new AgentToolCredentials(
+                agentKey,
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+        };
+        await StartCredentialSessionAsync(fixture, "session-a", context, durableReference);
+        await fixture.Agent.PrepareBatchAsync(new ChatToolBatchIntent(
+            "session-a",
+            0,
+            [new ChatToolOperationIntent(
+                ToolCall("call-a", tool.Name, "{}"),
+                context,
+                AgentToolReplayPolicy.ReadOnlyRetryable,
+                ToolPresentationDescriptors.Generic(tool.Name, tool.Description))]));
+
+        await fixture.Agent.HandleChatRecoveryContinuationRequestedAsync(new RoleChatRecoveryContinuationRequested
+        {
+            SessionId = "session-a",
+            ExpectedCheckpointGeneration =
+                fixture.Agent.State.Sessions["session-a"].RecoveryCheckpoint.Generation,
+        });
+
+        var request = executionPort.Requests.Should().ContainSingle().Which;
+        request.ExecutionContext.Credentials.NyxIdAccessToken.Should().Be(agentKey);
+        request.ExecutionContext.Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+        request.ExecutionContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        fixture.Agent.State.Sessions["session-a"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+    }
+
     [Theory]
     [InlineData("other-actor", "session-a", "operation-a", false)]
     [InlineData("actor-a", "other-session", "operation-a", false)]

@@ -87,6 +87,37 @@ public sealed class WorkflowCallerAccessTokenResolverTests
         provider.IssueCount.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData("nyxid_ag_channel_agent_key")]
+    [InlineData("")]
+    public async Task ResolveAsync_WithChannelAgentKey_ShouldNeverIssueUserToken(string agentKey)
+    {
+        var provider = new RecordingAccessTokenProvider();
+        var credential = new WorkflowCallerCredential
+        {
+            BearerToken = agentKey,
+            DurableCallerCredential = new DurableCallerCredentialRef
+            {
+                Ref = "sec-channel-agent-key",
+                Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                OwnerScopeKey = "scope-channel",
+                SubjectId = "agent-key-channel",
+                SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+            },
+            NyxIdAuthority = CreateAuthority(),
+            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+        };
+
+        var resolved = await WorkflowCallerAccessTokenResolver.ResolveAsync(
+            credential,
+            provider,
+            CancellationToken.None);
+
+        resolved.Should().BeSameAs(credential);
+        resolved.BearerToken.Should().Be(agentKey);
+        provider.IssueCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task ResolveAsync_WithBearerOnly_ShouldPreserveBearer()
     {

@@ -441,12 +441,16 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
-        var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
-        intent.CallerCredential = await BuildRoleCallerCredentialAsync(
-            callerCredential,
-            HasUnattendedWebhookAuthorization(ctx),
-            ct);
-        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        if (!WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyChannelAgentKeyOrSenderNyxIdAccessToken(
+                ctx,
+                intent))
+        {
+            var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
+            intent.CallerCredential = await BuildRoleCallerCredentialAsync(
+                callerCredential,
+                HasUnattendedWebhookAuthorization(ctx),
+                ct);
+        }
         CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
@@ -490,6 +494,19 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         if (!resolved.Found)
             return new WorkflowCallerCredential();
 
+        var durable = resolved.Credential.DurableCallerCredential;
+        if (durable?.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration)
+        {
+            // Channel workflows carry only the vault-backed bot Agent Key handle across
+            // the role-actor boundary. The role resolves it locally for every NyxID-backed
+            // tool path; the inbound user's short-lived bearer never enters the workflow.
+            return new WorkflowCallerCredential
+            {
+                DurableCallerCredential = durable.Clone(),
+                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+            };
+        }
+
         if (!hasUnattendedWebhookAuthorization)
         {
             return await WorkflowCallerAccessTokenResolver.ResolveAsync(
@@ -498,7 +515,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 ct);
         }
 
-        var durable = resolved.Credential.DurableCallerCredential;
         if (durable?.SourceKind != DurableCallerCredentialSourceKind.WebhookBinding)
             return new WorkflowCallerCredential();
 

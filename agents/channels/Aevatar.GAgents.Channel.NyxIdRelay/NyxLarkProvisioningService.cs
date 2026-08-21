@@ -300,7 +300,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         {
             var stored = await _secretVault.PutAsync(
                 new StoreSecretRequest(
-                    CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                    CredentialSecretPurposes.ChannelNyxIdAgentKey,
                     scopeId,
                     apiKeyId,
                     fullKey,
@@ -388,7 +388,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             JsonSerializer.Serialize(new
             {
                 name = $"aevatar-lark-relay-{registrationId[..12]}",
-                scopes = "read write",
+                scopes = ChannelNyxIdAgentKeyScopePolicy.ProvisionedScopes,
                 platform = NyxRelayApiKeyPlatform,
                 callback_url = relayCallbackUrl,
             }),

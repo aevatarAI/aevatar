@@ -329,6 +329,12 @@ public class WorkflowRoleGAgent(
     {
         var durable = checkpoint.CallerDurableCredential;
         if (checkpoint.RequiresRuntimeCredential &&
+            durable?.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration)
+        {
+            return await base.TryResolveRecoveryExecutionContextAsync(checkpoint, ct);
+        }
+
+        if (checkpoint.RequiresRuntimeCredential &&
             durable?.SourceKind == DurableCallerCredentialSourceKind.WebhookBinding)
         {
             // A webhook binding owns an exact Agent Key. Never replace it with
@@ -385,8 +391,9 @@ public class WorkflowRoleGAgent(
         AgentToolExecutionContext context,
         CancellationToken ct)
     {
-        if (request.CallerDurableCredential?.SourceKind !=
-            DurableCallerCredentialSourceKind.WebhookBinding)
+        if (request.CallerDurableCredential?.SourceKind is not (
+                DurableCallerCredentialSourceKind.WebhookBinding or
+                DurableCallerCredentialSourceKind.ChannelRegistration))
         {
             return context;
         }
@@ -399,8 +406,16 @@ public class WorkflowRoleGAgent(
                 RecoveryContext = context.ToRecoveryPayload(),
             },
             ct);
-        return resolved ?? throw new InvalidOperationException(
-            "Workflow webhook caller credential is unavailable or no longer matches its binding descriptor.");
+        if (resolved == null)
+        {
+            throw new InvalidOperationException(
+                "Workflow durable caller credential is unavailable or no longer matches its exact vault descriptor.");
+        }
+
+        return request.CallerDurableCredential.SourceKind ==
+               DurableCallerCredentialSourceKind.ChannelRegistration
+            ? resolved with { CredentialSource = AgentToolCredentialSource.ChannelRegistration }
+            : resolved;
     }
 
     protected override async Task<IAgentTool?> ResolveRecoveryToolAsync(
@@ -917,6 +932,26 @@ public class WorkflowRoleGAgent(
         AgentToolExecutionContext context,
         CancellationToken ct)
     {
+        var durable = context.DurableNyxIdCredential;
+        if (durable?.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration)
+        {
+            var resolved = await base.TryResolveRecoveryExecutionContextAsync(
+                new RoleChatRecoveryCheckpoint
+                {
+                    RequiresRuntimeCredential = true,
+                    CallerDurableCredential = durable.Clone(),
+                    RecoveryContext = context.ToRecoveryPayload(),
+                },
+                ct);
+            if (resolved == null)
+            {
+                throw new InvalidOperationException(
+                    "The channel bot Agent Key is unavailable or no longer matches its exact vault descriptor.");
+            }
+
+            return resolved with { CredentialSource = AgentToolCredentialSource.ChannelRegistration };
+        }
+
         var authority = context.NyxIdAuthority;
         if (!authority.IsComplete || string.IsNullOrWhiteSpace(authority.Scope))
             return context;

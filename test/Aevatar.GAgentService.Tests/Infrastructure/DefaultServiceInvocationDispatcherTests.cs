@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
@@ -786,6 +787,19 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 ConnectorHttpAuthorization = "Bearer delegation-alpha",
                 CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
                 CallerSourceReadableNyxIdBearerToken = "source-alpha",
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    NyxIdAuthority = new AgentToolNyxIdAuthorityContextPayload
+                    {
+                        Platform = "lark",
+                        Tenant = "tenant-alpha",
+                        ExternalUserId = "external-user-alpha",
+                    },
+                    SenderBinding = new AgentToolSenderBindingContextPayload
+                    {
+                        BindingId = "binding-alpha",
+                    },
+                },
                 LlmControl = new LLMControlContextPayload
                 {
                     SenderNyxIdAccessToken = "llm-sender-alpha",
@@ -798,7 +812,97 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowRequest.CallerCredential.BearerToken.Should().Be("delegation-alpha");
         workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
         workflowRequest.CallerCredential.SourceReadableUserBearerToken.Should().Be("source-alpha");
+        workflowRequest.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
+            new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "external-user-alpha",
+                Scope = "proxy",
+                BindingId = "binding-alpha",
+            });
         workflowRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("llm-sender-alpha");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapTrustedChannelAgentKeyToWorkflowCallerCredential()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort(),
+            new AcceptingArtifactCompatibilityPreflight());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+            {
+                ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+        var descriptor = new SecretReference
+        {
+            Ref = "sec_channel_agent_key",
+            Purpose = CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            OwnerScopeKey = "scope-channel",
+            Fingerprint = "fingerprint-channel",
+            Version = 1,
+            CreatedAtUnixMs = 1_700_000_000_000,
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-channel-agent-key",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                CallerDurableCredential = new DurableCallerCredentialRef
+                {
+                    Ref = descriptor.Ref,
+                    Purpose = descriptor.Purpose,
+                    OwnerScopeKey = descriptor.OwnerScopeKey,
+                    SubjectId = "key-channel",
+                    SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+                    SecretReference = descriptor.Clone(),
+                },
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration("registration-channel"),
+                    Channel = new AgentToolChannelContextPayload
+                    {
+                        RegistrationScopeId = "scope-channel",
+                        BotRegistrationId = "registration-channel",
+                        WorkflowResultDeliveryCredential = new ChannelWorkflowResultDeliveryCredential
+                        {
+                            SecretReference = descriptor.Clone(),
+                            SubjectId = "key-channel",
+                        },
+                    },
+                },
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().BeEmpty();
+        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        workflowRequest.CallerCredential.NyxIdAuthority.Should().BeNull();
+        workflowRequest.CallerCredential.DurableCallerCredential.Should().NotBeNull();
+        workflowRequest.CallerCredential.DurableCallerCredential.Ref.Should().Be(descriptor.Ref);
+        workflowRequest.CallerCredential.DurableCallerCredential.SourceKind.Should().Be(
+            DurableCallerCredentialSourceKind.ChannelRegistration);
+        workflowRequest.CallerCredential.DurableCallerCredential.SecretReference.Should().Be(descriptor);
     }
 
     [Fact]
@@ -845,6 +949,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowRequest.CallerCredential.BearerToken.Should().Be("delegation-only");
         workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
         workflowRequest.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
+        workflowRequest.CallerCredential.NyxIdAuthority.Should().BeNull();
     }
 
     [Fact]

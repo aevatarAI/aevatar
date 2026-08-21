@@ -1608,6 +1608,56 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
+    public async Task ToolCallModule_WithChannelAgentKey_ShouldNeverRefreshOrForwardUserToken()
+    {
+        const string agentKey = "nyxid_ag_channel_tool_key";
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-channel",
+            "agent-key-channel",
+            agentKey,
+            "channel-tool-test"));
+        var tool = new CapturingWorkflowTool("nyxid_tool");
+        var tokenProvider = new RotatingCallerAccessTokenProvider();
+        var module = CreateModule(tool, tokenProvider);
+        var ctx = new RecordingWorkflowContext
+        {
+            SecretVault = vault,
+        };
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            DurableCallerCredential = new DurableCallerCredentialRef
+            {
+                Ref = stored.Reference.Ref,
+                Purpose = stored.Reference.Purpose,
+                OwnerScopeKey = stored.Reference.OwnerScopeKey,
+                SubjectId = "agent-key-channel",
+                SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+                SecretReference = stored.Reference.Clone(),
+            },
+            NyxIdAuthority = CreateCallerAuthority(),
+            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+        };
+        ctx.ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
+        {
+            ModelOverride = "channel-agent-model",
+        };
+        ctx.RuntimeContext.ApplySenderNyxIdAccessToken("short-lived-user-token");
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "channel-agent-key-tool");
+
+        tool.LastRequest.Should().NotBeNull();
+        tool.LastRequest!.CallerCredential.BearerToken.Should().Be(agentKey);
+        tool.LastRequest.CallerCredential.DurableCallerCredential.Should().NotBeNull();
+        tool.LastRequest.CallerCredential.DurableCallerCredential.SourceKind.Should()
+            .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
+        tool.LastRequest.LlmControl.Should().NotBeNull();
+        tool.LastRequest.LlmControl!.SenderNyxIdAccessToken.Should().BeEmpty();
+        tokenProvider.Authorities.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ToolCallModule_ShouldPassCurrentStepInputFileRefsToDirectTool()
     {
         var tool = new CapturingWorkflowTool("document_extract");
@@ -5036,6 +5086,7 @@ public sealed class ToolCallModuleContextTests
         : IWorkflowExecutionContext,
           IWorkflowExecutionRuntimeContextAccessor,
           IWorkflowExecutionStateHost,
+          ISecretVaultAccessor,
           IRuntimeSecretStoreAccessor
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
@@ -5064,6 +5115,7 @@ public sealed class ToolCallModuleContextTests
         public ILogger Logger { get; init; } = NullLogger.Instance;
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
+        public ISecretVault? SecretVault { get; init; }
         public IRuntimeSecretStore? RuntimeSecretStore { get; init; } = new InMemoryRuntimeSecretStore();
         public DateTimeOffset? UtcNowOverride { get; set; }
         public TimeProvider Clock { get; init; } = TimeProvider.System;

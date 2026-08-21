@@ -23,7 +23,8 @@ public sealed class AgentToolExecutionContextPayloadContractTests
             .Should()
             .Contain((12, "credential_source"))
             .And.Contain((13, "schedule"))
-            .And.Contain((17, "chat"));
+            .And.Contain((17, "chat"))
+            .And.Contain((20, "durable_nyx_id_credential"));
 
         AgentToolScheduleContextPayload.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))

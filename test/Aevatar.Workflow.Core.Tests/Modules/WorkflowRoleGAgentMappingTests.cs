@@ -214,6 +214,50 @@ public sealed class WorkflowRoleGAgentMappingTests
     }
 
     [Fact]
+    public async Task WorkflowRoleGAgent_ChannelApprovalContinuation_ShouldResolveAgentKeyInsteadOfUserToken()
+    {
+        const string agentKey = "nyxid_ag_channel_approval_key";
+        var vault = new InMemorySecretVault();
+        var durable = await StoreChannelAgentKeyAsync(vault, agentKey);
+        var provider = new RecordingLlmProvider();
+        var publisher = new RecordingEventPublisher();
+        var (agent, _) = CreateAgent(provider, publisher, secretVault: vault);
+        var context = AgentToolExecutionContext.Empty with
+        {
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+            DurableNyxIdCredential = durable.Clone(),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-alpha",
+                "user-alpha",
+                "proxy"),
+        };
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-channel-approval",
+            Prompt = "continue after approval",
+            ToolContext = context.ToPayload(),
+            WorkflowLlmToolApprovalContinuation = new WorkflowLlmToolApprovalContinuation
+            {
+                RunId = "run-channel-approval",
+                StepId = "reply",
+                SessionId = "session-channel-approval",
+            },
+        });
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.ToolContext.Should().NotBeNull();
+        provider.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be(agentKey);
+        provider.LastRequest.ToolContext.Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+        provider.LastRequest.ToolContext.CredentialSource.Should()
+            .Be(AgentToolCredentialSource.ChannelRegistration);
+        provider.LastRequest.LlmControl.Should().NotBeNull();
+        provider.LastRequest.LlmControl!.NyxIdAccessToken.Should().Be(agentKey);
+    }
+
+    [Fact]
     public async Task WorkflowRoleGAgent_WhenToolReceiptCarriesManagedHandoff_ShouldPublishHandoffCompletion()
     {
         var provider = new RecordingLlmProvider
@@ -606,6 +650,27 @@ public sealed class WorkflowRoleGAgentMappingTests
             OwnerScopeKey = stored.Reference.OwnerScopeKey,
             SubjectId = "owner-alpha",
             SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+            SecretReference = stored.Reference.Clone(),
+        };
+    }
+
+    private static async Task<DurableCallerCredentialRef> StoreChannelAgentKeyAsync(
+        ISecretVault vault,
+        string agentKey)
+    {
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-channel-alpha",
+            "channel-agent-alpha",
+            agentKey,
+            "test-channel-agent-key"));
+        return new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = "channel-agent-alpha",
+            SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
             SecretReference = stored.Reference.Clone(),
         };
     }

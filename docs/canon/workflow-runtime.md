@@ -65,7 +65,7 @@ owner: eanzhao
    - 一次 run 一个 actor
   - 按 `roles` 创建 run-scoped role actor 树；`agent_kind` 由 Foundation runtime 解析，省略时默认 `workflow.role-agent`
    - 通过依赖推导（`IWorkflowModuleDependencyExpander`）确定所需模块，经 `WorkflowModuleFactory` 创建并安装
-   - 收到 `ChatRequestEvent` envelope 后发布 `StartWorkflowEvent`
+   - 收到 `ChatRequestEvent` envelope 后先把 exact `StartWorkflowEvent` 作为 `WorkflowRunExecutionStartedEvent.pending_start_workflow` 同原子提交，再 self publish；首次 kernel checkpoint 清除该 intent，activation 与 committed-publication recovery 会补发未完成启动
    - fork/resume-from-step seed 只走 request-level `WorkflowChatRequestEvent.fork_seed -> StartWorkflowEvent.fork_seed`；run bind 只表达 definition/run binding，不携带 seed。
    - run lineage 是 `WorkflowRunGAgent` owned committed fact，不从 route、actor id、graph/topology、workflow name 或 ID 前缀推断。`WorkflowRunLineage` 分离 retry/fork 与 `workflow_call` parent/child 关系，并始终使用可路由 public `runId`；actor address 只作为可选寻址信息保留。legacy 或未携带 lineage 的 run 必须显式返回 unavailable/legacy-unavailable。
    - 由 `WorkflowExecutionKernel` 推进 `StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`
@@ -507,6 +507,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
   │
   ├── WorkflowRunGAgent 收到 `ChatRequestEvent` envelope
   │     ├── EnsureAgentTreeAsync: 按 roles 创建子 RoleGAgent
+  │     ├── 原子提交 WorkflowRunExecutionStartedEvent + pending_start_workflow
   │     └── 发布 StartWorkflowEvent (TopologyAudience.Self)
   │
   ├── WorkflowExecutionKernel 收到 StartWorkflowEvent
@@ -532,6 +533,8 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
 ```
 
 关键点：**流程控制由模块完成，不写死在单个 Agent 的方法里。**
+
+run 启动也使用 actor-owned durable outbox。`WorkflowRunGAgent` 在状态进入 `running` 时，把待发布的完整强类型 `StartWorkflowEvent` 与 `WorkflowRunExecutionStartedEvent` 一次提交；只有 `WorkflowExecutionKernel` 提交第一个 `WorkflowExecutionStateUpsertedEvent` checkpoint 后才清除 `pending_start_workflow`。若进程在“run-start 已提交、self publish 尚未完成”或“self message 已发布、kernel 尚未 checkpoint”期间退出，activation 与 committed-publication recovery 会重发同一个 intent；kernel 对同 run 的 top-level start 幂等吸收。该内部 intent 在 committed projection hook 中清除，不扩散到 current-state readmodel。终态 reducer 也会清除它，禁止 terminal run 被恢复性启动重新打开。
 
 ### Saga 补偿生命周期
 

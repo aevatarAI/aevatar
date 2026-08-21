@@ -2071,7 +2071,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             reference is null ||
             reference.SourceKind is not (
                 DurableCallerCredentialSourceKind.ScheduledDispatch or
-                DurableCallerCredentialSourceKind.WebhookBinding) ||
+                DurableCallerCredentialSourceKind.WebhookBinding or
+                DurableCallerCredentialSourceKind.ChannelRegistration) ||
             string.IsNullOrWhiteSpace(reference.Ref) ||
             string.IsNullOrWhiteSpace(reference.Purpose) ||
             string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
@@ -2141,6 +2142,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return string.Equals(
                        reference.Purpose,
                        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                       StringComparison.Ordinal) &&
+                   reference.SecretReference is { } descriptor &&
+                   !string.IsNullOrWhiteSpace(descriptor.Ref);
+        }
+
+        if (reference.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration)
+        {
+            return string.Equals(
+                       reference.Purpose,
+                       CredentialSecretPurposes.ChannelNyxIdAgentKey,
                        StringComparison.Ordinal) &&
                    reference.SecretReference is { } descriptor &&
                    !string.IsNullOrWhiteSpace(descriptor.Ref);
