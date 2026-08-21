@@ -12,6 +12,8 @@ and
 [`user paths`](../../superpowers/specs/2026-08-04-workflow-activity-vnext-user-paths.md),
 plus the
 [`published-workflow schedule supplement`](../../superpowers/specs/2026-08-11-workflow-schedule-design.md)
+and the
+[`Schedule management and History specification`](../../superpowers/specs/2026-08-21-workflow-schedule-history-design.md)
 when Schedule is in scope.
 
 Use the sources in this order:
@@ -25,12 +27,13 @@ Use the sources in this order:
    published-workflow schedule supplement are normative whenever a Schedule
    entry, panel, or resource is changed. They define Schedule as an exact child
    of `scopeId + workflowId`, backed by the Workflow-scoped Schedule API, not a
-   Team member automation, graph node, draft property, Run property, or
-   Activity surface.
+   Team member automation, graph node, draft property, or Run property.
+   Schedule History owns bounded attempts while Activity remains the owner of
+   actual Runs.
 4. The user-path specification is the normative end-to-end journey, decision,
    recovery, and completion-evidence contract.
 5. The PNG files are viewport references for individual states. Schedule review
-   uses six standalone 1440x900 scene PNGs; there is no combined overview.
+   uses seven standalone 1440x900 scene PNGs; there is no combined overview.
 6. `prototype.html` is an interaction demonstration only;
    `prototype-schedule.html` opens its published Workflow Schedule state
    directly.
@@ -120,10 +123,13 @@ Contract specification:
 Schedule design, when Schedule is in scope:
   aevatar-workflow-schedule-design.excalidraw
 Schedule design SHA-256:
-  84b05e328f28173b6e375653af800cd393a835b377b23b588166e7afa733c989
+  10f956173c9ae30dd641151fd36d1ac613c7f699dd07b6a9c56fa3a4edaf13ba
 Schedule supplement, when Schedule is in scope:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-11-workflow-schedule-design.md
+Schedule management and History supplement, when Schedule is in scope:
+  apps/aevatar-console-web/docs/superpowers/specs/
+  2026-08-21-workflow-schedule-history-design.md
 User paths:
   apps/aevatar-console-web/docs/superpowers/specs/
   2026-08-04-workflow-activity-vnext-user-paths.md
@@ -147,18 +153,19 @@ failures rather than undocumented implementation choices.
 ## 文件
 
 - `aevatar-workflow-activity-vnext.excalidraw`：合并后的 Excalidraw，包含 Workflows、Activity 与 Settings，共 17 个 frame。
-- `aevatar-workflow-schedule-design.excalidraw`：根据用户提供的 Schedule wireframe 重绘的独立 Excalidraw，只包含 Workflows 快速创建、Workflow 编辑器配置、创建前复核、创建等待、详情与修改，共 6 个 frame；不包含 Activity 页面。
+- `aevatar-workflow-schedule-design.excalidraw`：根据用户提供的 Schedule wireframe 重绘的独立 Excalidraw，只包含 Workflows 管理、Workflow 编辑器配置、创建前复核、创建等待、Overview、History 与修改，共 7 个 frame；不包含 Activity 页面。
 - `aevatar-workflow-schedule-design.gen.py`：上述 Schedule 画板的确定性生成器。
 - `render-schedule-png.py`：从 Schedule Excalidraw 确定性地将每个 frame 渲染为独立 1440×900 PNG 的 Pillow 脚本。
 - `aevatar-workflow-activity-vnext.gen.py`：画板生成器，内含画框边界、ID 唯一性和废弃术语检查。
-- `verify-baseline.py`：仓库内校验器，验证主画板和 Schedule 画板 SHA-256、两个生成器的确定性输出、17 个主画板 frame、6 个 Schedule frame、6 张独立 PNG，并拒绝旧的拼板总览图。
+- `verify-baseline.py`：仓库内校验器，验证主画板和 Schedule 画板 SHA-256、两个生成器的确定性输出、17 个主画板 frame、7 个 Schedule frame、7 张独立 PNG，并拒绝旧的拼板总览图。
 - `prototype.html`：可直接在浏览器打开的交互原型，不需要安装依赖或启动服务。
 - `prototype-schedule.html`：打开后直接进入已发布 Workflow 的新建 Schedule 配置，不需要先从 Draft 列表寻找入口。
-- `schedule-workflows-list-modal.png`：从 Workflows 列表打开的 Schedule 管理 modal，展示已创建的 Schedule 及 Edit/Pause/Run now/Delete 操作。
+- `schedule-workflows-list-modal.png`：从 Workflows 列表打开的 Schedule 管理 modal；列表行只负责选择 Schedule，不重复堆放生命周期操作。
 - `schedule-workflow-editor-panel.png`：Workflow 编辑器右侧的新建 Schedule panel。
 - `schedule-review.png`：确认 Workflow、名称、周期、时区、可选运行输入、创建后启用状态与五次 next-fire 预览的创建复核页。
 - `schedule-creation-pending.png`：创建命令 `202 Accepted` 后回到列表并显示 Toast 的页面。
-- `schedule-detail.png`：Workflow 内的 Schedule 详情与生命周期动作。
+- `schedule-detail.png`：Workflow 内默认打开的 Schedule Overview，展示人类可读规则、当前状态、关键统计和分层动作。
+- `schedule-history.png`：Workflow 内的 Schedule History，展示有界 recent attempts、失败技术详情折叠和去 Activity 查看相关 Runs 的入口。
 - `schedule-edit.png`：Workflow 内修改重复规则、时间、时区和可选运行输入的页面。
 - `prototype-workflows.png`：Workflows 桌面视图截图。
 - `prototype-activity.png`：Activity 桌面视图截图。
@@ -236,13 +243,14 @@ Production Data Truth Rule，也不覆盖设计规范中的
 
 Schedule 相关变更请另外导入 `aevatar-workflow-schedule-design.excalidraw`，按下面顺序检查：
 
-1. `01 · Workflows — schedule management modal`：在 Workflow 列表点击已发布行的 `Schedules`，打开该 Workflow 的管理弹窗；已创建的 Schedule 在这里可查看、编辑、暂停、立即运行或删除，`New schedule` 进入创建流程。
+1. `01 · Workflows — schedule management modal`：在 Workflow 列表点击已发布行的 `Schedules`，打开该 Workflow 的管理弹窗；点击现有 Schedule 会在同一弹窗打开 Overview，`New schedule` 进入创建流程。
 2. `02 · Workflow — schedule setup panel`：在画布旁用 `Repeat`、时间和时区构造重复规则；默认只显示人类可读摘要，`write it as cron instead` 才打开 raw cron，Review 时显示 next-fire 预览。
 3. `03 · Schedule — review before creation`：确认 Workflow、Schedule name、周期、时区、可选运行输入、enabled 与五次 next-fire 预览，然后直接创建。
 4. `04 · Schedule — creation pending`：创建命令返回 `202 Accepted` 后立即回到列表并显示 Toast；后台继续刷新当前 Workflow 的 Schedule list/detail，不提前声称 Active 或 next fire 已存在。
-5. `05 · Workflow — schedule detail`：在 Workflow canvas 旁查看 API 返回的 enabled、next/last fire、计数、最近 fires 与生命周期动作。
-6. `06 · Workflow — change schedule`：在 Workflow panel 修改周期和运行输入，并在 `PUT` 中保留已读取的 enabled 状态。
-上述 6 个 frame 分别渲染为独立 1440×900 PNG；不再生成九宫格或总览拼图。
+5. `05 · Workflow — schedule overview`：默认页签，在 Workflow canvas 旁查看人类可读周期、enabled、next/last attempt 与计数；Run now 和 Edit 直接显示，Pause/Enable 与 Delete 收进 More。
+6. `06 · Workflow — schedule history`：紧凑展示 `recentFires` 对应的 recent attempts；原始错误只在 Technical details 中出现，相关真实 Runs 通过 Workflow + Schedule 筛选交给 Activity。
+7. `07 · Workflow — change schedule`：在 Workflow panel 修改周期和运行输入，并在 `PUT` 中保留已读取的 enabled 状态；Cancel 返回 Overview。
+上述 7 个 frame 分别渲染为独立 1440×900 PNG；不再生成九宫格或总览拼图。
 
 重点不是逐个查看控件，而是沿着这条主路径检查语义是否连贯：
 
@@ -266,7 +274,7 @@ Workflows
 1. 打开 `prototype.html`，默认进入 Workflows；点击已发布 Workflow 行的 `Schedules` 会打开该 Workflow 的 Schedule 管理弹窗。列表内的 `New schedule` 进入配置流程，已有 Schedule 可进入编辑和生命周期操作。只评审编辑器 Schedule panel 时可直接打开 `prototype-schedule.html`。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
 3. 在画布点击节点，右侧打开 Node configuration；`Add node` 从左侧打开 Node library；`Edit YAML` 从右侧打开 YAML 面板。
-4. 打开一个已发布 Workflow，点击编辑器里的 `Schedules` 检查右侧 Workflow schedules 面板，再点击 `New schedule` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 保持禁用并显示 publish 原因。Workflows 管理 modal 与编辑器 panel 共享 `list -> configure -> previewing -> review -> create -> toast -> list`：先调用 `/api/scopes/{scopeId}/workflows/{workflowId}/schedules/preview`，再直接调用 Workflow-scoped create；`202 Accepted` 后关闭创建视图、显示 Toast，并刷新当前 Workflow 的 list/detail，不提前声称 Active 或 next fire 已存在。已有 Schedule 可从管理列表进入编辑、enable/disable、run-now 与 delete，这些操作也只使用相同的 Workflow-scoped resource。Schedule 流程不提供 Activity 跳转或筛选。
+4. 打开一个已发布 Workflow，点击编辑器里的 `Schedules` 检查右侧 Workflow schedules 面板，再点击 `New schedule` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 保持禁用并显示 publish 原因。Workflows 管理 modal 与编辑器 panel 共享 `list -> Overview <-> History -> Edit` 管理模型和 `list -> configure -> previewing -> review -> create -> toast -> list` 创建模型。Overview 不平铺最近 attempts；History 不冒充 Run 历史；点击 `View related runs in Activity` 后，Activity 明确展示 Workflow + Schedule + scheduled origin 筛选。
 5. 在列表或编辑器点击 `Run`，确认修订、输入、连接和外部影响。
 6. 勾选外部影响确认后点击 `Run`。记录会立即写入浏览器 `localStorage`，编辑器显示运行状态。
 7. 打开 Activity，点击任意一行查看详情。

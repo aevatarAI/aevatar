@@ -1,0 +1,351 @@
+# Workflow Schedule Management and History Design Specification
+
+**Status:** Design baseline awaiting product review
+
+**Extends:**
+[Workflow Schedule vNext Design Specification](./2026-08-11-workflow-schedule-design.md)
+
+**Backend authority:** [Issue #3446](https://github.com/aevatarAI/aevatar/issues/3446),
+the Workflow-scoped Schedule facade, and the Schedule detail `recentFires`
+contract on `feature/integrate`.
+
+## Product Decision
+
+An existing Schedule has one management surface with two sibling views:
+
+```text
+Schedule management
+  Overview   configuration and current observed state
+  History    bounded recent Schedule attempts
+```
+
+This surface does not replace Activity. The product owns three related but
+different records:
+
+| Surface | Fact it owns | Source |
+| --- | --- | --- |
+| Schedule Overview | Recurrence configuration and current observed state | Workflow Schedule detail |
+| Schedule History | Bounded recent trigger attempts | Schedule detail `recentFires` |
+| Activity | Actual observed Workflow Runs and Run detail | Activity read model |
+
+A Schedule attempt can fail before a Workflow Run exists. For that reason,
+the UI must call `recentFires` **attempts**, must not promise complete Run
+history, and must not derive a Run URL from actor, command, correlation, or
+idempotency identifiers.
+
+## User Jobs
+
+The management surface supports four explicit jobs without mixing them into
+one long form:
+
+1. Understand whether the Schedule is active and when it will try next.
+2. Inspect or change its recurrence and optional Run input.
+3. Inspect recent Schedule attempts, including failures before Run creation.
+4. Continue to Activity when the user needs the resulting Workflow Runs.
+
+Raw backend diagnostics, accepted-command implementation notes, and resource
+identifiers are not primary user jobs.
+
+## Information Architecture
+
+### Entry points
+
+The same state model is used in both existing containers:
+
+- Workflows catalogue: `Schedules` opens the Workflow's Schedule management
+  modal.
+- Workflow editor: `Schedules` opens the right-side Schedule management panel
+  without hiding the canvas.
+
+Both containers start on the Schedule collection. Selecting a Schedule opens
+its Overview. Neither container navigates through Activity to manage a
+Schedule.
+
+### Schedule collection
+
+Each row shows only the facts needed to choose a Schedule:
+
+- Schedule name;
+- Enabled or Paused status;
+- human-readable recurrence and timezone;
+- next scheduled time, or `No upcoming attempt` when paused or unavailable.
+
+The row is the single selection target. Lifecycle and edit buttons do not
+repeat on every collection row. `New schedule` remains the primary collection
+action.
+
+### Selected Schedule header
+
+The header is stable across Overview, History, and Edit:
+
+```text
+[Back]  Morning digest                         [Close]
+        Weekly Feedback Report
+```
+
+- Back returns to the Schedule collection inside the current container.
+- Close exits the entire Schedule management modal or panel.
+- The Schedule name is the primary title.
+- The owning Workflow name is secondary context.
+- There is no footer-level `Back to schedules` action.
+
+Back and Close are separate controls because they produce different state
+transitions. Their accessible names are `Back to schedules` and
+`Close schedules`.
+
+### Tabs
+
+Overview and History are a two-item tab list immediately below the header.
+Overview is selected every time the user newly selects a Schedule. Tab state
+may persist while that Schedule stays selected, but must not leak to a
+different Schedule.
+
+The tab list supports normal keyboard tab semantics:
+
+- `Tab` focuses the active tab;
+- Left/Right move between tabs;
+- `Home` and `End` select the first and last tab;
+- each tab owns one labelled tab panel.
+
+Edit is not a third tab. It is a temporary mutation mode entered from
+Overview and returns to Overview after Cancel or an observed successful
+update.
+
+## Overview
+
+### Primary content
+
+Overview is read-only and follows this order:
+
+1. Status and recurrence summary.
+2. Next scheduled time.
+3. Timezone.
+4. Last attempt.
+5. Total attempts and failed attempts.
+6. Run input, only when non-empty.
+7. Collapsed Advanced details containing the raw cron expression.
+
+The human-readable recurrence is primary, for example:
+
+```text
+Every weekday at 09:00
+```
+
+The raw value `0 9 * * 1-5` is diagnostic configuration and stays under
+`Advanced details`. Overview does not repeat a large blue Workflow context
+strip or an empty `No prompt` field.
+
+Dates and times use the current application locale and the Schedule timezone.
+They must not use an independent browser-locale formatter that can create a
+mixed-language surface.
+
+### Actions
+
+Overview exposes this hierarchy:
+
+```text
+[Run now]  [Edit schedule]  [More]
+                                Pause / Enable
+                                Delete schedule
+```
+
+- `Run now` is a direct command. Its accepted response is acknowledged by
+  Toast; observed attempt state still comes from Schedule detail.
+- `Edit schedule` enters Edit mode with the observed values.
+- `Pause` or `Enable` is inside More and reflects the observed current state.
+- `Delete schedule` is inside More, visually destructive, and requires a
+  confirmation dialog naming the Schedule.
+
+Pause/Enable and Delete must not have equal visual weight with Run now or Edit
+schedule. Accepted mutations must not optimistically rewrite authoritative
+Schedule state.
+
+### Pending state
+
+When a mutation returns `202 Accepted`, keep the selected Schedule visible,
+disable only conflicting mutations, and show a compact inline pending message
+or Toast. Refresh the exact Workflow-scoped list/detail until the observed
+state changes. Do not show backend implementation narration such as
+`Observed Schedule state only` or `Waiting for the Workflow list to confirm`.
+
+## History
+
+### Meaning
+
+The tab title is `History`; its content heading is `Recent attempts`. It shows
+the bounded `recentFires` returned by the exact Schedule detail endpoint in
+newest-first order.
+
+It is not a lifetime audit log and is not labelled `Runs`, `Run history`, or
+`All history`.
+
+### Row model
+
+History uses one compact table or table-like list. Each attempt exposes:
+
+| UI column | Backend source | Presentation |
+| --- | --- | --- |
+| Scheduled time | `scheduledFireAt` | Application locale in Schedule timezone |
+| Source | `manual` | `Manual` when true; otherwise `Scheduled` |
+| Result | `error` | `Failed` when non-empty; otherwise `Succeeded` |
+| Completed time | `completedAt` | Application locale in Schedule timezone |
+
+A failed row adds one concise message below its main row:
+
+```text
+The scheduled attempt could not start the Workflow.
+```
+
+For a manual attempt, substitute `manual` for `scheduled`. The raw backend
+error is available only through an expandable `Technical details` disclosure
+inside that row.
+
+Technical details may show the returned error text for support and debugging.
+The primary row must not expose:
+
+- service IDs or endpoint IDs;
+- actor IDs;
+- command or correlation IDs;
+- idempotency keys;
+- a guessed Run link;
+- a frontend-invented error category based on raw string matching.
+
+### Activity handoff
+
+The History tab provides one secondary link:
+
+```text
+View related runs in Activity
+```
+
+The link is deliberately about related Runs, not all attempts. It closes the
+Schedule container and opens:
+
+```text
+/scopes/:scopeId/workflow-activity-vnext/activity
+  ?workflowId=:workflowId
+  &schedule=:scheduleId
+  &origin=schedule
+```
+
+Activity owns the visible filter context and Run detail. The target view must
+make the Workflow and Schedule filters understandable to the user rather than
+silently filtering the table. No backend change is required because the
+Activity contract already accepts `workflowId`, `scheduleIds`, and scheduled
+origin filters.
+
+## Edit
+
+Edit uses the existing human recurrence builder and preserves the selected
+Schedule's observed values:
+
+- name;
+- repeat preset plus time, or raw cron mode;
+- timezone;
+- optional Run input;
+- observed enabled state in the full update request.
+
+Raw cron mode and the repeat builder are mutually exclusive. When raw cron is
+selected, Repeat and Time are hidden and `Cron expression` is shown; timezone
+remains visible. Returning to the builder restores the human controls from a
+representable cron value.
+
+`Cancel` discards the draft and returns to Overview. `Save changes` sends the
+full replacement, shows accepted feedback, and returns to Overview while the
+observed detail refreshes. Edit contains no History table or lifecycle action.
+
+## State Model
+
+```mermaid
+stateDiagram-v2
+    [*] --> ScheduleList
+    ScheduleList --> Overview: Select Schedule
+    Overview --> History: Select History tab
+    History --> Overview: Select Overview tab
+    Overview --> Edit: Edit schedule
+    Edit --> Overview: Cancel
+    Edit --> Overview: Save accepted
+    History --> Activity: View related runs
+    Overview --> ScheduleList: Back
+    History --> ScheduleList: Back
+    Edit --> ScheduleList: Back
+    ScheduleList --> [*]: Close
+    Overview --> [*]: Close
+    History --> [*]: Close
+    Edit --> [*]: Close
+```
+
+Using Back from Edit abandons the draft and returns to the collection. If the
+form is dirty, the container uses the product's normal unsaved-change
+confirmation before discarding it.
+
+## Loading, Empty, and Error States
+
+Schedule-detail loading and History loading are explicit states. They do not
+render stale collection summaries as if they were detail data.
+
+| State | Required presentation |
+| --- | --- |
+| Detail loading | Stable skeleton inside the selected-Schedule shell |
+| Detail request error | `Schedule couldn't be loaded` with Retry |
+| History loading | Stable row skeleton under `Recent attempts` |
+| Successful empty History | `No attempts yet` |
+| History request error | `History couldn't be loaded` with Retry |
+| Failed attempt | Normal History row with Failed result and Technical details |
+
+A failed attempt is business data, not a History-request error. Refresh and
+Retry preserve the selected Schedule and active tab.
+
+## Backend Compatibility
+
+The design uses the existing Workflow-facing contract without additions:
+
+```text
+GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules
+GET /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
+PUT /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
+POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:enable
+POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:disable
+POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:run-now
+DELETE /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
+```
+
+The Schedule detail provides configuration, counters, current timestamps, and
+bounded `recentFires`. Activity already supplies the filtered actual-Run
+surface. There is no backend issue comment to add for this design.
+
+## Review Artifacts
+
+The deterministic Schedule source contains seven standalone `1440x900`
+scenes:
+
+1. `schedule-workflows-list-modal.png`
+2. `schedule-workflow-editor-panel.png`
+3. `schedule-review.png`
+4. `schedule-creation-pending.png`
+5. `schedule-detail.png` as the Overview state
+6. `schedule-history.png` as the History state
+7. `schedule-edit.png`
+
+There is no contact sheet and no Schedule-specific Activity frame. Overview
+and History are separate PNGs so each state can be reviewed at readable size.
+
+## Acceptance Criteria
+
+- Selecting a Schedule opens Overview, not an editable form.
+- Overview and History are sibling tabs under one stable selected-Schedule
+  header.
+- Back returns to the collection; Close exits the container.
+- Overview uses a human recurrence and hides raw cron under Advanced details.
+- Empty optional Run input is omitted.
+- Run now and Edit schedule are direct actions; Pause/Enable and Delete live
+  under More.
+- History renders bounded attempts in a compact list and keeps raw failures
+  under Technical details.
+- No attempt fabricates a Run identity or per-Run link.
+- `View related runs in Activity` uses exact Workflow and Schedule filters.
+- Loading, successful empty, request error, and failed-attempt states remain
+  distinct.
+- All timestamps follow the application locale and Schedule timezone.
+- The implementation requires no backend contract change.
+

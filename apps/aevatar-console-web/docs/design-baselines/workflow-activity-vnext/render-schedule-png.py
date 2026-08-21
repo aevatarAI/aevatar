@@ -20,8 +20,9 @@ FRAME_OUTPUTS = (
     ("02 · Workflow — schedule setup panel", "schedule-workflow-editor-panel.png"),
     ("03 · Schedule — review before creation", "schedule-review.png"),
     ("04 · Schedule — creation pending", "schedule-creation-pending.png"),
-    ("05 · Workflow — schedule detail", "schedule-detail.png"),
-    ("06 · Workflow — change schedule", "schedule-edit.png"),
+    ("05 · Workflow — schedule overview", "schedule-detail.png"),
+    ("06 · Workflow — schedule history", "schedule-history.png"),
+    ("07 · Workflow — change schedule", "schedule-edit.png"),
 )
 
 SANS_FONT = Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf")

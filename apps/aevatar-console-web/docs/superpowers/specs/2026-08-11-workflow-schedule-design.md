@@ -5,6 +5,11 @@
 **Backend authority:** [Issue #3446](https://github.com/aevatarAI/aevatar/issues/3446)
 and the workflow-scoped Schedule facade merged by PR #3451.
 
+**Existing-Schedule management extension:**
+[Workflow Schedule Management and History Design Specification](./2026-08-21-workflow-schedule-history-design.md).
+The extension is normative for Overview, History, edit navigation, action
+hierarchy, and the handoff to filtered Activity.
+
 ## Product Decision
 
 The previous design implied that a Workflow Schedule was a Team member
@@ -25,8 +30,10 @@ flowchart LR
 - Schedule is not a Workflow graph node, Run-dialog mode, global setting, or
   Team member automation.
 - Team Automation remains a separate Team/Member product resource.
-- Activity remains a separate Run history surface. No Activity page or
-  Schedule-to-Activity link belongs in this design supplement.
+- Activity remains the separate owner of actual Run history and Run detail.
+  Schedule History owns only bounded recent attempts and provides a secondary
+  `View related runs in Activity` handoff with exact Workflow and Schedule
+  filters.
 
 ## Identity Boundary
 
@@ -201,18 +208,13 @@ The UI may present only typed response facts, including:
 Low-level service, actor, command, correlation, credential, or Team fields do
 not belong in the primary product UI.
 
-Selecting an existing Schedule opens its read-only detail before editing. The
-detail is the local history surface for that Schedule and must call the exact
-Workflow-scoped detail endpoint. It shows the observed next and last fire,
-total and failed fire counts, and the returned `recentFires` in newest-first
-order. Each recent fire distinguishes scheduled from manual invocation and
-success from failure using its returned timestamps and error. Loading, empty,
-and detail-request failure remain distinct; a failed detail request must not
-fall back to the collection summary or pretend that no fires exist.
-
-`Recent fires` is intentionally a bounded Schedule-detail window, not a claim
-of complete lifetime Activity. It remains inside Schedule management and does
-not fabricate Run links from actor, command, correlation, or idempotency keys.
+Selecting an existing Schedule opens its read-only Overview before editing.
+Overview and History are sibling tabs in one stable management surface.
+Overview owns configuration and observed status; History renders the returned
+`recentFires` as bounded recent attempts in newest-first order. Loading, empty,
+request-failure, and failed-attempt states remain distinct. The focused
+management and History specification linked above defines the exact layout,
+copy, action hierarchy, diagnostics disclosure, and Activity handoff.
 
 ### Edit
 
@@ -267,18 +269,19 @@ an additional comment.
 
 ## Standalone Review Artifacts
 
-The deterministic Schedule source contains exactly six independently useful
+The deterministic Schedule source contains exactly seven independently useful
 `1440x900` scenes:
 
 1. `schedule-workflows-list-modal.png`
 2. `schedule-workflow-editor-panel.png`
 3. `schedule-review.png`
 4. `schedule-creation-pending.png`
-5. `schedule-detail.png`
-6. `schedule-edit.png`
+5. `schedule-detail.png` (Overview)
+6. `schedule-history.png`
+7. `schedule-edit.png`
 
-There is no contact sheet, combined overview, Activity frame, or authorization
-review image.
+There is no contact sheet, combined overview, Schedule-specific Activity
+frame, or authorization review image.
 
 ## Verification Contract
 
@@ -290,7 +293,7 @@ review image.
 - The prototype must key fixtures by exact `scopeId + workflowId`.
 - The prototype must preserve observed `enabled` on update and refresh after
   every accepted mutation.
-- The generator, Excalidraw, renderer, and six PNGs must be deterministic and
+- The generator, Excalidraw, renderer, and seven PNGs must be deterministic and
   source-linked.
 - Focused frontend checks are local; the full suite and build remain delegated
   to GitHub CI.

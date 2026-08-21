@@ -23,12 +23,13 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "9105ffbea6267740428dddfe9f1c253b46565dd183570923e1736b628fd70e80",
-    "schedule-workflow-editor-panel.png": "467bb6de9827b7feb783bbf6d02b90adb4c2f81e4061523c20927e5d87a91368",
-    "schedule-review.png": "4c0ac3d8709ebaebef14546b83697a472c51b6071459e94dd84d49be976a3861",
-    "schedule-creation-pending.png": "c7387a76a6dcbd8d929a9ba603878bc38481d6b9750e12f2cf3f63512180b04b",
-    "schedule-detail.png": "0c78e9690f95fd9e1ab48601abb987d8f523026905b1ae7ac83a896dad76b458",
-    "schedule-edit.png": "2ac828c239f3de1daa4e4a7572e46b6fbf0d4f229cebd89860f2724815b97c14",
+    "schedule-workflows-list-modal.png": "0a8c66b34ce4474242af84b9466604afa194f6d86299a19168bae6accf4d78d9",
+    "schedule-workflow-editor-panel.png": "32131c4b2d94fb09fc514130430f31068ebb14fdc60c003c6504dea486eb0ce3",
+    "schedule-review.png": "c876eade010bf8bab714b9d6db1b32321ef30460a06943e1e0c70eb6122c8784",
+    "schedule-creation-pending.png": "a7c48476d48ff1f64df86ba4f111c928df7438cc947f7a23d96a592e2acc3d73",
+    "schedule-detail.png": "f8bbb253f3297370e4c587c6bc37445b31ebce40f8e63a6e182c43bae90faa3c",
+    "schedule-history.png": "4da899d681e707a9cbaf0b48adf1c88e0d616abbe0793ad4c95648b7f1efcfd5",
+    "schedule-edit.png": "fdef675ed1996c27e7d144fa3f602ef2c5468884b29ef2027a00dc77510baaac",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
@@ -36,7 +37,7 @@ OBSOLETE_SCHEDULE_PNGS = (
     "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "574d7d380e9752bfb02e5dfe847af0a7ebbb9abdc47750383d36c51a5188919e"
+EXPECTED_SCHEDULE_SHA256 = "10f956173c9ae30dd641151fd36d1ac613c7f699dd07b6a9c56fa3a4edaf13ba"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -61,8 +62,9 @@ EXPECTED_SCHEDULE_FRAMES = (
     "02 · Workflow — schedule setup panel",
     "03 · Schedule — review before creation",
     "04 · Schedule — creation pending",
-    "05 · Workflow — schedule detail",
-    "06 · Workflow — change schedule",
+    "05 · Workflow — schedule overview",
+    "06 · Workflow — schedule history",
+    "07 · Workflow — change schedule",
 )
 
 
@@ -256,7 +258,7 @@ def main() -> None:
             f"got      {schedule_frame_names!r}"
         )
     if len(schedule_frame_names) != len(EXPECTED_SCHEDULE_FRAMES):
-        raise SystemExit("schedule board must contain exactly six standalone review scenes")
+        raise SystemExit("schedule board must contain exactly seven standalone review scenes")
 
     schedule_frames_by_name = {
         element["name"]: element["id"]
@@ -272,21 +274,14 @@ def main() -> None:
             if element.get("type") == "text" and element.get("frameId") == frame_id
         )
 
-    for forbidden in (
-        "scheduled runs",
-        "view scheduled runs",
-        "watch activity",
-        "next fire and activity",
-        "activity contains immutable runs",
-        "activity evidence",
-    ):
-        if forbidden in schedule_visible_text_casefolded:
-            raise SystemExit(f"Schedule design still links to Activity: {forbidden}")
-
     quick_modal_text = schedule_frame_text("01 · Workflows — schedule management modal").casefold()
-    for required in ("schedules", "new schedule", "edit", "pause", "run now", "delete"):
+    for required in ("schedules", "new schedule", "open"):
         if required not in quick_modal_text:
             raise SystemExit(f"Workflow catalogue Schedule management modal is missing: {required}")
+    quick_modal_lines = {line.strip() for line in quick_modal_text.splitlines()}
+    for forbidden in ("edit", "pause", "run now", "delete"):
+        if forbidden in quick_modal_lines:
+            raise SystemExit(f"Workflow catalogue repeats selected-Schedule actions in every row: {forbidden}")
     configure_frame_name = "02 · Workflow — schedule setup panel"
     configure_text = schedule_frame_text(configure_frame_name).casefold()
     for required in (
@@ -303,7 +298,7 @@ def main() -> None:
     if "cron expression" in configure_text:
         raise SystemExit(f"{configure_frame_name} exposes raw cron as a default primary field")
 
-    schedule_edit_text = schedule_frame_text("06 · Workflow — change schedule").casefold()
+    schedule_edit_text = schedule_frame_text("07 · Workflow — change schedule").casefold()
     for required in (
         "schedule name",
         "weekly review",
@@ -344,26 +339,57 @@ def main() -> None:
             raise SystemExit(f"Schedule pending frame is missing honest accepted state: {required}")
 
     for workflow_frame_name in (
-        "05 · Workflow — schedule detail",
-        "06 · Workflow — change schedule",
+        "05 · Workflow — schedule overview",
+        "06 · Workflow — schedule history",
+        "07 · Workflow — change schedule",
     ):
         workflow_frame_text = schedule_frame_text(workflow_frame_name).casefold()
         if "workflow canvas remains visible" not in workflow_frame_text:
             raise SystemExit(f"{workflow_frame_name} is not visibly owned by Workflow")
-        if "managed from this workflow" not in workflow_frame_text:
-            raise SystemExit(f"{workflow_frame_name} does not state its Workflow ownership")
+        if "weekly feedback report" not in workflow_frame_text:
+            raise SystemExit(f"{workflow_frame_name} does not identify its owning Workflow")
 
-    schedule_detail_text = schedule_frame_text("05 · Workflow — schedule detail").casefold()
-    for required in ("weekly review", "every monday at 10:00", "asia/shanghai"):
-        if required not in schedule_detail_text:
-            raise SystemExit(f"Workflow Schedule detail does not round-trip selected state: {required}")
-    if "schedule facts are returned by the workflow-scoped api" not in schedule_detail_text:
-        raise SystemExit("Workflow Schedule detail does not identify its typed read source")
-    for required in ("Run now", "Change", "Pause", "Delete"):
-        if required.casefold() not in schedule_detail_text:
-            raise SystemExit(f"Workflow Schedule detail is missing lifecycle action: {required}")
-    if "Review and reauthorize".casefold() in schedule_detail_text:
-        raise SystemExit("Workflow Schedule detail still exposes fictional reauthorization")
+    schedule_overview_text = schedule_frame_text("05 · Workflow — schedule overview").casefold()
+    for required in (
+        "morning digest",
+        "overview",
+        "history",
+        "active",
+        "every weekday at 09:00",
+        "asia/shanghai",
+        "next scheduled",
+        "last attempt",
+        "total attempts",
+        "failed attempts",
+        "summarize new feedback",
+        "advanced details",
+        "run now",
+        "edit schedule",
+        "more",
+    ):
+        if required not in schedule_overview_text:
+            raise SystemExit(f"Workflow Schedule Overview is missing: {required}")
+    for forbidden in ("cron expression", "recent fires", "observed schedule state only"):
+        if forbidden in schedule_overview_text:
+            raise SystemExit(f"Workflow Schedule Overview exposes secondary implementation content: {forbidden}")
+
+    schedule_history_text = schedule_frame_text("06 · Workflow — schedule history").casefold()
+    for required in (
+        "morning digest",
+        "recent attempts",
+        "scheduled",
+        "manual",
+        "succeeded",
+        "failed",
+        "technical details",
+        "the scheduled attempt could not start the workflow",
+        "view related runs in activity",
+    ):
+        if required not in schedule_history_text:
+            raise SystemExit(f"Workflow Schedule History is missing: {required}")
+    for forbidden in ("run id", "actor id", "command id", "correlation id", "idempotency key"):
+        if forbidden in schedule_history_text:
+            raise SystemExit(f"Workflow Schedule History leaks a runtime identifier: {forbidden}")
     if "what will run" in schedule_visible_text_casefolded:
         raise SystemExit("Schedule board still presents the removed collection model")
 
@@ -457,11 +483,11 @@ def main() -> None:
         'id="schedule-edit-time-zone"',
         'id="schedule-edit-cron"',
         'id="schedule-edit-prompt"',
-        'displayName: panel.querySelector("#schedule-edit-name").value.trim()',
-        'cronExpression: panel.querySelector("#schedule-edit-cron").value.trim()',
-        'timezone: panel.querySelector("#schedule-edit-time-zone").value.trim()',
+        'displayName: root.querySelector("#schedule-edit-name").value.trim()',
+        'cronExpression: root.querySelector("#schedule-edit-cron").value.trim()',
+        'timezone: root.querySelector("#schedule-edit-time-zone").value.trim()',
         "enabled: schedule.enabled",
-        'prompt: panel.querySelector("#schedule-edit-prompt").value.trim()',
+        'prompt: root.querySelector("#schedule-edit-prompt").value.trim()',
     ):
         if required not in prototype_text:
             raise SystemExit(f"prototype Schedule edit does not round-trip observed state: {required}")
@@ -494,7 +520,22 @@ def main() -> None:
         "It will appear in Activity when available.",
     ):
         if forbidden in prototype_text:
-            raise SystemExit(f"prototype Schedule surface still links to Activity: {forbidden}")
+            raise SystemExit(f"prototype Schedule surface uses the obsolete Activity handoff: {forbidden}")
+    for required in (
+        "function renderScheduleModalSelected",
+        "function scheduleOverviewMarkup",
+        "function scheduleHistoryMarkup",
+        "function openRelatedRunsInActivity",
+        "View related runs in Activity",
+        "Recent attempts",
+        "Technical details",
+        "The ${source.toLowerCase()} attempt could not start the Workflow.",
+        "activityScheduleId",
+        "run.scheduleId === activityScheduleId",
+        "?workflowId=${workflow.id}&schedule=${schedule.scheduleId}&origin=schedule",
+    ):
+        if required not in prototype_text:
+            raise SystemExit(f"prototype Schedule history flow is missing: {required}")
     if "scheduleMutation" not in prototype_text:
         raise SystemExit("prototype does not model accepted Schedule mutations")
     if 'data-step-type="schedule"' in prototype_text:
@@ -546,8 +587,8 @@ def main() -> None:
         raise SystemExit("prototype does not model accepted Workflow Schedule mutations")
     if "function schedulePreview(schedule)" not in prototype_text:
         raise SystemExit("prototype does not distinguish paused Schedule previews")
-    if 'schedule.enabled && schedule.nextFireAt ? [schedule.nextFireAt] : ["No upcoming runs"]' not in prototype_text:
-        raise SystemExit("prototype promises upcoming runs for a paused Schedule")
+    if 'schedule.enabled && schedule.nextFireAt ? [schedule.nextFireAt] : ["No upcoming attempts"]' not in prototype_text:
+        raise SystemExit("prototype promises upcoming attempts for a paused Schedule")
 
     schedule_prototype_text = schedule_prototype_path.read_text(encoding="utf-8")
     if "prototype.html#schedule" not in schedule_prototype_text:

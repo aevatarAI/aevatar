@@ -212,6 +212,9 @@
     .empty h2 { margin: 0 0 8px; font-size: 18px; }
     .empty p { margin: 0 0 18px; color: var(--muted); }
     .table-foot { margin-top: 12px; color: var(--muted); font-size: 12px; }
+    .activity-filter-context { margin-bottom: 14px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid #84adff; border-radius: 6px; background: var(--blue-bg); }
+    .activity-filter-context strong { display: block; color: var(--blue); font-size: 12px; }
+    .activity-filter-context span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
 
     .run-banner {
       position: absolute;
@@ -355,6 +358,51 @@
     .schedule-cadence span { padding: 7px 5px; border: 1px solid #e5e7eb; border-radius: 5px; color: var(--muted); background: #fff; font-size: 11px; text-align: center; }
     .schedule-cadence span.selected { color: var(--blue); border-color: #84adff; background: var(--blue-bg); font-weight: 700; }
     .schedule-observation { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 5px; color: var(--muted); background: #fbfcfe; font-size: 11px; line-height: 1.45; }
+    .schedule-selected-title { min-width: 0; display: flex; align-items: flex-start; gap: 10px; }
+    .schedule-selected-title > div { min-width: 0; }
+    .schedule-selected-title h2, .schedule-selected-title p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .schedule-tabs { display: flex; gap: 22px; margin: -2px -20px 20px; padding: 0 20px; border-bottom: 1px solid #e5e7eb; }
+    .schedule-tab { min-height: 42px; padding: 0 2px; color: var(--muted); border: 0; border-bottom: 2px solid transparent; background: transparent; font-size: 12px; font-weight: 700; }
+    .schedule-tab[aria-selected="true"] { color: var(--blue); border-bottom-color: var(--blue); }
+    .schedule-overview-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .schedule-overview-intro h3 { margin: 12px 0 0; font-size: 18px; line-height: 1.35; }
+    .schedule-overview-intro p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+    .schedule-actionbar { position: relative; display: flex; align-items: center; gap: 7px; margin: 18px 0 22px; padding-bottom: 20px; border-bottom: 1px solid #e5e7eb; }
+    .schedule-action-menu { position: relative; }
+    .schedule-action-menu > summary { list-style: none; }
+    .schedule-action-menu > summary::-webkit-details-marker { display: none; }
+    .schedule-action-popover { position: absolute; z-index: 4; top: calc(100% + 6px); right: 0; width: 174px; padding: 5px; border: 1px solid #d0d5dd; border-radius: 6px; background: #fff; box-shadow: 0 12px 26px rgba(16,24,40,.16); }
+    .schedule-action-popover button { width: 100%; min-height: 34px; padding: 0 9px; border: 0; border-radius: 4px; background: transparent; text-align: left; }
+    .schedule-action-popover button:hover { background: var(--subtle); }
+    .schedule-action-popover button.danger { color: var(--red); }
+    .schedule-facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border-top: 1px solid #eaecf0; }
+    .schedule-fact { min-width: 0; padding: 15px 0; border-bottom: 1px solid #eaecf0; }
+    .schedule-fact:nth-child(2n) { padding-left: 18px; border-left: 1px solid #eaecf0; }
+    .schedule-fact span, .schedule-run-input span { display: block; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
+    .schedule-fact strong { display: block; margin-top: 7px; font-size: 12px; line-height: 1.4; }
+    .schedule-run-input { padding: 17px 0; border-bottom: 1px solid #eaecf0; }
+    .schedule-run-input p { margin: 7px 0 0; font-size: 12px; line-height: 1.5; }
+    .schedule-advanced { padding: 15px 0; border-bottom: 1px solid #eaecf0; }
+    .schedule-advanced summary { color: var(--ink); cursor: pointer; font-size: 12px; font-weight: 700; }
+    .schedule-advanced div { display: flex; justify-content: space-between; gap: 16px; margin-top: 13px; color: var(--muted); font-size: 11px; }
+    .schedule-history-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+    .schedule-history-heading h3 { margin: 0; font-size: 16px; }
+    .schedule-history-link { padding: 0; color: var(--blue); border: 0; background: transparent; font-size: 11px; font-weight: 700; }
+    .schedule-history-copy { margin: 7px 0 15px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .schedule-attempts { overflow: hidden; border: 1px solid #e5e7eb; border-radius: 6px; }
+    .schedule-attempt-row { display: grid; grid-template-columns: minmax(104px,1.5fr) minmax(62px,.75fr) minmax(68px,.8fr) minmax(72px,1fr); border-bottom: 1px solid #e5e7eb; }
+    .schedule-attempt-row:last-child { border-bottom: 0; }
+    .schedule-attempt-row.header { color: var(--muted); background: var(--subtle); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
+    .schedule-attempt-row > span { min-width: 0; padding: 10px 7px; overflow-wrap: anywhere; font-size: 10px; line-height: 1.35; }
+    .schedule-attempt-row.header > span { font-size: 9px; }
+    .schedule-attempt-result { font-weight: 700; }
+    .schedule-attempt-result.succeeded { color: var(--green); }
+    .schedule-attempt-result.failed { color: var(--red); }
+    .schedule-attempt-failure { grid-column: 1 / -1; padding: 0 8px 11px; }
+    .schedule-attempt-failure p { margin: 0 0 8px; color: var(--ink); font-size: 11px; line-height: 1.45; }
+    .schedule-attempt-failure details summary { color: var(--blue); cursor: pointer; font-size: 10px; font-weight: 700; }
+    .schedule-attempt-failure pre { margin: 8px 0 0; padding: 8px; overflow: auto; color: #475467; border: 1px solid #e5e7eb; border-radius: 4px; background: var(--subtle); font: 9px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+    .schedule-history-state { padding: 42px 16px; color: var(--muted); border: 1px dashed var(--line); text-align: center; }
     .inspector-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
     .inspector-summary div { min-width: 0; padding: 10px 11px; border: 1px solid #e5e7eb; border-radius: 6px; background: #f8fafc; }
     .inspector-summary span { display: block; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
@@ -444,6 +492,8 @@
     .modal-footer { padding: 16px 24px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--line); }
     .schedule-quick-modal { width: min(820px, 100%); }
     .schedule-quick-modal .modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+    .schedule-modal-title { min-width: 0; display: flex; align-items: flex-start; gap: 10px; }
+    .schedule-modal-title > div { min-width: 0; }
     .schedule-quick-context { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; padding: 12px 14px; border: 1px solid #84adff; border-radius: 6px; background: var(--blue-bg); }
     .schedule-quick-context strong { display: block; font-size: 14px; }
     .schedule-quick-context span { display: block; margin-top: 4px; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -883,7 +933,7 @@ steps:
   <div class="modal-backdrop" id="schedule-quick-modal" hidden>
     <section class="modal schedule-quick-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-quick-title">
       <header class="modal-header">
-        <div><h2 id="schedule-quick-title">New schedule</h2><p id="schedule-quick-subtitle">Configure recurring work without leaving Workflows.</p></div>
+        <div class="schedule-modal-title"><button type="button" class="icon-button" id="schedule-quick-back" aria-label="Back to schedules" title="Back" hidden>←</button><div><h2 id="schedule-quick-title">New schedule</h2><p id="schedule-quick-subtitle">Configure recurring work without leaving Workflows.</p></div></div>
         <button type="button" class="icon-button" id="close-schedule-quick" aria-label="Close new schedule" title="Close">×</button>
       </header>
       <div class="modal-body" id="schedule-quick-content"></div>
@@ -1032,6 +1082,7 @@ steps:
       "POST /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}:run-now",
       "DELETE /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}"
     ];
+    void workflowScheduleApiContract;
 
     const prototypeSchedulePreviewByCron = {
       "0 * * * *": { requestId: "preview-hourly-response", fires: ["Wed, Aug 19 · 00:00", "Wed, Aug 19 · 01:00", "Wed, Aug 19 · 02:00", "Wed, Aug 19 · 03:00", "Wed, Aug 19 · 04:00"] },
@@ -1063,9 +1114,9 @@ steps:
     ];
 
     const initialRuns = [
-      { id: "R-1041", workflowId: "wf-invoice", workflow: "Invoice follow-up", status: "Needs you", origin: "Schedule · weekday", revision: "Published · v4", when: "42m ago", took: "02:18", usage: "$0.22", outcome: "Approve 4 messages", startedBy: "Automation", sourceId: null },
-      { id: "R-1040", workflowId: "wf-feedback", workflow: "Weekly feedback digest", status: "Succeeded", origin: "Schedule · weekly", revision: "Published · v7", when: "2h ago", took: "01:42", usage: "$0.18", outcome: "Posted 1 summary", startedBy: "Automation", sourceId: null },
-      { id: "R-1038", workflowId: "wf-orders", workflow: "Nightly order sync", status: "Failed", origin: "Schedule · nightly", revision: "Published · v9", when: "3:04 AM", took: "00:21", usage: "$0.04", outcome: "Warehouse unavailable", startedBy: "Automation", sourceId: null, error: "The warehouse connection rejected the request at step 4." },
+      { id: "R-1041", workflowId: "wf-invoice", scheduleId: "sch-invoice-weekday", workflow: "Invoice follow-up", status: "Needs you", origin: "Schedule · weekday", revision: "Published · v4", when: "42m ago", took: "02:18", usage: "$0.22", outcome: "Approve 4 messages", startedBy: "Automation", sourceId: null },
+      { id: "R-1040", workflowId: "wf-feedback", scheduleId: "sch-feedback-morning", workflow: "Weekly feedback digest", status: "Succeeded", origin: "Schedule · morning digest", revision: "Published · v7", when: "2h ago", took: "01:42", usage: "$0.18", outcome: "Posted 1 summary", startedBy: "Automation", sourceId: null },
+      { id: "R-1038", workflowId: "wf-orders", scheduleId: "sch-orders-nightly", workflow: "Nightly order sync", status: "Failed", origin: "Schedule · nightly", revision: "Published · v9", when: "3:04 AM", took: "00:21", usage: "$0.04", outcome: "Warehouse unavailable", startedBy: "Automation", sourceId: null, error: "The warehouse connection rejected the request at step 4." },
       { id: "R-1032", workflowId: "wf-escalation", workflow: "Customer escalation triage", status: "Succeeded", origin: "Retry · R-1031", revision: "Draft · revision 11", when: "Yesterday", took: "00:49", usage: "$0.09", outcome: "Posted reply", startedBy: "You", sourceId: "R-1031" },
       { id: "R-1031", workflowId: "wf-escalation", workflow: "Customer escalation triage", status: "Failed", origin: "Manual · Calvin", revision: "Draft · revision 11", when: "Yesterday", took: "00:13", usage: "$0.02", outcome: "Linear permission denied", startedBy: "Calvin", sourceId: null, error: "Linear rejected the request because this connection lacks issue creation permission." },
       { id: "R-1028", workflowId: "wf-invoice", workflow: "Invoice follow-up", status: "Succeeded", origin: "Manual · you", revision: "Published · v4", when: "2d ago", took: "02:04", usage: "$0.20", outcome: "Sent 6 reminders", startedBy: "You", sourceId: null }
@@ -1086,7 +1137,11 @@ steps:
               lastFireAt: "Failed yesterday",
               fireCount: 18,
               failureCount: 1,
-              recentFires: ["Mon, Aug 11 · Succeeded", "Fri, Aug 8 · Failed"],
+              recentFires: [
+                { scheduledFireAt: "2026-08-24T01:00:00Z", completedAt: "2026-08-24T01:00:04Z", manual: false, error: "Capability admission rejected the scheduled request for the current published revision." },
+                { scheduledFireAt: "2026-08-21T01:00:00Z", completedAt: "2026-08-21T01:01:13Z", manual: false, error: "" },
+                { scheduledFireAt: "2026-08-20T07:42:00Z", completedAt: "2026-08-20T07:43:06Z", manual: true, error: "" }
+              ],
               lastError: "Last run couldn't be completed. Review the prompt or pause this Schedule."
             },
             {
@@ -1100,7 +1155,10 @@ steps:
               lastFireAt: "Succeeded Mon, Aug 4",
               fireCount: 12,
               failureCount: 0,
-              recentFires: ["Mon, Aug 4 · Succeeded", "Mon, Jul 28 · Succeeded"],
+              recentFires: [
+                { scheduledFireAt: "2026-08-17T02:00:00Z", completedAt: "2026-08-17T02:00:58Z", manual: false, error: "" },
+                { scheduledFireAt: "2026-08-10T02:00:00Z", completedAt: "2026-08-10T02:01:02Z", manual: false, error: "" }
+              ],
               lastError: ""
             }
           ]
@@ -1124,9 +1182,11 @@ steps:
     let workflowFilter = "All";
     let activityFilter = "All";
     let activityWorkflowId = null;
+    let activityScheduleId = null;
     let selectedStep = -1;
     let schedulePanelOpen = false;
     let schedulePanelMode = "list";
+    let scheduleModalMode = "list";
     let selectedScheduleId = null;
     let scheduleMutation = null;
     let scheduleCreationSurface = "modal";
@@ -1378,6 +1438,8 @@ steps:
 
     function closeScheduleQuickModal() {
       resetScheduleCreation();
+      scheduleModalMode = "list";
+      selectedScheduleId = null;
       document.querySelector("#schedule-quick-content").innerHTML = "";
       document.querySelector("#schedule-quick-footer").innerHTML = "";
       closeModal("schedule-quick-modal");
@@ -1415,9 +1477,13 @@ steps:
       const footer = document.querySelector("#schedule-quick-footer");
       const schedules = prototypeWorkflowSchedules[workflow.scopeId]?.[workflow.id] || [];
       const rows = schedules.map(scheduleListRow).join("");
+      scheduleModalMode = "list";
+      selectedScheduleId = null;
+      document.querySelector("#schedule-quick-back").hidden = true;
       document.querySelector("#schedule-quick-title").textContent = "Schedules";
       document.querySelector("#schedule-quick-subtitle").textContent = `Recurring runs owned by ${workflow.name}.`;
       content.innerHTML = `<div class="schedule-quick-context"><div><strong>${escapeHtml(workflow.name)}</strong><span>Published Workflow · ${schedules.length} schedule${schedules.length === 1 ? "" : "s"}</span></div><span class="schedule-state">Managed</span></div><div class="section-heading" style="margin:0 0 10px"><div><h3>Schedules</h3><p>${schedules.length ? "Select a Schedule to review its configuration." : "Create recurring work for this published Workflow."}</p></div><button type="button" class="button small primary" id="quick-schedule-new">New schedule</button></div>${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : `<div class="schedule-quick-review"><p>No schedules yet.</p></div>`}`;
+      footer.hidden = false;
       footer.innerHTML = `<button type="button" class="button" id="quick-schedule-refresh">Refresh</button>`;
       document.querySelector("#quick-schedule-new").onclick = () => {
         initializeScheduleCreation(workflow, "modal");
@@ -1429,15 +1495,9 @@ steps:
       };
       document.querySelectorAll("#schedule-quick-content [data-schedule-id]").forEach(button => {
         button.onclick = () => {
-          const scheduleId = button.dataset.scheduleId;
-          closeScheduleQuickModal();
-          currentWorkflow = workflow;
-          schedulePanelOpen = true;
-          schedulePanelMode = "detail";
-          selectedScheduleId = scheduleId;
-          renderEditor();
-          showView("editor");
-          renderSchedulePanel();
+          selectedScheduleId = button.dataset.scheduleId;
+          scheduleModalMode = "overview";
+          renderScheduleModalSelected(workflow);
         };
       });
     }
@@ -1448,6 +1508,8 @@ steps:
       resetScheduleCreation();
       scheduleCreationSurface = "modal";
       quickScheduleWorkflow = workflow;
+      scheduleModalMode = "list";
+      selectedScheduleId = null;
       renderScheduleModalList(workflow);
       document.querySelector("#schedule-quick-modal").hidden = false;
       setTimeout(() => document.querySelector("#quick-schedule-new")?.focus(), 0);
@@ -1519,8 +1581,10 @@ steps:
         root = document.querySelector("#schedule-quick-modal");
         content = root.querySelector("#schedule-quick-content");
         footer = root.querySelector("#schedule-quick-footer");
+        root.querySelector("#schedule-quick-back").hidden = true;
         root.querySelector("#schedule-quick-title").textContent = stepPresentation[0];
         root.querySelector("#schedule-quick-subtitle").textContent = stepPresentation[1];
+        footer.hidden = false;
       }
 
       if (quickScheduleStep === "configure") {
@@ -1680,13 +1744,13 @@ steps:
       currentWorkflow = publishedWorkflow;
       selectedStep = -1;
       schedulePanelOpen = true;
-      schedulePanelMode = "list";
-      selectedScheduleId = null;
+      schedulePanelMode = "overview";
+      selectedScheduleId = prototypeWorkflowSchedules[publishedWorkflow.scopeId]?.[publishedWorkflow.id]?.[0]?.scheduleId || null;
       canvasZoom = null;
       document.querySelector("#yaml-panel").hidden = true;
       renderEditor();
       showView("editor");
-      openSchedulePanelCreation();
+      renderSchedulePanel();
     }
 
     function openWorkflow(id) {
@@ -1901,7 +1965,7 @@ steps:
     }
 
     function schedulePreview(schedule) {
-      return schedule.enabled && schedule.nextFireAt ? [schedule.nextFireAt] : ["No upcoming runs"];
+      return schedule.enabled && schedule.nextFireAt ? [schedule.nextFireAt] : ["No upcoming attempts"];
     }
 
     function scheduleEditModel(schedule) {
@@ -1933,14 +1997,14 @@ steps:
       };
     }
 
-    function updateScheduleEditRepeatPresentation(panel, locked = false) {
-      const repeatInput = panel.querySelector("#schedule-edit-repeat");
-      const timeInput = panel.querySelector("#schedule-edit-repeat-time");
+    function updateScheduleEditRepeatPresentation(root, locked = false) {
+      const repeatInput = root.querySelector("#schedule-edit-repeat");
+      const timeInput = root.querySelector("#schedule-edit-repeat-time");
       const repeatField = repeatInput.closest("label");
       const timeField = timeInput.closest("label");
-      const cronInput = panel.querySelector("#schedule-edit-cron");
-      const cronEditor = panel.querySelector("#schedule-edit-cron-editor");
-      const cronModeButton = panel.querySelector("#schedule-edit-cron-mode");
+      const cronInput = root.querySelector("#schedule-edit-cron");
+      const cronEditor = root.querySelector("#schedule-edit-cron-editor");
+      const cronModeButton = root.querySelector("#schedule-edit-cron-mode");
       const customCron = repeatInput.value === "Write cron yourself";
       repeatField.hidden = customCron;
       timeField.hidden = customCron;
@@ -1948,18 +2012,194 @@ steps:
       cronEditor.hidden = !customCron;
       cronModeButton.textContent = customCron ? "use the repeat builder" : "write it as cron instead";
       if (!customCron) cronInput.value = quickScheduleCronForRepeat(repeatInput.value, timeInput.value);
-      panel.querySelector("#schedule-edit-generated-cron").textContent = cronInput.value.trim();
-      panel.querySelector("#schedule-edit-human-summary").textContent = quickScheduleHumanSummary(repeatInput.value, timeInput.value, cronInput.value.trim());
+      root.querySelector("#schedule-edit-generated-cron").textContent = cronInput.value.trim();
+      root.querySelector("#schedule-edit-human-summary").textContent = quickScheduleHumanSummary(repeatInput.value, timeInput.value, cronInput.value.trim());
     }
 
     function schedulePending(schedule) {
       return scheduleMutation?.scheduleId === schedule.scheduleId ? scheduleMutation : null;
     }
 
+    function formatScheduleTimestamp(value, timezone) {
+      if (!value) return "Not completed";
+      return new Intl.DateTimeFormat(document.documentElement.lang || "en", {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: timezone
+      }).format(new Date(value));
+    }
+
     function scheduleListRow(schedule) {
       const pending = schedulePending(schedule);
       const editModel = scheduleEditModel(schedule);
-      return `<li><button type="button" class="schedule-list-select" data-schedule-id="${escapeHtml(schedule.scheduleId)}"><div class="schedule-row"><div class="schedule-row-top"><strong>${escapeHtml(schedule.displayName)}</strong><span class="schedule-state${scheduleStateClass(schedule)}">${scheduleState(schedule)}</span></div><p>${escapeHtml(editModel.humanSummary)} · ${escapeHtml(schedule.timezone)}<br>Next: ${escapeHtml(schedule.nextFireAt)}</p>${pending ? `<p class="muted">${escapeHtml(pending.label)} Waiting for the latest status.</p>` : ""}</div></button></li>`;
+      return `<li><button type="button" class="schedule-list-select" data-schedule-id="${escapeHtml(schedule.scheduleId)}"><div class="schedule-row"><div class="schedule-row-top"><strong>${escapeHtml(schedule.displayName)}</strong><span class="schedule-state${scheduleStateClass(schedule)}">${scheduleState(schedule)}</span></div><p>${escapeHtml(editModel.humanSummary)} · ${escapeHtml(schedule.timezone)}<br>Next: ${escapeHtml(schedulePreview(schedule)[0])}</p>${pending ? `<p class="muted">${escapeHtml(pending.label)} Refreshing status.</p>` : ""}</div></button></li>`;
+    }
+
+    function scheduleTabsMarkup(activeMode) {
+      return `<div class="schedule-tabs" role="tablist" aria-label="Schedule views"><button type="button" class="schedule-tab" data-schedule-tab="overview" role="tab" aria-selected="${activeMode === "overview"}" tabindex="${activeMode === "overview" ? "0" : "-1"}">Overview</button><button type="button" class="schedule-tab" data-schedule-tab="history" role="tab" aria-selected="${activeMode === "history"}" tabindex="${activeMode === "history" ? "0" : "-1"}">History</button></div>`;
+    }
+
+    function scheduleOverviewMarkup(schedule, pending) {
+      const editModel = scheduleEditModel(schedule);
+      const latestAttempt = schedule.recentFires[0];
+      const lastAttempt = latestAttempt
+        ? `${formatScheduleTimestamp(latestAttempt.completedAt, schedule.timezone)} · ${latestAttempt.error ? "Failed" : "Succeeded"}`
+        : "No attempts yet";
+      return `<section aria-labelledby="schedule-overview-heading"><div class="schedule-overview-intro"><div><span class="schedule-state${scheduleStateClass(schedule)}">${scheduleState(schedule)}</span><h3 id="schedule-overview-heading">${escapeHtml(editModel.humanSummary)}</h3><p>${escapeHtml(schedule.timezone)}</p></div></div><div class="schedule-actionbar"><button type="button" class="button small primary" id="schedule-run-now" ${pending ? "disabled" : ""}>Run now</button><button type="button" class="button small" id="schedule-edit" ${pending ? "disabled" : ""}>Edit schedule</button><details class="schedule-action-menu"><summary class="button small">More</summary><div class="schedule-action-popover"><button type="button" id="schedule-toggle" ${pending ? "disabled" : ""}>${schedule.enabled ? "Pause schedule" : "Enable schedule"}</button><button type="button" class="danger" id="schedule-delete" ${pending ? "disabled" : ""}>Delete schedule</button></div></details></div><div class="schedule-facts"><div class="schedule-fact"><span>Next scheduled</span><strong>${escapeHtml(schedulePreview(schedule)[0])}</strong></div><div class="schedule-fact"><span>Last attempt</span><strong>${escapeHtml(lastAttempt)}</strong></div><div class="schedule-fact"><span>Total attempts</span><strong>${schedule.fireCount}</strong></div><div class="schedule-fact"><span>Failed attempts</span><strong>${schedule.failureCount}</strong></div></div>${schedule.prompt ? `<div class="schedule-run-input"><span>Run input</span><p>${escapeHtml(schedule.prompt)}</p></div>` : ""}<details class="schedule-advanced"><summary>Advanced details</summary><div><span>Cron expression</span><code>${escapeHtml(schedule.cronExpression)}</code></div></details>${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Refreshing the observed Schedule status.</div>` : ""}</section>`;
+    }
+
+    function scheduleHistoryMarkup(schedule) {
+      const rows = schedule.recentFires.map(fire => {
+        const source = fire.manual ? "Manual" : "Scheduled";
+        const failed = Boolean(fire.error);
+        const result = failed ? "Failed" : "Succeeded";
+        const failure = failed ? `<div class="schedule-attempt-failure"><p>The ${source.toLowerCase()} attempt could not start the Workflow.</p><details><summary>Technical details</summary><pre>${escapeHtml(fire.error)}</pre></details></div>` : "";
+        return `<div class="schedule-attempt-row" role="row"><span role="cell">${escapeHtml(formatScheduleTimestamp(fire.scheduledFireAt, schedule.timezone))}</span><span role="cell">${source}</span><span class="schedule-attempt-result ${result.toLowerCase()}" role="cell">${result}</span><span role="cell">${escapeHtml(formatScheduleTimestamp(fire.completedAt, schedule.timezone))}</span>${failure}</div>`;
+      }).join("");
+      return `<section aria-labelledby="schedule-history-heading"><div class="schedule-history-heading"><h3 id="schedule-history-heading">Recent attempts</h3><button type="button" class="schedule-history-link" id="schedule-open-activity">View related runs in Activity →</button></div><p class="schedule-history-copy">Schedule attempts can fail before a Workflow Run exists.</p>${rows ? `<div class="schedule-attempts" role="table" aria-label="Recent Schedule attempts"><div class="schedule-attempt-row header" role="row"><span role="columnheader">Scheduled</span><span role="columnheader">Source</span><span role="columnheader">Result</span><span role="columnheader">Completed</span></div>${rows}</div>` : `<div class="schedule-history-state">No attempts yet</div>`}</section>`;
+    }
+
+    function scheduleEditMarkup(schedule, pending) {
+      const editModel = scheduleEditModel(schedule);
+      return `<section aria-labelledby="schedule-edit-heading"><div class="section-heading" style="margin-bottom:16px"><div><h2 id="schedule-edit-heading">Edit schedule</h2><p>Change recurrence or fixed Run input.</p></div></div><label class="form-row"><span class="field-label">Schedule name</span><input class="input" id="schedule-edit-name" value="${escapeHtml(editModel.name)}" ${pending ? "disabled" : ""}></label><div class="form-row"><span class="field-label">How often</span><div class="schedule-repeat-builder"><label><span class="field-label">Repeat</span><select class="select" id="schedule-edit-repeat" ${pending ? "disabled" : ""}><option>Every hour</option><option>Every day</option><option>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Every Mon, Wed and Fri</option><option>Write cron yourself</option></select></label><label><span class="field-label">At</span><input class="input" id="schedule-edit-repeat-time" type="time" value="${escapeHtml(editModel.repeatTime)}" ${pending ? "disabled" : ""}></label><label><span class="field-label">In</span><input class="input" id="schedule-edit-time-zone" value="${escapeHtml(editModel.timeZone)}" ${pending ? "disabled" : ""}></label></div><div class="schedule-repeat-preview"><div class="schedule-repeat-preview-row"><strong id="schedule-edit-human-summary">${escapeHtml(editModel.humanSummary)}</strong></div><div class="schedule-repeat-preview-row"><span>${escapeHtml(schedulePreview(schedule)[0])}</span><span><button type="button" class="schedule-cron-action" id="schedule-edit-cron-mode" ${pending ? "disabled" : ""}>write it as cron instead</button><code class="schedule-cron-code" id="schedule-edit-generated-cron">${escapeHtml(editModel.cronExpression)}</code></span></div></div><label class="schedule-cron-editor" id="schedule-edit-cron-editor" ${editModel.customCron ? "" : "hidden"}><span class="field-label">Cron expression</span><input class="input mono" id="schedule-edit-cron" value="${escapeHtml(editModel.cronExpression)}" ${pending ? "disabled" : ""}><small>Use a five-field cron expression.</small></label></div><label class="form-row"><span class="field-label">Run input (optional)</span><textarea class="textarea" id="schedule-edit-prompt" ${pending ? "disabled" : ""}>${escapeHtml(editModel.prompt)}</textarea></label></section>`;
+    }
+
+    function selectedScheduleMode(surface) {
+      return surface === "panel" ? schedulePanelMode : scheduleModalMode;
+    }
+
+    function setSelectedScheduleMode(surface, mode) {
+      if (surface === "panel") schedulePanelMode = mode;
+      else scheduleModalMode = mode;
+    }
+
+    function scheduleSelectedMarkup(schedule, surface) {
+      const mode = selectedScheduleMode(surface);
+      const pending = schedulePending(schedule);
+      if (mode === "edit") return scheduleEditMarkup(schedule, pending);
+      return `${scheduleTabsMarkup(mode)}${mode === "history" ? scheduleHistoryMarkup(schedule) : scheduleOverviewMarkup(schedule, pending)}`;
+    }
+
+    function bindScheduleTabs(root, surface, renderSelected) {
+      const tabs = [...root.querySelectorAll("[data-schedule-tab]")];
+      tabs.forEach((tab, index) => {
+        const select = () => {
+          setSelectedScheduleMode(surface, tab.dataset.scheduleTab);
+          renderSelected();
+        };
+        tab.onclick = select;
+        tab.onkeydown = event => {
+          let next = index;
+          if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+          else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+          else if (event.key === "Home") next = 0;
+          else if (event.key === "End") next = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          setSelectedScheduleMode(surface, tabs[next].dataset.scheduleTab);
+          renderSelected();
+          root.querySelector(`[data-schedule-tab="${tabs[next].dataset.scheduleTab}"]`)?.focus();
+        };
+      });
+    }
+
+    function openRelatedRunsInActivity(workflow, schedule) {
+      const relatedRunsPath = `/scopes/${workflow.scopeId}/workflow-activity-vnext/activity?workflowId=${workflow.id}&schedule=${schedule.scheduleId}&origin=schedule`;
+      document.body.dataset.prototypeActivityPath = relatedRunsPath;
+      activityFilter = "Scheduled";
+      activityWorkflowId = workflow.id;
+      activityScheduleId = schedule.scheduleId;
+      if (schedulePanelOpen) closeSchedulePanel();
+      if (!document.querySelector("#schedule-quick-modal").hidden) closeScheduleQuickModal();
+      syncFilterButtons("activity");
+      showView("activity");
+    }
+
+    function bindScheduleSelectedSurface(root, footer, workflow, schedule, surface, renderSelected) {
+      const mode = selectedScheduleMode(surface);
+      bindScheduleTabs(root, surface, renderSelected);
+      root.querySelector("#schedule-open-activity")?.addEventListener("click", () => openRelatedRunsInActivity(workflow, schedule));
+      root.querySelector("#schedule-edit")?.addEventListener("click", () => {
+        setSelectedScheduleMode(surface, "edit");
+        renderSelected();
+      });
+      root.querySelector("#schedule-run-now")?.addEventListener("click", () => {
+        if (!window.confirm("Run this published workflow now? It may change external systems.")) return;
+        scheduleMutation = { scheduleId: schedule.scheduleId, label: "Run-now request accepted." };
+        refreshWorkflowSchedules(workflow);
+        renderSelected();
+        showToast("Run-now request accepted. Refreshing Schedule status.");
+      });
+      root.querySelector("#schedule-toggle")?.addEventListener("click", () => {
+        scheduleMutation = { scheduleId: schedule.scheduleId, label: schedule.enabled ? "Pause request accepted." : "Enable request accepted." };
+        refreshWorkflowSchedules(workflow);
+        renderSelected();
+        showToast(`${scheduleMutation.label} Refreshing Schedule status.`);
+      });
+      root.querySelector("#schedule-delete")?.addEventListener("click", () => {
+        if (!window.confirm(`Delete ${schedule.displayName}? This cannot be undone.`)) return;
+        scheduleMutation = { scheduleId: schedule.scheduleId, label: "Schedule deletion accepted." };
+        refreshWorkflowSchedules(workflow);
+        renderSelected();
+        showToast("Schedule deletion accepted. Refreshing the Schedule list.");
+      });
+
+      if (mode !== "edit") return;
+      const pending = schedulePending(schedule);
+      const editModel = scheduleEditModel(schedule);
+      root.querySelector("#schedule-edit-repeat").value = editModel.repeat;
+      root.querySelector("#schedule-edit-repeat").onchange = () => updateScheduleEditRepeatPresentation(root, Boolean(pending));
+      root.querySelector("#schedule-edit-repeat-time").oninput = () => updateScheduleEditRepeatPresentation(root, Boolean(pending));
+      root.querySelector("#schedule-edit-cron").oninput = () => updateScheduleEditRepeatPresentation(root, Boolean(pending));
+      root.querySelector("#schedule-edit-cron-mode").onclick = () => {
+        const repeatInput = root.querySelector("#schedule-edit-repeat");
+        repeatInput.value = repeatInput.value === "Write cron yourself" ? "Every weekday" : "Write cron yourself";
+        updateScheduleEditRepeatPresentation(root, Boolean(pending));
+        if (repeatInput.value === "Write cron yourself") root.querySelector("#schedule-edit-cron").focus();
+      };
+      updateScheduleEditRepeatPresentation(root, Boolean(pending));
+      footer.querySelector("#schedule-edit-cancel").onclick = () => {
+        setSelectedScheduleMode(surface, "overview");
+        renderSelected();
+      };
+      footer.querySelector("#schedule-save").onclick = () => {
+        const scheduleUpdateDraft = {
+          displayName: root.querySelector("#schedule-edit-name").value.trim(),
+          cronExpression: root.querySelector("#schedule-edit-cron").value.trim(),
+          timezone: root.querySelector("#schedule-edit-time-zone").value.trim(),
+          enabled: schedule.enabled,
+          prompt: root.querySelector("#schedule-edit-prompt").value.trim()
+        };
+        if (!scheduleUpdateDraft.displayName || !isValidTimeZone(scheduleUpdateDraft.timezone) || scheduleUpdateDraft.cronExpression.split(/\s+/).length !== 5) {
+          showToast("Name, a valid IANA timezone, and a five-field cron are required.");
+          return;
+        }
+        scheduleMutation = { scheduleId: schedule.scheduleId, label: "Schedule update accepted.", request: scheduleUpdateDraft };
+        refreshWorkflowSchedules(workflow);
+        setSelectedScheduleMode(surface, "overview");
+        renderSelected();
+        showToast("Schedule update accepted. Refreshing Schedule status.");
+      };
+    }
+
+    function renderScheduleModalSelected(workflow) {
+      const schedules = prototypeWorkflowSchedules[workflow.scopeId]?.[workflow.id] || [];
+      const schedule = schedules.find(item => item.scheduleId === selectedScheduleId);
+      if (!schedule) {
+        renderScheduleModalList(workflow);
+        return;
+      }
+      const content = document.querySelector("#schedule-quick-content");
+      const footer = document.querySelector("#schedule-quick-footer");
+      const back = document.querySelector("#schedule-quick-back");
+      back.hidden = false;
+      back.onclick = () => renderScheduleModalList(workflow);
+      document.querySelector("#schedule-quick-title").textContent = schedule.displayName;
+      document.querySelector("#schedule-quick-subtitle").textContent = workflow.name;
+      content.innerHTML = scheduleSelectedMarkup(schedule, "modal");
+      footer.hidden = scheduleModalMode !== "edit";
+      footer.innerHTML = scheduleModalMode === "edit" ? `<button type="button" class="button" id="schedule-edit-cancel">Cancel</button><button type="button" class="button primary" id="schedule-save">Save changes</button>` : "";
+      bindScheduleSelectedSurface(content, footer, workflow, schedule, "modal", () => renderScheduleModalSelected(workflow));
     }
 
     function renderSchedulePanel() {
@@ -1978,23 +2218,17 @@ steps:
       }
       if (schedulePanelMode === "list") {
         const rows = schedules.map(scheduleListRow).join("");
-        panel.innerHTML = `<header class="studio-panel-header"><div><h2>Workflow schedules</h2><p>Recurring runs owned by this Workflow.</p></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header>
-          <div class="studio-panel-body">
-            <div class="section-heading" style="margin:0 0 10px"><div><h2>${schedules.length ? "Schedules" : "No schedules yet"}</h2><p>${schedules.length ? "Select a Schedule to review its configuration." : "Create recurring work for this published Workflow."}</p></div><button type="button" class="button small primary" id="schedule-new">New schedule</button></div>
-            ${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : ""}
-            <button type="button" class="button small" id="schedule-refresh">Refresh</button>
-            <p class="muted" style="margin-top:14px">Production reads ${escapeHtml(workflowScheduleApiContract[0])}.</p>
-          </div>`;
-        document.querySelector("#close-schedule").onclick = closeSchedulePanel;
-        document.querySelector("#schedule-new").onclick = openSchedulePanelCreation;
-        document.querySelector("#schedule-refresh").onclick = () => {
+        panel.innerHTML = `<header class="studio-panel-header"><div><h2>Workflow schedules</h2><p>Recurring runs owned by this Workflow.</p></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header><div class="studio-panel-body"><div class="section-heading" style="margin:0 0 10px"><div><h2>${schedules.length ? "Schedules" : "No schedules yet"}</h2><p>${schedules.length ? "Select a Schedule to review it." : "Create recurring work for this published Workflow."}</p></div><button type="button" class="button small primary" id="schedule-new">New schedule</button></div>${schedules.length ? `<ul class="schedule-list">${rows}</ul>` : ""}<button type="button" class="button small" id="schedule-refresh">Refresh</button></div>`;
+        panel.querySelector("#close-schedule").onclick = closeSchedulePanel;
+        panel.querySelector("#schedule-new").onclick = openSchedulePanelCreation;
+        panel.querySelector("#schedule-refresh").onclick = () => {
           refreshWorkflowSchedules(currentWorkflow);
           showToast("Workflow schedules refreshed.");
         };
-        document.querySelectorAll("[data-schedule-id]").forEach(button => {
+        panel.querySelectorAll("[data-schedule-id]").forEach(button => {
           button.onclick = () => {
             selectedScheduleId = button.dataset.scheduleId;
-            schedulePanelMode = "detail";
+            schedulePanelMode = "overview";
             renderSchedulePanel();
           };
         });
@@ -2004,79 +2238,19 @@ steps:
       const schedule = schedules.find(item => item.scheduleId === selectedScheduleId);
       if (!schedule) {
         schedulePanelMode = "list";
+        selectedScheduleId = null;
         renderSchedulePanel();
         return;
       }
 
-      const pending = schedulePending(schedule);
-      const state = scheduleState(schedule);
-      const previewLabel = schedule.enabled ? "Next fire" : "Upcoming runs";
-      const editModel = scheduleEditModel(schedule);
-      panel.innerHTML = `<header class="studio-panel-header"><div><h2>${escapeHtml(schedule.displayName)}</h2><p>Recurring runs for ${escapeHtml(currentWorkflow.name)}.</p></div><div><button type="button" class="icon-button" id="schedule-back" aria-label="Back to schedules" title="Back">←</button><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></div></header>
-        <div class="studio-panel-body">
-          <section class="schedule-summary"><div class="schedule-summary-top"><strong>Workflow Schedule</strong><span class="schedule-state${scheduleStateClass(schedule)}">${state}</span></div><p>Managed from this Workflow</p></section>
-          <label class="form-row"><span class="field-label">Schedule name</span><input class="input" id="schedule-edit-name" value="${escapeHtml(editModel.name)}" ${pending ? "disabled" : ""}></label>
-          <div class="form-row"><span class="field-label">How often</span><div class="schedule-repeat-builder"><label><span class="field-label">Repeat</span><select class="select" id="schedule-edit-repeat" ${pending ? "disabled" : ""}><option>Every hour</option><option>Every day</option><option>Every weekday</option><option>Every weekend</option><option>Every Monday</option><option>Every Mon, Wed and Fri</option><option>Write cron yourself</option></select></label><label><span class="field-label">At</span><input class="input" id="schedule-edit-repeat-time" type="time" value="${escapeHtml(editModel.repeatTime)}" ${pending ? "disabled" : ""}></label><label><span class="field-label">In</span><input class="input" id="schedule-edit-time-zone" value="${escapeHtml(editModel.timeZone)}" ${pending ? "disabled" : ""}></label></div><div class="schedule-repeat-preview"><div class="schedule-repeat-preview-row"><strong id="schedule-edit-human-summary">${escapeHtml(editModel.humanSummary)}</strong></div><div class="schedule-repeat-preview-row"><span>${escapeHtml(schedule.nextFireAt)}</span><span><button type="button" class="schedule-cron-action" id="schedule-edit-cron-mode" ${pending ? "disabled" : ""}>write it as cron instead</button><code class="schedule-cron-code" id="schedule-edit-generated-cron">${escapeHtml(editModel.cronExpression)}</code></span></div></div><label class="schedule-cron-editor" id="schedule-edit-cron-editor" ${editModel.customCron ? "" : "hidden"}><span class="field-label">Cron expression</span><input class="input mono" id="schedule-edit-cron" value="${escapeHtml(editModel.cronExpression)}" ${pending ? "disabled" : ""}><small>Complex expressions stay in raw-cron mode and are never rounded to a preset.</small></label></div>
-          <label class="form-row"><span class="field-label">Run input (optional)</span><textarea class="textarea" id="schedule-edit-prompt" ${pending ? "disabled" : ""}>${escapeHtml(editModel.prompt)}</textarea></label>
-          <label class="schedule-toggle"><span>Schedule is active</span><input id="schedule-enabled" type="checkbox" role="switch" ${schedule.enabled ? "checked" : ""} ${pending ? "disabled" : ""}></label>
-          <div class="form-row"><span class="field-label">${previewLabel}</span><ul class="schedule-preview">${schedulePreview(schedule).map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>
-          <div class="form-row"><span class="field-label">Last fire</span><p class="muted" style="margin:4px 0 0">${escapeHtml(schedule.lastFireAt)} · ${schedule.fireCount} total · ${schedule.failureCount} failed</p></div>
-          <div class="form-row"><span class="field-label">Recent fires</span><ul class="schedule-preview">${schedule.recentFires.map(value => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>
-          ${schedule.lastError ? `<div class="schedule-alert"><strong>Last fire</strong>${escapeHtml(schedule.lastError)}</div>` : ""}
-          ${pending ? `<div class="schedule-pending"><strong>${escapeHtml(pending.label)}</strong>Waiting for the latest Workflow Schedule status.</div>` : "<div class=\"schedule-observation\"><strong>Observed Schedule state only.</strong><br>Production rereads the Workflow-scoped list or detail after every accepted mutation.</div>"}
-        </div>
-        <footer class="studio-panel-footer"><button type="button" class="button small danger" id="schedule-delete" ${pending ? "disabled" : ""}>Delete</button><button type="button" class="button small" id="schedule-run-now" ${pending ? "disabled" : ""}>Run now</button><button type="button" class="button small primary" id="schedule-save" ${pending ? "disabled" : ""}>Save changes</button></footer>`;
-
-      document.querySelector("#close-schedule").onclick = closeSchedulePanel;
-      document.querySelector("#schedule-back").onclick = () => { schedulePanelMode = "list"; selectedScheduleId = null; renderSchedulePanel(); };
-      panel.querySelector("#schedule-edit-repeat").value = editModel.repeat;
-      panel.querySelector("#schedule-edit-repeat").onchange = () => updateScheduleEditRepeatPresentation(panel, Boolean(pending));
-      panel.querySelector("#schedule-edit-repeat-time").oninput = () => updateScheduleEditRepeatPresentation(panel, Boolean(pending));
-      panel.querySelector("#schedule-edit-cron").oninput = () => updateScheduleEditRepeatPresentation(panel, Boolean(pending));
-      document.querySelector("#schedule-edit-cron-mode").onclick = () => {
-        const repeatInput = panel.querySelector("#schedule-edit-repeat");
-        repeatInput.value = repeatInput.value === "Write cron yourself" ? "Every weekday" : "Write cron yourself";
-        updateScheduleEditRepeatPresentation(panel, Boolean(pending));
-        if (repeatInput.value === "Write cron yourself") panel.querySelector("#schedule-edit-cron").focus();
-      };
-      updateScheduleEditRepeatPresentation(panel, Boolean(pending));
-      document.querySelector("#schedule-enabled").onchange = event => {
-        scheduleMutation = { scheduleId: schedule.scheduleId, label: event.target.checked ? "Enable request accepted." : "Pause request accepted." };
-        refreshWorkflowSchedules(currentWorkflow);
+      panel.innerHTML = `<header class="studio-panel-header"><div class="schedule-selected-title"><button type="button" class="icon-button" id="schedule-back" aria-label="Back to schedules" title="Back">←</button><div><h2>${escapeHtml(schedule.displayName)}</h2><p>${escapeHtml(currentWorkflow.name)}</p></div></div><button type="button" class="icon-button" id="close-schedule" aria-label="Close schedules" title="Close">×</button></header><div class="studio-panel-body" id="schedule-selected-body">${scheduleSelectedMarkup(schedule, "panel")}</div><footer class="studio-panel-footer" id="schedule-selected-footer" ${schedulePanelMode === "edit" ? "" : "hidden"}>${schedulePanelMode === "edit" ? `<button type="button" class="button small" id="schedule-edit-cancel">Cancel</button><button type="button" class="button small primary" id="schedule-save">Save changes</button>` : ""}</footer>`;
+      panel.querySelector("#close-schedule").onclick = closeSchedulePanel;
+      panel.querySelector("#schedule-back").onclick = () => {
+        schedulePanelMode = "list";
+        selectedScheduleId = null;
         renderSchedulePanel();
-        showToast(`${scheduleMutation.label} Waiting for the latest status.`);
       };
-      document.querySelector("#schedule-save").onclick = () => {
-        const scheduleUpdateDraft = {
-          displayName: panel.querySelector("#schedule-edit-name").value.trim(),
-          cronExpression: panel.querySelector("#schedule-edit-cron").value.trim(),
-          timezone: panel.querySelector("#schedule-edit-time-zone").value.trim(),
-          enabled: schedule.enabled,
-          prompt: panel.querySelector("#schedule-edit-prompt").value.trim()
-        };
-        if (!scheduleUpdateDraft.displayName || !isValidTimeZone(scheduleUpdateDraft.timezone) || scheduleUpdateDraft.cronExpression.split(/\s+/).length !== 5) {
-          showToast("Name, a valid IANA timezone, and a five-field cron are required.");
-          return;
-        }
-        scheduleMutation = { scheduleId: schedule.scheduleId, label: "Schedule update accepted.", request: scheduleUpdateDraft };
-        refreshWorkflowSchedules(currentWorkflow);
-        renderSchedulePanel();
-        showToast("Schedule update accepted. Waiting for the latest status.");
-      };
-      document.querySelector("#schedule-run-now").onclick = () => {
-        if (!window.confirm("Run this published workflow now? It may change external systems.")) return;
-        scheduleMutation = { scheduleId: schedule.scheduleId, label: "Run-now request accepted." };
-        refreshWorkflowSchedules(currentWorkflow);
-        renderSchedulePanel();
-        showToast("Run-now request accepted. Waiting for the latest Schedule detail.");
-      };
-      document.querySelector("#schedule-delete").onclick = () => {
-        if (!window.confirm("Delete this Schedule? This cannot be undone.")) return;
-        scheduleMutation = { scheduleId: schedule.scheduleId, label: "Schedule deletion accepted." };
-        refreshWorkflowSchedules(currentWorkflow);
-        renderSchedulePanel();
-        showToast("Schedule deletion accepted. Waiting for the Workflow list to confirm removal.");
-      };
+      bindScheduleSelectedSurface(panel.querySelector("#schedule-selected-body"), panel.querySelector("#schedule-selected-footer"), currentWorkflow, schedule, "panel", renderSchedulePanel);
     }
 
     function renderActiveBanner() {
@@ -2107,29 +2281,43 @@ steps:
     function renderActivity() {
       const query = document.querySelector("#activity-search").value.trim().toLowerCase();
       const scopedWorkflow = activityWorkflowId ? workflows.find(item => item.id === activityWorkflowId) : null;
+      const scopedSchedule = scopedWorkflow && activityScheduleId
+        ? prototypeWorkflowSchedules[scopedWorkflow.scopeId]?.[scopedWorkflow.id]?.find(item => item.scheduleId === activityScheduleId)
+        : null;
       document.querySelector("#activity-subtitle").textContent = scopedWorkflow
-        ? `Scheduled runs for ${scopedWorkflow.name}.`
+        ? `Related scheduled Runs for ${scopedWorkflow.name}.`
         : "Every Run, newest first. Search, inspect, and recover from one place.";
       const filtered = runs.filter(run => {
         const haystack = `${run.id} ${run.workflow} ${run.outcome} ${run.revision} ${run.origin}`.toLowerCase();
         const matchesText = haystack.includes(query);
         const matchesFilter = activityFilter === "All" || run.status === activityFilter || (activityFilter === "Scheduled" && run.origin.startsWith("Schedule")) || (activityFilter === "Mine" && run.startedBy === "You");
         const matchesWorkflow = !activityWorkflowId || run.workflowId === activityWorkflowId;
-        return matchesText && matchesFilter && matchesWorkflow;
+        const matchesSchedule = !activityScheduleId || run.scheduleId === activityScheduleId;
+        return matchesText && matchesFilter && matchesWorkflow && matchesSchedule;
       });
       const wrap = document.querySelector("#activity-table-wrap");
+      const filterContext = scopedSchedule ? `<div class="activity-filter-context"><div><strong>Schedule: ${escapeHtml(scopedSchedule.displayName)}</strong><span>Workflow: ${escapeHtml(scopedWorkflow.name)} · Origin: Schedule</span></div><button type="button" class="button small" id="clear-related-runs">Clear</button></div>` : "";
       if (!filtered.length) {
-        wrap.innerHTML = `<div class="empty"><div><h2>No Runs match</h2><p>Change the search or filter.</p><button type="button" class="button" id="clear-activity-filter">Clear filters</button></div></div>`;
+        wrap.innerHTML = `${filterContext}<div class="empty"><div><h2>No Runs match</h2><p>Change the search or filter.</p><button type="button" class="button" id="clear-activity-filter">Clear filters</button></div></div>`;
         document.querySelector("#clear-activity-filter").onclick = () => {
           activityFilter = "All";
           activityWorkflowId = null;
+          activityScheduleId = null;
           document.querySelector("#activity-search").value = "";
           syncFilterButtons("activity");
           renderActivity();
         };
+        document.querySelector("#clear-related-runs")?.addEventListener("click", () => document.querySelector("#clear-activity-filter").click());
         return;
       }
-      wrap.innerHTML = runTable(filtered);
+      wrap.innerHTML = `${filterContext}${runTable(filtered)}`;
+      document.querySelector("#clear-related-runs")?.addEventListener("click", () => {
+        activityFilter = "All";
+        activityWorkflowId = null;
+        activityScheduleId = null;
+        syncFilterButtons("activity");
+        renderActivity();
+      });
       bindRunRows(wrap);
     }
 
@@ -2565,7 +2753,10 @@ steps:
     document.querySelectorAll("[data-activity-filter]").forEach(button => {
       button.onclick = () => {
         activityFilter = button.dataset.activityFilter;
-        if (activityFilter !== "Scheduled") activityWorkflowId = null;
+        if (activityFilter !== "Scheduled") {
+          activityWorkflowId = null;
+          activityScheduleId = null;
+        }
         syncFilterButtons("activity");
         renderActivity();
       };

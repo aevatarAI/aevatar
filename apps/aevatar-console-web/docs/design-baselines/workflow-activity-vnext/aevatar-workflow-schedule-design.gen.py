@@ -394,11 +394,11 @@ def frame_workflows_list(index: int) -> None:
         text(modal_x + 48, row_y + 18, name, FS_BODY, INK, width=330)
         badge(modal_x + modal_w - 132, row_y + 16, state, kind)
         text(modal_x + 48, row_y + 52, summary, FS_SMALL, MUTED, width=420)
-        button(modal_x + 48, row_y + 84, 70, "Edit", color=BLUE)
-        button(modal_x + 126, row_y + 84, 82,
-               "Pause" if state == "Enabled" else "Enable", color=MUTED)
-        button(modal_x + 216, row_y + 84, 88, "Run now", color=MUTED)
-        button(modal_x + 314, row_y + 84, 76, "Delete", color=RED)
+        text(modal_x + 48, row_y + 90,
+             "Next · Mon 24 Aug at 09:00" if state == "Enabled" else "No upcoming attempt",
+             FS_SMALL, INK if state == "Enabled" else MUTED, width=360)
+        text(modal_x + modal_w - 110, row_y + 88, "Open  →", FS_SMALL, BLUE,
+             width=74, align="right")
     annotation(fx + FRAME_W + 42, fy + 160, "1", "Manage schedules where they are created",
                 "The published Workflow row opens its Schedule management modal. Existing entries are readable and editable; New schedule starts the shared configure/review flow.")
     end_frame()
@@ -531,9 +531,9 @@ def workflow_canvas(cx: float, cy: float) -> None:
 
 
 def frame_schedule_detail(index: int) -> None:
-    fx, fy = begin_frame(index, "05 · Workflow — schedule detail")
+    fx, fy = begin_frame(index, "05 · Workflow — schedule overview")
     cx, cy, cw = app_shell(fx, fy, "Workflows", title="Weekly Feedback Report",
-                           subtitle="Published · v7 · Schedule details")
+                           subtitle="Published · v7 · Schedule overview")
     button(cx + cw - 528, fy + 18, 70, "Run", color=INK)
     button(cx + cw - 446, fy + 18, 94, "Schedule", primary=True, color=BLUE)
     button(cx + cw - 344, fy + 18, 94, "Add node", color=INK)
@@ -541,32 +541,113 @@ def frame_schedule_detail(index: int) -> None:
     button(cx + cw - 146, fy + 18, 116, "Publish", color=INK)
     workflow_canvas(cx, cy)
     rect(cx + 748, cy + 18, 548, 898, bg=SURFACE, stroke=LINE)
-    text(cx + 776, cy + 46, "Schedule details", FS_HEAD, INK, width=330)
-    text(cx + 776, cy + 80, "Managed from this Workflow", FS_SMALL, BLUE, font=FONT_MONO, width=420)
-    schedule_summary(cx + 776, cy + 112, 492)
-    field(cx + 776, cy + 204, 492, "Schedule name", "Weekly review")
-    rect(cx + 776, cy + 282, 492, 92, bg=GREEN_BG, stroke=GREEN)
-    text(cx + 796, cy + 302, "ENABLED", FS_SMALL, GREEN, font=FONT_MONO, width=120)
-    text(cx + 796, cy + 334, "Next run · Mon 24 Aug at 10:00", FS_BODY, INK, width=440)
-    field(cx + 776, cy + 400, 240, "Cadence", "Every Monday at 10:00")
-    field(cx + 1032, cy + 400, 236, "Time zone", "Asia/Shanghai")
-    field(cx + 776, cy + 478, 240, "Last fire", "Mon 17 Aug · Succeeded")
-    field(cx + 1032, cy + 478, 236, "Runs", "12 total · 1 failed")
-    field(cx + 776, cy + 556, 492, "Run input (optional)", "No prompt", disabled=True)
-    text(cx + 776, cy + 650, "RECENT FIRES", FS_SMALL, MUTED, font=FONT_MONO, width=180)
-    text(cx + 776, cy + 680, "Mon 17 Aug · Succeeded   ·   Mon 10 Aug · Succeeded", FS_SMALL, INK, width=492)
-    text(cx + 776, cy + 716, "Schedule facts are returned by the Workflow-scoped API.", FS_SMALL, MUTED, width=492)
-    button(cx + 776, cy + 824, 100, "Run now", color=INK)
-    button(cx + 884, cy + 824, 98, "Change", color=BLUE, bg=BLUE_BG)
-    button(cx + 990, cy + 824, 84, "Pause", color=INK)
-    button(cx + 1082, cy + 824, 78, "Delete", color=RED)
-    annotation(fx + FRAME_W + 42, fy + 320, "5", "Workflow owns the schedule",
-                "Schedule detail and lifecycle actions stay beside the Workflow that owns the published target.")
+    text(cx + 768, cy + 44, "←", FS_HEAD, MUTED, width=24)
+    text(cx + 806, cy + 42, "Morning digest", FS_HEAD, INK, width=310)
+    text(cx + 806, cy + 74, "Weekly Feedback Report", FS_SMALL, MUTED, width=310)
+    text(cx + 1242, cy + 44, "×", FS_HEAD, MUTED, width=24, align="right")
+    line(cx + 748, cy + 108, 548, 0, color=LINE)
+    text(cx + 776, cy + 128, "Overview", FS_SMALL, BLUE, width=84, align="center")
+    text(cx + 874, cy + 128, "History", FS_SMALL, MUTED, width=84, align="center")
+    line(cx + 776, cy + 158, 84, 0, color=BLUE, sw=2)
+
+    badge(cx + 776, cy + 188, "Active", "ok")
+    text(cx + 776, cy + 230, "Every weekday at 09:00", FS_HEAD, INK, width=360)
+    text(cx + 776, cy + 264, "Asia/Shanghai", FS_SMALL, MUTED, width=260)
+    button(cx + 776, cy + 304, 108, "Run now", primary=True, color=BLUE)
+    button(cx + 894, cy + 304, 134, "Edit schedule", color=INK)
+    button(cx + 1038, cy + 304, 84, "More  ▾", color=MUTED)
+
+    line(cx + 776, cy + 372, 492, 0, color=LINE)
+    text(cx + 776, cy + 396, "NEXT SCHEDULED", FS_SMALL, MUTED, font=FONT_MONO, width=212)
+    text(cx + 1032, cy + 396, "LAST ATTEMPT", FS_SMALL, MUTED, font=FONT_MONO, width=212)
+    text(cx + 776, cy + 426, "Tue 25 Aug · 09:00", FS_BODY, INK, width=220)
+    text(cx + 1032, cy + 426, "Mon 24 Aug · Succeeded", FS_BODY, INK, width=226)
+    line(cx + 776, cy + 468, 492, 0, color=LINE)
+    text(cx + 776, cy + 492, "TOTAL ATTEMPTS", FS_SMALL, MUTED, font=FONT_MONO, width=212)
+    text(cx + 1032, cy + 492, "FAILED ATTEMPTS", FS_SMALL, MUTED, font=FONT_MONO, width=212)
+    text(cx + 776, cy + 522, "18", FS_BODY, INK, width=220)
+    text(cx + 1032, cy + 522, "1", FS_BODY, RED, width=226)
+    line(cx + 776, cy + 564, 492, 0, color=LINE)
+    text(cx + 776, cy + 590, "RUN INPUT", FS_SMALL, MUTED, font=FONT_MONO, width=180)
+    text(cx + 776, cy + 620, "Summarize new feedback.", FS_BODY, INK, width=492)
+    line(cx + 776, cy + 664, 492, 0, color=LINE)
+    text(cx + 776, cy + 694, "Advanced details", FS_BODY, INK, width=220)
+    text(cx + 1240, cy + 694, "›", FS_BODY, MUTED, width=20, align="right")
+    annotation(fx + FRAME_W + 42, fy + 300, "5", "Overview answers what is configured",
+                "The default tab keeps recurrence and observed state readable. Run and Edit stay direct; Pause and Delete move under More.")
+    end_frame()
+
+
+def frame_schedule_history(index: int) -> None:
+    fx, fy = begin_frame(index, "06 · Workflow — schedule history")
+    cx, cy, cw = app_shell(fx, fy, "Workflows", title="Weekly Feedback Report",
+                           subtitle="Published · v7 · Schedule history")
+    button(cx + cw - 528, fy + 18, 70, "Run", color=INK)
+    button(cx + cw - 446, fy + 18, 94, "Schedule", primary=True, color=BLUE)
+    button(cx + cw - 344, fy + 18, 94, "Add node", color=INK)
+    button(cx + cw - 242, fy + 18, 88, "Save", color=INK)
+    button(cx + cw - 146, fy + 18, 116, "Publish", color=INK)
+    workflow_canvas(cx, cy)
+    rect(cx + 748, cy + 18, 548, 898, bg=SURFACE, stroke=LINE)
+    text(cx + 768, cy + 44, "←", FS_HEAD, MUTED, width=24)
+    text(cx + 806, cy + 42, "Morning digest", FS_HEAD, INK, width=310)
+    text(cx + 806, cy + 74, "Weekly Feedback Report", FS_SMALL, MUTED, width=310)
+    text(cx + 1242, cy + 44, "×", FS_HEAD, MUTED, width=24, align="right")
+    line(cx + 748, cy + 108, 548, 0, color=LINE)
+    text(cx + 776, cy + 128, "Overview", FS_SMALL, MUTED, width=84, align="center")
+    text(cx + 874, cy + 128, "History", FS_SMALL, BLUE, width=84, align="center")
+    line(cx + 874, cy + 158, 84, 0, color=BLUE, sw=2)
+
+    text(cx + 776, cy + 194, "Recent attempts", FS_HEAD, INK, width=260)
+    text(cx + 1054, cy + 200, "View related runs in Activity  →", FS_SMALL, BLUE,
+         width=214, align="right")
+    text(cx + 776, cy + 230,
+         "Schedule attempts can fail before a Workflow Run exists.", FS_SMALL,
+         MUTED, width=470)
+
+    table_y = cy + 278
+    widths = [178, 86, 96, 132]
+    rect(cx + 776, table_y, sum(widths), 42, bg=SUBTLE, stroke=LINE, radius=False)
+    cursor = cx + 776
+    for width, label in zip(widths, ("SCHEDULED", "SOURCE", "RESULT", "COMPLETED")):
+        text(cursor + 8, table_y + 13, label, FS_SMALL, MUTED,
+             font=FONT_MONO, width=width - 16)
+        cursor += width
+
+    rows = [
+        ("Mon 24 Aug · 09:00", "Scheduled", "Failed", "09:00", "fail"),
+        ("Fri 21 Aug · 09:00", "Scheduled", "Succeeded", "09:01", "ok"),
+        ("Thu 20 Aug · 15:42", "Manual", "Succeeded", "15:43", "ok"),
+    ]
+    row_offsets = [42, 194, 270]
+    for row_index, (scheduled, source, result, completed, kind) in enumerate(rows):
+        row_y = table_y + row_offsets[row_index]
+        row_h = 152 if row_index == 0 else 76
+        rect(cx + 776, row_y, sum(widths), row_h, bg=SURFACE, stroke=LINE,
+             radius=False)
+        cursor = cx + 776
+        for width, value in zip(widths, (scheduled, source, result, completed)):
+            color = RED if value == "Failed" else GREEN if value == "Succeeded" else INK
+            text(cursor + 8, row_y + 18, value, FS_SMALL, color,
+                 width=width - 16)
+            cursor += width
+        if row_index == 0:
+            text(cx + 784, row_y + 54,
+                 "The scheduled attempt could not start the Workflow.", FS_SMALL,
+                 INK, width=462)
+            text(cx + 784, row_y + 88, "▾  Technical details", FS_SMALL, BLUE,
+                 width=190)
+            rect(cx + 784, row_y + 114, 476, 28, bg=SUBTLE, stroke=LINE)
+            text(cx + 794, row_y + 121,
+                 "Capability admission rejected the scheduled request.", FS_SMALL,
+                 MUTED, font=FONT_MONO, width=452)
+    annotation(fx + FRAME_W + 42, fy + 300, "6", "History is attempts, Activity is Runs",
+                "recentFires renders as a compact bounded list. Technical errors stay disclosed; Activity receives exact Workflow and Schedule filters.")
     end_frame()
 
 
 def frame_schedule_edit(index: int) -> None:
-    fx, fy = begin_frame(index, "06 · Workflow — change schedule")
+    fx, fy = begin_frame(index, "07 · Workflow — change schedule")
     cx, cy, cw = app_shell(fx, fy, "Workflows", title="Weekly Feedback Report",
                            subtitle="Published · v7 · Change schedule")
     button(cx + cw - 528, fy + 18, 70, "Run", color=INK)
@@ -576,12 +657,15 @@ def frame_schedule_edit(index: int) -> None:
     button(cx + cw - 146, fy + 18, 116, "Publish", color=INK)
     workflow_canvas(cx, cy)
     rect(cx + 748, cy + 18, 548, 898, bg=SURFACE, stroke=LINE)
-    text(cx + 776, cy + 46, "Change schedule", FS_HEAD, INK, width=330)
-    text(cx + 776, cy + 80, "Managed from this Workflow", FS_SMALL, BLUE, font=FONT_MONO, width=420)
-    schedule_summary(cx + 776, cy + 112, 492, state="Enabled")
+    text(cx + 768, cy + 44, "←", FS_HEAD, MUTED, width=24)
+    text(cx + 806, cy + 42, "Weekly review", FS_HEAD, INK, width=310)
+    text(cx + 806, cy + 74, "Weekly Feedback Report", FS_SMALL, MUTED, width=310)
+    text(cx + 1242, cy + 44, "×", FS_HEAD, MUTED, width=24, align="right")
+    line(cx + 748, cy + 108, 548, 0, color=LINE)
+    text(cx + 776, cy + 132, "Edit schedule", FS_HEAD, INK, width=330)
     schedule_fields(
         cx + 776,
-        cy + 204,
+        cy + 184,
         492,
         show_preview=True,
         name="Weekly review",
@@ -594,13 +678,13 @@ def frame_schedule_edit(index: int) -> None:
     )
     button(cx + 776, cy + 824, 136, "Save changes", primary=True, color=BLUE)
     button(cx + 924, cy + 824, 92, "Cancel", color=MUTED)
-    annotation(fx + FRAME_W + 42, fy + 260, "6", "Edit in Workflow",
-                "PUT sends the edited fields and preserves the observed enabled state; it never enables a paused Schedule by accident.")
+    annotation(fx + FRAME_W + 42, fy + 260, "7", "Edit is a temporary mode",
+                "Cancel returns to Overview. PUT sends the edited fields and preserves the observed enabled state; it never enables a paused Schedule by accident.")
     end_frame()
 
 
 text(ORIGIN_X, 70, "Aevatar — Published workflow schedules", FS_TITLE, INK, width=1040)
-text(ORIGIN_X, 126, "One Workflow, one recurring resource model, six reviewable screens.", FS_HEAD, BLUE, width=1060)
+text(ORIGIN_X, 126, "One Workflow, one recurring resource model, seven reviewable screens.", FS_HEAD, BLUE, width=1060)
 text(ORIGIN_X, 178,
      "Schedule is configured, previewed, created, observed, and managed through the Workflow-scoped API.",
      FS_BODY, MUTED, width=1180)
@@ -614,7 +698,8 @@ frame_schedule_setup(1)
 frame_creation_review(2)
 frame_creation_pending(3)
 frame_schedule_detail(4)
-frame_schedule_edit(5)
+frame_schedule_history(5)
+frame_schedule_edit(6)
 
 document = {
     "type": "excalidraw",
