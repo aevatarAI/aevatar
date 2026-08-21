@@ -1289,20 +1289,18 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                   ? t('workflowActivityVNext.schedule.manual', 'Manual')
                   : t('workflowActivityVNext.schedule.scheduled', 'Scheduled');
                 return (
-                  <React.Fragment
-                    key={`${fire.idempotencyKey}:${fire.completedAt}`}
-                  >
-                    <tr>
-                      <td>
-                        <time dateTime={fire.scheduledFireAt}>
-                          {formatScheduleDate(
-                            fire.scheduledFireAt,
-                            scheduleDetail.data.schedule.timezone,
-                          )}
-                        </time>
-                      </td>
-                      <td>{source}</td>
-                      <td>
+                  <tr key={`${fire.idempotencyKey}:${fire.completedAt}`}>
+                    <td>
+                      <time dateTime={fire.scheduledFireAt}>
+                        {formatScheduleDate(
+                          fire.scheduledFireAt,
+                          scheduleDetail.data.schedule.timezone,
+                        )}
+                      </time>
+                    </td>
+                    <td>{source}</td>
+                    <td>
+                      <div className="wa-vnext__schedule-history-result">
                         <Tag color={failed ? 'red' : 'green'}>
                           {failed
                             ? t(
@@ -1314,42 +1312,40 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                                 'Succeeded',
                               )}
                         </Tag>
-                      </td>
-                      <td>
-                        <time dateTime={fire.completedAt}>
-                          {formatScheduleDate(
-                            fire.completedAt,
-                            scheduleDetail.data.schedule.timezone,
-                          )}
-                        </time>
-                      </td>
-                    </tr>
-                    {failed ? (
-                      <tr className="wa-vnext__schedule-history-error-row">
-                        <td colSpan={4}>
-                          <p>
-                            {t(
-                              fire.manual
-                                ? 'workflowActivityVNext.schedule.manualAttemptFailed'
-                                : 'workflowActivityVNext.schedule.scheduledAttemptFailed',
-                              fire.manual
-                                ? 'The manual attempt could not start the Workflow.'
-                                : 'The scheduled attempt could not start the Workflow.',
-                            )}
-                          </p>
-                          <details>
-                            <summary>
+                        {failed ? (
+                          <>
+                            <p className="wa-vnext__schedule-history-failure">
                               {t(
-                                'workflowActivityVNext.schedule.technicalDetails',
-                                'Technical details',
+                                fire.manual
+                                  ? 'workflowActivityVNext.schedule.manualAttemptFailed'
+                                  : 'workflowActivityVNext.schedule.scheduledAttemptFailed',
+                                fire.manual
+                                  ? 'The manual attempt could not start the Workflow.'
+                                  : 'The scheduled attempt could not start the Workflow.',
                               )}
-                            </summary>
-                            <code>{fire.error}</code>
-                          </details>
-                        </td>
-                      </tr>
-                    ) : null}
-                  </React.Fragment>
+                            </p>
+                            <details>
+                              <summary>
+                                {t(
+                                  'workflowActivityVNext.schedule.technicalDetails',
+                                  'Technical details',
+                                )}
+                              </summary>
+                              <code>{fire.error}</code>
+                            </details>
+                          </>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>
+                      <time dateTime={fire.completedAt}>
+                        {formatScheduleDate(
+                          fire.completedAt,
+                          scheduleDetail.data.schedule.timezone,
+                        )}
+                      </time>
+                    </td>
+                  </tr>
                 );
               })}
             </tbody>

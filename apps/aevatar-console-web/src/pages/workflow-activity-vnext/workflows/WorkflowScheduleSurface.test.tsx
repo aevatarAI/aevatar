@@ -796,6 +796,60 @@ describe('WorkflowScheduleSurface', () => {
     );
   });
 
+  it('keeps multiple attempts scannable with one table row per attempt', async () => {
+    const schedule = createScheduleSummary({
+      fireCount: 3,
+      failureCount: 2,
+    });
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get.mockResolvedValue({
+      schedule,
+      recentFires: [
+        {
+          scheduledFireAt: '2026-08-21T01:00:00Z',
+          completedAt: '2026-08-21T01:01:00Z',
+          idempotencyKey: 'schedule-alpha:fire:3',
+          error: 'Scheduled request was rejected.',
+          manual: false,
+        },
+        {
+          scheduledFireAt: '2026-08-20T01:00:00Z',
+          completedAt: '2026-08-20T01:01:00Z',
+          idempotencyKey: 'schedule-alpha:fire:2',
+          error: '',
+          manual: false,
+        },
+        {
+          scheduledFireAt: '2026-08-19T03:00:00Z',
+          completedAt: '2026-08-19T03:01:00Z',
+          idempotencyKey: 'schedule-alpha:manual:1',
+          error: 'Manual request was rejected.',
+          manual: true,
+        },
+      ],
+    });
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
+
+    await screen.findByRole('heading', { name: 'Recent attempts' });
+    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(4));
+    expect(screen.getAllByText('Technical details')).toHaveLength(2);
+    expect(
+      screen.getByText('The scheduled attempt could not start the Workflow.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('The manual attempt could not start the Workflow.'),
+    ).toBeInTheDocument();
+  });
+
   it('shows a bounded History empty state when no attempts have been recorded', async () => {
     const schedule = createScheduleSummary({
       lastFireAt: null,
