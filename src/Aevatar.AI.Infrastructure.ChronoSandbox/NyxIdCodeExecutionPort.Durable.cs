@@ -745,23 +745,27 @@ internal sealed partial class NyxIdCodeExecutionPort
             }
 
             var diagnosticId = ReadProviderDiagnosticId(root) ?? localDiagnosticId;
+            var providerPhase = ReadProviderFailurePhase(root);
             failure = code switch
             {
                 "EXECUTION_CANCELLED" => DurableFailure(
                     DurableCodeExecutionFailureKind.Cancelled,
                     code,
                     "Durable code execution was cancelled.",
-                    diagnosticId: diagnosticId),
+                    diagnosticId: diagnosticId,
+                    providerPhase: providerPhase),
                 "OUTCOME_UNCERTAIN" => DurableFailure(
                     DurableCodeExecutionFailureKind.OutcomeUncertain,
                     code,
                     "The durable code execution outcome could not be determined safely.",
-                    diagnosticId: diagnosticId),
+                    diagnosticId: diagnosticId,
+                    providerPhase: providerPhase),
                 _ => DurableFailure(
                     DurableCodeExecutionFailureKind.ExecutionFailed,
                     code,
                     "Durable code execution failed before producing a result.",
-                    diagnosticId: diagnosticId),
+                    diagnosticId: diagnosticId,
+                    providerPhase: providerPhase),
             };
             return true;
         }
@@ -877,6 +881,27 @@ internal sealed partial class NyxIdCodeExecutionPort
             _ => DurableCodeExecutionPhase.Unspecified,
         };
         return phase != DurableCodeExecutionPhase.Unspecified;
+    }
+
+    private static DurableCodeExecutionPhase ReadProviderFailurePhase(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("error", out var error) ||
+            error.ValueKind != JsonValueKind.Object ||
+            !TryReadPhase(error, out var phase))
+        {
+            return DurableCodeExecutionPhase.Unspecified;
+        }
+
+        return phase is DurableCodeExecutionPhase.SandboxCreate or
+            DurableCodeExecutionPhase.SandboxReady or
+            DurableCodeExecutionPhase.InputWrite or
+            DurableCodeExecutionPhase.DependencyInstall or
+            DurableCodeExecutionPhase.Execute or
+            DurableCodeExecutionPhase.Collect or
+            DurableCodeExecutionPhase.CleaningUp
+                ? phase
+                : DurableCodeExecutionPhase.Unspecified;
     }
 
     private static bool TryReadCleanupState(
@@ -1017,7 +1042,8 @@ internal sealed partial class NyxIdCodeExecutionPort
             retryAfter: failure.Kind is CodeExecutionFailureKind.TransportUnavailable or CodeExecutionFailureKind.TimedOut
                 ? DefaultDurableRetryDelay
                 : null,
-            diagnosticId: failure.DiagnosticId);
+            diagnosticId: failure.DiagnosticId,
+            providerPhase: failure.ProviderPhase);
 
     private static DurableCodeExecutionFailure SubmissionUncertain(
         string code,
@@ -1053,8 +1079,9 @@ internal sealed partial class NyxIdCodeExecutionPort
         string message,
         bool retryable = false,
         TimeSpan? retryAfter = null,
-        string? diagnosticId = null) =>
-        new(kind, code, message, retryable, retryAfter, diagnosticId);
+        string? diagnosticId = null,
+        DurableCodeExecutionPhase providerPhase = DurableCodeExecutionPhase.Unspecified) =>
+        new(kind, code, message, retryable, retryAfter, diagnosticId, providerPhase);
 
     private static DurableCodeExecutionSubmitOutcome SubmitFailed(
         DurableCodeExecutionFailure failure) => new(null, failure);

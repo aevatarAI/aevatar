@@ -1105,7 +1105,8 @@ public sealed class NyxIdCodeExecuteTool(
             },
             failure.Code,
             failure.Message,
-            failure.DiagnosticId);
+            failure.DiagnosticId,
+            failure.ProviderPhase);
 
     private static bool TryResolveAdmittedRoute(out string? userServiceId)
     {
@@ -1241,6 +1242,20 @@ public sealed class NyxIdCodeExecuteTool(
 
         if (result is not null)
         {
+            var providerPhase = ProviderPhaseName(failure!.ProviderPhase);
+            if (providerPhase is not null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    output = Output(result),
+                    error = failure.Code,
+                    code = failure.Code,
+                    message = failure.Message,
+                    diagnostic_id = failure.DiagnosticId,
+                    provider_phase = providerPhase,
+                });
+            }
             return JsonSerializer.Serialize(new
             {
                 success = false,
@@ -1252,6 +1267,19 @@ public sealed class NyxIdCodeExecuteTool(
             });
         }
 
+        var terminalProviderPhase = ProviderPhaseName(failure!.ProviderPhase);
+        if (terminalProviderPhase is not null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = failure.Code,
+                code = failure.Code,
+                message = failure.Message,
+                diagnostic_id = failure.DiagnosticId,
+                provider_phase = terminalProviderPhase,
+            });
+        }
         return JsonSerializer.Serialize(new
         {
             success = false,
@@ -1261,6 +1289,18 @@ public sealed class NyxIdCodeExecuteTool(
             diagnostic_id = failure.DiagnosticId,
         });
     }
+
+    private static string? ProviderPhaseName(DurableCodeExecutionPhase phase) => phase switch
+    {
+        DurableCodeExecutionPhase.SandboxCreate => "sandbox_create",
+        DurableCodeExecutionPhase.SandboxReady => "sandbox_ready",
+        DurableCodeExecutionPhase.InputWrite => "input_write",
+        DurableCodeExecutionPhase.DependencyInstall => "dependency_install",
+        DurableCodeExecutionPhase.Execute => "execute",
+        DurableCodeExecutionPhase.Collect => "collect",
+        DurableCodeExecutionPhase.CleaningUp => "cleaning_up",
+        _ => null,
+    };
 
     private static object Output(CodeExecutionResult result) => new
     {

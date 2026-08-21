@@ -146,6 +146,61 @@ public sealed class CodeExecuteWorkflowAuditTests
             AgentToolExecutionAttemptKind.ActorRecovery);
     }
 
+    [Fact]
+    public async Task ProvisioningTimeout_ShouldCommitOnlyAllowlistedPhaseToWorkflowReceipt()
+    {
+        var legacyPort = new CompletedFailureCodeExecutionPort();
+        var durablePort = new CompletedFailureDurableCodeExecutionPort(
+            new DurableCodeExecutionFailure(
+                DurableCodeExecutionFailureKind.ExecutionFailed,
+                "SANDBOX_TIMEOUT",
+                "Durable code execution failed before producing a result.",
+                DiagnosticId: "diag-provisioning-safe",
+                ProviderPhase: DurableCodeExecutionPhase.SandboxCreate));
+        var tool = new NyxIdCodeExecuteTool(legacyPort, durablePort);
+        var auditTrail = new RecordingAuditTrailAppender();
+        var executor = new RecordingToolExecutionPort(new AdmittedAgentToolExecutor(
+            new StartOnceAdmissionLedger(),
+            auditTrail,
+            new StableAuditIdentityHasher()));
+        var source = new AgentWorkflowToolSourceAdapter(
+            [new SingleToolSource(tool)],
+            executor);
+        var workflowTool = (await source.GetToolsAsync()).Should().ContainSingle().Subject;
+        var request = new WorkflowToolExecutionRequest(
+            ArgumentsJson: """{"language":"javascript","code":"console.log('must-not-escape')"}""",
+            RunId: "run-provisioning-timeout",
+            StepId: "step-provisioning-timeout",
+            ExecutionId: "execution-provisioning-timeout",
+            CallId: "call-provisioning-timeout",
+            ScopeId: "scope-provisioning-timeout",
+            CallerCredential: new WorkflowCallerCredential
+            {
+                BearerToken = "source-readable-bearer",
+                Kind = NyxIdCallerCredentialKind.SourceReadableUserBearer,
+            },
+            RuntimeContext: WorkflowToolRuntimeContext.Empty,
+            InvocationAdmission: CodeExecutionAdmission(
+                "run-provisioning-timeout/step-provisioning-timeout"));
+
+        var submitted = await workflowTool.ExecuteAsync(request);
+        var workflowResult = await ((IWorkflowDurableOperationTool)workflowTool).ReconcileAsync(
+            request,
+            submitted.PendingOperation!);
+
+        using var document = JsonDocument.Parse(workflowResult.ResultJson);
+        document.RootElement.GetProperty("code").GetString().Should().Be("SANDBOX_TIMEOUT");
+        document.RootElement.GetProperty("provider_phase").GetString().Should().Be("sandbox_create");
+        executor.Outcome!.Receipt.ResultJson.Should().Be(workflowResult.ResultJson);
+        workflowResult.ResultJson.Should().NotContain("must-not-escape");
+        workflowResult.ResultJson.Should().NotContain("source-readable-bearer");
+        workflowResult.ResultJson.Should().NotContain("op_0123456789abcdefghijklmnopqrstuv");
+        workflowResult.ResultJson.Should().NotContain("svc-code-alpha");
+        auditTrail.Records.Should().ContainSingle(record =>
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Terminal &&
+            record.ErrorCode == "SANDBOX_TIMEOUT");
+    }
+
     private static WorkflowCapabilityInvocationAdmission CodeExecutionAdmission(string callSiteId)
     {
         var proof = new CodeExecutionCapabilityRef
@@ -206,6 +261,13 @@ public sealed class CodeExecuteWorkflowAuditTests
     private sealed class CompletedFailureDurableCodeExecutionPort : IDurableCodeExecutionPort
     {
         private const string ProviderOperationId = "op_0123456789abcdefghijklmnopqrstuv";
+        private readonly DurableCodeExecutionFailure? _terminalFailure;
+
+        public CompletedFailureDurableCodeExecutionPort(
+            DurableCodeExecutionFailure? terminalFailure = null)
+        {
+            _terminalFailure = terminalFailure;
+        }
 
         public int SubmitCallCount { get; private set; }
 
@@ -261,8 +323,8 @@ public sealed class CodeExecuteWorkflowAuditTests
                     now,
                     RetryAfter: null,
                     new DurableCodeExecutionProviderFailure(
-                        "EXECUTION_FAILED",
-                        "Code execution exited unsuccessfully.")),
+                        _terminalFailure?.Code ?? "EXECUTION_FAILED",
+                        _terminalFailure?.Message ?? "Code execution exited unsuccessfully.")),
                 NotModified: false,
                 ETag: "\"version-2\"",
                 RetryAfter: null,
@@ -275,6 +337,14 @@ public sealed class CodeExecuteWorkflowAuditTests
         {
             ct.ThrowIfCancellationRequested();
             ResultCallCount++;
+            if (_terminalFailure is not null)
+            {
+                return Task.FromResult(new DurableCodeExecutionResultOutcome(
+                    Outcome: null,
+                    Pending: false,
+                    RetryAfter: null,
+                    Failure: _terminalFailure));
+            }
             return Task.FromResult(new DurableCodeExecutionResultOutcome(
                 CodeExecutionOutcome.CompletedWithFailure(
                     new CodeExecutionResult(

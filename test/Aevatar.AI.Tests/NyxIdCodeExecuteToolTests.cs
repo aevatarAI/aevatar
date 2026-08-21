@@ -1506,6 +1506,33 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteWithOutcomeAsync_ProvisioningTimeoutCommitsSafeProviderPhase()
+    {
+        var port = new StubCodeExecutionPort(CodeExecutionOutcome.Failed(
+            new CodeExecutionFailure(
+                CodeExecutionFailureKind.TimedOut,
+                "SANDBOX_TIMEOUT",
+                "Code execution timed out upstream.",
+                "diag-provider-phase",
+                DurableCodeExecutionPhase.SandboxCreate)));
+        var tool = new NyxIdCodeExecuteTool(port);
+        SetSourceReadableBearer("source-readable-bearer");
+
+        var terminal = await tool.ExecuteWithOutcomeAsync(
+            "call-provider-phase",
+            tool.Name,
+            """{"language":"javascript","code":"console.log('must-not-escape')"}""");
+
+        using var document = JsonDocument.Parse(terminal.ResultJson);
+        var root = document.RootElement;
+        root.GetProperty("code").GetString().Should().Be("SANDBOX_TIMEOUT");
+        root.GetProperty("provider_phase").GetString().Should().Be("sandbox_create");
+        terminal.ResultJson.Should().NotContain("must-not-escape");
+        terminal.ResultJson.Should().NotContain("source-readable-bearer");
+        terminal.ResultJson.Should().NotContain("us-code-alpha");
+    }
+
+    [Fact]
     public async Task ExecuteWithOutcomeAsync_ContradictoryPortOutcome_FailsClosed()
     {
         var port = new StubCodeExecutionPort(new CodeExecutionOutcome(

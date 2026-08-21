@@ -220,6 +220,49 @@ public sealed class NyxIdDurableCodeExecutionPortTests
         outcome.RetryAfter.Should().Be(TimeSpan.FromSeconds(4));
     }
 
+    [Theory]
+    [InlineData("sandbox_create", DurableCodeExecutionPhase.SandboxCreate)]
+    [InlineData("credential-secret", DurableCodeExecutionPhase.Unspecified)]
+    public async Task GetResultAsync_TerminalTimeoutPreservesOnlyAllowlistedProviderPhase(
+        string providerPhase,
+        DurableCodeExecutionPhase expectedPhase)
+    {
+        var handler = new SequenceHandler(_ => Response(
+            HttpStatusCode.OK,
+            $$"""
+              {
+                "success":false,
+                "diagnostic_id":"diag-timeout-safe",
+                "source":"console.log('must-not-escape')",
+                "operation_id":"op-secret-provider-value",
+                "user_service_id":"us-secret-provider-value",
+                "credential":"credential-secret-value",
+                "error":{
+                  "code":"SANDBOX_TIMEOUT",
+                  "message":"untrusted provider detail",
+                  "phase":"{{providerPhase}}"
+                }
+              }
+              """));
+        var port = CreatePort(handler);
+
+        var outcome = await port.GetResultAsync(OperationRequest());
+
+        outcome.Outcome.Should().BeNull();
+        outcome.Failure.Should().NotBeNull();
+        outcome.Failure!.Code.Should().Be("SANDBOX_TIMEOUT");
+        outcome.Failure.DiagnosticId.Should().Be("diag-timeout-safe");
+        outcome.Failure.ProviderPhase.Should().Be(expectedPhase);
+        outcome.Failure.Message.Should().Be(
+            "Durable code execution failed before producing a result.");
+        var committed = JsonSerializer.Serialize(outcome.Failure);
+        committed.Should().NotContain("must-not-escape");
+        committed.Should().NotContain("op-secret-provider-value");
+        committed.Should().NotContain("us-secret-provider-value");
+        committed.Should().NotContain("credential-secret-value");
+        committed.Should().NotContain("untrusted provider detail");
+    }
+
     [Fact]
     public async Task CancelAsync_UsesCanonicalPublicPostWithJsonBodyAndParsesSnapshot()
     {

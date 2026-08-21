@@ -111,7 +111,8 @@ public sealed record CodeExecutionFailure(
     CodeExecutionFailureKind Kind,
     string Code,
     string Message,
-    string? DiagnosticId = null);
+    string? DiagnosticId = null,
+    DurableCodeExecutionPhase ProviderPhase = DurableCodeExecutionPhase.Unspecified);
 
 /// <summary>
 /// A non-zero process exit carries both the completed execution result and a failure. Failures
@@ -252,7 +253,8 @@ public sealed record DurableCodeExecutionFailure(
     string Message,
     bool Retryable = false,
     TimeSpan? RetryAfter = null,
-    string? DiagnosticId = null);
+    string? DiagnosticId = null,
+    DurableCodeExecutionPhase ProviderPhase = DurableCodeExecutionPhase.Unspecified);
 
 public sealed record DurableCodeExecutionSubmitOutcome(
     DurableCodeExecutionReceipt? Receipt,
