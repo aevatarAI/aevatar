@@ -145,7 +145,7 @@ Responses、Messages 和 Chat Completions 三条直连入口都把模型调用�
 
 ## 5. 直连工具行为
 
-`/v1/responses`、`/v1/messages`、`/v1/chat/completions` 使用同一套 `IResponsesDirectToolPlanService` + `IResponsesToolClassificationService` 抽象组装 tool sources 并做工具分类。三条 create 入口都会合并同一批全局 `IResponsesToolProvider`，并按 chat-route `ForwardToModel.ToolSetRef` 追加同一个 route tool set。Mainnet 的 direct LLM ingress 默认补 `workspace.default`；`lark.self_notify`、`voice.realtime` 也必须组合 `workspace.default`，所以 NyxID/Aevatar workspace tools 是默认可见能力，不依赖调用方显式配置 route tool set。最终工具分成三类：
+`/v1/responses`、`/v1/messages`、`/v1/chat/completions` 使用同一套 `IResponsesDirectToolPlanService` + `IResponsesToolClassificationService` 抽象组装 tool sources 并做工具分类。三条 create 入口都会合并同一批全局 `IResponsesToolProvider`，并按 chat-route `ForwardToModel.ToolSetRef` 追加同一个 route tool set。Mainnet 的 direct LLM ingress 默认补 `workspace.default`；`lark.self_notify`、`voice.realtime` 也必须组合 `workspace.default`，所以 NyxID/Aevatar workspace tools 是默认可见能力，不依赖调用方显式配置 route tool set。`workspace.default` 是 public/default surface，不包含 Studio provisioning、member、binding、schedule 或 query sources；这些能力只通过内置 Studio workflow 显式选择的 `studio.local` tool set 暴露。最终工具分成三类：
 
 - Aevatar substitute tools：由服务端接管执行并记录状态。
 - Aevatar additive tools：由服务端额外注入，供模型主动调用。

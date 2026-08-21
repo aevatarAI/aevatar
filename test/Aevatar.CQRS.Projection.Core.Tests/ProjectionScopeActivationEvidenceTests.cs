@@ -252,9 +252,9 @@ public sealed class ProjectionScopeActivationEvidenceTests
 
         var first = fixture.Service.EnsureAsync(Request());
         var second = fixture.Service.EnsureAsync(Request());
-        await bothCallersInColdPath.Task;
+        await bothCallersInColdPath.Task.WaitAsync(TimeSpan.FromSeconds(10));
         releaseAuthorityReads.TrySetResult();
-        await Task.WhenAll(first, second);
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(10));
 
         fixture.Runtime.ExistsCallCount.Should().Be(2);
         fixture.Runtime.CreateCallCount.Should().Be(1);

@@ -35,6 +35,9 @@ public static class ProjectionScopeStatusRuntimeRegistration
             IRuntimeFleetCapabilityAdvertisement,
             ProjectionScopeStatusTerminalCapabilityAdvertisement>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IRuntimeFleetCapabilityAdvertisement,
+            ProjectionScopeStatusTerminalActivationSealCapabilityAdvertisement>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
             ProjectionScopeCommittedStateRedactionHook>());
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ProjectionScopeStatusDocument>,

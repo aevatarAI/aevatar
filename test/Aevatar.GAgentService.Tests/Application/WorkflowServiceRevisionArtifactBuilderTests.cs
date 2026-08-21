@@ -1,14 +1,29 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.Reflection;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class WorkflowServiceRevisionArtifactBuilderTests
 {
+    [Fact]
+    public void Build_ShouldIncludeResolvableChatProtocolDescriptors()
+    {
+        var artifact = BuildArtifact();
+
+        artifact.ProtocolDescriptorSet.IsEmpty.Should().BeFalse();
+        ResolveDescriptor(artifact.ProtocolDescriptorSet, ChatRequestEvent.Descriptor.FullName)
+            .Should().NotBeNull();
+        ResolveDescriptor(artifact.ProtocolDescriptorSet, ChatResponseEvent.Descriptor.FullName)
+            .Should().NotBeNull();
+    }
+
     [Fact]
     public void Build_WithExplicitRequestCapability_ShouldRequireServiceGrant()
     {
@@ -256,4 +271,36 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
                 },
             },
         };
+
+    private static MessageDescriptor? ResolveDescriptor(ByteString descriptorSet, string fullName)
+    {
+        var fileDescriptorSet = FileDescriptorSet.Parser.ParseFrom(descriptorSet);
+        var files = FileDescriptor.BuildFromByteStrings(
+            fileDescriptorSet.File.Select(static file => file.ToByteString()));
+        foreach (var file in files)
+        {
+            var descriptor = FindDescriptor(file.MessageTypes, fullName);
+            if (descriptor is not null)
+                return descriptor;
+        }
+
+        return null;
+    }
+
+    private static MessageDescriptor? FindDescriptor(
+        IList<MessageDescriptor> messageTypes,
+        string fullName)
+    {
+        foreach (var messageType in messageTypes)
+        {
+            if (string.Equals(messageType.FullName, fullName, StringComparison.Ordinal))
+                return messageType;
+
+            var nested = FindDescriptor(messageType.NestedTypes, fullName);
+            if (nested is not null)
+                return nested;
+        }
+
+        return null;
+    }
 }

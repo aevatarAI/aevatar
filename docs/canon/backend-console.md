@@ -171,15 +171,28 @@ Admin Studio exposes conversation and request-trajectory views over the same liv
 Each top-level text request creates a trace container keyed by its `clientRequestId`; a later `runId` or
 `turnId` is attached as a server fact and never replaces that key. SSE frames incrementally create or
 settle the container's ordered Input/Model/Tool operations. Each model response and each tool call is a
-separate selectable ledger record rather than another top-level trace. The fixed three-lane overview
-and the ledger project the same operation identities, so selecting a bar or row opens that operation's
-own detail. Selecting an older container changes only the inspector data; Actor controls remain scoped
-to the current task. Studio consumes the live typed Model/Tool lifecycle frames, but its trajectory
-index is explicitly page-local: reopening a stored transcript does not hydrate the prior request ledger
-from the durable Observatory operation read model. Durable Model/Tool inspection is available in
-Observatory, but Studio does not yet join it back to stored conversation/request identity. The Input
-record likewise has no independent start/completion pair. Missing operation timing remains unavailable
-rather than being calculated from browser receipt time.
+separate selectable ledger record rather than another top-level trace. One continuous ledger carries
+every container in the conversation: a request is a numbered section boundary inside that ledger, not a
+separate navigation rail. The fixed three-lane overview and the ledger project the same operation
+identities onto one shared time domain across every container, so selecting a bar or row opens that
+operation's own detail in the trajectory's resizable details pane. Overview drag selects a time
+interval and dims records outside it, wheel zooms the domain, and right-button drag pans a zoomed
+viewport; toolbar controls switch recorded-duration against equal-width projection, fold requests and
+fold a model record's tool calls, and search the loaded ledger. Selecting an older container changes
+only inspection; Actor controls remain scoped to the current task.
+
+The trajectory survives a reload from two committed sources, and neither infers a record it did not
+read. A terminal turn appends its Model/Tool operation ledger together with its chat history turn, so
+`GET /api/chat/conversations/{id}` returns those operations beside the stored messages; the in-flight
+turn is rebuilt from the conversation actor's current-state step ledger. Recovered containers are keyed
+by the server's `turnId` because `clientRequestId` is a browser identity that does not survive the
+reload, and a live container already owning that turn is never replaced. Persisted operation content is
+a sanitized, size-bounded preview: a truncated preview is labelled as an archived fragment and never
+presented as the complete payload. Tool result bodies are deliberately not archived, because untrusted
+external text must not be retained by a conversation actor whose state is re-read when rebuilding model
+input; a restored Tool record therefore carries identity, status and timing but reports its output as
+uncaptured. The Input record has no independent start/completion pair. Missing operation timing remains
+unavailable rather than being calculated from browser receipt time.
 
 Fleet links carry exact `scope + run`, and schedule links carry `schedule` while clearing an unrelated selected
 run. The embedded page writes canonical route changes back to the parent hash without reloading its iframe.

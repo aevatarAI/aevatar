@@ -17,7 +17,8 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
 {
     public const string AgentKind =
         "projection.materialization-scope.workflow-execution-materialization-context";
-    public const int SupportedStateSchemaVersion = 1;
+    public const int IncrementalGraphStateSchemaVersion = 1;
+    public const int SupportedStateSchemaVersion = 2;
 
     protected override bool EnablesDurableObservationRecovery =>
         WorkflowProjectionIncrementalGraphSchemaAdoption.IsGranted(

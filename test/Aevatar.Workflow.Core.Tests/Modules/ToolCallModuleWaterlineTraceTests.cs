@@ -29,7 +29,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var logger = new RecordingToolCallLogger();
         var tool = new BlockingWorkflowTool("throwing_tool");
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-throw", "exec-throw");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -66,7 +66,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var logger = new RecordingToolCallLogger();
         var tool = new CancellableBlockingWorkflowTool("cancellable_tool");
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-cancel", "exec-cancel");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -129,7 +129,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
                 terminalInvoked: false,
                 retryable: true));
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-stale", "exec-stale");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -172,7 +172,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var logger = new RecordingToolCallLogger();
         var tool = new BlockingWorkflowTool("stale_timeout_tool");
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-stale-timeout", "exec-stale-timeout");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -235,7 +235,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var logger = new RecordingToolCallLogger();
         var tool = new BlockingWorkflowTool("forged_completion_tool");
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-forged", "exec-forged");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -285,7 +285,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var logger = new RecordingToolCallLogger();
         var tool = new BlockingWorkflowTool("untrusted_timeout_tool");
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-untrusted-timeout", "exec-untrusted-timeout");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -346,7 +346,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
                 retryable: true),
             WorkflowToolExecutionResult.Success(SentinelResult()));
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-retry", "exec-retry");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -416,7 +416,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
                 terminalInvoked: false,
                 retryable: true));
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = clock };
+        var ctx = new RecordingWorkflowContext { Clock = clock, Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-retry-deadline", "exec-retry-deadline");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -477,7 +477,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
                 retryable: true),
             WorkflowToolExecutionResult.Success(SentinelResult()));
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-stale-retry", "exec-stale-retry");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -566,7 +566,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
                 terminalInvoked: false,
                 retryable: true));
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         var request = TracedRequest(ctx, tool.Name, "step-stale-recovery", "exec-stale-recovery");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -633,7 +633,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var logger = new RecordingToolCallLogger();
         var tool = new BlockingWorkflowTool("in_transport_tool");
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = logger };
         // The transport hands the self-published completion to the actor inbox before
         // PublishAsync returns to the producer (synchronous in-transport delivery).
         ctx.InTransportAttemptCompletionDelivery = envelope => module.HandleAsync(envelope, ctx, CancellationToken.None);
@@ -702,7 +702,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var recoveredLogger = new RecordingToolCallLogger();
         var tool = new BlockingWorkflowTool("recoverable_tool", WorkflowToolRecoverySafety.ReplayableReadOnly);
         var firstModule = CreateModule(tool, logger: firstLogger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = firstLogger };
         var request = TracedRequest(ctx, tool.Name, "step-recover", "exec-recover");
 
         await firstModule.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -759,7 +759,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var recoveredLogger = new RecordingToolCallLogger();
         var tool = new BlockingWorkflowTool("late_recovery_tool", WorkflowToolRecoverySafety.ReplayableReadOnly);
         var firstModule = CreateModule(tool, logger: firstLogger);
-        var ctx = new RecordingWorkflowContext { Clock = clock };
+        var ctx = new RecordingWorkflowContext { Clock = clock, Logger = firstLogger };
         var request = TracedRequest(ctx, tool.Name, "step-late-recover", "exec-late-recover");
 
         await firstModule.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -809,7 +809,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var recoveredLogger = new RecordingToolCallLogger();
         var tool = new BlockingWorkflowTool("effectful_tool", WorkflowToolRecoverySafety.EffectfulNonReplayable);
         var firstModule = CreateModule(tool, logger: firstLogger);
-        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch) };
+        var ctx = new RecordingWorkflowContext { Clock = new FakeTimeProvider(TraceEpoch), Logger = firstLogger };
         var request = TracedRequest(ctx, tool.Name, "step-effectful-recover", "exec-effectful-recover");
 
         await firstModule.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -856,6 +856,7 @@ public sealed class ToolCallModuleWaterlineTraceTests
         var ctx = new RecordingWorkflowContext
         {
             Clock = new FakeTimeProvider(TraceEpoch),
+            Logger = logger,
             FailNextSchedule = true,
         };
         var request = TracedRequest(ctx, tool.Name, "step-no-watchdog", "exec-no-watchdog");
@@ -1094,6 +1095,8 @@ public sealed class ToolCallModuleWaterlineTraceTests
         "ReconciliationDisposition",
         "ElapsedPhase",
         "ElapsedMs",
+        "CommittedEventId",
+        "CommittedStateVersion",
     ];
 
     private static void AssertRedacted(IEnumerable<LogEntry> observations)

@@ -10,7 +10,7 @@ internal static class WorkflowProjectionIncrementalGraphSchemaAdoption
         var context = reader?.Current;
         if (context == null ||
             context.StateSchemaVersion <
-            WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion ||
+            WorkflowExecutionMaterializationScopeGAgent.IncrementalGraphStateSchemaVersion ||
             !string.Equals(
                 context.AgentKind,
                 WorkflowExecutionMaterializationScopeGAgent.AgentKind,
@@ -22,7 +22,7 @@ internal static class WorkflowProjectionIncrementalGraphSchemaAdoption
         var receipts = context.AdoptionReceipts
             .Where(static receipt =>
                 receipt.StateSchemaVersion ==
-                WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion)
+                WorkflowExecutionMaterializationScopeGAgent.IncrementalGraphStateSchemaVersion)
             .ToArray();
         if (receipts.Length != 1)
             return false;

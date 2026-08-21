@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.GAgentService.Abstractions.AgentProfiles;
 
@@ -80,8 +82,19 @@ public static partial class AgentProfilePolicies
                 diagnostics.Add(Diagnostic("UNSUPPORTED_AGENT_KIND", "runtimeProfile.agentKind", "Only nyxid.chat is supported."));
             if (!SupportedRouteToolSetRefs.Contains(draft.RuntimeProfile.RouteToolSetRef))
                 diagnostics.Add(Diagnostic("UNSUPPORTED_ROUTE_TOOL_SET", "runtimeProfile.routeToolSetRef", "The route tool set is not registered for nyxid.chat."));
+            diagnostics.AddRange(ValidateToolPolicy(
+                draft.RuntimeProfile.MaximumToolPolicy,
+                "runtimeProfile.maximumToolPolicy"));
+            diagnostics.AddRange(ValidateToolPolicy(
+                draft.RuntimeProfile.RecoveryToolPolicy,
+                "runtimeProfile.recoveryToolPolicy"));
             foreach (var member in draft.RuntimeProfile.Members)
+            {
                 diagnostics.AddRange(ValidateExactSkillReference(member));
+                diagnostics.AddRange(ValidateToolPolicy(
+                    member.TaskToolPolicy,
+                    $"runtimeProfile.members[{member.IntentId}].taskToolPolicy"));
+            }
         }
 
         return diagnostics;
@@ -89,6 +102,55 @@ public static partial class AgentProfilePolicies
 
     public static bool IsSupportedAgentKind(string? agentKind) =>
         string.Equals(agentKind?.Trim(), NyxIdChatAgentKind, StringComparison.Ordinal);
+
+    private static IReadOnlyList<AgentProfileDiagnostic> ValidateToolPolicy(
+        AgentProfileToolPolicy? policy,
+        string field)
+    {
+        if (policy is null || policy.ConnectedServiceSelectors.Count == 0)
+            return [];
+
+        var diagnostics = new List<AgentProfileDiagnostic>();
+        var seenSlugs = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < policy.ConnectedServiceSelectors.Count; index++)
+        {
+            var selector = policy.ConnectedServiceSelectors[index];
+            var selectorField = $"{field}.connectedServiceSelectors[{index}]";
+            if (!NyxIdServiceSlugPolicy.IsCanonical(selector.CatalogServiceSlug))
+            {
+                diagnostics.Add(Diagnostic(
+                    "PROFILE_CONNECTED_SERVICE_SLUG_INVALID",
+                    $"{selectorField}.catalogServiceSlug",
+                    "Connected-service catalog slug must be canonical."));
+            }
+            else if (!seenSlugs.Add(selector.CatalogServiceSlug))
+            {
+                diagnostics.Add(Diagnostic(
+                    "PROFILE_CONNECTED_SERVICE_SELECTOR_DUPLICATE",
+                    $"{selectorField}.catalogServiceSlug",
+                    "A tool policy may contain only one selector for each catalog service slug."));
+            }
+
+            if (selector.AllowedRisks.Count == 0)
+            {
+                diagnostics.Add(Diagnostic(
+                    "PROFILE_CONNECTED_SERVICE_RISKS_REQUIRED",
+                    $"{selectorField}.allowedRisks",
+                    "A connected-service selector must allow READ_ONLY and/or WRITE."));
+            }
+            else if (selector.AllowedRisks.Any(static risk =>
+                         risk is not (AgentToolOperationRiskPayload.ReadOnly or
+                             AgentToolOperationRiskPayload.Write)))
+            {
+                diagnostics.Add(Diagnostic(
+                    "PROFILE_CONNECTED_SERVICE_RISK_INVALID",
+                    $"{selectorField}.allowedRisks",
+                    "Connected-service selector risks may contain only READ_ONLY and WRITE."));
+            }
+        }
+
+        return diagnostics;
+    }
 
     private static AgentProfileDiagnostic Diagnostic(string code, string field, string message) =>
         new()

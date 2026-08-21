@@ -186,27 +186,58 @@ public class NyxIdChatGAgentTests
         runtime.CreateCalls.Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task CreateTargetResolver_ShouldRejectProfileRouteWithoutCompleteToolSetRef(
-        bool missingForwardToModel)
+    [Fact]
+    public async Task CreateTargetResolver_ShouldUseSelectedProfileRouteForImplicitProjectedToolSet()
     {
         var runtime = new RecordingActorRuntime();
         var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "reviewed.route"));
-        var routeSnapshot = missingForwardToModel
-            ? null
-            : new ChatRoutePolicySnapshot(
-                new ChatRouteAction { ForwardToModel = new ForwardToModel() },
-                []);
-        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(routeSnapshot);
-        var routeResolver = missingForwardToModel
-            ? new ChatRouteResolver(new MissingForwardToModelFallbackProvider())
-            : NewChatRouteResolver();
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction { ForwardToModel = new ForwardToModel() },
+            []));
         var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
             runtime,
             routeQueryPort,
-            routeResolver,
+            NewChatRouteResolver(),
+            source);
+        var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeTrue();
+        source.ResolveCalls.Should().Be(1);
+        runtime.CreateCalls.Should().ContainSingle();
+        AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateTargetResolver_ShouldUseSelectedProfileRouteInsteadOfImplicitFallbackToolSet()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "reviewed.route"));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            StaticChatRoutePolicyQueryPort.ForSnapshot(null),
+            new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty, "workspace.default")),
+            source);
+        var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeTrue();
+        source.ResolveCalls.Should().Be(1);
+        runtime.CreateCalls.Should().ContainSingle();
+        AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateTargetResolver_ShouldRejectProfileRouteWithoutForwardToModelAction()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "reviewed.route"));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            StaticChatRoutePolicyQueryPort.ForSnapshot(null),
+            new ChatRouteResolver(new MissingForwardToModelFallbackProvider()),
             source);
         var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
 
@@ -2814,18 +2845,26 @@ public class NyxIdChatGAgentTests
         return AgentProfileSnapshotCodec.Seal(profile);
     }
 
-    private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
+    private sealed class StaticChatRouteFallbackProvider(
+        string modelName,
+        string toolSetName = "") : IChatRouteFallbackProvider
     {
-        public ChatRouteDecision GetFallbackDecision() => new()
+        public ChatRouteDecision GetFallbackDecision()
         {
-            Action = new ChatRouteAction
+            var forwardToModel = new ForwardToModel { ModelName = modelName };
+            if (!string.IsNullOrWhiteSpace(toolSetName))
             {
-                ForwardToModel = new ForwardToModel { ModelName = modelName },
-            },
-            MatchedRuleId = string.Empty,
-            UsedFallback = true,
-            ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        };
+                forwardToModel.ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName };
+            }
+
+            return new ChatRouteDecision
+            {
+                Action = new ChatRouteAction { ForwardToModel = forwardToModel },
+                MatchedRuleId = string.Empty,
+                UsedFallback = true,
+                ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            };
+        }
     }
 
     private sealed class MissingForwardToModelFallbackProvider : IChatRouteFallbackProvider

@@ -13,13 +13,35 @@ internal static class ProjectionScopeAgentRegistration
         if (!scopeAgentType.IsGenericType &&
             scopeAgentType.GetCustomAttribute<GAgentAttribute>(inherit: false) != null)
         {
-            return AgentRegistration.FromAgentType(scopeAgentType);
+            var declaredRegistration = AgentRegistration.FromAgentType(scopeAgentType);
+            return scopeAgentType == typeof(ProjectionScopeStatusGAgent)
+                ? declaredRegistration with
+                {
+                    StateMigrationTypes =
+                    [
+                        typeof(ProjectionScopeStatusTerminalStateV0ToV1Migration),
+                    ],
+                }
+                : declaredRegistration;
         }
 
-        return new AgentRegistration(
+        var registration = new AgentRegistration(
             Kind: BuildKind(scopeAgentType),
             ImplementationType: scopeAgentType,
             StateContractType: typeof(ProjectionScopeState));
+        return scopeAgentType.IsGenericType &&
+               scopeAgentType.GetGenericTypeDefinition() == typeof(ProjectionMaterializationScopeGAgent<>)
+            ? registration with
+            {
+                StateSchemaVersion = 1,
+                PrebuiltStateMigrationSteps =
+                [
+                    ProjectionScopeStateActivationSealMigration.Create(
+                        registration.Kind,
+                        fromStateVersion: 0),
+                ],
+            }
+            : registration;
     }
 
     private static string BuildKind(Type scopeAgentType)

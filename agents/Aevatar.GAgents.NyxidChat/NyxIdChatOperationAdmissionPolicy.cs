@@ -46,6 +46,11 @@ internal static class NyxIdChatOperationAdmissionPolicy
                  provenance.ServiceSlug,
                  admission.ServiceSlug,
                  StringComparison.Ordinal) ||
+             !string.IsNullOrWhiteSpace(admission.CatalogServiceSlug) &&
+             !string.Equals(
+                 provenance.CatalogServiceSlug,
+                 admission.CatalogServiceSlug,
+                 StringComparison.Ordinal) ||
              !string.Equals(
                  provenance.OperationId,
                  admission.PublishedEndpoint.EndpointId,
@@ -137,6 +142,10 @@ internal static class NyxIdChatOperationAdmissionPolicy
                 string.Equals(
                     operation.ServiceSlug,
                     effectOperation.ServiceSlug,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    operation.CatalogServiceSlug,
+                    effectOperation.CatalogServiceSlug,
                     StringComparison.Ordinal) &&
                 string.Equals(
                     operation.CatalogDigest,

@@ -287,7 +287,12 @@ public static class ServiceCollectionExtensions
 
     private static IEnumerable<IAgentToolSource> ResolveChannelToolSources(IServiceProvider serviceProvider)
     {
-        foreach (var source in serviceProvider.GetServices<IAgentToolSource>())
+        var workspace = serviceProvider.GetRequiredService<IToolSetRegistry>()
+            .Resolve(ToolSetNames.WorkspaceDefault);
+        var sources = workspace.IsSuccess
+            ? workspace.Sources
+            : serviceProvider.GetServices<IAgentToolSource>();
+        foreach (var source in sources)
             yield return source;
 
         var inventory = serviceProvider.GetService<ChannelNyxIdConnectedServiceInventoryToolSource>();

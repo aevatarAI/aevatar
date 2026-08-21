@@ -108,6 +108,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<AsyncLocalRuntimeFleetReconcileDeliveryAttestationAccessor>());
         services.TryAddSingleton<IRuntimeFleetCapabilityAdmissionReader,
             DenyAllRuntimeFleetCapabilityAdmissionReader>();
+        services.TryAddSingleton<IRuntimeFleetCapabilityQuiescenceReader,
+            DenyAllRuntimeFleetCapabilityQuiescenceReader>();
         services.TryAddSingleton<IRuntimeLocalMembershipIdentityReader,
             UnavailableRuntimeLocalMembershipIdentityReader>();
         services.TryAddSingleton<IRuntimeFleetMembershipSnapshotSource,

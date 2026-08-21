@@ -1,4 +1,4 @@
-import "./transport.js?v=20260817-m55-operation-auth-trajectory";
+import "./transport.js?v=20260820-m57-trajectory-persistence";
 import {
   consumeSse,
   mergeUsage,
@@ -9,20 +9,20 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260817-m55-operation-auth-trajectory";
+} from "./protocol.js?v=20260820-m57-trajectory-persistence";
 import {
   buildConnectCardBlock,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260817-m55-operation-auth-trajectory";
+} from "./blocks.js?v=20260820-m57-trajectory-persistence";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260817-m55-operation-auth-trajectory";
-import { describeReadinessFailure } from "./readiness.js?v=20260817-m55-operation-auth-trajectory";
+} from "./actor-state.js?v=20260820-m57-trajectory-persistence";
+import { describeReadinessFailure } from "./readiness.js?v=20260820-m57-trajectory-persistence";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const SERVICE_ACCESS_REVIEW_KEY = "aevatar-studio:pending-service-access-review:v1";
@@ -108,11 +108,8 @@ const dom = {
   recentGroup: $("#recentGroup"),
   recentSessionsList: $("#recentSessionsList"),
   requestTraceCount: $("#requestTraceCount"),
-  requestTraceEmpty: $("#requestTraceEmpty"),
   requestTraceLive: $("#requestTraceLive"),
-  requestTraceList: $("#requestTraceList"),
   requestTracePanel: $("#requestTracePanel"),
-  requestTraceRailCount: $("#requestTraceRailCount"),
   needsYouCount: $("#needsYouCount"),
   needsYouFilterButton: $("#needsYouFilterButton"),
   removeAttachmentButton: $("#removeAttachmentButton"),
@@ -163,20 +160,29 @@ const dom = {
   traceEventFact: $("#traceEventFact"),
   traceInputFact: $("#traceInputFact"),
   traceOperationCount: $("#traceOperationCount"),
-  traceOperationDurationFact: $("#traceOperationDurationFact"),
   traceOperationEmpty: $("#traceOperationEmpty"),
-  traceOperationIdFact: $("#traceOperationIdFact"),
-  traceOperationInputFact: $("#traceOperationInputFact"),
-  traceOperationInputSection: $("#traceOperationInputSection"),
-  traceOperationKindFact: $("#traceOperationKindFact"),
   traceOperationList: $("#traceOperationList"),
-  traceOperationOutputFact: $("#traceOperationOutputFact"),
-  traceOperationOutputSection: $("#traceOperationOutputSection"),
   traceOperationOverview: $("#traceOperationOverview"),
-  traceOperationSection: $("#traceOperationSection"),
-  traceOperationStartedFact: $("#traceOperationStartedFact"),
-  traceOperationStatusFact: $("#traceOperationStatusFact"),
-  traceOperationTitleFact: $("#traceOperationTitleFact"),
+  trajectoryDetails: $("#trajectoryDetails"),
+  trajectoryDetailsBody: $("#trajectoryDetailsBody"),
+  trajectoryDetailsClose: $("#trajectoryDetailsClose"),
+  trajectoryDetailsKind: $("#trajectoryDetailsKind"),
+  trajectoryDetailsLocation: $("#trajectoryDetailsLocation"),
+  trajectoryDetailsResize: $("#trajectoryDetailsResize"),
+  trajectoryDetailsTabs: $("#trajectoryDetailsTabs"),
+  trajectoryDurationButton: $("#trajectoryDurationButton"),
+  trajectoryFoldCallsButton: $("#trajectoryFoldCallsButton"),
+  trajectoryFoldCallsIcon: $("#trajectoryFoldCallsIcon"),
+  trajectoryFoldRequestsButton: $("#trajectoryFoldRequestsButton"),
+  trajectoryFoldRequestsIcon: $("#trajectoryFoldRequestsIcon"),
+  trajectoryLedger: $("#trajectoryLedger"),
+  trajectoryOverviewBoundaries: $("#trajectoryOverviewBoundaries"),
+  trajectoryOverviewEmpty: $("#trajectoryOverviewEmpty"),
+  trajectoryOverviewHairline: $("#trajectoryOverviewHairline"),
+  trajectoryOverviewSelection: $("#trajectoryOverviewSelection"),
+  trajectoryOverviewSpans: $("#trajectoryOverviewSpans"),
+  trajectoryOverviewTrack: $("#trajectoryOverviewTrack"),
+  trajectorySearchInput: $("#trajectorySearchInput"),
   traceOutputFact: $("#traceOutputFact"),
   traceOutputSection: $("#traceOutputSection"),
   traceReadonlyNotice: $("#traceReadonlyNotice"),
@@ -490,6 +496,202 @@ function createInputTraceOperation(trace) {
     record.timingClock = "client";
   }
   return record;
+}
+
+// ---------------------------------------------------------------------------
+// Trajectory recovery.
+//
+// The live ledger is built from SSE frames, which are gone after a reload. Two
+// committed sources restore it, and neither infers a record it did not read:
+//   * stored turns  — `operations` from GET /api/chat/conversations/{id}
+//   * the in-flight turn — the conversation actor's current-state projection
+// Recovered containers are keyed by the server's `turnId`, because
+// `clientRequestId` is a browser identity that does not survive the reload. A
+// live container already owning that turn is never overwritten.
+// ---------------------------------------------------------------------------
+
+function restoredTraceKey(turnId) {
+  return `turn:${String(turnId || "").trim()}`;
+}
+
+function ensureRestoredRequestTrace(entry, turnId, { prompt = "", status = "closed" } = {}) {
+  const normalizedTurnId = String(turnId || "").trim();
+  if (!entry || !normalizedTurnId) return null;
+  for (const candidate of entry.traces.values()) {
+    if (String(candidate.serverTurnId || "").trim() === normalizedTurnId) return candidate;
+  }
+  const key = restoredTraceKey(normalizedTurnId);
+  const existing = entry.traces.get(key);
+  if (existing) return existing;
+
+  const run = createRunState();
+  run.status = status;
+  run.clientRequestId = key;
+  run.request = { prompt: String(prompt || "") };
+  run.context = { actorId: entry.actorId || "", turnId: normalizedTurnId };
+  const trace = {
+    key,
+    clientRequestId: key,
+    serverRunId: null,
+    serverTurnId: normalizedTurnId,
+    restored: true,
+    run,
+    records: [],
+    recordIndex: new Map(),
+    selectedOperationKey: null,
+    activeModelOperationKey: null,
+    followLatestOperation: false,
+    nextOperationSequence: 0,
+    typedModelLifecycleObserved: true,
+    element: null,
+    fields: null,
+  };
+  entry.traces.set(key, trace);
+  entry.traceOrder.unshift(key);
+  return trace;
+}
+
+function restoredOperationTimestamp(value) {
+  const timestamp = traceServerTimestamp(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+}
+
+function restoredOperationUsage(operation) {
+  const usage = {
+    promptTokens: operation?.promptTokens ?? null,
+    completionTokens: operation?.completionTokens ?? null,
+    totalTokens: operation?.totalTokens ?? null,
+  };
+  return Object.values(usage).some((value) => value != null) ? usage : null;
+}
+
+function applyRestoredOperation(trace, operation, { kind, id, title }) {
+  const key = traceOperationKey(kind, id);
+  const record = upsertTraceOperation(trace, {
+    key,
+    id,
+    kind,
+    title: title || traceOperationKindLabel(kind),
+    status: String(operation?.status || "closed").toLowerCase(),
+    input: operation?.inputPreview || operation?.argumentsPreview || "",
+    // Tool result bodies are never archived, so a restored tool record reports
+    // its status and timing but honestly has no captured output.
+    output: operation?.outputPreview || "",
+    model: operation?.model || "",
+    provider: operation?.provider || "",
+    finishReason: operation?.finishReason || "",
+    error: operation?.status === "error" ? operation?.safeMessage || "" : "",
+    usage: restoredOperationUsage(operation),
+    serverSequence: Number.isSafeInteger(operation?.order) && operation.order > 0
+      ? operation.order
+      : undefined,
+  });
+  if (!record) return null;
+  record.restored = true;
+  record.previewsTruncated = Boolean(operation?.previewsTruncated);
+  record.startedAt = restoredOperationTimestamp(operation?.startedAt);
+  record.completedAt = restoredOperationTimestamp(operation?.completedAt);
+  record.timingClock = record.startedAt == null ? null : "server";
+  return record;
+}
+
+function restoreTrajectoryFromStoredOperations(entry, operations, messages) {
+  if (!entry || !Array.isArray(operations) || !operations.length) return;
+  const promptByTurn = new Map();
+  for (const message of messages || []) {
+    if (message?.role !== "user" || !message.turnId) continue;
+    if (!promptByTurn.has(message.turnId)) promptByTurn.set(message.turnId, message.content || "");
+  }
+
+  const grouped = new Map();
+  for (const operation of operations) {
+    const turnId = String(operation?.turnId || "").trim();
+    if (!turnId) continue;
+    if (!grouped.has(turnId)) grouped.set(turnId, []);
+    grouped.get(turnId).push(operation);
+  }
+
+  for (const [turnId, turnOperations] of grouped) {
+    const trace = ensureRestoredRequestTrace(entry, turnId, {
+      prompt: promptByTurn.get(turnId) || "",
+      status: turnOperations.some((operation) => operation?.status === "error")
+        ? "error"
+        : "complete",
+    });
+    if (!trace || !trace.restored || trace.records.length) continue;
+    const ordered = [...turnOperations]
+      .sort((left, right) => (Number(left?.order) || 0) - (Number(right?.order) || 0));
+    const firstStart = ordered
+      .map((operation) => restoredOperationTimestamp(operation?.startedAt))
+      .find((value) => value != null) ?? null;
+    const lastEnd = ordered
+      .map((operation) => restoredOperationTimestamp(operation?.completedAt))
+      .filter((value) => value != null)
+      .at(-1) ?? null;
+    trace.run.startedAt = firstStart;
+    trace.run.completedAt = lastEnd;
+
+    const input = createInputTraceOperation(trace);
+    if (input) {
+      input.restored = true;
+      input.startedAt = firstStart;
+      input.timingClock = firstStart == null ? null : "server";
+    }
+    for (const operation of ordered) {
+      applyRestoredOperation(trace, operation, {
+        kind: operation?.kind === "model" ? "model" : "tool",
+        id: operation?.operationId || `${turnId}:${operation?.order ?? 0}`,
+        title: operation?.title,
+      });
+    }
+  }
+}
+
+function restoreTrajectoryFromActorProjection(entry, projection) {
+  const task = projection?.task;
+  const turnId = String(task?.turnId || "").trim();
+  if (!entry || !turnId || !(projection?.steps instanceof Map)) return;
+  const steps = [...projection.steps.values()]
+    .filter((step) => step?.operation?.requestedAt &&
+      (step.kind === "llm" || step.kind === "tool"));
+  if (!steps.length) return;
+
+  const trace = ensureRestoredRequestTrace(entry, turnId, {
+    prompt: projection?.activeTurn?.turnId === turnId
+      ? projection?.activeTurn?.prompt || ""
+      : projection?.latestTurn?.prompt || "",
+    status: task?.status === "failed" ? "error" : "running",
+  });
+  if (!trace || !trace.restored) return;
+
+  const firstStart = steps
+    .map((step) => restoredOperationTimestamp(step.operation.requestedAt))
+    .find((value) => value != null) ?? null;
+  if (trace.run.startedAt == null) trace.run.startedAt = firstStart;
+  const input = createInputTraceOperation(trace);
+  if (input && input.startedAt == null) {
+    input.restored = true;
+    input.startedAt = firstStart;
+    input.timingClock = firstStart == null ? null : "server";
+  }
+
+  for (const step of steps) {
+    applyRestoredOperation(trace, {
+      status: step.status,
+      title: step.kind === "tool" ? step.source?.tool?.toolName : step.source?.llm?.model,
+      model: step.source?.llm?.model || "",
+      startedAt: step.operation.requestedAt,
+      completedAt: step.operation.completedAt,
+      safeMessage: step.safeMessage,
+      order: step.order,
+    }, {
+      kind: step.kind === "llm" ? "model" : "tool",
+      id: step.operation.operationId || step.stepId,
+      title: step.kind === "tool"
+        ? step.source?.tool?.toolName
+        : step.source?.llm?.model || step.description,
+    });
+  }
 }
 
 function selectedTraceOperation(trace) {
@@ -846,186 +1048,883 @@ function traceOperationStatusLabel(status) {
   }[String(status || "").toLowerCase()] || "状态未知";
 }
 
-function traceOperationPreview(record) {
-  const value = record?.kind === "input" ? record.input : record?.output || record?.input;
-  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 180) ||
-    (record?.status === "running" ? "等待结果" : "未上报内容");
-}
+// ---------------------------------------------------------------------------
+// Trajectory ledger.
+//
+// A request is only the stable container; its Input / Model / Tool operations
+// are the selectable records. One operation identity is shared by its overview
+// span, its ledger row and the details pane, so all three always describe the
+// same recorded facts. Timing is rendered only when the operation reported it.
+// ---------------------------------------------------------------------------
+
+const TRAJECTORY_LANE = { input: 0, model: 1, tool: 2 };
+const TRAJECTORY_DETAILS_MIN_WIDTH = 240;
+const TRAJECTORY_DETAILS_DEFAULT_WIDTH = 340;
+const TRAJECTORY_RANGE_MIN_PX = 3;
+const TRAJECTORY_TAIL_THRESHOLD_PX = 24;
+
+const trajectory = {
+  durationMode: true,
+  foldCalls: false,
+  foldedRequests: new Set(),
+  search: "",
+  range: null,
+  viewport: null,
+  detailsWidth: null,
+  detailsTab: null,
+  detailsOpen: false,
+  domain: null,
+  spans: [],
+  rows: [],
+  drag: null,
+};
 
 function traceOperationIcon(kind) {
   return { input: "corner-down-right", model: "sparkles", tool: "wrench" }[kind] || "circle";
 }
 
-function createTraceOperationRow(entry, trace, record) {
-  const row = el("button", `trace-operation-row ${record.kind}`);
-  row.type = "button";
-  row.setAttribute("role", "option");
-  row.dataset.operationKey = record.key;
-  const marker = el("span", "trace-operation-marker");
-  marker.append(iconNode(traceOperationIcon(record.kind)));
-  const copy = el("span", "trace-operation-copy");
-  const heading = el("span", "trace-operation-heading");
-  const kind = el("small", "trace-operation-kind", traceOperationKindLabel(record.kind));
-  const title = el("strong", "trace-operation-title");
-  heading.append(kind, title);
-  const preview = el("small", "trace-operation-preview");
-  copy.append(heading, preview);
-  const timing = el("span", "trace-operation-timing");
-  const status = el("small", "trace-operation-status");
-  const duration = el("strong", "trace-operation-duration mono");
-  timing.append(status, duration);
-  row.append(marker, copy, timing, iconNode("chevron-right"));
-  record.element = row;
-  record.fields = { kind, title, preview, status, duration };
-  row.addEventListener("click", () => selectTraceOperation(entry, trace, record.key, { openDetails: true }));
-  row.addEventListener("keydown", (event) => moveTraceOperationSelection(event, entry, trace, record.key));
-  return row;
+function trajectoryPreview(value, limit = 220) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
 }
 
-function updateTraceOperationRow(entry, trace, record) {
-  const row = record.element || createTraceOperationRow(entry, trace, record);
-  const selected = trace.selectedOperationKey === record.key;
-  row.className = `trace-operation-row ${record.kind} ${record.status || "running"}${selected ? " selected" : ""}`;
-  row.setAttribute("aria-selected", String(selected));
-  row.tabIndex = selected ? 0 : -1;
-  record.fields.title.textContent = record.title || traceOperationKindLabel(record.kind);
-  record.fields.preview.textContent = traceOperationPreview(record);
-  record.fields.status.textContent = traceOperationStatusLabel(record.status);
-  record.fields.duration.textContent = traceOperationDuration(record);
-  return row;
+function trajectoryRowTitle(record) {
+  if (record.kind === "input") return trajectoryPreview(record.input) || "空请求";
+  if (record.kind === "model") return record.model || record.title || "LLM response";
+  return record.title || "tool";
 }
 
-function selectTraceOperation(entry, trace, key, { openDetails = false, focusRow = false } = {}) {
+function trajectoryRowResult(record) {
+  if (record.kind === "input") return null;
+  const output = trajectoryPreview(record.error || record.output || record.reasoning);
+  if (output) return { text: output, error: Boolean(record.error) || record.status === "error" };
+  if (record.status === "running") return { text: "等待结果", pending: true };
+  return { text: "未上报内容", pending: true };
+}
+
+function trajectoryRequestSummary(records) {
+  const models = records.filter((record) => record.kind === "model").length;
+  const tools = records.filter((record) => record.kind === "tool").length;
+  const parts = [`${records.length} 条记录`];
+  if (models) parts.push(`${models} 次模型响应`);
+  if (tools) parts.push(`${tools} 次工具调用`);
+  return parts.join(" · ");
+}
+
+function trajectoryCollapsedCallsSummary(tools) {
+  const failed = tools.filter((tool) => tool.status === "error").length;
+  const names = [...new Set(tools.map((tool) => tool.title).filter(Boolean))].slice(0, 3).join(", ");
+  const summary = `${tools.length} 次工具调用${names ? ` · ${names}` : ""}`;
+  return failed ? `${summary} · ${failed} 失败` : summary;
+}
+
+function trajectorySearchText(row) {
+  if (row.type === "request") {
+    return `${row.number} ${row.records.map((record) => record.title).join(" ")}`.toLowerCase();
+  }
+  const record = row.record;
+  return [
+    traceOperationKindLabel(record.kind),
+    trajectoryRowTitle(record),
+    record.model,
+    record.provider,
+    record.input,
+    record.output,
+    record.reasoning,
+    record.error,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function orderedRequestTraces(entry) {
+  return [...(entry?.traceOrder || [])]
+    .map((key) => entry?.traces?.get(key))
+    .filter(Boolean)
+    .reverse();
+}
+
+function buildTrajectoryRows(entry) {
+  const rows = [];
+  orderedRequestTraces(entry).forEach((trace, index) => {
+    const records = orderedTraceOperations(trace);
+    const number = index + 1;
+    if (!records.length) return;
+    if (trajectory.foldedRequests.has(trace.key) && records.length > 1) {
+      rows.push({
+        type: "request",
+        key: `request:${trace.key}`,
+        trace,
+        number,
+        records,
+        requestStart: true,
+        requestEnd: true,
+      });
+      return;
+    }
+    let cursor = 0;
+    let first = true;
+    while (cursor < records.length) {
+      const record = records[cursor];
+      const collapsedCalls = [];
+      if (trajectory.foldCalls && record.kind === "model") {
+        let lookahead = cursor + 1;
+        while (lookahead < records.length && records[lookahead].kind === "tool") {
+          collapsedCalls.push(records[lookahead]);
+          lookahead += 1;
+        }
+      }
+      rows.push({
+        type: "operation",
+        key: `${trace.key} ${record.key}`,
+        trace,
+        number,
+        record,
+        collapsedCalls,
+        requestStart: first,
+        requestEnd: false,
+      });
+      first = false;
+      cursor += 1 + collapsedCalls.length;
+    }
+    const last = rows.at(-1);
+    if (last) last.requestEnd = true;
+  });
+  return rows;
+}
+
+function trajectoryVisibleRecords(rows) {
+  return rows.flatMap((row) => (row.type === "operation"
+    ? [row.record, ...row.collapsedCalls]
+    : row.records));
+}
+
+function trajectorySpanRange(record) {
+  if (!Number.isFinite(record.startedAt)) return null;
+  const end = Number.isFinite(record.completedAt) && record.completedAt >= record.startedAt
+    ? record.completedAt
+    : null;
+  return { start: record.startedAt, end };
+}
+
+function buildTrajectorySpans(rows) {
+  const records = trajectoryVisibleRecords(rows);
+  if (!records.length) return { domain: null, spans: [] };
+  if (!trajectory.durationMode) {
+    return {
+      domain: { start: 0, end: records.length, mode: "sequence" },
+      spans: records.map((record, index) => ({
+        record,
+        start: index,
+        end: index,
+        equal: true,
+      })),
+    };
+  }
+  const timed = records
+    .map((record) => ({ record, range: trajectorySpanRange(record) }))
+    .filter((candidate) => candidate.range !== null);
+  if (!timed.length) return { domain: null, spans: [] };
+  const start = Math.min(...timed.map((candidate) => candidate.range.start));
+  const end = Math.max(
+    start + 1,
+    ...timed.map((candidate) => candidate.range.end ?? candidate.range.start),
+  );
+  return {
+    domain: { start, end, mode: "duration" },
+    spans: timed.map((candidate) => ({
+      record: candidate.record,
+      start: candidate.range.start,
+      end: candidate.range.end,
+      equal: false,
+    })),
+  };
+}
+
+function trajectoryViewport() {
+  const domain = trajectory.domain;
+  if (!domain) return null;
+  const viewport = trajectory.viewport;
+  if (!viewport) return { start: domain.start, end: domain.end };
+  const width = Math.max(1e-6, viewport.end - viewport.start);
+  const clampedStart = Math.max(domain.start, Math.min(viewport.start, domain.end - width));
+  return { start: clampedStart, end: clampedStart + width };
+}
+
+function trajectoryRequestBoundaries(rows) {
+  const boundaries = [];
+  for (const row of rows) {
+    if (!row.requestStart) continue;
+    const first = row.type === "operation" ? row.record : row.records[0];
+    if (Number.isFinite(first?.startedAt)) boundaries.push({ at: first.startedAt, number: row.number });
+  }
+  return boundaries;
+}
+
+function trajectoryRecordInRange(record) {
+  if (trajectory.range === null) return true;
+  const { start, end } = trajectory.range;
+  if (!trajectory.durationMode) {
+    const index = trajectory.spans.findIndex((span) => span.record === record);
+    return index >= 0 && index >= Math.floor(start) && index <= Math.ceil(end);
+  }
+  if (!Number.isFinite(record.startedAt)) return false;
+  const recordEnd = Number.isFinite(record.completedAt) ? record.completedAt : record.startedAt;
+  return record.startedAt <= end && recordEnd >= start;
+}
+
+function trajectoryRowInRange(row) {
+  if (trajectory.range === null) return true;
+  const records = row.type === "operation" ? [row.record, ...row.collapsedCalls] : row.records;
+  return records.some((record) => trajectoryRecordInRange(record));
+}
+
+function selectedTrajectoryRecord(entry) {
+  const trace = selectedRequestTrace(entry);
+  return trace ? selectedTraceOperation(trace) : null;
+}
+
+function selectTraceOperation(entry, trace, key, { focusRow = false } = {}) {
   ensureTraceOperationState(trace);
   if (!entry || !trace?.recordIndex.has(key)) return;
   entry.selectedTraceKey = trace.key;
   trace.selectedOperationKey = key;
   trace.followLatestOperation = false;
+  trajectory.detailsOpen = true;
   if (entry !== state.activeConversation) return;
   renderRequestTraces(entry);
   renderInspector();
-  setInspectorTab("run");
-  if (openDetails) openMobilePanel("inspector");
+  renderEventLog();
   if (focusRow) trace.recordIndex.get(key)?.element?.focus();
 }
 
-function moveTraceOperationSelection(event, entry, trace, key) {
+function moveTraceOperationSelection(event, entry) {
   if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
-  const keys = orderedTraceOperations(trace).map((record) => record.key);
-  const index = Math.max(0, keys.indexOf(key));
+  const operations = trajectory.rows.filter((row) => row.type === "operation");
+  if (!operations.length) return;
+  const trace = selectedRequestTrace(entry);
+  const currentKey = trace?.selectedOperationKey;
+  const index = Math.max(0, operations.findIndex((row) =>
+    row.trace === trace && row.record.key === currentKey));
   const nextIndex = event.key === "Home"
     ? 0
     : event.key === "End"
-      ? keys.length - 1
+      ? operations.length - 1
       : event.key === "ArrowUp"
         ? Math.max(0, index - 1)
-        : Math.min(keys.length - 1, index + 1);
-  selectTraceOperation(entry, trace, keys[nextIndex], { openDetails: true, focusRow: true });
+        : Math.min(operations.length - 1, index + 1);
+  const next = operations[nextIndex];
+  selectTraceOperation(entry, next.trace, next.record.key, { focusRow: true });
 }
 
-function traceOperationOverviewRange(trace) {
-  ensureTraceOperationState(trace);
-  const serverRecords = trace.records.filter((record) =>
-    record.timingClock === "server" && Number.isFinite(record.startedAt));
-  const comparable = serverRecords.length
-    ? serverRecords
-    : trace.records.filter((record) => Number.isFinite(record.startedAt));
-  if (!comparable.length) return null;
-  const start = Math.min(...comparable.map((record) => record.startedAt));
-  const knownEnds = comparable.flatMap((record) =>
-    Number.isFinite(record.completedAt) ? [record.completedAt] : [record.startedAt]);
-  const end = Math.max(start + 1, ...knownEnds);
-  return { start, end, clock: serverRecords.length ? "server" : comparable[0].timingClock };
-}
+function createTrajectoryOperationRow(entry, row) {
+  const record = row.record;
+  const element = el("tr", "trajectory-row");
+  element.tabIndex = 0;
+  element.dataset.kind = record.kind;
+  element.dataset.operationKey = record.key;
+  element.dataset.traceKey = row.trace.key;
 
-function createTraceOperationBar(trace, record, range) {
-  const selected = trace.selectedOperationKey === record.key;
-  const bar = el(
-    "button",
-    `trace-operation-duration-bar ${record.kind} ${record.status || "running"}${selected ? " selected" : ""}`,
-  );
-  bar.type = "button";
-  const comparable = range && record.timingClock === range.clock && Number.isFinite(record.startedAt);
-  const duration = traceOperationDurationMs(record);
-  const rangeDuration = range ? Math.max(1, range.end - range.start) : 1;
-  const orderedRecords = orderedTraceOperations(trace);
-  const sequenceDenominator = Math.max(1, orderedRecords.length - 1);
-  const sequenceIndex = Math.max(0, orderedRecords.findIndex((candidate) => candidate.key === record.key));
-  const sequenceLeft = orderedRecords.length === 1 ? 0 : sequenceIndex / sequenceDenominator * 100;
-  const left = comparable ? (record.startedAt - range.start) / rangeDuration * 100 : sequenceLeft;
-  const width = comparable && duration != null ? duration / rangeDuration * 100 : 0;
-  bar.style.setProperty("--trace-operation-left", `${Math.max(0, Math.min(100, left))}%`);
-  bar.style.setProperty("--trace-operation-width", `${Math.max(0, Math.min(100 - left, width))}%`);
-  bar.dataset.timingRecorded = String(duration != null);
-  bar.dataset.operationKey = record.key;
-  bar.title = `${traceOperationKindLabel(record.kind)} · ${record.title} · ${traceOperationDuration(record)}`;
-  bar.setAttribute("aria-label", bar.title);
-  bar.setAttribute("aria-pressed", String(selected));
-  bar.addEventListener("click", () => {
-    const entry = state.activeConversation;
-    const selectedTrace = selectedRequestTrace(entry);
-    if (entry && selectedTrace === trace) selectTraceOperation(entry, trace, record.key, { openDetails: true });
+  const event = el("td", "trajectory-event");
+  const requestRail = el("span", "trajectory-request-rail");
+  const selectionRail = el("span", "trajectory-selection-rail");
+  const requestLabel = el("button", "trajectory-request-label");
+  requestLabel.type = "button";
+  const eventInner = el("div", "trajectory-event-inner");
+  const kindSlot = el("span", "trajectory-kind-slot");
+  const kindTag = el("span", "trajectory-kind-tag");
+  kindTag.dataset.kind = record.kind;
+  kindTag.append(iconNode(traceOperationIcon(record.kind)), el("span", "", traceOperationKindLabel(record.kind)));
+  kindSlot.append(kindTag);
+  eventInner.append(kindSlot);
+  event.append(requestRail, selectionRail, requestLabel, eventInner);
+
+  const content = el("td", "trajectory-content");
+  const inner = el("div", "trajectory-content-inner");
+  const time = el("span", "trajectory-row-time");
+  const text = el("span", "trajectory-content-text");
+  const title = el("span", "trajectory-content-title");
+  const arrow = el("span", "trajectory-content-arrow", "→");
+  const result = el("span", "trajectory-content-result");
+  text.append(title, arrow, result);
+  inner.append(text, time);
+  content.append(inner);
+
+  element.append(event, content);
+  record.element = element;
+  record.fields = { requestRail, selectionRail, requestLabel, kindTag, title, arrow, result, time };
+  element.addEventListener("click", () => {
+    selectTraceOperation(entry, row.trace, record.key);
   });
-  record.barElement = bar;
-  return bar;
+  element.addEventListener("keydown", (keyEvent) => {
+    if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+      keyEvent.preventDefault();
+      selectTraceOperation(entry, row.trace, record.key);
+      return;
+    }
+    moveTraceOperationSelection(keyEvent, entry);
+  });
+  requestLabel.addEventListener("click", (clickEvent) => {
+    clickEvent.stopPropagation();
+    toggleTrajectoryRequest(entry, row.trace.key);
+  });
+  return element;
 }
 
-function renderTraceOperationOverview(trace) {
-  if (!dom.traceOperationOverview) return;
-  ensureTraceOperationState(trace);
-  if (!trace?.records.length) {
-    dom.traceOperationOverview.replaceChildren();
-    return;
+function updateTrajectoryOperationRow(entry, row, searchQuery) {
+  const record = row.record;
+  const element = record.element || createTrajectoryOperationRow(entry, row);
+  const trace = row.trace;
+  const selected = entry.selectedTraceKey === trace.key && trace.selectedOperationKey === record.key;
+  const activeRequest = entry.selectedTraceKey === trace.key;
+  element.dataset.selected = String(selected);
+  element.dataset.status = record.status || "running";
+  element.dataset.requestStart = String(Boolean(row.requestStart));
+  element.dataset.requestEnd = String(Boolean(row.requestEnd));
+  element.dataset.inRange = String(trajectoryRowInRange(row));
+  element.dataset.searchMatch = String(!searchQuery || trajectorySearchText(row).includes(searchQuery));
+  element.setAttribute("aria-selected", String(selected));
+
+  const fields = record.fields;
+  fields.requestRail.hidden = !activeRequest;
+  fields.selectionRail.hidden = !selected;
+  fields.requestLabel.hidden = !row.requestStart;
+  if (row.requestStart) {
+    fields.requestLabel.textContent = `Req ${row.number}`;
+    fields.requestLabel.dataset.active = String(activeRequest);
+    fields.requestLabel.title = trajectory.foldedRequests.has(trace.key)
+      ? `展开请求 ${row.number}`
+      : `折叠请求 ${row.number}`;
   }
-  const range = traceOperationOverviewRange(trace);
-  const lanes = [
-    ["input", "Input"],
-    ["model", "Model"],
-    ["tool", "Tools"],
-  ].map(([kind, label]) => {
-    const lane = el("div", `trace-operation-lane ${kind}`);
-    const laneLabel = el("span", "trace-operation-lane-label", label);
-    const track = el("div", "trace-operation-lane-track");
-    for (const record of orderedTraceOperations(trace).filter((candidate) => candidate.kind === kind)) {
-      track.append(createTraceOperationBar(trace, record, range));
-    }
-    lane.append(laneLabel, track);
-    return lane;
-  });
-  dom.traceOperationOverview.replaceChildren(...lanes);
+
+  const collapsed = row.collapsedCalls.length > 0;
+  fields.title.textContent = trajectoryRowTitle(record);
+  fields.title.classList.toggle("mono", record.kind === "tool");
+  const result = collapsed
+    ? { text: trajectoryCollapsedCallsSummary(row.collapsedCalls), pending: false }
+    : trajectoryRowResult(record);
+  fields.arrow.hidden = result === null;
+  fields.result.hidden = result === null;
+  if (result !== null) {
+    fields.result.textContent = result.text;
+    fields.result.dataset.error = String(Boolean(result.error));
+    fields.result.dataset.pending = String(Boolean(result.pending));
+  }
+  const duration = traceOperationDurationMs(record);
+  fields.time.textContent = duration == null
+    ? (record.status === "running" ? "运行中" : "—")
+    : formatDuration(duration);
+  element.title = `${traceOperationKindLabel(record.kind)} · ${trajectoryRowTitle(record)} · ${traceOperationDuration(record)}`;
+  return element;
 }
 
-function renderTraceOperations(entry, trace) {
-  if (!dom.traceOperationList) return;
-  ensureTraceOperationState(trace);
-  const records = orderedTraceOperations(trace);
-  if (dom.traceOperationCount) dom.traceOperationCount.textContent = String(records.length);
-  if (!records.length) {
-    dom.traceOperationEmpty?.classList.remove("hidden");
-    if (dom.traceOperationEmpty &&
-        (dom.traceOperationList.firstElementChild !== dom.traceOperationEmpty ||
-         dom.traceOperationList.childElementCount !== 1)) {
-      dom.traceOperationList.replaceChildren(dom.traceOperationEmpty);
+function createTrajectoryRequestRow(entry, row) {
+  const element = el("tr", "trajectory-row");
+  element.tabIndex = 0;
+  element.dataset.kind = "request";
+  element.dataset.traceKey = row.trace.key;
+
+  const event = el("td", "trajectory-event");
+  const requestRail = el("span", "trajectory-request-rail");
+  const requestLabel = el("button", "trajectory-request-label");
+  requestLabel.type = "button";
+  const eventInner = el("div", "trajectory-event-inner");
+  const kindSlot = el("span", "trajectory-kind-slot");
+  const kindTag = el("span", "trajectory-kind-tag");
+  kindTag.dataset.kind = "request";
+  kindTag.append(iconNode("waypoints"), el("span", "", "REQUEST"));
+  kindSlot.append(kindTag);
+  eventInner.append(kindSlot);
+  event.append(requestRail, requestLabel, eventInner);
+
+  const content = el("td", "trajectory-content");
+  const collapsedText = el("span", "trajectory-collapsed");
+  const ellipsis = el("span", "trajectory-collapsed-ellipsis", "…");
+  const summary = el("span", "trajectory-collapsed-text");
+  collapsedText.append(ellipsis, summary);
+  content.append(collapsedText);
+
+  element.append(event, content);
+  row.trace.summaryElement = element;
+  row.trace.summaryFields = { requestRail, requestLabel, summary };
+  const expand = () => toggleTrajectoryRequest(entry, row.trace.key);
+  element.addEventListener("click", expand);
+  element.addEventListener("keydown", (keyEvent) => {
+    if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+    keyEvent.preventDefault();
+    expand();
+  });
+  return element;
+}
+
+function updateTrajectoryRequestRow(entry, row, searchQuery) {
+  const element = row.trace.summaryElement || createTrajectoryRequestRow(entry, row);
+  const activeRequest = entry.selectedTraceKey === row.trace.key;
+  element.dataset.selected = "false";
+  element.dataset.status = row.trace.run?.status || "idle";
+  element.dataset.requestStart = "true";
+  element.dataset.requestEnd = "true";
+  element.dataset.inRange = String(trajectoryRowInRange(row));
+  element.dataset.searchMatch = String(!searchQuery || trajectorySearchText(row).includes(searchQuery));
+  const fields = row.trace.summaryFields;
+  fields.requestRail.hidden = !activeRequest;
+  fields.requestLabel.textContent = `Req ${row.number}`;
+  fields.requestLabel.dataset.active = String(activeRequest);
+  fields.requestLabel.title = `展开请求 ${row.number}`;
+  fields.summary.textContent = trajectoryRequestSummary(row.records);
+  element.title = `请求 ${row.number} 已折叠 · ${trajectoryRequestSummary(row.records)}`;
+  return element;
+}
+
+function toggleTrajectoryRequest(entry, key) {
+  if (trajectory.foldedRequests.has(key)) trajectory.foldedRequests.delete(key);
+  else trajectory.foldedRequests.add(key);
+  renderRequestTraces(entry);
+}
+
+function renderTrajectoryLedger(entry, rows) {
+  const body = dom.traceOperationList;
+  if (!body) return;
+  const searchQuery = trajectory.search.trim().toLowerCase();
+  if (!rows.length) {
+    body.replaceChildren();
+    if (dom.traceOperationEmpty) {
+      dom.traceOperationEmpty.classList.remove("hidden");
+      dom.traceOperationEmpty.querySelector("strong").textContent = "尚无操作记录";
     }
-    renderTraceOperationOverview(trace);
     return;
   }
   dom.traceOperationEmpty?.classList.add("hidden");
-  if (!trace.recordIndex.has(trace.selectedOperationKey)) {
-    trace.selectedOperationKey = records.at(-1).key;
-  }
-  const needsIcons = records.some((record) => !record.element);
-  const rows = records.map((record) => updateTraceOperationRow(entry, trace, record));
-  rows.forEach((row, index) => {
-    const current = dom.traceOperationList.children[index];
-    if (current !== row) dom.traceOperationList.insertBefore(row, current || null);
+  const ledger = dom.trajectoryLedger;
+  const atTail = ledger
+    ? ledger.scrollHeight - ledger.clientHeight - ledger.scrollTop <= TRAJECTORY_TAIL_THRESHOLD_PX
+    : false;
+  const needsIcons = rows.some((row) => (row.type === "operation"
+    ? !row.record.element
+    : !row.trace.summaryElement));
+  const elements = rows.map((row) => (row.type === "operation"
+    ? updateTrajectoryOperationRow(entry, row, searchQuery)
+    : updateTrajectoryRequestRow(entry, row, searchQuery)));
+  elements.forEach((element, index) => {
+    const current = body.children[index];
+    if (current !== element) body.insertBefore(element, current || null);
   });
-  while (dom.traceOperationList.childElementCount > rows.length) {
-    dom.traceOperationList.lastElementChild.remove();
+  while (body.childElementCount > elements.length) body.lastElementChild.remove();
+  if (needsIcons) refreshIcons(body);
+  const visible = elements.some((element) => element.dataset.searchMatch !== "false");
+  if (dom.traceOperationEmpty) {
+    dom.traceOperationEmpty.classList.toggle("hidden", visible);
+    dom.traceOperationEmpty.querySelector("strong").textContent = "没有匹配的记录";
   }
-  if (needsIcons) refreshIcons(dom.traceOperationList);
-  renderTraceOperationOverview(trace);
+  if (atTail && ledger) ledger.scrollTop = ledger.scrollHeight;
+}
+
+function createTrajectorySpanElement(entry, span) {
+  const element = el("button", "trajectory-span");
+  element.type = "button";
+  element.dataset.kind = span.record.kind;
+  element.dataset.operationKey = span.record.key;
+  element.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const trace = trajectory.rows.find((row) =>
+      row.type === "operation" && row.record === span.record)?.trace;
+    if (trace) selectTraceOperation(entry, trace, span.record.key);
+  });
+  element.addEventListener("pointerdown", (event) => { event.stopPropagation(); });
+  return element;
+}
+
+function applyTrajectoryProjection(rows) {
+  const projection = buildTrajectorySpans(rows);
+  trajectory.domain = projection.domain;
+  trajectory.spans = projection.spans;
+  if (trajectory.domain === null) {
+    trajectory.viewport = null;
+    trajectory.range = null;
+  }
+}
+
+function renderTrajectoryOverview(entry, rows) {
+  const track = dom.trajectoryOverviewTrack;
+  if (!track) return;
+  const projection = { domain: trajectory.domain, spans: trajectory.spans };
+  const searchQuery = trajectory.search.trim().toLowerCase();
+  const viewport = trajectoryViewport();
+  const empty = !projection.domain || !projection.spans.length;
+  dom.trajectoryOverviewEmpty?.classList.toggle("hidden", !empty);
+  if (empty) {
+    dom.trajectoryOverviewSpans?.replaceChildren();
+    dom.trajectoryOverviewBoundaries?.replaceChildren();
+    dom.trajectoryOverviewSelection?.classList.add("hidden");
+    if (dom.trajectoryOverviewEmpty) {
+      dom.trajectoryOverviewEmpty.textContent = trajectory.durationMode
+        ? "尚无记录的时序"
+        : "尚无操作记录";
+    }
+    return;
+  }
+  const width = Math.max(1e-6, viewport.end - viewport.start);
+  const percent = (value) => ((value - viewport.start) / width) * 100;
+  const selectedRecord = selectedTrajectoryRecord(entry);
+  const spanElements = projection.spans.map((span) => {
+    const element = span.record.barElement || createTrajectorySpanElement(entry, span);
+    span.record.barElement = element;
+    const left = percent(span.start);
+    const spanWidth = span.equal
+      ? 0
+      : span.end === null ? 0 : percent(span.end) - left;
+    element.style.setProperty("--trajectory-span-left", `${left}%`);
+    element.style.setProperty("--trajectory-span-width", `${Math.max(0, spanWidth)}%`);
+    element.style.setProperty("--trajectory-span-lane", String(TRAJECTORY_LANE[span.record.kind] ?? 0));
+    element.dataset.equalDuration = String(span.equal);
+    element.dataset.timing = span.equal ? "sequence" : span.end === null ? "start-only" : "recorded";
+    element.dataset.status = span.record.status || "running";
+    element.dataset.current = String(selectedRecord === span.record);
+    element.dataset.inRange = String(trajectoryRecordInRange(span.record));
+    element.dataset.searchMatch = String(
+      !searchQuery || trajectorySearchText({ type: "operation", record: span.record }).includes(searchQuery),
+    );
+    const label = `${traceOperationKindLabel(span.record.kind)} · ${trajectoryRowTitle(span.record)} · ${traceOperationDuration(span.record)}`;
+    element.title = label;
+    element.setAttribute("aria-label", label);
+    return element;
+  });
+  dom.trajectoryOverviewSpans?.replaceChildren(...spanElements);
+
+  const boundaries = trajectory.durationMode
+    ? trajectoryRequestBoundaries(rows)
+    : rows.flatMap((row, index) => (row.requestStart && index > 0
+      ? [{ at: index, number: row.number }]
+      : []));
+  dom.trajectoryOverviewBoundaries?.replaceChildren(...boundaries.map((boundary) => {
+    const element = el("span", "trajectory-request-boundary");
+    element.style.setProperty("--trajectory-boundary-left", `${percent(boundary.at)}%`);
+    return element;
+  }));
+
+  const selection = dom.trajectoryOverviewSelection;
+  if (selection) {
+    const range = trajectory.range;
+    selection.classList.toggle("hidden", range === null);
+    if (range !== null) {
+      const bounds = track.getBoundingClientRect();
+      const left = (percent(range.start) / 100) * bounds.width;
+      const right = (percent(range.end) / 100) * bounds.width;
+      selection.style.setProperty("--trajectory-selection-left", `${Math.min(left, right)}px`);
+      selection.style.setProperty("--trajectory-selection-width", `${Math.abs(right - left)}px`);
+    }
+  }
+}
+
+function trajectoryDomainAt(clientX) {
+  const track = dom.trajectoryOverviewTrack;
+  const viewport = trajectoryViewport();
+  if (!track || !viewport) return null;
+  const bounds = track.getBoundingClientRect();
+  if (bounds.width <= 0) return null;
+  const ratio = Math.max(0, Math.min(1, (clientX - bounds.left) / bounds.width));
+  return viewport.start + ratio * (viewport.end - viewport.start);
+}
+
+function bindTrajectoryOverview() {
+  const track = dom.trajectoryOverviewTrack;
+  if (!track) return;
+  track.addEventListener("contextmenu", (event) => { event.preventDefault(); });
+  track.addEventListener("pointerdown", (event) => {
+    const at = trajectoryDomainAt(event.clientX);
+    if (at === null) return;
+    if (event.button === 2) {
+      trajectory.drag = { mode: "pan", pointerId: event.pointerId, clientX: event.clientX, moved: false };
+      track.dataset.panning = "true";
+    } else if (event.button === 0) {
+      trajectory.drag = { mode: "range", pointerId: event.pointerId, clientX: event.clientX, anchor: at };
+    } else return;
+    track.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  track.addEventListener("pointermove", (event) => {
+    const hairline = dom.trajectoryOverviewHairline;
+    const bounds = track.getBoundingClientRect();
+    if (hairline) {
+      hairline.classList.remove("hidden");
+      hairline.style.setProperty("--trajectory-hairline-left", `${event.clientX - bounds.left}px`);
+    }
+    const drag = trajectory.drag;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    if (drag.mode === "pan") {
+      const viewport = trajectoryViewport();
+      const domain = trajectory.domain;
+      if (!viewport || !domain || bounds.width <= 0) return;
+      const delta = ((event.clientX - drag.clientX) / bounds.width) * (viewport.end - viewport.start);
+      drag.clientX = event.clientX;
+      drag.moved = true;
+      const span = viewport.end - viewport.start;
+      const start = Math.max(domain.start, Math.min(viewport.start - delta, domain.end - span));
+      trajectory.viewport = { start, end: start + span };
+      renderRequestTraces();
+      return;
+    }
+    const at = trajectoryDomainAt(event.clientX);
+    if (at === null) return;
+    trajectory.range = { start: Math.min(drag.anchor, at), end: Math.max(drag.anchor, at) };
+    drag.clientXEnd = event.clientX;
+    renderRequestTraces();
+  });
+  const endDrag = (event) => {
+    const drag = trajectory.drag;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    trajectory.drag = null;
+    delete track.dataset.panning;
+    if (track.hasPointerCapture(event.pointerId)) track.releasePointerCapture(event.pointerId);
+    if (drag.mode === "pan" && !drag.moved) {
+      trajectory.range = null;
+      renderRequestTraces();
+      return;
+    }
+    if (drag.mode !== "range") return;
+    if (Math.abs((drag.clientXEnd ?? drag.clientX) - drag.clientX) < TRAJECTORY_RANGE_MIN_PX) {
+      trajectory.range = null;
+    }
+    renderRequestTraces();
+  };
+  track.addEventListener("pointerup", endDrag);
+  track.addEventListener("pointercancel", endDrag);
+  track.addEventListener("pointerleave", () => {
+    dom.trajectoryOverviewHairline?.classList.add("hidden");
+  });
+  track.addEventListener("wheel", (event) => {
+    const domain = trajectory.domain;
+    const viewport = trajectoryViewport();
+    if (!domain || !viewport) return;
+    const focus = trajectoryDomainAt(event.clientX);
+    if (focus === null) return;
+    event.preventDefault();
+    const domainWidth = domain.end - domain.start;
+    const scale = event.deltaY > 0 ? 1.25 : 0.8;
+    const width = Math.max(
+      domainWidth / 200,
+      Math.min(domainWidth, (viewport.end - viewport.start) * scale),
+    );
+    const ratio = (focus - viewport.start) / Math.max(1e-6, viewport.end - viewport.start);
+    const start = Math.max(domain.start, Math.min(focus - ratio * width, domain.end - width));
+    trajectory.viewport = width >= domainWidth ? null : { start, end: start + width };
+    renderRequestTraces();
+  }, { passive: false });
+}
+
+function trajectoryDetailTabs(record) {
+  const tabs = [{ id: "overview", label: "概览" }];
+  if (record.input) tabs.push({ id: "input", label: "输入" });
+  if (record.output || record.reasoning || record.error) tabs.push({ id: "output", label: "输出" });
+  if (Number.isFinite(record.startedAt)) tabs.push({ id: "timing", label: "计时" });
+  return tabs;
+}
+
+function trajectoryFactList(pairs) {
+  const list = el("dl", "trajectory-facts");
+  for (const [term, value, mono] of pairs) {
+    if (value === null || value === undefined || value === "") continue;
+    const row = el("div");
+    const dd = el("dd", mono ? "mono" : "", String(value));
+    dd.title = String(value);
+    row.append(el("dt", "", term), dd);
+    list.append(row);
+  }
+  return list;
+}
+
+function trajectoryPayloadGroup(label, value, { truncated = false } = {}) {
+  const group = el("div", "trajectory-payload-group");
+  const heading = el("span", "", label);
+  // A restored preview is a stored fragment, never the complete payload.
+  if (truncated) heading.append(el("i", "trajectory-payload-note", "已截断的存档预览"));
+  group.append(heading, el("pre", "trajectory-payload", value));
+  return group;
+}
+
+function renderTrajectoryDetailBody(record, trace) {
+  const tab = trajectory.detailsTab;
+  const truncated = Boolean(record.previewsTruncated);
+  if (tab === "input") {
+    const body = el("div");
+    if (record.input) body.append(trajectoryPayloadGroup("Input", record.input, { truncated }));
+    if (record.kind === "model" && record.tools?.length) {
+      body.append(trajectoryPayloadGroup("Available tools", record.tools.join("\n")));
+    }
+    if (!body.childElementCount) body.append(el("p", "trajectory-payload-empty", "未捕获输入"));
+    return body;
+  }
+  if (tab === "output") {
+    const body = el("div");
+    if (record.output) body.append(trajectoryPayloadGroup("Output", record.output, { truncated }));
+    if (record.reasoning) body.append(trajectoryPayloadGroup("Reasoning", record.reasoning));
+    if (record.error) body.append(trajectoryPayloadGroup("Error", record.error));
+    if (!body.childElementCount) body.append(el("p", "trajectory-payload-empty", "未捕获输出"));
+    return body;
+  }
+  if (tab === "timing") {
+    return trajectoryFactList([
+      ["开始", traceOperationStartedAt(record)],
+      ["结束", Number.isFinite(record.completedAt)
+        ? traceOperationStartedAt({ startedAt: record.completedAt })
+        : "不可用"],
+      ["Duration", traceOperationDuration(record)],
+      ["时钟", record.timingClock === "server" ? "服务端上报" : record.timingClock === "client" ? "浏览器发起" : "不可用"],
+    ]);
+  }
+  return trajectoryFactList([
+    ["状态", traceOperationStatusLabel(record.status)],
+    ["Operation", record.id || record.key, true],
+    ["开始", traceOperationStartedAt(record)],
+    ["Duration", traceOperationDuration(record)],
+    ["模型", record.kind === "model" ? record.model || "未上报" : null],
+    ["Provider", record.kind === "model" ? record.provider || "未上报" : null],
+    ["Round", record.round == null ? null : String(record.round)],
+    ["Finish reason", record.finishReason || null],
+    ["Input tokens", record.usage?.promptTokens ?? null],
+    ["Output tokens", record.usage?.completionTokens ?? null],
+    ["Total tokens", record.usage?.totalTokens ?? null],
+    ["Session", record.sessionId || null, true],
+    ["Turn", trace?.serverTurnId || null, true],
+    ["Request", trace?.restored ? null : trace?.clientRequestId || null, true],
+    ["Run", trace?.serverRunId || trace?.run?.context?.runId || null, true],
+    ["来源", trace?.restored ? "已存档轨迹" : null],
+  ]);
+}
+
+function setTrajectoryDetailsWidth(width) {
+  const split = dom.trajectoryDetails?.parentElement;
+  if (!split) return;
+  split.style.setProperty(
+    "--trajectory-details-width",
+    `${width ?? TRAJECTORY_DETAILS_DEFAULT_WIDTH}px`,
+  );
+}
+
+function renderTrajectoryDetails(entry) {
+  const panel = dom.trajectoryDetails;
+  if (!panel) return;
+  const trace = selectedRequestTrace(entry);
+  const record = trajectory.detailsOpen ? selectedTrajectoryRecord(entry) : null;
+  panel.classList.toggle("hidden", !record);
+  if (!record) return;
+  setTrajectoryDetailsWidth(trajectory.detailsWidth);
+  dom.trajectoryDetailsKind.textContent = traceOperationKindLabel(record.kind);
+  dom.trajectoryDetailsKind.dataset.kind = record.kind;
+  const requestNumber = trajectory.rows.find((row) => row.trace === trace)?.number;
+  const location = `${requestNumber ? `Req ${requestNumber} · ` : ""}${trajectoryRowTitle(record)}`;
+  dom.trajectoryDetailsLocation.textContent = location;
+  dom.trajectoryDetailsLocation.title = location;
+
+  const tabs = trajectoryDetailTabs(record);
+  if (!tabs.some((tab) => tab.id === trajectory.detailsTab)) trajectory.detailsTab = tabs[0].id;
+  dom.trajectoryDetailsTabs.replaceChildren(...tabs.map((tab) => {
+    const button = el("button", "trajectory-details-tab", tab.label);
+    button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(trajectory.detailsTab === tab.id));
+    button.addEventListener("click", () => {
+      trajectory.detailsTab = tab.id;
+      renderTrajectoryDetails(entry);
+    });
+    return button;
+  }));
+  dom.trajectoryDetailsBody.replaceChildren(renderTrajectoryDetailBody(record, trace));
+}
+
+function updateTrajectoryToolbar(entry) {
+  const traces = orderedRequestTraces(entry);
+  const foldable = traces.filter((trace) => orderedTraceOperations(trace).length > 1);
+  const allFolded = foldable.length > 0 && foldable.every((trace) => trajectory.foldedRequests.has(trace.key));
+  if (dom.trajectoryDurationButton) {
+    dom.trajectoryDurationButton.setAttribute("aria-pressed", String(trajectory.durationMode));
+    dom.trajectoryDurationButton.title = trajectory.durationMode ? "切换为等宽排布" : "按记录耗时排布";
+  }
+  if (dom.trajectoryFoldRequestsButton) {
+    dom.trajectoryFoldRequestsButton.setAttribute("aria-pressed", String(allFolded));
+    dom.trajectoryFoldRequestsButton.title = allFolded ? "展开全部请求" : "折叠全部请求";
+    dom.trajectoryFoldRequestsIcon.textContent = allFolded ? "⊞" : "⊟";
+  }
+  if (dom.trajectoryFoldCallsButton) {
+    dom.trajectoryFoldCallsButton.setAttribute("aria-pressed", String(trajectory.foldCalls));
+    dom.trajectoryFoldCallsButton.title = trajectory.foldCalls ? "展开工具调用" : "折叠模型记录下的工具调用";
+    dom.trajectoryFoldCallsIcon.textContent = trajectory.foldCalls ? "⊞" : "⊟";
+  }
+}
+
+function toggleAllTrajectoryRequests(entry) {
+  const foldable = orderedRequestTraces(entry).filter((trace) => orderedTraceOperations(trace).length > 1);
+  const allFolded = foldable.length > 0 && foldable.every((trace) => trajectory.foldedRequests.has(trace.key));
+  for (const trace of foldable) {
+    if (allFolded) trajectory.foldedRequests.delete(trace.key);
+    else trajectory.foldedRequests.add(trace.key);
+  }
+  renderRequestTraces(entry);
+}
+
+function bindTrajectoryControls() {
+  dom.trajectoryDurationButton?.addEventListener("click", () => {
+    trajectory.durationMode = !trajectory.durationMode;
+    trajectory.range = null;
+    trajectory.viewport = null;
+    renderRequestTraces();
+  });
+  dom.trajectoryFoldRequestsButton?.addEventListener("click", () => {
+    toggleAllTrajectoryRequests(state.activeConversation);
+  });
+  dom.trajectoryFoldCallsButton?.addEventListener("click", () => {
+    trajectory.foldCalls = !trajectory.foldCalls;
+    renderRequestTraces();
+  });
+  dom.trajectorySearchInput?.addEventListener("input", (event) => {
+    trajectory.search = event.currentTarget.value;
+    renderRequestTraces();
+  });
+  dom.trajectoryDetailsClose?.addEventListener("click", () => {
+    trajectory.detailsOpen = false;
+    renderRequestTraces();
+  });
+  bindTrajectoryDetailsResize();
+  bindTrajectoryOverview();
+}
+
+function bindTrajectoryDetailsResize() {
+  const handle = dom.trajectoryDetailsResize;
+  const panel = dom.trajectoryDetails;
+  if (!handle || !panel) return;
+  let drag = null;
+  const clamp = (width) => {
+    const split = panel.parentElement;
+    const max = split ? split.getBoundingClientRect().width * 0.7 : width;
+    return Math.max(TRAJECTORY_DETAILS_MIN_WIDTH, Math.min(width, max));
+  };
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    drag = { pointerId: event.pointerId, clientX: event.clientX, width: panel.getBoundingClientRect().width };
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    trajectory.detailsWidth = clamp(drag.width + drag.clientX - event.clientX);
+    setTrajectoryDetailsWidth(trajectory.detailsWidth);
+  });
+  const stop = (event) => {
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    drag = null;
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+  };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
+  handle.addEventListener("dblclick", () => {
+    trajectory.detailsWidth = null;
+    setTrajectoryDetailsWidth(null);
+  });
+  handle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowLeft" ? 1 : -1;
+    trajectory.detailsWidth = clamp(panel.getBoundingClientRect().width + direction * 24);
+    setTrajectoryDetailsWidth(trajectory.detailsWidth);
+  });
 }
 
 function requestTraceInput(trace) {
@@ -1080,55 +1979,9 @@ function requestTraceStartTime(trace, { detailed = false } = {}) {
     : date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-function createRequestTraceRow(entry, trace) {
-  const row = el("button", "request-trace-row");
-  row.type = "button";
-  row.setAttribute("role", "option");
-  row.dataset.traceKey = trace.key;
-  const marker = el("span", "request-trace-marker");
-  marker.append(iconNode("waypoints"));
-  const copy = el("span", "request-trace-copy");
-  const input = el("strong", "request-trace-prompt");
-  const identity = el("small", "request-trace-identity mono");
-  copy.append(input, identity);
-  const metrics = el("span", "request-trace-row-metrics");
-  const status = el("span", "request-trace-row-status");
-  const counts = el("span", "request-trace-row-counts");
-  const timing = el("span", "request-trace-row-timing");
-  metrics.append(status, counts, timing);
-  row.append(marker, copy, metrics, iconNode("chevron-right"));
-  trace.element = row;
-  trace.fields = { marker, input, identity, status, counts, timing };
-  row.addEventListener("click", () => selectRequestTrace(entry, trace.key, { openDetails: true }));
-  row.addEventListener("keydown", (event) => moveRequestTraceSelection(event, entry, trace.key));
-  return row;
-}
-
-function updateRequestTraceRow(entry, trace) {
-  const row = trace.element || createRequestTraceRow(entry, trace);
-  const run = trace.run;
-  const selected = entry.selectedTraceKey === trace.key;
-  row.className = `request-trace-row ${run.status || "idle"}${selected ? " selected" : ""}`;
-  row.setAttribute("aria-selected", String(selected));
-  row.tabIndex = selected ? 0 : -1;
-  trace.fields.input.textContent = requestTraceInput(trace);
-  const serverRunId = trace.serverRunId || run.context?.runId || "";
-  trace.fields.identity.textContent = serverRunId
-    ? `request ${trace.clientRequestId} · run ${serverRunId}`
-    : `request ${trace.clientRequestId}`;
-  trace.fields.status.textContent = requestTraceStatusLabel(run.status);
-  trace.fields.counts.textContent = `${run.events.length} 事件 · ${run.tools.size} 工具`;
-  trace.fields.timing.textContent = `${requestTraceStartTime(trace)} · ${requestTraceDuration(trace)}`;
-  return row;
-}
-
 function renderRequestTraces(entry = state.activeConversation) {
-  if (!entry || entry !== state.activeConversation || !dom.requestTraceList) return;
-  const traces = entry.traceOrder
-    .map((key) => entry.traces.get(key))
-    .filter(Boolean);
-  dom.requestTraceCount.textContent = String(traces.length);
-  if (dom.requestTraceRailCount) dom.requestTraceRailCount.textContent = String(traces.length);
+  if (!entry || entry !== state.activeConversation || !dom.traceOperationList) return;
+  const traces = orderedRequestTraces(entry);
   const activeTrace = currentRequestTrace(entry);
   const receiving = Boolean(entry.controllers?.size && activeTrace?.run?.status === "running");
   const liveCopy = receiving
@@ -1136,64 +1989,24 @@ function renderRequestTraces(entry = state.activeConversation) {
     : activeTrace?.run?.startedAt
       ? "SSE 已结束"
       : "本页会话";
+  dom.requestTraceCount.textContent = String(traces.length);
   dom.requestTraceLive.classList.toggle("active", receiving);
   dom.requestTraceLive.querySelector("span").textContent = liveCopy;
-  if (!traces.length) {
-    entry.selectedTraceKey = null;
-    if (dom.requestTraceList.firstElementChild !== dom.requestTraceEmpty || dom.requestTraceList.childElementCount !== 1) {
-      dom.requestTraceList.replaceChildren(dom.requestTraceEmpty);
-    }
-    dom.requestTraceEmpty.classList.remove("hidden");
-    if (dom.traceOperationCount) dom.traceOperationCount.textContent = "0";
-    if (dom.traceOperationOverview) dom.traceOperationOverview.replaceChildren();
-    if (dom.traceOperationList && dom.traceOperationEmpty) {
-      dom.traceOperationEmpty.classList.remove("hidden");
-      dom.traceOperationList.replaceChildren(dom.traceOperationEmpty);
-    }
-    refreshIcons(dom.requestTraceEmpty);
-    return;
+  if (!entry.traces.has(entry.selectedTraceKey)) {
+    entry.selectedTraceKey = activeTrace?.key || traces.at(-1)?.key || null;
   }
-  dom.requestTraceEmpty.classList.add("hidden");
-  if (!entry.traces.has(entry.selectedTraceKey)) entry.selectedTraceKey = traces[0].key;
-  const needsIcons = traces.some((trace) => !trace.element);
-  const rows = traces.map((trace) => updateRequestTraceRow(entry, trace));
-  rows.forEach((row, index) => {
-    const current = dom.requestTraceList.children[index];
-    if (current !== row) dom.requestTraceList.insertBefore(row, current || null);
-  });
-  while (dom.requestTraceList.childElementCount > rows.length) {
-    dom.requestTraceList.lastElementChild.remove();
+  const rows = buildTrajectoryRows(entry);
+  trajectory.rows = rows;
+  if (dom.traceOperationCount) {
+    dom.traceOperationCount.textContent = String(
+      traces.reduce((total, trace) => total + orderedTraceOperations(trace).length, 0),
+    );
   }
-  if (needsIcons) refreshIcons(dom.requestTraceList);
-  renderTraceOperations(entry, selectedRequestTrace(entry) || traces[0]);
-}
-
-function selectRequestTrace(entry, key, { openDetails = false, focusRow = false } = {}) {
-  if (!entry?.traces?.has(key)) return;
-  entry.selectedTraceKey = key;
-  ensureTraceOperationState(entry.traces.get(key));
-  if (entry !== state.activeConversation) return;
-  renderRequestTraces(entry);
-  renderInspector();
-  renderEventLog();
-  setInspectorTab("run");
-  if (openDetails) openMobilePanel("inspector");
-  if (focusRow) entry.traces.get(key)?.element?.focus();
-}
-
-function moveRequestTraceSelection(event, entry, key) {
-  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
-  event.preventDefault();
-  const keys = entry.traceOrder.filter((candidate) => entry.traces.has(candidate));
-  const index = Math.max(0, keys.indexOf(key));
-  const nextIndex = event.key === "Home"
-    ? 0
-    : event.key === "End"
-      ? keys.length - 1
-      : event.key === "ArrowUp"
-        ? Math.max(0, index - 1)
-        : Math.min(keys.length - 1, index + 1);
-  selectRequestTrace(entry, keys[nextIndex], { openDetails: true, focusRow: true });
+  applyTrajectoryProjection(rows);
+  updateTrajectoryToolbar(entry);
+  renderTrajectoryLedger(entry, rows);
+  renderTrajectoryOverview(entry, rows);
+  renderTrajectoryDetails(entry);
 }
 
 function queueRequestTraceRender(entry = conversationContext || state.activeConversation) {
@@ -1524,6 +2337,7 @@ function bindEvents() {
   dom.traceViewButton.addEventListener("click", () => switchWorkspaceView("traces"));
   dom.conversationViewButton.addEventListener("keydown", moveWorkspaceView);
   dom.traceViewButton.addEventListener("keydown", moveWorkspaceView);
+  bindTrajectoryControls();
   dom.composerForm.addEventListener("submit", (event) => {
     event.preventDefault();
     void submitComposer();
@@ -3597,7 +4411,9 @@ async function loadConversation(conversation) {
       cache: "no-store",
     });
     if (!response.ok) throw await responseError(response);
-    const messages = normalizeStoredMessages(await response.json());
+    const payload = await response.json();
+    const messages = normalizeStoredMessages(payload);
+    const storedOperations = Array.isArray(payload?.operations) ? payload.operations : [];
     if (sequence !== state.conversationLoadSequence || configKey !== historyConfigKey()) return;
     const existing = findConversationState(conversation.id);
     if (existing) {
@@ -3614,6 +4430,7 @@ async function loadConversation(conversation) {
       title: conversation.title,
     });
     if (conversation.stateVersion > 0) ensureConversationProjectionVersion(entry);
+    restoreTrajectoryFromStoredOperations(entry, storedOperations, messages);
     activateConversationState(entry);
     renderActorProjection(entry);
     state.run.context = {
@@ -3683,6 +4500,10 @@ async function refreshActorStateFor(entry, actorId, { uncursored = false } = {})
       if (!response.ok) throw await responseError(response);
       const result = applyCurrentStateResult(projection, await response.json());
       setActorProjectionFor(entry, actorId, result.projection);
+      // The conversation actor owns the in-flight turn's step ledger. Rebuilding
+      // its trace container here is what makes a mid-run reload keep its
+      // trajectory; committed turns come from the stored chat history instead.
+      if (isConversationActor) restoreTrajectoryFromActorProjection(entry, result.projection);
       if (result.reloadWithoutCursor) {
         if (!uncursored) return refreshActorStateFor(entry, actorId, { uncursored: true });
         setActorStateNotice(entry, actorId, "Actor 要求重新加载状态，请稍后重试。");
@@ -3694,7 +4515,10 @@ async function refreshActorStateFor(entry, actorId, { uncursored = false } = {})
       restoreProjectionActionCaches(entry, actorId);
       renderActorProjection(entry, actorId);
       renderActionCards(entry);
-      if (entry === state.activeConversation) renderActiveConversationState();
+      if (entry === state.activeConversation) {
+        renderActiveConversationState();
+        renderRequestTraces(entry);
+      }
       return actorProjectionFor(entry, actorId);
     } catch (error) {
       setActorStateNotice(
@@ -6110,49 +6934,6 @@ function inspectorTraceOperation(entry = state.activeConversation, trace = inspe
   return entry?.mainView === "traces" ? selectedTraceOperation(trace) : null;
 }
 
-function renderTraceOperationInspector(trace) {
-  if (!dom.traceOperationSection) return;
-  const record = inspectorTraceOperation(state.activeConversation, trace);
-  dom.traceOperationSection.classList.toggle("hidden", !record);
-  if (!record) return;
-  dom.traceOperationKindFact.textContent = traceOperationKindLabel(record.kind);
-  dom.traceOperationKindFact.className = `trace-operation-kind ${record.kind}`;
-  dom.traceOperationTitleFact.textContent = record.title || traceOperationKindLabel(record.kind);
-  dom.traceOperationIdFact.textContent = record.id || record.key;
-  dom.traceOperationIdFact.title = record.id || record.key;
-  dom.traceOperationStatusFact.textContent = traceOperationStatusLabel(record.status);
-  dom.traceOperationStartedFact.textContent = traceOperationStartedAt(record);
-  dom.traceOperationDurationFact.textContent = traceOperationDuration(record);
-  const modelFacts = record.kind === "model"
-      ? [
-        record.model ? `Model: ${record.model}` : "",
-        record.provider ? `Provider: ${record.provider}` : "",
-        record.round != null ? `Round: ${record.round}` : "",
-        record.sessionId ? `Session: ${record.sessionId}` : "",
-        record.finishReason ? `Finish reason: ${record.finishReason}` : "",
-        record.usage?.promptTokens != null ? `Input tokens: ${record.usage.promptTokens}` : "",
-        record.usage?.completionTokens != null ? `Output tokens: ${record.usage.completionTokens}` : "",
-        record.usage?.totalTokens != null ? `Total tokens: ${record.usage.totalTokens}` : "",
-      ].filter(Boolean).join("\n")
-    : "";
-  const toolCatalog = record.kind === "model" && record.tools?.length
-    ? `Available tools:\n${record.tools.join("\n")}`
-    : "";
-  const outputValue = [
-    String(record.output || ""),
-    record.reasoning ? `Reasoning:\n${record.reasoning}` : "",
-    record.error ? `Error:\n${record.error}` : "",
-    modelFacts,
-  ].filter(Boolean).join("\n\n");
-  const inputValue = [String(record.input || ""), toolCatalog].filter(Boolean).join("\n\n");
-  const hasInput = inputValue.length > 0;
-  const hasOutput = outputValue.length > 0;
-  dom.traceOperationInputSection?.classList.toggle("hidden", !hasInput);
-  dom.traceOperationOutputSection?.classList.toggle("hidden", !hasOutput);
-  if (dom.traceOperationInputFact) dom.traceOperationInputFact.textContent = inputValue;
-  if (dom.traceOperationOutputFact) dom.traceOperationOutputFact.textContent = outputValue;
-}
-
 function paintRunStatus(status, label = requestTraceStatusEnglish(status)) {
   dom.runStatus.className = `run-status ${status || "idle"}`;
   dom.runStatus.querySelector("strong").textContent = label;
@@ -6178,7 +6959,6 @@ function renderInspector() {
   dom.inspectorEyebrow.textContent = operation ? traceOperationKindLabel(operation.kind) : trace ? "Request trace" : "Current run";
   dom.inspectorTitle.textContent = operation ? operation.title || "操作详情" : trace ? "轨迹详情" : "运行详情";
   paintRunStatus(visibleStatus);
-  renderTraceOperationInspector(trace);
   dom.traceClientRequestFact.textContent = trace?.clientRequestId || run.clientRequestId || "—";
   dom.traceClientRequestFact.title = trace?.clientRequestId || run.clientRequestId || "";
   dom.traceInputFact.textContent = trace

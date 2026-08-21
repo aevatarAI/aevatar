@@ -392,6 +392,32 @@ message ChatConversationTurnDocument {
   int64 terminal_time_ms = 7;
   string llm_route = 8;
   string llm_model = 9;
+  repeated ChatConversationTurnOperationDocument operations = 10;
+}
+
+// Query copy of one committed turn operation. Timing stays absent when the
+// operation never reported it; previews stay marked as truncated fragments.
+message ChatConversationTurnOperationDocument {
+  reserved 17;
+  reserved "result_preview";
+  string operation_id = 1;
+  int32 order = 2;
+  string kind = 3;
+  string title = 4;
+  string status = 5;
+  int64 started_at_ms = 6;
+  int64 completed_at_ms = 7;
+  string model = 8;
+  string provider = 9;
+  string finish_reason = 10;
+  int32 prompt_tokens = 11;
+  int32 completion_tokens = 12;
+  int32 total_tokens = 13;
+  string input_preview = 14;
+  string output_preview = 15;
+  string arguments_preview = 16;
+  bool previews_truncated = 18;
+  string safe_message = 19;
 }
 
 message ChatConversationCurrentStateDocument {

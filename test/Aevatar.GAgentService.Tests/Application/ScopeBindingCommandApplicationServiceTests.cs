@@ -2601,64 +2601,39 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         WorkflowAuthorizationDependencies? dependencies = null,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null)
     {
-        var admittedCapabilities = capabilityAdmissionPlan?.ExternalCapabilities
-            ?? dependencies?.ExternalCapabilities;
-        var serviceGrantRequirement = capabilityAdmissionPlan is not null
-            ? capabilityAdmissionPlan.ExternalCapabilities.Any(static capability =>
-                capability.CapabilityCase ==
-                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
-                ? Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required
-                : Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.NotRequired
-            : dependencies?.ServiceGrantPolicy switch
-            {
-                WorkflowServiceGrantPolicy.Required =>
-                    Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required,
-                WorkflowServiceGrantPolicy.NotRequiredNoExternalService =>
-                    Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.NotRequired,
-                _ => Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Unspecified,
-            };
-        var authorizationEvidence = new Aevatar.GAgentService.Abstractions.Schedules.Authorization.WorkflowRevisionAuthorizationEvidence
+        var effectiveWorkflowId = workflowId ?? revisionId;
+        var effectivePlan = capabilityAdmissionPlan ?? WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var effectiveDependencies = dependencies ?? new WorkflowAuthorizationDependencies
         {
-            OwnerLlmRouteRequired = dependencies?.OwnerLlmRouteRequired ?? false,
-            ServiceGrantRequirement = serviceGrantRequirement,
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
         };
-        authorizationEvidence.ExternalCapabilities.Add(
-            (admittedCapabilities ?? []).Select(static capability => capability.Clone()));
-        var artifact = new PreparedServiceRevisionArtifact
-        {
-            Identity = DefaultServiceIdentity(serviceId),
-            RevisionId = revisionId,
-            ImplementationKind = ServiceImplementationKind.Workflow,
-            Endpoints =
+
+        var artifact = WorkflowServiceRevisionArtifactBuilder.Build(
+            new ServiceRevisionSpec
             {
-                new ServiceEndpointDescriptor
-                {
-                    EndpointId = "chat",
-                    DisplayName = "chat",
-                    Kind = ServiceEndpointKind.Chat,
-                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
-                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
-                    Description = endpointDescription,
-                },
-            },
-            DeploymentPlan = new ServiceDeploymentPlan
-            {
-                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                Identity = DefaultServiceIdentity(serviceId),
+                RevisionId = revisionId,
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
                     WorkflowName = workflowName,
                     WorkflowYaml = workflowYaml,
-                    WorkflowId = workflowId ?? revisionId,
-                    RevisionId = revisionId,
+                    WorkflowId = effectiveWorkflowId,
                     DefinitionActorId = DefaultOptions.BuildDefinitionActorIdPrefix(
                         ScopeId,
                         workflowId ?? DefaultOptions.DefaultServiceId),
-                    AuthorizationEvidence = authorizationEvidence,
-                    CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
-                    ExecutionMode = capabilityAdmissionPlan?.ExecutionMode ??
-                                    ExternalCapabilityExecutionMode.Interactive,
+                    ExpectedExecutionMode = effectivePlan.ExecutionMode,
                 },
             },
-        };
+            workflowName,
+            effectiveDependencies,
+            effectivePlan);
+        artifact.Endpoints.Single().Description = endpointDescription;
         return new PreparedServiceRevisionArtifactAssembler().Assemble(artifact);
     }
 

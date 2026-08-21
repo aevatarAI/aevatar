@@ -69,6 +69,49 @@ public sealed class RuntimeFleetCapabilityAdmissionValidationTests
         grant.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetQuiescenceReceiptAsync_WhenEvidenceIsExact_ShouldReturnReceiptButNoOpenGrant()
+    {
+        var admission = CreateAdmission();
+        admission.Status = RuntimeFleetCapabilityGateStatus.Quiesced;
+        var evidence = CreateQuiescenceEvidence();
+        var reader = new RecordingQuiescenceReader(evidence);
+
+        var receipt = await RuntimeFleetCapabilityAdmissionValidation.GetQuiescenceReceiptAsync(
+            RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            ContractId,
+            1,
+            reader);
+        var grant = await RuntimeFleetCapabilityAdmissionValidation.GetGrantedAdmissionAsync(
+            RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            ContractId,
+            1,
+            new StubAdmissionReader(admission),
+            new StubMembershipReader(CurrentMembership()),
+            new FixedTimeProvider(Now));
+
+        receipt.Should().NotBeNull();
+        receipt!.Evidence.CapabilityEpoch.Should().Be(long.MaxValue);
+        receipt.Evidence.QuiescenceTransitionId.Should().Be("transition:quiesce");
+        grant.Should().BeNull("QUIESCED is a completion receipt, never an OPEN adoption grant");
+        reader.ReadCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetQuiescenceReceiptAsync_WhenEvidenceIsNotTerminalEpoch_ShouldReturnNull()
+    {
+        var evidence = CreateQuiescenceEvidence();
+        evidence.CapabilityEpoch = 7;
+
+        var receipt = await RuntimeFleetCapabilityAdmissionValidation.GetQuiescenceReceiptAsync(
+            RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            ContractId,
+            1,
+            new StubQuiescenceReader(evidence));
+
+        receipt.Should().BeNull();
+    }
+
     [Theory]
     [InlineData(InvalidAdmissionCase.Revoked)]
     [InlineData(InvalidAdmissionCase.Stale)]
@@ -178,6 +221,22 @@ public sealed class RuntimeFleetCapabilityAdmissionValidationTests
         return admission;
     }
 
+    private static RuntimeFleetCapabilityQuiescenceEvidence CreateQuiescenceEvidence() =>
+        new()
+        {
+            Capability = RuntimeFleetCapability.WorkflowNormalizedStateWritesV1,
+            AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            AuthorityStateVersion = 9,
+            CapabilityEpoch = long.MaxValue,
+            ContractId = ContractId,
+            QuiescenceReaderContractVersion = 1,
+            QuiescedMembershipEpoch = 7,
+            QuiescedMembershipDigest = "digest-a",
+            QuiescedDeploymentRevision = "revision-a",
+            QuiescedAt = Timestamp.FromDateTimeOffset(Now.AddSeconds(-5)),
+            QuiescenceTransitionId = "transition:quiesce",
+        };
+
     private static RuntimeLocalMembershipIdentity CurrentMembership() =>
         new(7, "digest-a", "revision-a", "member-a", "inc-a");
 
@@ -246,6 +305,33 @@ public sealed class RuntimeFleetCapabilityAdmissionValidationTests
             ct.ThrowIfCancellationRequested();
             ReadCount++;
             return Task.FromResult<RuntimeFleetCapabilityAdmission?>(admission);
+        }
+    }
+
+    private sealed class StubQuiescenceReader(RuntimeFleetCapabilityQuiescenceEvidence evidence)
+        : IRuntimeFleetCapabilityQuiescenceReader
+    {
+        public Task<RuntimeFleetCapabilityQuiescenceEvidence?> GetQuiescenceAsync(
+            RuntimeFleetCapability capability,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<RuntimeFleetCapabilityQuiescenceEvidence?>(evidence.Clone());
+        }
+    }
+
+    private sealed class RecordingQuiescenceReader(RuntimeFleetCapabilityQuiescenceEvidence evidence)
+        : IRuntimeFleetCapabilityQuiescenceReader
+    {
+        public int ReadCount { get; private set; }
+
+        public Task<RuntimeFleetCapabilityQuiescenceEvidence?> GetQuiescenceAsync(
+            RuntimeFleetCapability capability,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ReadCount++;
+            return Task.FromResult<RuntimeFleetCapabilityQuiescenceEvidence?>(evidence.Clone());
         }
     }
 

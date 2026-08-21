@@ -625,12 +625,15 @@ public static partial class NyxIdChatEndpoints
                 result.Error switch
                 {
                     NyxIdChatStartError.ProjectionUnavailable => "PROJECTION_UNAVAILABLE",
+                    NyxIdChatStartError.AdmissionUnavailable => "ADMISSION_UNAVAILABLE",
                     NyxIdChatStartError.ActorNotFound => "ACTOR_NOT_FOUND",
                     _ => "COMMAND_START_FAILED",
                 },
                 result.Error switch
                 {
                     NyxIdChatStartError.ProjectionUnavailable => "NyxID chat projection pipeline is unavailable.",
+                    NyxIdChatStartError.AdmissionUnavailable =>
+                        "NyxID chat admission is unavailable for the requested Agent Profile or route.",
                     NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
                     _ => message,
                 },

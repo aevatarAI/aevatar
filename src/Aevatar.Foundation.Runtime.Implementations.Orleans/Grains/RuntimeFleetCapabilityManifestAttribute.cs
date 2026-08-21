@@ -27,6 +27,9 @@ internal sealed class RuntimeFleetCapabilityManifestAttribute
         foreach (var provider in services
                      .GetServices<IRuntimeFleetCapabilityAdvertisement>())
         {
+            if (!provider.IsAvailable)
+                continue;
+
             var capability = provider.GetCapability()?.Clone() ??
                 throw new InvalidOperationException(
                     $"{provider.GetType().FullName} returned no runtime fleet capability advertisement.");

@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260817-m55-operation-auth-trajectory";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260820-m57-trajectory-persistence";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};

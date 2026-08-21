@@ -4,6 +4,7 @@ using System.Reflection;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Metadata;
 using Orleans.Runtime;
 
@@ -72,7 +73,33 @@ public sealed class OrleansRuntimeFleetMembershipReadersTests
     {
         IRuntimeFleetCapabilityAdvertisement advertisement = new TestCapabilityAdvertisement();
 
+        advertisement.IsAvailable.Should().BeTrue();
         advertisement.GetReaderImplementationType().Should().Be(typeof(TestCapabilityAdvertisement));
+    }
+
+    [Fact]
+    public void CapabilityManifest_WhenAdvertisementIsUnavailable_ShouldOmitItWithoutReadingContract()
+    {
+        var services = new ServiceCollection()
+            .AddSingleton<IRuntimeFleetCapabilityAdvertisement>(
+                new UnavailableCapabilityAdvertisement())
+            .BuildServiceProvider();
+        var properties = new Dictionary<string, string>();
+
+        new RuntimeFleetCapabilityManifestAttribute().Populate(
+            services,
+            typeof(OrleansRuntimeFleetMembershipSnapshotSource),
+            GrainType.Create("runtime-actor"),
+            properties);
+
+        properties.Should().ContainKey(
+            RuntimeFleetCapabilityManifest.DeploymentRevisionProperty);
+        properties.Should().NotContainKey(
+            RuntimeFleetCapabilityManifest.ContractIdProperty(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV3));
+        properties.Should().NotContainKey(
+            RuntimeFleetCapabilityManifest.ReaderVersionProperty(
+                RuntimeFleetCapability.ProjectionScopeStatusTerminalV3));
     }
 
     [Fact]
@@ -153,6 +180,16 @@ public sealed class OrleansRuntimeFleetMembershipReadersTests
                 ReaderContractVersion =
                     RuntimeFleetCapabilityContracts.WorkflowNormalizedStateReaderVersion,
             };
+    }
+
+    private sealed class UnavailableCapabilityAdvertisement
+        : IRuntimeFleetCapabilityAdvertisement
+    {
+        public bool IsAvailable => false;
+
+        public RuntimeFleetMemberCapability GetCapability() =>
+            throw new InvalidOperationException(
+                "An unavailable advertisement must not be materialized.");
     }
 
     private class CurrentPropertyProxy : DispatchProxy

@@ -402,7 +402,9 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("nyxid_llm_status");
         allowed.Should().Contain("nyxid_services");
         allowed.Should().NotContain("nyxid_proxy");
-        role.AgentToolScope.ToolSetRefs.Should().Equal("nyxid.connected_services");
+        role.AgentToolScope.ToolSetRefs.Should().Equal(
+            "studio.local",
+            "nyxid.connected_services");
         allowed.Should().Contain("nyxid_require_service");
         allowed.Should().Contain("list_external_workflow_capabilities");
         allowed.Should().Contain("inspect_external_workflow_capability_readiness");

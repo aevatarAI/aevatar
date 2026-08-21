@@ -3022,8 +3022,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     }
 
     // The call-site identity a step carries at runtime must be the one admission committed, so both
-    // sides derive it from the compiler. Looping primitives receive their synthesized sub-step
-    // call site here and copy it onto every item/iteration they dispatch.
+    // sides derive it from the compiler. Composite primitives receive their synthesized sub-step
+    // call site here and copy it onto every child they dispatch.
     private void ApplyExternalInvocation(StepRequestEvent request, StepDefinition step)
     {
         var workflowName = _workflow?.Name ?? string.Empty;

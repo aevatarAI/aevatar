@@ -8,6 +8,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -1064,6 +1065,147 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_ConnectedServiceSelector_ShouldAdmitMatchingRiskAcrossExactInstances()
+    {
+        IAgentTool[] tools =
+        [
+            new AdmittedTestTool(
+                "nyxop_github_read_alpha",
+                CreateReadAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    "endpoint-read",
+                    "api-github")),
+            new AdmittedTestTool(
+                "nyxop_github_read_beta",
+                CreateReadAdmission(
+                    "us-github-beta",
+                    "api-github-beta",
+                    "endpoint-read",
+                    "api-github")),
+            new AdmittedTestTool(
+                "nyxop_github_write_alpha",
+                CreateWriteAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    "endpoint-write",
+                    "api-github")),
+            new AdmittedTestTool(
+                "nyxop_slack_read",
+                CreateReadAdmission(
+                    "us-slack-alpha",
+                    "api-slack-alpha",
+                    "endpoint-read",
+                    "api-slack")),
+            new PresentedTestTool("presentation-spoof", "api-github"),
+        ];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly,
+            AgentToolOperationRiskPayload.Write));
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "nyxop_github_read_alpha",
+            "nyxop_github_read_beta");
+        catalog.RouteOwnedTools.Values
+            .Cast<IAgentToolOperationAdmissionOwner>()
+            .Select(static owner => owner.OperationAdmission.ServiceInstanceId)
+            .Should().BeEquivalentTo("us-github-alpha", "us-github-beta");
+        catalog.FinalAllowedToolNames.Should().NotContain([
+            "nyxop_github_write_alpha",
+            "nyxop_slack_read",
+            "presentation-spoof",
+        ]);
+        catalog.Diagnostics.Should().NotContain(static diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ProfileInvalid);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_LiteralMaximum_ShouldDiagnoseFilteredConnectedServiceToolsByKind()
+    {
+        IAgentTool[] tools =
+        [
+            new TestTool("task"),
+            new AdmittedTestTool(
+                "nyxop_github_read",
+                CreateReadAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    "endpoint-read",
+                    "api-github")),
+        ];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("task");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("task");
+        catalog.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.MaximumPolicyFilteredTools &&
+            diagnostic.Detail == "removed=1;nyx_id_operation=1");
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_UnmatchedConnectedServiceSelector_ShouldKeepOtherAllowedTools()
+    {
+        var tools = NewTools("task");
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("task");
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("task");
+        catalog.Diagnostics.Should().NotContain(static diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ProfileInvalid);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_DuplicateAlias_ShouldUseRecoveryWithoutFetching()
     {
         var tools = NewTools("recovery", "task", "extra");
@@ -2029,7 +2171,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     private static AgentToolOperationAdmission CreateReadAdmission(
         string userServiceId,
         string serviceSlug,
-        string endpointId) =>
+        string endpointId,
+        string catalogServiceSlug = "") =>
         new(
             userServiceId,
             serviceSlug,
@@ -2046,7 +2189,42 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 AgentToolOperationApproval.None,
                 AgentToolOperationEnforcementOwner.Aevatar,
                 [AgentToolOperationExecutionMode.Interactive]),
-            "catalog-digest-alpha");
+            "catalog-digest-alpha",
+            ReadBack: null,
+            CatalogServiceSlug: catalogServiceSlug);
+
+    private static AgentToolOperationAdmission CreateWriteAdmission(
+        string userServiceId,
+        string serviceSlug,
+        string endpointId,
+        string catalogServiceSlug) =>
+        new(
+            userServiceId,
+            serviceSlug,
+            new AgentToolOperationIdentity.PublishedEndpoint(endpointId),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "POST",
+            "/items",
+            "contract-digest-alpha",
+            [],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.Write,
+                AgentToolOperationApproval.Required,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive]),
+            "catalog-digest-alpha",
+            ReadBack: null,
+            CatalogServiceSlug: catalogServiceSlug);
+
+    private static AgentProfileConnectedServiceSelector ConnectedServiceSelector(
+        string catalogServiceSlug,
+        params AgentToolOperationRiskPayload[] allowedRisks) => new()
+    {
+        CatalogServiceSlug = catalogServiceSlug,
+        AllowedRisks = { allowedRisks },
+    };
 
     private static AgentProfileTurnCatalogMaterializer NewMaterializer(
         IToolSetRegistry registry,
@@ -2303,6 +2481,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         public string Name => name;
         public string Description => name;
         public string ParametersSchema => "{}";
+        public virtual ToolPresentationDescriptor Presentation =>
+            ToolPresentationDescriptors.Generic(name, name);
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
     }
@@ -2314,6 +2494,42 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         IAgentToolOperationAdmissionOwner
     {
         public AgentToolOperationAdmission OperationAdmission { get; } = operationAdmission;
+
+        public override ToolPresentationDescriptor Presentation { get; } = new()
+        {
+            InvocationName = name,
+            DisplayName = name,
+            Description = name,
+            Kind = ToolPresentationKind.NyxIdOperation,
+            Availability = ToolAvailability.Available,
+            NyxIdOperation = new NyxIdOperationRef
+            {
+                ConnectedServiceId = operationAdmission.ServiceInstanceId,
+                ServiceSlug = operationAdmission.ServiceSlug,
+                CatalogServiceSlug = operationAdmission.CatalogServiceSlug,
+                OperationId = operationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint endpoint
+                    ? endpoint.EndpointId
+                    : string.Empty,
+                HttpMethod = operationAdmission.HttpMethod,
+                PathTemplate = operationAdmission.PathTemplate,
+            },
+        };
+    }
+
+    private sealed class PresentedTestTool(string name, string catalogServiceSlug) : TestTool(name)
+    {
+        public override ToolPresentationDescriptor Presentation { get; } = new()
+        {
+            InvocationName = name,
+            DisplayName = name,
+            Description = name,
+            Kind = ToolPresentationKind.NyxIdOperation,
+            Availability = ToolAvailability.Available,
+            NyxIdOperation = new NyxIdOperationRef
+            {
+                CatalogServiceSlug = catalogServiceSlug,
+            },
+        };
     }
 
     private sealed class CapabilityTool(string name, IReadOnlyCollection<string> capabilities)

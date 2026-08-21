@@ -27,6 +27,11 @@ message RuntimeActorStateSchemaAdoptionReceipt {
   google.protobuf.Timestamp adopted_at = 9;
   string authority_actor_id = 10;
   string membership_digest = 11;
+  // OPEN is a fresh membership-bound admission. QUIESCED is historical terminal evidence used
+  // only by explicitly declared bridge migrations. UNSPECIFIED is retained for pre-field OPEN
+  // receipts already persisted before this field existed.
+  RuntimeFleetCapabilityGateStatus evidence_status = 12;
+  string quiescence_transition_id = 13;
 }
 
 // Stable business identity for an actor row, persisted alongside the

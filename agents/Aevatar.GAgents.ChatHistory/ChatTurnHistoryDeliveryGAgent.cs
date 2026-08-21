@@ -177,6 +177,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             Text = notification.Text?.Trim() ?? string.Empty,
             ErrorCode = notification.ErrorCode?.Trim() ?? string.Empty,
             ObservedAtUnixMs = notification.ObservedAtUnixMs,
+            Operations = { notification.Operations.Select(operation => operation.Clone()) },
         };
         if (State.TerminalStatus != ChatTurnTerminalStatus.Unspecified)
         {
@@ -201,6 +202,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                 Text = terminal.Text,
                 ErrorCode = terminal.ErrorCode,
                 ObservedAtUnixMs = terminal.ObservedAtUnixMs,
+                Operations = { terminal.Operations.Select(operation => operation.Clone()) },
             });
             await DispatchPendingTerminalAppendAsync(CancellationToken.None);
             return;
@@ -401,6 +403,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                 SanitizedError = sanitizedError,
                 TerminalTime = Timestamp.FromDateTimeOffset(
                     DateTimeOffset.FromUnixTimeMilliseconds(State.TerminalObservedAtUnixMs)),
+                Operations = { State.TerminalOperations.Select(operation => operation.Clone()) },
             },
         };
     }
@@ -628,6 +631,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         next.TerminalObservedAtUnixMs = evt.ObservedAtUnixMs;
         next.ErrorCode = string.Empty;
         next.ErrorSummary = string.Empty;
+        ReplaceTerminalOperations(next, evt.Operations);
         return next;
     }
 
@@ -649,7 +653,23 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         next.TerminalObservedAtUnixMs = evt.ObservedAtUnixMs;
         next.ErrorCode = string.Empty;
         next.ErrorSummary = string.Empty;
+        ReplaceTerminalOperations(next, evt.Operations);
         return next;
+    }
+
+    /// <summary>
+    /// Replaces the recorded ledger only when the source reported one, so a
+    /// reconciliation that carries no operations cannot erase the observed ledger.
+    /// </summary>
+    private static void ReplaceTerminalOperations(
+        ChatTurnHistoryDeliveryState state,
+        IEnumerable<ChatTurnOperation> operations)
+    {
+        var replacement = operations.Select(operation => operation.Clone()).ToList();
+        if (replacement.Count == 0)
+            return;
+        state.TerminalOperations.Clear();
+        state.TerminalOperations.AddRange(replacement);
     }
 
     private static ChatTurnHistoryDeliveryState ApplyAppendDispatched(

@@ -238,4 +238,8 @@ message AgentToolOperationAdmissionPayload {
   string catalog_digest = 13;
   AgentToolOperationReadBackPayload read_back = 14;
   AgentToolDurableAuthorizationSnapshotPayload durable_authorization = 15;
+  // Stable catalog identity used by sealed Agent Profile policy. Unlike
+  // service_instance_id/service_slug, this survives reconnects and is portable
+  // across callers. It is observation evidence, never a proxy route selector.
+  string catalog_service_slug = 17;
 }

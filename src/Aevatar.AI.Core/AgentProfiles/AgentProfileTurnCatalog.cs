@@ -21,6 +21,7 @@ public enum AgentProfileTurnDiagnosticCode
     ExactSkillFetchFailed = 11,
     ExactSkillIdentityMismatch = 12,
     SelectedSkillBodyInvalid = 13,
+    MaximumPolicyFilteredTools = 14,
 }
 
 public sealed record AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode Code, string Detail);

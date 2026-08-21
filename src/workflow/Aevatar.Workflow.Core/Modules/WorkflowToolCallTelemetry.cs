@@ -46,7 +46,7 @@ internal static class WorkflowToolCallTelemetry
         WorkflowToolCallAttemptTimingObservation observation)
     {
         logger.LogInformation(
-            "Workflow tool-call timing waterline observed. scopeId={ScopeId} runId={RunId} stepId={StepId} callId={CallId} executionId={ExecutionId} continuationId={ContinuationId} attempt={Attempt} dispatchId={DispatchId} waterline={Waterline} observedAtUtc={ObservedAtUtc} transportAttempt={TransportAttempt} providerDisposition={ProviderDisposition} deliveryMethod={DeliveryMethod} deliveryAcceptance={DeliveryAcceptance} reconciliationDisposition={ReconciliationDisposition} elapsedPhase={ElapsedPhase} elapsedMs={ElapsedMs}",
+            "Workflow tool-call timing waterline observed. scopeId={ScopeId} runId={RunId} stepId={StepId} callId={CallId} executionId={ExecutionId} continuationId={ContinuationId} attempt={Attempt} dispatchId={DispatchId} waterline={Waterline} observedAtUtc={ObservedAtUtc} transportAttempt={TransportAttempt} providerDisposition={ProviderDisposition} deliveryMethod={DeliveryMethod} deliveryAcceptance={DeliveryAcceptance} reconciliationDisposition={ReconciliationDisposition} elapsedPhase={ElapsedPhase} elapsedMs={ElapsedMs} committedEventId={CommittedEventId} committedStateVersion={CommittedStateVersion}",
             observation.ScopeId,
             observation.RunId,
             observation.StepId,
@@ -63,7 +63,9 @@ internal static class WorkflowToolCallTelemetry
             DeliveryAcceptanceValue(observation.DeliveryAcceptance),
             ReconciliationDispositionValue(observation.ReconciliationDisposition),
             PhaseValue(observation),
-            TryReadElapsed(observation, out var elapsedMs) ? elapsedMs : null);
+            TryReadElapsed(observation, out var elapsedMs) ? elapsedMs : null,
+            observation.CommittedEventId,
+            observation.CommittedStateVersion);
     }
 
     private static TagList Tags(WorkflowToolCallAttemptTimingObservation observation) =>

@@ -132,39 +132,73 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        await ReleaseScopeAsync();
-
-        // A status-route cutover release is confirmed to the source only after the release is
-        // committed (also when it already was): the source flips the route on this typed
-        // continuation, never on inbox acceptance of the command.
         if (command.StatusRouteEpoch > 0)
         {
+            if (!IsExpectedDirectPublisher(command.RootActorId) ||
+                !HasSameScope(command) ||
+                !string.Equals(command.ExpectedWriterActorId, Id, StringComparison.Ordinal) ||
+                command.RequiredObservedVersion <= 0)
+            {
+                return;
+            }
+
+            var durableObservedVersion = State.Released
+                ? State.ReleasedAtObservedVersion
+                : State.HighestSeenVersion;
+            if (durableObservedVersion < command.RequiredObservedVersion)
+                return;
+
+            await ReleaseScopeAsync(durableObservedVersion);
+
+            // A status-route cutover release is confirmed to the source only after the release is
+            // committed (also when it already was): the source flips the route on this typed
+            // continuation, never on inbox acceptance of the command.
             await ConfirmStatusWriterReleasedAsync(
                 command.RootActorId,
                 command.StatusRouteEpoch,
-                State.HighestSeenVersion);
+                State.ReleasedAtObservedVersion);
+            return;
         }
+
+        await ReleaseScopeAsync(State.HighestSeenVersion);
     }
 
-    private async Task ReleaseScopeAsync()
+    private bool IsExpectedDirectPublisher(string expectedActorId)
     {
-        if (!State.Active || State.Released)
+        var inbound = ActiveInboundEnvelope;
+        if (inbound == null)
+            return false;
+
+        var runtimeSourceActorId = inbound.Runtime?.SourceActorId;
+        return inbound.Route.IsDirect() &&
+               string.Equals(inbound.Route?.PublisherActorId, expectedActorId, StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(runtimeSourceActorId) &&
+               string.Equals(runtimeSourceActorId, expectedActorId, StringComparison.Ordinal);
+    }
+
+    private bool HasSameScope(ReleaseProjectionScopeCommand command) =>
+        string.Equals(command.RootActorId, State.RootActorId, StringComparison.Ordinal) &&
+        string.Equals(command.ProjectionKind, State.ProjectionKind, StringComparison.Ordinal) &&
+        string.Equals(command.SessionId, State.SessionId, StringComparison.Ordinal) &&
+        command.Mode == State.Mode;
+
+    private async Task ReleaseScopeAsync(long lastObservedVersion)
+    {
+        if (!State.Active)
             return;
 
-        await PersistDomainEventAsync(new ProjectionScopeReleasedEvent
+        if (!State.Released)
         {
-            OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
-        });
-
-        if (State.ObservationAttached)
-        {
-            await PersistDomainEventAsync(new ProjectionObservationAttachmentUpdatedEvent
+            await PersistDomainEventAsync(new ProjectionScopeReleasedEvent
             {
-                Attached = false,
                 OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+                LastObservedVersion = lastObservedVersion,
             });
         }
 
+        // Relay removal happens after the release commit. Repeating it for an already released
+        // scope closes the crash window between those two operations before a route cutover is
+        // confirmed to the source.
         await RemoveObservationRelayAsync(State.RootActorId, CancellationToken.None);
     }
 
@@ -346,9 +380,17 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverGoldenVerified)
             .On<ProjectionMaterializationCutoverActivatedEvent>(
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverActivated)
+            .On<ProjectionScopeStatusRoutePreparationStartedEvent>(
+                ProjectionScopeStateApplier.ApplyStatusRoutePreparationStarted)
+            .On<ProjectionScopeStatusActorSealRecordedEvent>(
+                ProjectionScopeStateApplier.ApplyStatusActorSealRecorded)
+            .On<ProjectionScopeStatusRouteActivationSealsBoundEvent>(
+                ProjectionScopeStateApplier.ApplyStatusRouteActivationSealsBound)
             .On<ProjectionScopeStatusRouteWarmingStartedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteWarmingStarted)
+            .On<ProjectionScopeStatusRouteWarmingProbedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteWarmingProbed)
             .On<ProjectionScopeStatusRouteCaughtUpEvent>(ProjectionScopeStateApplier.ApplyStatusRouteCaughtUp)
             .On<ProjectionScopeStatusRouteBlockedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteBlocked)
+            .On<ProjectionScopeStatusRouteDrainProbedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteDrainProbed)
             .On<ProjectionScopeStatusRouteActivatedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteActivated)
             .On<ProjectionScopeStatusLegacyRouteReleasedEvent>(ProjectionScopeStateApplier.ApplyStatusLegacyRouteReleased)
             .On<ProjectionScopeStatusRouteContractUpgradedEvent>(ProjectionScopeStateApplier.ApplyStatusRouteContractUpgraded)

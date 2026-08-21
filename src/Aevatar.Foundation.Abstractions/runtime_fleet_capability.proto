@@ -15,10 +15,11 @@ enum RuntimeFleetCapability
   RUNTIME_FLEET_CAPABILITY_PROJECTION_SCOPE_STATUS_TERMINAL_V1 = 2;
   RUNTIME_FLEET_CAPABILITY_PROJECTION_INCREMENTAL_GRAPH_V1 = 3;
   // Phased status-route cutover (warming / caught-up / blocked / released / active) with the
-  // epoch-fenced status document. Advertised only by binaries that run the phased source scope;
-  // a fleet that still contains a phase-unaware binary never opens this gate, and such binaries
-  // no longer find the V1 gate managed, so a mixed fleet fails closed in both directions.
+  // epoch-fenced status document. Advertised only by binaries that run the phased source scope.
   RUNTIME_FLEET_CAPABILITY_PROJECTION_SCOPE_STATUS_TERMINAL_V2 = 4;
+  // Protocol-only Phase-B predeclaration. Phase A neither advertises nor manages this fresh gate;
+  // the later artifact must define its exact contract before using it for OPEN admission.
+  RUNTIME_FLEET_CAPABILITY_PROJECTION_SCOPE_STATUS_TERMINAL_V3 = 5;
 }
 
 enum RuntimeFleetCapabilityGateStatus
@@ -26,6 +27,8 @@ enum RuntimeFleetCapabilityGateStatus
   RUNTIME_FLEET_CAPABILITY_GATE_STATUS_UNSPECIFIED = 0;
   RUNTIME_FLEET_CAPABILITY_GATE_STATUS_OPEN = 1;
   RUNTIME_FLEET_CAPABILITY_GATE_STATUS_REVOKED = 2;
+  // Terminal bridge state. New authorities never reopen or revoke a quiesced gate.
+  RUNTIME_FLEET_CAPABILITY_GATE_STATUS_QUIESCED = 3;
 }
 
 message RuntimeFleetMemberCapability
@@ -75,6 +78,25 @@ message RuntimeFleetCapabilityAdmission
   string membership_digest = 13;
   string contract_id = 14;
   repeated RuntimeFleetAdmittedMember admitted_members = 15;
+}
+
+// Durable evidence that a capability gate reached its typed terminal QUIESCED state. Unlike a
+// live admission, this records the historical fleet proof that closed the gate and deliberately
+// does not claim that the same membership is still current. A later rollout must use a separate
+// fresh OPEN capability gate for its own admission.
+message RuntimeFleetCapabilityQuiescenceEvidence
+{
+  RuntimeFleetCapability capability = 1;
+  string authority_actor_id = 2;
+  int64 authority_state_version = 3;
+  int64 capability_epoch = 4;
+  string contract_id = 5;
+  int32 quiescence_reader_contract_version = 6;
+  int64 quiesced_membership_epoch = 7;
+  string quiesced_membership_digest = 8;
+  string quiesced_deployment_revision = 9;
+  google.protobuf.Timestamp quiesced_at = 10;
+  string quiescence_transition_id = 11;
 }
 
 message RuntimeFleetAdmittedMember

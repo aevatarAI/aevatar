@@ -56,6 +56,56 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
+    public void Resolve_NullSnapshot_WhenImplicitToolSetOverrideSelected_ShouldReplaceFallbackToolSet()
+    {
+        var fallback = Substitute.For<IChatRouteFallbackProvider>();
+        fallback.GetFallbackDecision().Returns(new ChatRouteDecision
+        {
+            Action = ForwardToModelAction(
+                "fallback-model",
+                includeToolSetRef: true,
+                includeToolChoiceHint: true),
+            UsedFallback = true,
+        });
+        var resolver = new ChatRouteResolver(fallback);
+
+        var decision = resolver.Resolve(
+            null,
+            new ChatRouteInput(),
+            implicitToolSetNameOverride: "profile.route");
+
+        decision.UsedFallback.Should().BeTrue();
+        decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("profile.route");
+        decision.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("notify_self");
+    }
+
+    [Fact]
+    public void Resolve_NullSnapshot_ShouldNotLeakImplicitToolSetOverrideIntoSharedFallbackDecision()
+    {
+        var sharedFallback = new ChatRouteDecision
+        {
+            Action = ForwardToModelAction(
+                "fallback-model",
+                includeToolSetRef: true,
+                includeToolChoiceHint: false),
+            UsedFallback = true,
+        };
+        var fallback = Substitute.For<IChatRouteFallbackProvider>();
+        fallback.GetFallbackDecision().Returns(sharedFallback);
+        var resolver = new ChatRouteResolver(fallback);
+
+        var selected = resolver.Resolve(
+            null,
+            new ChatRouteInput(),
+            implicitToolSetNameOverride: "profile.route");
+        var unselected = resolver.Resolve(null, new ChatRouteInput());
+
+        selected.Action.ForwardToModel.ToolSetRef.Name.Should().Be("profile.route");
+        unselected.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
+        sharedFallback.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
+    }
+
+    [Fact]
     public void Resolve_RulesEmpty_ReturnsDefaultTarget()
     {
         var resolver = NewResolver();
@@ -102,6 +152,20 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
+    public void Resolve_ProjectedForwardToModelWithoutToolSetRef_ShouldUseImplicitToolSetOverride()
+    {
+        var resolver = NewResolver(defaultToolSetName: "workspace.default");
+        var snapshot = new ChatRoutePolicySnapshot(ForwardToModelAction("default-model"), []);
+
+        var decision = resolver.Resolve(
+            snapshot,
+            new ChatRouteInput(),
+            implicitToolSetNameOverride: "profile.route");
+
+        decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("profile.route");
+    }
+
+    [Fact]
     public void Resolve_ForwardToModelWithToolSetRef_WhenDefaultToolSetConfigured_ShouldPreserveExplicitToolSet()
     {
         var resolver = NewResolver(defaultToolSetName: "workspace.default");
@@ -112,6 +176,25 @@ public sealed class ChatRouteResolverTests
         var snapshot = new ChatRoutePolicySnapshot(action, []);
 
         var decision = resolver.Resolve(snapshot, new ChatRouteInput());
+
+        decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
+        decision.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("notify_self");
+    }
+
+    [Fact]
+    public void Resolve_ProjectedForwardToModelWithToolSetRef_ShouldPreserveExplicitRouteOverImplicitOverride()
+    {
+        var resolver = NewResolver(defaultToolSetName: "workspace.default");
+        var action = ForwardToModelAction(
+            "default-model",
+            includeToolSetRef: true,
+            includeToolChoiceHint: true);
+        var snapshot = new ChatRoutePolicySnapshot(action, []);
+
+        var decision = resolver.Resolve(
+            snapshot,
+            new ChatRouteInput(),
+            implicitToolSetNameOverride: "profile.route");
 
         decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
         decision.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("notify_self");

@@ -621,7 +621,7 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
                     new FixedSchemaContextReader(new RuntimeActorStateSchemaContext(
                         WorkflowExecutionMaterializationScopeGAgent.AgentKind,
                         WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion,
-                        [CreateAdoptionReceipt()])));
+                        [CreateGraphAdoptionReceipt(), CreateActivationSealAdoptionReceipt()])));
             }
 
             // Same registration the production module performs: the scope kind is registered
@@ -795,10 +795,11 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
             return admission;
         }
 
-        private static RuntimeActorStateSchemaAdoptionReceipt CreateAdoptionReceipt() =>
+        private static RuntimeActorStateSchemaAdoptionReceipt CreateGraphAdoptionReceipt() =>
             new()
             {
-                StateSchemaVersion = WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion,
+                StateSchemaVersion =
+                    WorkflowExecutionMaterializationScopeGAgent.IncrementalGraphStateSchemaVersion,
                 RequiredCapability = RuntimeFleetCapability.ProjectionIncrementalGraphV1,
                 RequiredContractId = RuntimeFleetCapabilityContracts.ProjectionIncrementalGraphV1,
                 RequiredContractVersion =
@@ -810,6 +811,26 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
                 AdoptedAt = Timestamp.FromDateTimeOffset(Now),
                 AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
                 MembershipDigest = "digest-a",
+                EvidenceStatus = RuntimeFleetCapabilityGateStatus.Open,
+            };
+
+        private static RuntimeActorStateSchemaAdoptionReceipt CreateActivationSealAdoptionReceipt() =>
+            new()
+            {
+                StateSchemaVersion = WorkflowExecutionMaterializationScopeGAgent.SupportedStateSchemaVersion,
+                RequiredCapability = RuntimeFleetCapability.ProjectionScopeStatusTerminalV3,
+                RequiredContractId =
+                    RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1,
+                RequiredContractVersion =
+                    RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion,
+                CapabilityEpoch = 4,
+                AuthorityStateVersion = 10,
+                MembershipEpoch = 7,
+                DeploymentRevision = "revision-a",
+                AdoptedAt = Timestamp.FromDateTimeOffset(Now),
+                AuthorityActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                MembershipDigest = "digest-a",
+                EvidenceStatus = RuntimeFleetCapabilityGateStatus.Open,
             };
     }
 

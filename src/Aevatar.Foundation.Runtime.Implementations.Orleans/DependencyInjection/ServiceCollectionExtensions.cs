@@ -37,6 +37,8 @@ public static class ServiceCollectionExtensions
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
         services.Replace(ServiceDescriptor.Singleton<IActorDispatchPort, OrleansActorDispatchPort>());
+        services.Replace(ServiceDescriptor.Singleton<IRuntimeActorStateSchemaActivationSealSupport,
+            OrleansRuntimeActorStateSchemaActivationSealSupport>());
         services.AddSerializer(serializerBuilder => serializerBuilder.AddProtobufSerializer());
         services.TryAddSingleton<EventSourcingRuntimeOptions>();
         services.RemoveAll(typeof(IStateStore<>));
@@ -83,6 +85,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
         services.TryAddSingleton<IRuntimeFleetCapabilityAdmissionReader,
             DenyAllRuntimeFleetCapabilityAdmissionReader>();
+        services.TryAddSingleton<IRuntimeFleetCapabilityQuiescenceReader,
+            DenyAllRuntimeFleetCapabilityQuiescenceReader>();
         services.TryAddSingleton<OrleansRuntimeFleetMembershipOptions>();
         services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetMembershipSnapshotSource,
             OrleansRuntimeFleetMembershipSnapshotSource>());

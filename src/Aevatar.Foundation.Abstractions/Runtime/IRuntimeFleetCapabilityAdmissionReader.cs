@@ -30,13 +30,31 @@ public static class RuntimeFleetCapabilityContracts
     public const string ProjectionScopeStatusTerminalV1 =
         "aevatar.projection.scope-status-terminal.v1";
 
-    // Phased status-route cutover + epoch-fenced status document. Only binaries running the
-    // phased source scope advertise this contract; a source adopts (or upgrades) its status route
-    // to this contract only under a fresh V2 admission.
+    // Persisted phased status-route contract + epoch-fenced status document. Phase-A bridge
+    // binaries continue to serve routes carrying it but advertise the distinct quiescence
+    // contract instead, so they cannot create a fresh V2 OPEN grant.
     public const string ProjectionScopeStatusTerminalV2 =
         "aevatar.projection.scope-status-terminal.v2";
 
-    public const int ProjectionScopeStatusTerminalReaderVersion = 2;
+    public const string ProjectionScopeStatusTerminalQuiescenceV1 =
+        "aevatar.projection.scope-status-terminal.quiescence.v1";
+
+    public const int ProjectionScopeStatusTerminalReaderVersionV2 = 2;
+
+    public const int ProjectionScopeStatusTerminalReaderVersion =
+        ProjectionScopeStatusTerminalReaderVersionV2;
+
+    // Reader revision of the distinct Phase-A bridge contract proving exact writer identity and
+    // drained-version release support. Status routes themselves remain V2/2.
+    public const int ProjectionScopeStatusTerminalQuiescenceReaderVersion = 3;
+
+    // Fresh Phase-B activation seal. This does not replace the persisted V2 status route
+    // contract: it proves that every active runtime can reject sealed actor rows on an older
+    // binary before a source is allowed to start or resume a cutover.
+    public const string ProjectionScopeStatusTerminalActivationSealV1 =
+        "aevatar.projection.scope-status-terminal.activation-seal.v1";
+
+    public const int ProjectionScopeStatusTerminalActivationSealReaderVersion = 4;
 
     public const string ProjectionIncrementalGraphV1 =
         "aevatar.projection.incremental-graph.v1";
@@ -51,6 +69,17 @@ public static class RuntimeFleetCapabilityContracts
 public interface IRuntimeFleetCapabilityAdmissionReader
 {
     Task<RuntimeFleetCapabilityAdmission?> GetAsync(
+        RuntimeFleetCapability capability,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Read-model port for a durable terminal quiescence marker. The returned evidence describes the
+/// historical fleet that closed the gate; it is not live membership admission for another rollout.
+/// </summary>
+public interface IRuntimeFleetCapabilityQuiescenceReader
+{
+    Task<RuntimeFleetCapabilityQuiescenceEvidence?> GetQuiescenceAsync(
         RuntimeFleetCapability capability,
         CancellationToken ct = default);
 }
@@ -89,6 +118,18 @@ public sealed class DenyAllRuntimeFleetCapabilityAdmissionReader
     }
 }
 
+public sealed class DenyAllRuntimeFleetCapabilityQuiescenceReader
+    : IRuntimeFleetCapabilityQuiescenceReader
+{
+    public Task<RuntimeFleetCapabilityQuiescenceEvidence?> GetQuiescenceAsync(
+        RuntimeFleetCapability capability,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<RuntimeFleetCapabilityQuiescenceEvidence?>(null);
+    }
+}
+
 /// <summary>
 /// Default used outside a trusted cluster membership adapter.
 /// </summary>
@@ -120,6 +161,13 @@ public interface IRuntimeFleetMembershipSnapshotSource
 /// </summary>
 public interface IRuntimeFleetCapabilityAdvertisement
 {
+    /// <summary>
+    /// Whether this host composition can actually provide the advertised reader contract. Optional
+    /// modules can stay registered for DI enumeration while suppressing a capability whose runtime
+    /// support is absent.
+    /// </summary>
+    bool IsAvailable => true;
+
     RuntimeFleetMemberCapability GetCapability();
 
     /// <summary>

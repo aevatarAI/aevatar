@@ -2,9 +2,12 @@ using System.Net;
 using System.Net.Sockets;
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Foundation.Runtime.Delivery;
@@ -438,6 +441,63 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         }
     }
 
+    [Theory]
+    [InlineData(ProjectionWriteDisposition.Conflict)]
+    [InlineData(ProjectionWriteDisposition.Gap)]
+    public async Task HandleEnvelopeAsync_ForwardedObserverStatusWriteRejection_ShouldPropagateShedAndRedeliver(
+        ProjectionWriteDisposition disposition)
+    {
+        RetryAwareDirectDispatchAgent.Reset();
+        var actorId = $"actor-{Guid.NewGuid():N}";
+        var sourceActorId = $"source-{Guid.NewGuid():N}";
+        var siloPort = ReserveTcpPort();
+        var gatewayPort = ReserveTcpPort();
+
+        using var envScope = new EnvironmentVariableScope(new Dictionary<string, string?>
+        {
+            ["AEVATAR_RUNTIME_AUTO_RETRY_MAX_ATTEMPTS"] = "0",
+            ["AEVATAR_RUNTIME_AUTO_RETRY_DELAY_MS"] = "50",
+            ["AEVATAR_TEST_NODE_VERSION_TAG"] = "new",
+            ["AEVATAR_TEST_FAIL_EVENT_TYPE_URLS"] = string.Empty,
+        });
+
+        var host = await StartSiloHostAsync(siloPort, gatewayPort);
+
+        try
+        {
+            await InitializeAgentByKindAsync(host, actorId);
+            var grain = host.Services.GetRequiredService<IGrainFactory>()
+                .GetGrain<IRuntimeActorGrain>(actorId);
+            var envelope = CreateForwardedObserverEnvelope(sourceActorId, actorId, disposition);
+
+            await grain.Invoking(x => x.HandleEnvelopeAsync(envelope.ToByteArray()))
+                .Should().ThrowAsync<Exception>()
+                .WithMessage($"*({disposition})*");
+            await RetryAwareDirectDispatchAgent.WaitForDeactivationAsync(TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(1);
+            RetryAwareDirectDispatchAgent.DeactivationCount.Should().Be(1,
+                "a retryable status rejection must shed the activation before provider redelivery");
+
+            // The provider redelivers the exact same forwarded observation after the failed call.
+            await grain.HandleEnvelopeAsync(envelope.ToByteArray());
+            var delivered = await RetryAwareDirectDispatchAgent.WaitForSuccessAsync(
+                envelope.Id,
+                TimeSpan.FromSeconds(20));
+
+            RetryAwareDirectDispatchAgent.ActivationCount.Should().Be(2);
+            RetryAwareDirectDispatchAgent.GetAttemptCount(envelope.Id).Should().Be(2);
+            delivered.Route.IsObserverPublication().Should().BeTrue();
+            StreamForwardingEnvelopeState.GetSourceStreamId(delivered).Should().Be(sourceActorId);
+            StreamForwardingEnvelopeState.GetTargetStreamId(delivered).Should().Be(actorId);
+        }
+        finally
+        {
+            await host.StopAsync();
+            host.Dispose();
+        }
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         int siloPort,
         int gatewayPort,
@@ -502,6 +562,26 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
             Payload = Any.Pack(new NeedsCredentialPayload { ReplyToken = "runtime-reply-token" }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
+
+    private static EventEnvelope CreateForwardedObserverEnvelope(
+        string sourceActorId,
+        string targetActorId,
+        ProjectionWriteDisposition disposition)
+    {
+        var published = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Payload = Any.Pack(new StringValue { Value = $"projection-write-rejected:{disposition}" }),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(
+                sourceActorId,
+                ObserverAudience.CommittedFacts),
+        };
+        return StreamForwardingRules.BuildForwardedEnvelope(
+            published,
+            sourceActorId,
+            targetActorId,
+            StreamForwardingMode.HandleThenForward);
+    }
 
     private static int ReserveTcpPort()
     {
@@ -738,6 +818,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
         private static int _activationCount;
         private static int _deactivationCount;
         private static int _runtimeRetryableFailuresRemaining;
+        private static int _projectionWriteRejectionsRemaining;
 
         public static void Reset()
         {
@@ -750,6 +831,7 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 _activationCount = 0;
                 _deactivationCount = 0;
                 _runtimeRetryableFailuresRemaining = 1;
+                _projectionWriteRejectionsRemaining = 1;
             }
         }
 
@@ -839,6 +921,23 @@ public sealed class OrleansDirectDispatchFailurePropagationTests
                 Interlocked.Exchange(ref _runtimeRetryableFailuresRemaining, 0) == 1)
             {
                 throw new RuntimeRetryableDirectDispatchException(payload);
+            }
+
+            if (payload.StartsWith("projection-write-rejected:", StringComparison.Ordinal) &&
+                Interlocked.Exchange(ref _projectionWriteRejectionsRemaining, 0) == 1)
+            {
+                var disposition = System.Enum.Parse<ProjectionWriteDisposition>(
+                    payload["projection-write-rejected:".Length..],
+                    ignoreCase: false);
+                throw new ProjectionScopeStatusWriteRejectedException(
+                    Id,
+                    new ProjectionSourceCoordinate
+                    {
+                        ActorId = "source-projection-scope",
+                        StateVersion = 17,
+                        EventId = envelope.Id,
+                    },
+                    disposition);
             }
 
             if (payload == "fail-once-then-succeed" &&

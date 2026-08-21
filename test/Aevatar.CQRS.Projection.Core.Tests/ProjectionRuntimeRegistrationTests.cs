@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgents.Channel.Runtime;
@@ -647,6 +648,42 @@ public sealed class ProjectionRuntimeRegistrationTests
 
         registration.Kind.Should().Be("projection.scope.test-fallback-scope-context");
         registration.ImplementationType.Should().Be(typeof(FallbackScopeAgent<TestFallbackScopeContext>));
+    }
+
+    [Fact]
+    public void ProjectionScopeAgentRegistration_ShouldRegisterExpectedStateSchemaMigrations()
+    {
+        var durable = ProjectionScopeAgentRegistration
+            .Create<ProjectionMaterializationScopeGAgent<TestMaterializationContext>>();
+
+        durable.StateSchemaVersion.Should().Be(1);
+        var migration = durable.PrebuiltStateMigrationSteps.Should().ContainSingle().Subject;
+        migration.FromStateVersion.Should().Be(0);
+        migration.ToStateVersion.Should().Be(1);
+        migration.StateContractType.Should().Be(typeof(ProjectionScopeState));
+        migration.MigrationType.Should().Be(typeof(ProjectionScopeStateActivationSealMigration));
+        migration.RequiredCapability.Should().Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV3);
+        migration.RequiredContractId.Should().Be(
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1);
+        migration.RequiredContractVersion.Should().Be(
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion);
+        migration.RequiredGateStatus.Should().Be(RuntimeFleetCapabilityGateStatus.Open);
+
+        var terminal = ProjectionScopeAgentRegistration.Create<ProjectionScopeStatusGAgent>();
+        terminal.StateContractType.Should().Be(typeof(ProjectionScopeStatusTerminalState));
+        terminal.StateSchemaVersion.Should().Be(ProjectionScopeStatusGAgent.SupportedStateSchemaVersion);
+        terminal.StateMigrationTypes.Should().Equal(
+            typeof(ProjectionScopeStatusTerminalStateV0ToV1Migration));
+        terminal.PrebuiltStateMigrationSteps.Should().BeNullOrEmpty();
+        var terminalMigration = new ProjectionScopeStatusTerminalStateV0ToV1Migration();
+        terminalMigration.FromStateVersion.Should().Be(0);
+        terminalMigration.ToStateVersion.Should().Be(1);
+
+        var session = ProjectionScopeAgentRegistration
+            .Create<ProjectionSessionScopeGAgent<TestSessionContext>>();
+        session.StateSchemaVersion.Should().Be(0);
+        session.StateMigrationTypes.Should().BeNullOrEmpty();
+        session.PrebuiltStateMigrationSteps.Should().BeNullOrEmpty();
     }
 
     [Fact]

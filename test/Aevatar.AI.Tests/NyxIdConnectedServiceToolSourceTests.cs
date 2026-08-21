@@ -158,11 +158,17 @@ public class NyxIdConnectedServiceToolSourceTests
         ]);
         var owner = tool.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
         owner.OperationAdmission.ServiceInstanceId.Should().Be("usvc-alpha");
+        owner.OperationAdmission.CatalogServiceSlug.Should().Be("svc-shop");
         owner.OperationAdmission.Identity.Should().Be(
             new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"));
         owner.OperationAdmission.CatalogDigest.Should().Be(
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         owner.OperationAdmission.ContractDigest.Should().MatchRegex("^[0-9a-f]{64}$");
+        tool.Presentation.NyxIdOperation.CatalogServiceSlug.Should().Be(
+            owner.OperationAdmission.CatalogServiceSlug);
+        AgentToolOperationSelector.ComputeDigest(owner.OperationAdmission).Should().NotBe(
+            AgentToolOperationSelector.ComputeDigest(
+                owner.OperationAdmission with { CatalogServiceSlug = "svc-other" }));
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         schema.RootElement.GetProperty("properties").EnumerateObject()
             .Select(static property => property.Name)
@@ -874,7 +880,8 @@ public class NyxIdConnectedServiceToolSourceTests
             AgentToolOperationAdmissionPayload.Parser.ParseFrom(
                 AgentToolOperationAdmissionPayloadMapper.ToPayload(frozen).ToByteArray()));
         reloaded.Should().NotBeNull();
-        reloaded!.ReadBack!.ProviderResourceArgument.Should().Be(
+        reloaded!.CatalogServiceSlug.Should().Be("api-lark-bot");
+        reloaded.ReadBack!.ProviderResourceArgument.Should().Be(
             frozen.ReadBack.ProviderResourceArgument,
             "the exact provider identity target is an actor-persisted typed contract");
         reloaded.ReadBack.EffectResultIdentityJsonPointer.Should().Be("/data/message_id");
@@ -1564,6 +1571,7 @@ public class NyxIdConnectedServiceToolSourceTests
           "slug": "{{slug}}",
           "label": "Shop",
           "catalog_service_id": "{{catalogServiceId}}",
+          "catalog_service_slug": "{{catalogServiceId}}",
           "endpoint_id": "instance-endpoint-alpha",
           "endpoint_url": "https://shop.test",
           "openapi_url": "{{openApiUrl}}",

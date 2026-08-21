@@ -110,6 +110,24 @@ public sealed class MainnetNyxIdChatAgentProfileResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_ShouldUseFullCohortSystemDefaultWhenScopeHasNoBinding()
+    {
+        var system = ProfileFixture.Create(AgentProfileOwners.ForSystem(), "system-profile");
+        var resolver = CreateResolver(
+            new StaticCatalogQueryPort(owner => SameOwner(owner, system.Owner)
+                ? Catalog(system, [SystemBinding(system.Target, enabled: true, 10_000)])
+                : null),
+            new StaticExecutionQueryPort(system));
+
+        var result = await resolver.ResolveAsync(new NyxIdChatAgentProfileSelectionRequest(
+            "scope-alpha", "conversation-alpha", null));
+
+        result.Status.Should().Be(NyxIdChatAgentProfileResolutionStatus.Selected);
+        result.Source.Should().Be(NyxIdChatAgentProfileSelectionSource.SystemDefault);
+        result.Profile!.ProfileId.Should().Be(system.Target.ProfileId);
+    }
+
+    [Fact]
     public async Task ResolveAsync_ShouldFailClosedWhenSelectedBindingHasNoExecutionReadModel()
     {
         var scope = ProfileFixture.Create(AgentProfileOwners.ForScope("scope-alpha"), "scope-profile");

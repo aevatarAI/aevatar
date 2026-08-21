@@ -211,13 +211,15 @@ public sealed class ToolCallModuleContextTests
     [Fact]
     public async Task ToolCallModule_WhenInitialPendingSaveFailsBeforeCommit_ShouldRevokeUnownedProtectedMaterial()
     {
+        var logger = new RecordingToolCallLogger();
         var tool = new CountingAgentTool("tool-alpha", static _ => "{}");
         var store = new TrackingRuntimeSecretStore();
-        var module = CreateModule(tool);
+        var module = CreateModule(tool, logger: logger);
         var ctx = new RecordingWorkflowContext
         {
             RuntimeSecretStore = store,
             FailStateSavesRemaining = 1,
+            Logger = logger,
         };
         var request = ToolRequest(ctx, tool.Name, "step-alpha", "exec-save-before-commit");
 
@@ -236,18 +238,22 @@ public sealed class ToolCallModuleContextTests
         ctx.LoadState<ToolCallModuleState>("tool_call").PendingExecutions.Should().BeEmpty();
         ctx.Scheduled.Should().BeEmpty();
         tool.ExecuteCalls.Should().Be(0);
+        logger.Entries.Should().NotContain(entry =>
+            Equals(entry.Properties.GetValueOrDefault("Waterline"), "pending_state_persisted"));
     }
 
     [Fact]
     public async Task ToolCallModule_WhenInitialPendingCommitSucceedsButStatePublicationFails_ShouldRetainOwnedProtectedMaterial()
     {
+        var logger = new RecordingToolCallLogger();
         var tool = new CountingAgentTool("tool-alpha", static _ => "{}");
         var store = new TrackingRuntimeSecretStore();
-        var module = CreateModule(tool);
+        var module = CreateModule(tool, logger: logger);
         var ctx = new RecordingWorkflowContext
         {
             RuntimeSecretStore = store,
             FailStatePublicationsAfterCommitRemaining = 1,
+            Logger = logger,
         };
         var request = ToolRequest(ctx, tool.Name, "step-alpha", "exec-save-after-commit");
 
@@ -262,11 +268,16 @@ public sealed class ToolCallModuleContextTests
         var reference = store.LastStoredReference!;
         var pending = ctx.LoadState<ToolCallModuleState>("tool_call")
             .PendingExecutions.Values.Should().ContainSingle().Subject;
+        pending.AttemptPreparationStartedAtUtc.Should().NotBeNull();
         pending.ProtectedMaterialReference.ToByteArray().Should().Equal(reference.ToByteArray());
         var resolved = await store.ResolveAsync(ResolveRequest(reference), CancellationToken.None);
         resolved.Resolved.Should().BeTrue();
         ctx.Scheduled.Should().BeEmpty();
         tool.ExecuteCalls.Should().Be(0);
+        var persisted = logger.Entries.Should().ContainSingle(entry =>
+            Equals(entry.Properties.GetValueOrDefault("Waterline"), "pending_state_persisted")).Subject;
+        persisted.Properties["CommittedEventId"].Should().Be("recording-workflow-state-1");
+        persisted.Properties["CommittedStateVersion"].Should().Be(1L);
     }
 
     [Fact]
@@ -1729,7 +1740,7 @@ public sealed class ToolCallModuleContextTests
         var logger = new RecordingToolCallLogger();
         var tool = new BlockingWorkflowTool("timed_tool");
         var module = CreateModule(tool, logger: logger);
-        var ctx = new RecordingWorkflowContext { Clock = clock };
+        var ctx = new RecordingWorkflowContext { Clock = clock, Logger = logger };
         var request = ToolRequest(ctx, tool.Name, "step-timed", "exec-timed");
 
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
@@ -5167,7 +5178,44 @@ public sealed class ToolCallModuleContextTests
                 throw new InvalidOperationException("simulated state save failure");
             }
 
-            _states[scopeKey] = Any.Pack(state);
+            var packed = Any.Pack(state);
+            WorkflowExecutionStateUpsertedEvent? committedUpsert = null;
+            if (string.Equals(scopeKey, ToolCallModule.ModuleStateKey, StringComparison.Ordinal) &&
+                packed.Is(ToolCallModuleState.Descriptor))
+            {
+                var authoritative = _states.TryGetValue(scopeKey, out var authoritativeState) &&
+                                    authoritativeState.Is(ToolCallModuleState.Descriptor)
+                    ? authoritativeState.Unpack<ToolCallModuleState>()
+                    : null;
+                committedUpsert = new WorkflowExecutionStateUpsertedEvent
+                {
+                    ScopeKey = scopeKey,
+                    State = packed,
+                };
+                committedUpsert.ToolCallAttemptPersistenceFacts.Add(
+                    WorkflowToolCallAttemptPersistence.BuildNewFacts(
+                        authoritative,
+                        packed.Unpack<ToolCallModuleState>(),
+                        ScopeId,
+                        UtcNow));
+            }
+
+            _states[scopeKey] = packed;
+            if (committedUpsert is { ToolCallAttemptPersistenceFacts.Count: > 0 })
+            {
+                var committed = new StateEvent
+                {
+                    AgentId = AgentId,
+                    EventId = $"recording-workflow-state-{StateSaveCalls}",
+                    Timestamp = Timestamp.FromDateTimeOffset(UtcNow),
+                    Version = StateSaveCalls,
+                    EventType = WorkflowExecutionStateUpsertedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(committedUpsert),
+                };
+                foreach (var observation in WorkflowToolCallAttemptPersistence.BuildCommittedObservations(committed))
+                    WorkflowToolCallTelemetry.Record(Logger, observation);
+            }
+
             if (FailStatePublicationsAfterCommitRemaining > 0)
             {
                 FailStatePublicationsAfterCommitRemaining--;

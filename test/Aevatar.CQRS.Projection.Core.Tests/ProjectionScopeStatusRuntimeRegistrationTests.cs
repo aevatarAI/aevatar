@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -128,20 +129,63 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
                 Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapability.ProjectionScopeStatusTerminalV2)
             .Subject;
 
-        // The fleet authority opens the terminal gate only when every silo advertises exactly the
-        // contract the source scope demands before warming the terminal route.
+        // Phase A uses the known V2 capability with a distinct bridge contract. It therefore
+        // closes old V2 admission in mixed fleets and quiesces only after bridge unanimity.
         var capability = advertisement.GetCapability();
-        capability.ContractId.Should().Be(ProjectionScopeStatusGAgent.ContractId);
+        ProjectionScopeStatusGAgent.ContractVersion.Should().Be(2);
         capability.ContractId.Should().Be(
             Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapabilityContracts
-                .ProjectionScopeStatusTerminalV2);
-        capability.ReaderContractVersion.Should().Be((int)ProjectionScopeStatusGAgent.ContractVersion);
+                .ProjectionScopeStatusTerminalQuiescenceV1);
         capability.ReaderContractVersion.Should().Be(
             Aevatar.Foundation.Abstractions.Runtime.RuntimeFleetCapabilityContracts
-                .ProjectionScopeStatusTerminalReaderVersion);
+                .ProjectionScopeStatusTerminalQuiescenceReaderVersion);
         capability.ReaderContractVersion.Should().Be(
-            2,
-            "the phased status route bumped the terminal reader contract to v2");
+            3,
+            "the Phase-A binary understands the terminal quiescence receipt");
+        advertisement.GetReaderImplementationType().Should().Be(typeof(ProjectionScopeStatusGAgent));
+    }
+
+    [Fact]
+    public async Task AddProjectionScopeStatusRuntimeCore_WithoutTurnoverSupport_ShouldSuppressV3Advertisement()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddProjectionScopeStatusRuntimeCore();
+
+        await using var provider = services.BuildServiceProvider();
+        var advertisement = provider
+            .GetServices<IRuntimeFleetCapabilityAdvertisement>()
+            .OfType<ProjectionScopeStatusTerminalActivationSealCapabilityAdvertisement>()
+            .Should().ContainSingle().Subject;
+
+        advertisement.IsAvailable.Should().BeFalse();
+        advertisement.GetCapability().Capability.Should()
+            .Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV3);
+    }
+
+    [Fact]
+    public async Task AddProjectionScopeStatusRuntimeCore_WithTurnoverSupport_ShouldAdvertiseExactV3Contract()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort(runtime);
+        var services = CreateServices(runtime, dispatchPort);
+        services.AddSingleton<IRuntimeActorStateSchemaActivationSealSupport, TurnoverSupport>();
+        services.AddProjectionScopeStatusRuntimeCore();
+
+        await using var provider = services.BuildServiceProvider();
+        var advertisement = provider
+            .GetServices<IRuntimeFleetCapabilityAdvertisement>()
+            .OfType<ProjectionScopeStatusTerminalActivationSealCapabilityAdvertisement>()
+            .Should().ContainSingle().Subject;
+
+        advertisement.IsAvailable.Should().BeTrue();
+        var capability = advertisement.GetCapability();
+        capability.Capability.Should().Be(RuntimeFleetCapability.ProjectionScopeStatusTerminalV3);
+        capability.ContractId.Should().Be(
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealV1);
+        capability.ReaderContractVersion.Should().Be(
+            RuntimeFleetCapabilityContracts.ProjectionScopeStatusTerminalActivationSealReaderVersion);
         advertisement.GetReaderImplementationType().Should().Be(typeof(ProjectionScopeStatusGAgent));
     }
 
@@ -371,6 +415,8 @@ public sealed class ProjectionScopeStatusRuntimeRegistrationTests
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
+
+    private sealed class TurnoverSupport : IRuntimeActorStateSchemaActivationSealSupport;
 
     private sealed class RecordingActorDispatchPort
         : IActorDispatchPort,

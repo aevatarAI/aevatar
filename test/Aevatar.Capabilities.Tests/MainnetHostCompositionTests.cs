@@ -74,6 +74,7 @@ using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Integration.AI;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -100,6 +101,39 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    private static readonly System.Type[] StudioLocalToolSourceTypes =
+    [
+        typeof(ProvisionWorkflowScheduleToolSource),
+        typeof(CreateStudioTeamToolSource),
+        typeof(StudioTeamQueryToolSource),
+        typeof(CreateStudioMemberToolSource),
+        typeof(CreateStudioMemberWorkflowDraftToolSource),
+        typeof(StudioMemberQueryToolSource),
+        typeof(StudioMemberInvocationReadinessToolSource),
+        typeof(StudioWorkflowQueryToolSource),
+        typeof(StudioScheduleQueryToolSource),
+        typeof(BindStudioMemberWorkflowToolSource),
+        typeof(ScheduleStudioMemberWorkflowToolSource),
+    ];
+
+    private static readonly string[] StudioLocalWorkflowToolNames =
+    [
+        "aevatar_provision_workflow_schedule",
+        "aevatar_create_team",
+        "aevatar_list_teams",
+        "aevatar_get_team",
+        "aevatar_create_member",
+        "aevatar_create_member_workflow_draft",
+        "aevatar_list_members",
+        "aevatar_get_member",
+        "aevatar_get_member_invocation_readiness",
+        "aevatar_list_workflows",
+        "aevatar_list_schedules",
+        "aevatar_get_schedule",
+        "aevatar_bind_member_workflow",
+        "aevatar_schedule_member_workflow",
+    ];
+
     [Fact]
     public void AddAevatarMainnetHost_ShouldExportProjectionAndKafkaTelemetry()
     {
@@ -414,6 +448,7 @@ public sealed class MainnetHostCompositionTests
         toolSources.Should().Contain(source => source is SkillsAgentToolSource);
         toolSources.Should().Contain(source => source is OrnnAgentToolSource);
         toolSources.Should().Contain(source => source is HumanInteractionChannelToolSource);
+        toolSources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         app.Services.GetRequiredService<IHumanInteractionPort>()
             .Should()
             .BeOfType<SkillBackedHumanInteractionPort>();
@@ -716,6 +751,7 @@ public sealed class MainnetHostCompositionTests
             ToolSetNames.LarkSelfNotify,
             ToolSetNames.NyxIdAssistantAdmission,
             ToolSetNames.NyxIdConnectedServices,
+            ToolSetNames.StudioLocal,
             ToolSetNames.WorkspaceDefault);
 
         var workspace = registry.Resolve(ToolSetNames.WorkspaceDefault);
@@ -726,17 +762,8 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is StartWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source is ObserveRunToolSource);
         workspace.Sources.Should().Contain(source => source is ReadWorkflowRunArtifactToolSource);
-        workspace.Sources.Should().Contain(source => source is ProvisionWorkflowScheduleToolSource);
-        workspace.Sources.Should().Contain(source => source is CreateStudioTeamToolSource);
-        workspace.Sources.Should().Contain(source => source is StudioTeamQueryToolSource);
-        workspace.Sources.Should().Contain(source => source is CreateStudioMemberToolSource);
-        workspace.Sources.Should().Contain(source => source is CreateStudioMemberWorkflowDraftToolSource);
-        workspace.Sources.Should().Contain(source => source is StudioMemberQueryToolSource);
-        workspace.Sources.Should().Contain(source => source is StudioScheduleQueryToolSource);
-        workspace.Sources.Should().Contain(source => source is StudioWorkflowQueryToolSource);
         workspace.Sources.Should().Contain(source => source is WorkflowCatalogAgentToolSource);
-        workspace.Sources.Should().Contain(source => source is BindStudioMemberWorkflowToolSource);
-        workspace.Sources.Should().Contain(source => source is ScheduleStudioMemberWorkflowToolSource);
+        workspace.Sources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
         workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
         workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
@@ -753,6 +780,9 @@ public sealed class MainnetHostCompositionTests
             .Select(static source => source.GetType())
             .Should()
             .NotContain(typeof(NyxIdConnectedServiceInventoryToolSource));
+        app.Services.GetServices<IAgentToolSource>()
+            .Should()
+            .NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         app.Services.GetRequiredService<NyxIdConnectedServiceInventoryToolSource>()
             .Should()
             .NotBeNull();
@@ -772,6 +802,7 @@ public sealed class MainnetHostCompositionTests
                 source is ChannelNyxIdConnectedServiceInventoryToolSource)
             .Which.Should()
             .BeSameAs(channelInventorySource);
+        channelToolSources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         var nyxIdChatToolSources = replyGenerator.GetType()
             .GetField("_nyxIdChatToolSources", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(replyGenerator)
@@ -794,6 +825,7 @@ public sealed class MainnetHostCompositionTests
             source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatToolSources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
+        nyxIdChatToolSources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
         scheduleQueries.Should().BeSameAs(scheduleMutations);
@@ -802,20 +834,59 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetServices<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowConnectedServiceResourceFetchAdapter>()
             .Should()
             .ContainSingle(adapter => adapter.GetType().Name == "LarkMessageResourceFetchAdapter");
-        var workflowToolNames = new List<string>();
-        foreach (var source in app.Services.GetServices<Aevatar.Workflow.Core.Modules.IWorkflowToolSource>())
+        var workflowToolSources = app.Services.GetServices<IWorkflowToolSource>().ToArray();
+        var workflowTools = new List<IWorkflowTool>();
+        foreach (var source in workflowToolSources)
         {
             var tools = await source.GetToolsAsync();
-            workflowToolNames.AddRange(tools.Select(static tool => tool.Name));
+            workflowTools.AddRange(tools);
         }
+        var workflowToolNames = workflowTools.Select(static tool => tool.Name).ToArray();
         workflowToolNames.Should().ContainSingle(name => name == "workflow_connected_service_resource_fetch");
+        workflowToolNames.Should().NotContain(StudioLocalWorkflowToolNames);
+        var agentWorkflowSource = workflowToolSources
+            .Should()
+            .ContainSingle(source => source is AgentWorkflowToolSourceAdapter)
+            .Which;
+        (await agentWorkflowSource.GetToolsAsync()).Should()
+            .OnlyContain(tool => tool is IWorkflowDurableOperationTool);
+
+        using (AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+               {
+                   ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(
+                       StudioLocalWorkflowToolNames),
+               }))
+        {
+            var ambientVisibleNames = new List<string>();
+            foreach (var source in workflowToolSources)
+            {
+                ambientVisibleNames.AddRange(
+                    (await source.GetToolsAsync()).Select(static tool => tool.Name));
+            }
+
+            ambientVisibleNames.Should().NotContain(StudioLocalWorkflowToolNames);
+        }
 
         var larkSelfNotify = registry.Resolve(ToolSetNames.LarkSelfNotify);
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
         larkSelfNotify.Sources.Select(static source => source.GetType()).Should()
             .Equal(workspace.Sources.Select(static source => source.GetType()));
+        larkSelfNotify.Sources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         larkSelfNotify.Sources.Should().Contain(source => source is LarkAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+
+        var studioLocal = registry.Resolve(ToolSetNames.StudioLocal);
+        studioLocal.IsSuccess.Should().BeTrue(studioLocal.Error?.Message);
+        studioLocal.Sources.Select(static source => source.GetType())
+            .Should()
+            .Equal(StudioLocalToolSourceTypes);
+        var studioLocalToolNames = new List<string>();
+        foreach (var source in studioLocal.Sources)
+        {
+            studioLocalToolNames.AddRange(
+                (await source.DiscoverToolsAsync()).Select(static tool => tool.Name));
+        }
+        studioLocalToolNames.Should().Contain(StudioLocalWorkflowToolNames);
 
         var nyxIdConnectedServices = registry.Resolve(ToolSetNames.NyxIdConnectedServices);
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);

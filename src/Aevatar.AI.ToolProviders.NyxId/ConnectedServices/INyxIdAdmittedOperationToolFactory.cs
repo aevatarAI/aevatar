@@ -59,7 +59,6 @@ internal sealed class NyxIdAdmittedOperationToolFactory : INyxIdAdmittedOperatio
             "Connected service",
             "Verification read",
             mapped.ServiceSlug,
-            mapped.ServiceSlug,
             null,
             NyxIdServiceAccessTokenSource.User);
     }

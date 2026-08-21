@@ -93,13 +93,13 @@ public sealed class AGUISseWriter : IAsyncDisposable
             return;
 
         ThrowIfDisposed();
-        _started = true;
         _response.StatusCode = StatusCodes.Status200OK;
         _response.Headers.ContentType = "text/event-stream; charset=utf-8";
         _response.Headers.CacheControl = "no-store";
         _response.Headers.Pragma = "no-cache";
         _response.Headers["X-Accel-Buffering"] = "no";
         await _response.StartAsync(ct);
+        _started = true;
         StartHeartbeat();
     }
 

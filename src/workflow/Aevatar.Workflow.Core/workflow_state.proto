@@ -902,6 +902,7 @@ message PendingToolCallExecutionState
   aevatar.credentials.RuntimeSecretReference protected_material_reference = 23;
   string protected_material_digest_sha256 = 24;
   WorkflowToolCallExecutionPhase execution_phase = 25;
+  google.protobuf.Timestamp attempt_preparation_started_at_utc = 26;
 }
 
 message PendingToolCallOperationState

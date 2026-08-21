@@ -69,15 +69,27 @@ The page is a quiet operational transcript with confident workspace scale. A sub
   continuation commands advance the owning task instead of inventing unrelated
   top-level containers.
 - Trajectory overview: a compact, shared time domain above the ledger with
-  distinct `Input`, `Model`, and `Tools` lanes. A bar and its ledger row carry
-  the same stable operation identity. Model bars may distinguish TTFT from
-  decoding only when both timings were recorded.
-- Operation inspector: Input shows captured content/source; Model shows output,
-  model/provider, usage, and timing; Tool shows payload, result, schema, and
-  timing. Tabs and fields appear only when backed by the operation's captured
-  facts; missing facts are labeled unavailable. The Input record does not have
-  an independent typed start/completion lifecycle and therefore has no honest
-  operation Duration bar.
+  distinct `Input`, `Model`, and `Tools` lanes, spanning every request container
+  in the conversation rather than one selected request. A bar and its ledger row
+  carry the same stable operation identity. Model bars may distinguish TTFT from
+  decoding only when both timings were recorded. Dragging selects a time
+  interval and dims ledger records outside it, the wheel zooms the domain, and a
+  right-button drag pans an already zoomed viewport.
+- Trajectory ledger: one continuous, dense, single-line record table with a
+  fixed `Event` column and a fluid `Content` column. A request is a numbered
+  section inside that ledger — a boundary rule, a `Req N` fold control and a
+  left rail on the active container — not a separate navigation rail. Content
+  reads as `request → result` on one line; the recorded duration is the row's
+  only timing claim.
+- Trajectory toolbar: recorded-duration against equal-width projection, fold all
+  requests, fold a model record's tool calls, and live ledger search.
+- Operation inspector: opens in the trajectory's own resizable details pane.
+  Input shows captured content/source; Model shows output, model/provider,
+  usage, and timing; Tool shows payload, result, schema, and timing. Tabs and
+  fields appear only when backed by the operation's captured facts; missing
+  facts are labeled unavailable. The Input record does not have an independent
+  typed start/completion lifecycle and therefore has no honest operation
+  Duration bar.
 
 ## Page Patterns
 
@@ -93,12 +105,17 @@ The page is a quiet operational transcript with confident workspace scale. A sub
   duration bar requires the operation's recorded start and completion. An
   in-flight operation with only a real start renders a start marker/running
   state; absent timing is unavailable and is never synthesized from browser
-  receipt time. The current ledger is page-local: reopening a stored transcript
-  does not infer request identities or event traces from message positions.
-  Observatory now has a durable typed Model/Tool operation read model, but
-  Studio does not hydrate it or join it back to stored conversation/request
-  identity. Full Studio trajectory recovery after reopening a transcript is
-  therefore still unavailable.
+  receipt time. The ledger survives a reload from two committed sources: a
+  terminal turn appends its operation ledger with its chat history turn, and the
+  in-flight turn is rebuilt from the conversation actor's current-state step
+  ledger. Recovered containers are keyed by the server's `turnId`, never inferred
+  from message positions, and a live container already owning that turn is never
+  replaced. Persisted operation content is a sanitized, size-bounded preview; a
+  truncated preview is labelled as an archived fragment rather than presented as
+  the complete payload. Tool result bodies are deliberately not archived: they
+  are untrusted external text, and conversation actor state is re-read when
+  rebuilding model input, so a restored Tool record carries its identity, status
+  and timing but reports its output as uncaptured.
 
 ## Content Style
 

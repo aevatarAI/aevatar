@@ -41,9 +41,11 @@ public static class RuntimeFleetCapabilityProjectionServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
             RuntimeFleetCapabilityCommittedStateProjectionActivationPlanProvider>());
-        services.Replace(ServiceDescriptor.Singleton<
-            IRuntimeFleetCapabilityAdmissionReader,
-            ProjectionRuntimeFleetCapabilityAdmissionReader>());
+        services.TryAddSingleton<ProjectionRuntimeFleetCapabilityAdmissionReader>();
+        services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetCapabilityAdmissionReader>(
+            static provider => provider.GetRequiredService<ProjectionRuntimeFleetCapabilityAdmissionReader>()));
+        services.Replace(ServiceDescriptor.Singleton<IRuntimeFleetCapabilityQuiescenceReader>(
+            static provider => provider.GetRequiredService<ProjectionRuntimeFleetCapabilityAdmissionReader>()));
         return services;
     }
 }

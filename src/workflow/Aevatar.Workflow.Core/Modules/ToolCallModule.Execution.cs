@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
 
@@ -394,11 +395,11 @@ public sealed partial class ToolCallModule
         CancellationToken ct)
     {
         var pendingKey = BuildExecutionKey(pending.CallId, pending.ExecutionId);
+        StampAttemptPreparationStartedAtUtc(pending, ctx, preparationStartedAtTimestamp);
         state.PendingExecutions[pendingKey] = pending;
         try
         {
             await SaveStateAsync(state, ctx, ct);
-            RecordPendingStatePersisted(ctx, pending, preparationStartedAtTimestamp);
         }
         catch (Exception saveException)
         {
@@ -1470,12 +1471,9 @@ public sealed partial class ToolCallModule
         pending.RetryDueUnixMs = retryDueUnixMs;
         pending.RetryLease = null;
         pending.ExecutionPhase = WorkflowToolCallExecutionPhase.RetryPending;
+        StampAttemptPreparationStartedAtUtc(pending, ctx, preparationStartedAtTimestamp);
         state.PendingExecutions[BuildExecutionKey(pending.CallId, pending.ExecutionId)] = pending;
         await SaveStateAsync(state, ctx, ct);
-        // First successful save that persists attempt N: the pending_state_persisted waterline
-        // for attempt N is recorded here (once), not when the retry later wakes up. The
-        // actor_preparation elapsed is measured from the completion handler's entry timestamp.
-        RecordPendingStatePersisted(ctx, pending, preparationStartedAtTimestamp);
 
         try
         {
@@ -1534,6 +1532,17 @@ public sealed partial class ToolCallModule
                     continuationException.GetType().Name);
             }
         }
+    }
+
+    private static void StampAttemptPreparationStartedAtUtc(
+        PendingToolCallExecutionState pending,
+        IWorkflowExecutionContext ctx,
+        long preparationStartedAtTimestamp)
+    {
+        var elapsed = ctx.GetElapsedTime(preparationStartedAtTimestamp);
+        if (elapsed < TimeSpan.Zero)
+            elapsed = TimeSpan.Zero;
+        pending.AttemptPreparationStartedAtUtc = Timestamp.FromDateTimeOffset(ctx.UtcNow - elapsed);
     }
 
     private async Task HandleApprovedToolRetryFiredAsync(

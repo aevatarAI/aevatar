@@ -244,20 +244,30 @@ public sealed partial class WorkflowRunGAgent
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeKey);
         ArgumentNullException.ThrowIfNull(state);
+        IReadOnlyList<WorkflowToolCallAttemptPersistenceFact> toolCallAttemptPersistenceFacts = [];
         if (string.Equals(scopeKey, ToolCallModule.ModuleStateKey, StringComparison.Ordinal) &&
             state.Is(ToolCallModuleState.Descriptor))
         {
             var toolCallState = state.Unpack<ToolCallModuleState>();
             ToolCallModule.ScrubLegacyPayloadFields(toolCallState);
+            var authoritative = State.ExecutionStates.TryGetValue(scopeKey, out var authoritativeState) &&
+                                authoritativeState.Is(ToolCallModuleState.Descriptor)
+                ? authoritativeState.Unpack<ToolCallModuleState>()
+                : null;
+            toolCallAttemptPersistenceFacts = WorkflowToolCallAttemptPersistence.BuildNewFacts(
+                authoritative,
+                toolCallState,
+                ScopeId,
+                _timeProvider.GetUtcNow());
             state = Any.Pack(toolCallState);
         }
-        return PersistDomainEventAsync(
-            new WorkflowExecutionStateUpsertedEvent
-            {
-                ScopeKey = scopeKey,
-                State = state,
-            },
-            ct);
+        var upserted = new WorkflowExecutionStateUpsertedEvent
+        {
+            ScopeKey = scopeKey,
+            State = state,
+        };
+        upserted.ToolCallAttemptPersistenceFacts.Add(toolCallAttemptPersistenceFacts);
+        return PersistDomainEventAsync(upserted, ct);
     }
 
     public Task ClearExecutionStateAsync(
