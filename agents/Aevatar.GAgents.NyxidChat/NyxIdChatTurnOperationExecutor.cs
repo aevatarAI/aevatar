@@ -37,7 +37,7 @@ public sealed class NyxIdChatTransientExecutionSession
     internal AgentRunAuthorizedToolStep? AuthorizedToolStep { get; set; }
     internal IReadOnlyList<AgentRunAuthorizedToolCallSafety> AuthorizedToolCallSafeties { get; set; } = [];
     internal NyxIdChatOperationKey? AuthorizationSourceKey { get; set; }
-    internal AgentProfileTurnCatalog? TurnCatalog { get; set; }
+    internal AgentTurnToolCatalog? TurnCatalog { get; set; }
     internal long ProgressSequence { get; set; }
     internal NyxIdChatStreamingProgressBatcher? StreamingProgressBatcher { get; set; }
 
@@ -346,7 +346,7 @@ public sealed class NyxIdChatTurnOperationExecutor
 
     private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
     private readonly INyxIdActionPostconditionPort _actionPostconditionPort;
-    private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
+    private readonly AgentTurnToolCatalogMaterializer? _turnCatalogMaterializer;
     private readonly INyxIdChatDelegationCredentialLifecyclePort _delegationCredentialLifecycle;
     private readonly INyxIdChatToolVerificationPort _toolVerificationPort;
     private readonly INyxIdExactServiceApprovalPort _exactServiceApprovalPort;
@@ -379,7 +379,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer)
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer)
         : this(
             generationExecutor,
             actionPostconditionPort,
@@ -392,7 +392,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle)
         : this(
             generationExecutor,
@@ -406,7 +406,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort)
         : this(
@@ -423,7 +423,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort,
         ILogger<NyxIdChatTurnOperationExecutor> logger)
@@ -441,7 +441,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort,
         INyxIdExactServiceApprovalPort exactServiceApprovalPort,
@@ -461,7 +461,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     internal NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort,
         TimeProvider timeProvider)
@@ -479,7 +479,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     internal NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort,
         TimeProvider timeProvider,
@@ -499,7 +499,7 @@ public sealed class NyxIdChatTurnOperationExecutor
     internal NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor,
         INyxIdActionPostconditionPort actionPostconditionPort,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatDelegationCredentialLifecyclePort delegationCredentialLifecycle,
         INyxIdChatToolVerificationPort toolVerificationPort,
         INyxIdExactServiceApprovalPort exactServiceApprovalPort,
@@ -740,7 +740,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                         catalogToolContext,
                         materializedCatalog,
                         verifiedAuthorization);
-                    session.TurnCatalog = AgentProfileTurnCatalogMaterializer
+                    session.TurnCatalog = AgentTurnToolCatalogMaterializer
                         .NarrowToVerifiedUserService(
                             materializedCatalog,
                             verifiedAuthorization);
@@ -967,7 +967,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                     .ConfigureAwait(false);
                 if (turnCatalog is null ||
                     !turnCatalog.FinalAllowedToolNames.Contains(toolInput.ToolName) ||
-                    !turnCatalog.RouteOwnedTools.ContainsKey(toolInput.ToolName))
+                    !turnCatalog.ExactTools.ContainsKey(toolInput.ToolName))
                 {
                     ClearAuthorization(session);
                     return Failure(
@@ -2259,7 +2259,7 @@ public sealed class NyxIdChatTurnOperationExecutor
         };
     }
 
-    private async Task<AgentProfileTurnCatalog?> MaterializeDurableRetryTurnCatalogAsync(
+    private async Task<AgentTurnToolCatalog?> MaterializeDurableRetryTurnCatalogAsync(
         NyxIdChatToolOperationInput input,
         CancellationToken ct)
     {
@@ -2395,7 +2395,7 @@ public sealed class NyxIdChatTurnOperationExecutor
 
     private void LogVerifiedAuthorizationCatalogDiagnostic(
         AgentToolExecutionContext toolContext,
-        AgentProfileTurnCatalog catalog,
+        AgentTurnToolCatalog catalog,
         NyxIdChatVerifiedAuthorizationContinuation continuation)
     {
         var expectedUserServiceId = continuation.VerifiedResource?.ResourceCase ==
@@ -2403,7 +2403,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             ? continuation.VerifiedResource.UserService.UserServiceId?.Trim()
             : null;
         var expectedServiceSlug = continuation.ServiceSlug?.Trim();
-        var admittedTools = catalog.RouteOwnedTools.Values
+        var admittedTools = catalog.ExactTools.Values
             .OfType<IAgentToolOperationAdmissionOwner>()
             .ToArray();
         var exactServiceIdMatchCount = admittedTools.Count(owner => string.Equals(
@@ -2427,7 +2427,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(toolContext.Credentials);
 
         _logger.LogInformation(
-            "NyxID verified-authorization continuation catalog diagnostic. credentialKind={CredentialKind}, hasSourceReadableBearer={HasSourceReadableBearer}, sourceSharesExecutionCredential={SourceSharesExecutionCredential}, toolVisibilityRestricted={ToolVisibilityRestricted}, finalAllowedToolCount={FinalAllowedToolCount}, routeOwnedToolCount={RouteOwnedToolCount}, admittedToolCount={AdmittedToolCount}, exactServiceIdMatchCount={ExactServiceIdMatchCount}, exactSlugMatchCount={ExactSlugMatchCount}, exactBothMatchCount={ExactBothMatchCount}",
+            "NyxID verified-authorization continuation catalog diagnostic. credentialKind={CredentialKind}, hasSourceReadableBearer={HasSourceReadableBearer}, sourceSharesExecutionCredential={SourceSharesExecutionCredential}, toolVisibilityRestricted={ToolVisibilityRestricted}, finalAllowedToolCount={FinalAllowedToolCount}, routeOwnedToolCount={ExactToolCount}, admittedToolCount={AdmittedToolCount}, exactServiceIdMatchCount={ExactServiceIdMatchCount}, exactSlugMatchCount={ExactSlugMatchCount}, exactBothMatchCount={ExactBothMatchCount}",
             toolContext.Credentials.NyxIdCredentialKind,
             !string.IsNullOrWhiteSpace(sourceReadableBearer),
             !string.IsNullOrWhiteSpace(sourceReadableBearer) && string.Equals(
@@ -2436,14 +2436,14 @@ public sealed class NyxIdChatTurnOperationExecutor
                 StringComparison.Ordinal),
             toolContext.ToolVisibility.IsRestricted,
             catalog.FinalAllowedToolNames.Count,
-            catalog.RouteOwnedTools.Count,
+            catalog.ExactTools.Count,
             admittedTools.Length,
             exactServiceIdMatchCount,
             exactSlugMatchCount,
             exactBothMatchCount);
     }
 
-    private async Task<AgentProfileTurnCatalog?> MaterializeTurnCatalogAsync(
+    private async Task<AgentTurnToolCatalog?> MaterializeTurnCatalogAsync(
         NyxIdChatLLMOperationInput input,
         NeedsLlmReplyEvent request,
         CancellationToken ct)
@@ -2467,7 +2467,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                         builtInToolContext,
                         ct)
                     .ConfigureAwait(false);
-                return AgentProfileTurnCatalogMaterializer.NarrowToBuiltInIntent(
+                return AgentTurnToolCatalogMaterializer.NarrowToBuiltInIntent(
                     input.Intent,
                     builtInCatalog,
                     authority?.AuthorityCeilingToolNames);
@@ -2505,7 +2505,7 @@ public sealed class NyxIdChatTurnOperationExecutor
                     ct)
                 .ConfigureAwait(false)).Catalog;
             return IsBuiltInIntent(input.Intent)
-                ? AgentProfileTurnCatalogMaterializer.NarrowToBuiltInIntent(
+                ? AgentTurnToolCatalogMaterializer.NarrowToBuiltInIntent(
                     input.Intent,
                     catalog,
                     authority.AuthorityCeilingToolNames)
@@ -2567,7 +2567,7 @@ public sealed class NyxIdChatTurnOperationExecutor
             StringComparison.Ordinal);
     }
 
-    private static AgentProfileTurnCatalog RestrictedEmptyCatalog() =>
+    private static AgentTurnToolCatalog RestrictedEmptyCatalog() =>
         new(
             [],
             profilePromptLayer: null,

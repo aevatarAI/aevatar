@@ -3340,7 +3340,7 @@ public class RoleGAgentReplayContractTests
                         initialAuthorityMutation)));
         }
 
-        protected override Task<AgentProfileTurnCatalogMaterialization?> MaterializeCommittedAgentProfileTurnCatalogAsync(
+        protected override Task<AgentTurnToolCatalogMaterialization?> MaterializeCommittedAgentTurnToolCatalogAsync(
             ChatRequestEvent request,
             AgentToolExecutionContext toolContext,
             AgentProfileTurnAuthorityState committedAuthority,
@@ -3351,14 +3351,14 @@ public class RoleGAgentReplayContractTests
             MaterializeCallCount++;
             MaterializedAuthorities.Add(committedAuthority.Clone());
             var reconcileProposal = MutateReconcileProposal(committedAuthority, reconcileProposalMutation);
-            var catalog = new AgentProfileTurnCatalog(
+            var catalog = new AgentTurnToolCatalog(
                 reconcileProposal.AuthorityCeilingToolNames,
                 profilePromptLayer: null,
                 selectedSkillPromptLayer: null,
                 selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
                 candidateIntentId: committedAuthority.CandidateRoute?.IntentId);
-            return Task.FromResult<AgentProfileTurnCatalogMaterialization?>(
-                AgentProfileTurnCatalogMaterialization.Create(catalog, reconcileProposal));
+            return Task.FromResult<AgentTurnToolCatalogMaterialization?>(
+                AgentTurnToolCatalogMaterialization.Create(catalog, reconcileProposal));
         }
     }
 

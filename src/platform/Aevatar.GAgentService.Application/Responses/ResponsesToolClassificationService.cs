@@ -70,16 +70,23 @@ public static class ResponsesToolClassifier
         var providerList = providers as IReadOnlyList<IResponsesToolProvider>
                            ?? providers.ToArray();
 
-        var discoveredSubstituteTools = new List<IAgentTool>();
+        var substituteToolsByName = new Dictionary<string, (IAgentTool Tool, string ProviderType)>(
+            StringComparer.OrdinalIgnoreCase);
         foreach (var provider in providerList)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                discoveredSubstituteTools.AddRange(
-                    await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
+                AddExactToolsOrThrow(
+                    substituteToolsByName,
+                    await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false),
+                    provider.GetType().FullName ?? provider.GetType().Name);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (AgentToolDiscoveryException)
             {
                 throw;
             }
@@ -92,20 +99,28 @@ public static class ResponsesToolClassifier
             }
         }
 
-        var substituteTools = discoveredSubstituteTools
-            .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
-            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+        var substituteTools = substituteToolsByName.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.Tool,
+            StringComparer.OrdinalIgnoreCase);
 
-        var discoveredAdditiveTools = new List<IAgentTool>();
+        var additiveToolsByName = new Dictionary<string, (IAgentTool Tool, string ProviderType)>(
+            StringComparer.OrdinalIgnoreCase);
         foreach (var provider in providerList)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                discoveredAdditiveTools.AddRange(
-                    await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
+                AddExactToolsOrThrow(
+                    additiveToolsByName,
+                    await provider.GetAdditiveToolsAsync(context, ct).ConfigureAwait(false),
+                    provider.GetType().FullName ?? provider.GetType().Name);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (AgentToolDiscoveryException)
             {
                 throw;
             }
@@ -118,16 +133,13 @@ public static class ResponsesToolClassifier
             }
         }
 
-        var additiveTools = discoveredAdditiveTools
-            .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
-            .Select(static group => group.First())
-            .ToArray();
-        var ownedToolNames = discoveredSubstituteTools
-            .Concat(discoveredAdditiveTools)
+        var additiveTools = additiveToolsByName.Values.Select(static value => value.Tool).ToArray();
+        var ownedToolNames = substituteTools.Values
+            .Concat(additiveTools)
             .Select(static tool => tool.Name)
-            .Distinct(StringComparer.Ordinal)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var ownedToolNameSet = ownedToolNames.ToHashSet(StringComparer.Ordinal);
+        var ownedToolNameSet = ownedToolNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var forwarded = new List<ResponsesApplicationToolDeclaration>();
         var effective = new List<IAgentTool>();
@@ -161,7 +173,7 @@ public static class ResponsesToolClassifier
 
         var effectiveNames = new HashSet<string>(
             effective.Select(static tool => tool.Name),
-            StringComparer.Ordinal);
+            StringComparer.OrdinalIgnoreCase);
         var addedAdditiveNames = new List<string>();
         foreach (var additive in additiveTools)
         {
@@ -183,6 +195,43 @@ public static class ResponsesToolClassifier
             substitutedNames,
             addedAdditiveNames,
             ownedToolNames);
+    }
+
+    private static void AddExactToolsOrThrow(
+        Dictionary<string, (IAgentTool Tool, string ProviderType)> exactTools,
+        IReadOnlyList<IAgentTool> tools,
+        string providerType)
+    {
+        foreach (var tool in tools)
+        {
+            if (tool is null || string.IsNullOrWhiteSpace(tool.Name))
+            {
+                throw new AgentToolDiscoveryException(new AgentToolDiscoveryFailure(
+                    AgentToolDiscoveryFailureCode.InvalidToolName,
+                    string.Empty,
+                    providerType,
+                    string.Empty,
+                    $"Responses tool provider '{providerType}' returned a tool with an empty name."));
+            }
+
+            var name = tool.Name.Trim();
+            if (!exactTools.TryGetValue(name, out var existing))
+            {
+                exactTools.Add(name, (tool, providerType));
+                continue;
+            }
+
+            if (ReferenceEquals(existing.Tool, tool))
+                continue;
+
+            throw new AgentToolDiscoveryException(new AgentToolDiscoveryFailure(
+                AgentToolDiscoveryFailureCode.ToolNameCollision,
+                existing.Tool.Name.Trim(),
+                existing.ProviderType,
+                providerType,
+                $"Responses tool name '{name}' resolved to different exact objects from " +
+                $"'{existing.ProviderType}' and '{providerType}'."));
+        }
     }
 }
 

@@ -76,8 +76,8 @@ public static class ServiceCollectionExtensions
                     sp.GetRequiredService<IFileArtifactIngressPort>()));
         }
 
-        services.TryAddEnumerable(
-            ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
+        services.TryAddTransient<NyxIdAgentToolSource>();
+        services.TryAddTransient<NyxIdExecutionAgentToolSource>();
         services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
         services.TryAddTransient<INyxIdAdmittedOperationToolFactory,
             NyxIdAdmittedOperationToolFactory>();

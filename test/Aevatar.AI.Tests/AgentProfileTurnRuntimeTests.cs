@@ -23,7 +23,7 @@ public sealed class AgentProfileTurnRuntimeTests
     public void Catalog_ShouldFreezeNamesAndBoundDiagnostics()
     {
         var names = new List<string> { " alpha ", "BETA", "alpha" };
-        var diagnostics = Enumerable.Range(0, AgentProfileTurnCatalog.MaximumDiagnostics + 3)
+        var diagnostics = Enumerable.Range(0, AgentTurnToolCatalog.MaximumDiagnostics + 3)
             .Select(index => new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ClassifierFailed,
                 $"{index}:{new string('\u754c', 200)}"))
@@ -36,35 +36,36 @@ public sealed class AgentProfileTurnRuntimeTests
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo("alpha", "BETA");
         catalog.ToolVisibility.IsRestricted.Should().BeTrue();
         catalog.ToolVisibility.AllowedToolNames.Should().BeSameAs(catalog.FinalAllowedToolNames);
-        catalog.Diagnostics.Should().HaveCount(AgentProfileTurnCatalog.MaximumDiagnostics);
+        catalog.Diagnostics.Should().HaveCount(AgentTurnToolCatalog.MaximumDiagnostics);
         catalog.Diagnostics.Should().OnlyContain(diagnostic =>
             Encoding.UTF8.GetByteCount(diagnostic.Detail) <= 256);
     }
 
     [Fact]
-    public void Catalog_ShouldFreezeExactRouteOwnedTools()
+    public void Catalog_ShouldFreezeExactExactTools()
     {
         var exact = new CountingTool("route-only");
         var mutable = new List<IAgentTool> { exact };
 
-        var catalog = NewCatalog(["route-only"], routeOwnedTools: mutable);
+        var catalog = NewCatalog(["route-only"], exactTools: mutable);
         mutable.Clear();
 
-        catalog.RouteOwnedTools.Should().ContainSingle();
-        catalog.RouteOwnedTools["ROUTE-ONLY"].Should().BeSameAs(exact);
+        catalog.ExactTools.Should().ContainSingle();
+        catalog.ExactTools["ROUTE-ONLY"].Should().BeSameAs(exact);
     }
 
     [Fact]
-    public void Catalog_SameNameCollisionFollowedByOriginalObject_ShouldRemainRestrictedEmpty()
+    public void Catalog_SameNameCollisionFollowedByOriginalObject_ShouldFailClosed()
     {
         var first = new CountingTool("route-only");
         var replacement = new CountingTool("ROUTE-ONLY");
 
-        var catalog = NewCatalog(
+        var act = () => NewCatalog(
             ["route-only"],
-            routeOwnedTools: [first, replacement, first]);
+            exactTools: [first, replacement, first]);
 
-        catalog.RouteOwnedTools.Should().BeEmpty();
+        act.Should().Throw<AgentTurnToolCatalogException>()
+            .Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.ToolNameCollision);
         first.ExecuteCount.Should().Be(0);
         replacement.ExecuteCount.Should().Be(0);
     }
@@ -75,7 +76,7 @@ public sealed class AgentProfileTurnRuntimeTests
         var routeOnly = new CountingTool("route-only");
         var runtime = NewRuntime(new RecordingProvider(), new ToolManager());
 
-        var request = runtime.CreateStepExecutor(NewCatalog(["route-only"], routeOwnedTools: [routeOnly]))
+        var request = runtime.CreateStepExecutor(NewCatalog(["route-only"], exactTools: [routeOnly]))
             .BuildBaseRequest(null, null, null, null);
 
         request.Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOnly);
@@ -89,11 +90,14 @@ public sealed class AgentProfileTurnRuntimeTests
         var provider = new ForgedToolProvider("shared");
         var runtime = NewRuntime(provider, NewToolManager(baseTool));
 
-        await DrainAsync(runtime.ChatStreamAsync(
+        var act = () => DrainAsync(runtime.ChatStreamAsync(
             "run",
-            NewCatalog(["shared"], routeOwnedTools: [routeOwnedTool])));
+            NewCatalog(["shared"], exactTools: [routeOwnedTool])));
 
-        provider.Requests[0].Tools.Should().BeNull();
+        await act.Should().ThrowAsync<AgentTurnToolCatalogException>()
+            .Where(exception =>
+                exception.Failure.Code == AgentTurnToolCatalogFailureCode.ToolNameCollision);
+        provider.Requests.Should().BeEmpty();
         baseTool.ExecuteCount.Should().Be(0);
         routeOwnedTool.ExecuteCount.Should().Be(0);
     }
@@ -108,7 +112,7 @@ public sealed class AgentProfileTurnRuntimeTests
 
         await DrainAsync(runtime.ChatStreamAsync(
             "run",
-            NewCatalog(["route-only"], routeOwnedTools: [routeOnlyExactTool])));
+            NewCatalog(["route-only"], exactTools: [routeOnlyExactTool])));
 
         provider.Requests[0].Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOnlyExactTool);
         routeOnlyExactTool.ExecuteCount.Should().Be(1);
@@ -121,7 +125,7 @@ public sealed class AgentProfileTurnRuntimeTests
         var globalTool = new CountingTool("global");
         var routeOnlyExactTool = new CountingTool("route-only");
         var executor = NewRuntime(new RecordingProvider(), NewToolManager(globalTool))
-            .CreateStepExecutor(NewCatalog(["route-only"], routeOwnedTools: [routeOnlyExactTool]));
+            .CreateStepExecutor(NewCatalog(["route-only"], exactTools: [routeOnlyExactTool]));
         var request = executor.BuildBaseRequest(null, null, null, null);
 
         await executor.ExecuteToolStepAsync(
@@ -211,7 +215,7 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
-    public async Task MainTurn_LlmMiddlewareShouldNotRestoreToolsOutsideCatalog()
+    public async Task MainTurn_LlmMiddlewareExpansion_ShouldFailProofValidation()
     {
         var visible = new CountingTool("visible");
         var hidden = new CountingTool("hidden");
@@ -222,12 +226,12 @@ public sealed class AgentProfileTurnRuntimeTests
             tools,
             [new ExpandingRequestMiddleware(tools.GetAll())]);
 
-        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["visible"])));
+        var act = () => DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["visible"])));
 
-        var request = provider.Requests.Should().ContainSingle().Subject;
-        request.Tools.Should().ContainSingle(tool => tool.Name == "visible");
-        request.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
-        request.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
+        await act.Should().ThrowAsync<AgentTurnToolCatalogException>()
+            .Where(exception =>
+                exception.Failure.Code == AgentTurnToolCatalogFailureCode.CatalogProofMismatch);
+        provider.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -242,9 +246,12 @@ public sealed class AgentProfileTurnRuntimeTests
             tools,
             [new ReplacingRequestMiddleware(replacement)]);
 
-        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["visible"])));
+        var act = () => DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["visible"])));
 
-        provider.Requests[0].Tools.Should().BeNull();
+        await act.Should().ThrowAsync<AgentTurnToolCatalogException>()
+            .Where(exception =>
+                exception.Failure.Code == AgentTurnToolCatalogFailureCode.CatalogProofMismatch);
+        provider.Requests.Should().BeEmpty();
         exact.ExecuteCount.Should().Be(0);
         replacement.ExecuteCount.Should().Be(0);
     }
@@ -411,7 +418,7 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
-    public async Task StepTurn_LlmMiddlewareShouldNotRestoreToolsOutsideCatalog()
+    public async Task StepTurn_LlmMiddlewareExpansion_ShouldFailProofValidation()
     {
         var visible = new CountingTool("visible");
         var hidden = new CountingTool("hidden");
@@ -431,16 +438,16 @@ public sealed class AgentProfileTurnRuntimeTests
             round: 0,
             finalNoTools: false);
 
-        await executor.ExecuteLlmStepAsync(
+        var act = () => executor.ExecuteLlmStepAsync(
             provider,
             request,
             onChunkAsync: null,
             CancellationToken.None);
 
-        var providerRequest = provider.Requests.Should().ContainSingle().Subject;
-        providerRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
-        providerRequest.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
-        providerRequest.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
+        await act.Should().ThrowAsync<AgentTurnToolCatalogException>()
+            .Where(exception =>
+                exception.Failure.Code == AgentTurnToolCatalogFailureCode.CatalogProofMismatch);
+        provider.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -501,7 +508,7 @@ public sealed class AgentProfileTurnRuntimeTests
     {
         typeof(ChatRuntime).GetConstructors()
             .Should().ContainSingle(constructor => constructor.GetParameters().Any(parameter =>
-                parameter.ParameterType == typeof(Func<AgentProfileTurnCatalog?, LLMRequest>)));
+                parameter.ParameterType == typeof(Func<AgentTurnToolCatalog?, LLMRequest>)));
         typeof(ChatRuntime).GetConstructors()
             .Should().NotContain(constructor => constructor.GetParameters().Any(parameter =>
                 parameter.ParameterType == typeof(Func<LLMRequest>)));
@@ -511,7 +518,7 @@ public sealed class AgentProfileTurnRuntimeTests
             .ToArray();
         streamMethods.Should().NotBeEmpty();
         streamMethods.Should().OnlyContain(method => method.GetParameters().Any(parameter =>
-            parameter.ParameterType == typeof(AgentProfileTurnCatalog) &&
+            parameter.ParameterType == typeof(AgentTurnToolCatalog) &&
             !parameter.HasDefaultValue));
 
         var createStep = typeof(ChatRuntime).GetMethods(BindingFlags.Instance | BindingFlags.Public)
@@ -519,13 +526,13 @@ public sealed class AgentProfileTurnRuntimeTests
             .ToArray();
         createStep.Should().ContainSingle();
         createStep[0].GetParameters().Should().ContainSingle(parameter =>
-            parameter.ParameterType == typeof(AgentProfileTurnCatalog) &&
+            parameter.ParameterType == typeof(AgentTurnToolCatalog) &&
             !parameter.HasDefaultValue);
 
         typeof(AIGAgentBase<>).GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
             .Where(method => method.Name == "DecorateSystemPrompt")
             .Should().ContainSingle(method => method.GetParameters().Length == 2 &&
-                method.GetParameters()[1].ParameterType == typeof(AgentProfileTurnCatalog));
+                method.GetParameters()[1].ParameterType == typeof(AgentTurnToolCatalog));
     }
 
     [Fact]
@@ -543,11 +550,11 @@ public sealed class AgentProfileTurnRuntimeTests
         provider.Requests[1].Tools.Should().ContainSingle(tool => tool.Name == "beta");
     }
 
-    private static AgentProfileTurnCatalog NewCatalog(
+    private static AgentTurnToolCatalog NewCatalog(
         IEnumerable<string> names,
         IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null,
-        IEnumerable<IAgentTool>? routeOwnedTools = null) =>
-        new(names, null, null, null, null, diagnostics, routeOwnedTools);
+        IEnumerable<IAgentTool>? exactTools = null) =>
+        new(names, null, null, null, null, diagnostics, exactTools);
 
     private static ToolManager NewToolManager(params IAgentTool[] tools)
     {

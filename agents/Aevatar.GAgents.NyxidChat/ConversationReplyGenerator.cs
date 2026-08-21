@@ -89,6 +89,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly ILarkOutboundClientFactory? _larkOutboundClientFactory;
     private readonly ISystemSkillOverlayProvider? _overlayProvider;
     private readonly IBuiltInPromptFloorProvider _builtInPromptFloorProvider;
+    private readonly IAgentToolDiscoveryService _toolDiscoveryService;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -133,7 +134,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         ILarkOutboundClientFactory? larkOutboundClientFactory = null,
         IAgentToolExecutionPort? toolExecutionPort = null,
         IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null,
-        IEnumerable<IAgentToolSource>? nyxIdChatToolSources = null)
+        IEnumerable<IAgentToolSource>? nyxIdChatToolSources = null,
+        IAgentToolDiscoveryService? toolDiscoveryService = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -154,6 +156,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _overlayProvider = overlayProvider;
         _builtInPromptFloorProvider = builtInPromptFloorProvider ??
                                       throw new ArgumentNullException(nameof(builtInPromptFloorProvider));
+        _toolDiscoveryService = toolDiscoveryService ?? AgentToolDiscoveryService.Instance;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
     }
 
@@ -305,7 +308,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
         CancellationToken ct,
-        AgentProfileTurnCatalog? turnCatalog) =>
+        AgentTurnToolCatalog? turnCatalog) =>
         await BuildStepPlanCoreAsync(
                 activity,
                 metadata,
@@ -326,7 +329,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(activity);
@@ -407,11 +410,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private static ToolManager BuildProfileTools(
         bool disableTools,
-        AgentProfileTurnCatalog turnCatalog)
+        AgentTurnToolCatalog turnCatalog)
     {
         var tools = new ToolManager();
         if (!disableTools)
-            tools.Register(turnCatalog.RouteOwnedTools.Values);
+            tools.Register(turnCatalog.ExactTools.Values);
         return tools;
     }
 
@@ -421,7 +424,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         bool forceDisableTools,
         bool replyPlanDisableTools,
         bool disableTools,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         AgentToolExecutionContext toolContext,
         IReadOnlyList<Aevatar.AI.Abstractions.ChatFileRef> inputFileRefs,
         ToolManager tools)
@@ -432,7 +435,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         var validTools = FilterValidTools(tools) ?? [];
         _logger.LogWarning(
-            "Channel LLM tool plan prepared. surface={Surface} isChannelRelayTurn={IsChannelRelayTurn} isNyxIdChatTurn={IsNyxIdChatTurn} forceDisableTools={ForceDisableTools} replyPlanDisableTools={ReplyPlanDisableTools} disableTools={DisableTools} turnCatalogPresent={TurnCatalogPresent} profileAllowedToolCount={ProfileAllowedToolCount} profileAllowedTools={ProfileAllowedTools} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedTools={RouteOwnedTools} finalToolCount={FinalToolCount} finalTools={FinalTools} inputPartFileRefCount={InputPartFileRefCount} toolContextInputFileRefCount={ToolContextInputFileRefCount}",
+            "Channel LLM tool plan prepared. surface={Surface} isChannelRelayTurn={IsChannelRelayTurn} isNyxIdChatTurn={IsNyxIdChatTurn} forceDisableTools={ForceDisableTools} replyPlanDisableTools={ReplyPlanDisableTools} disableTools={DisableTools} turnCatalogPresent={TurnCatalogPresent} profileAllowedToolCount={ProfileAllowedToolCount} profileAllowedTools={ProfileAllowedTools} routeOwnedToolCount={ExactToolCount} exactTools={ExactTools} finalToolCount={FinalToolCount} finalTools={FinalTools} inputPartFileRefCount={InputPartFileRefCount} toolContextInputFileRefCount={ToolContextInputFileRefCount}",
             surface,
             isChannelRelayTurn,
             isNyxIdChatTurn,
@@ -442,8 +445,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             turnCatalog is not null,
             turnCatalog?.FinalAllowedToolNames.Count ?? 0,
             FormatToolNames(turnCatalog?.FinalAllowedToolNames ?? Enumerable.Empty<string>()),
-            turnCatalog?.RouteOwnedTools.Count ?? 0,
-            FormatToolNames(turnCatalog?.RouteOwnedTools.Values.Select(static tool => tool.Name) ?? Enumerable.Empty<string>()),
+            turnCatalog?.ExactTools.Count ?? 0,
+            FormatToolNames(turnCatalog?.ExactTools.Values.Select(static tool => tool.Name) ?? Enumerable.Empty<string>()),
             validTools.Count,
             FormatToolNames(validTools.Select(static tool => tool.Name)),
             inputFileRefs.Count,
@@ -2227,10 +2230,24 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         if (toolSources.Count == 0)
             return [];
 
-        var discovered = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-        foreach (var source in toolSources)
+        var discovery = await _toolDiscoveryService
+            .DiscoverAsync(toolSources, toolContext ?? AgentToolExecutionContext.Empty, ct)
+            .ConfigureAwait(false);
+        if (!discovery.IsSuccess)
         {
-            var tools = await source.DiscoverToolsAsync(ct);
+            _logger.LogError(
+                "Channel tool catalog discovery failed closed. code={FailureCode} tool={ToolName} source={SourceType} conflictingSource={ConflictingSourceType}",
+                discovery.Failure!.Code,
+                discovery.Failure.ToolName,
+                discovery.Failure.SourceType,
+                discovery.Failure.ConflictingSourceType);
+            throw new AgentToolDiscoveryException(discovery.Failure);
+        }
+
+        var discovered = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sourceGroup in discovery.Entries.GroupBy(static entry => entry.SourceType, StringComparer.Ordinal))
+        {
+            var tools = sourceGroup.Select(static entry => entry.Tool).ToArray();
             var excludedDirectChannelToolNames = new List<string>();
             var excludedHumanSessionToolNames = new List<string>();
             foreach (var tool in tools)
@@ -2265,25 +2282,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                if (!discovered.TryAdd(tool.Name, tool))
-                {
-                    if (isNyxIdChatTurn)
-                    {
-                        _logger.LogError(
-                            "NyxID Chat tool catalog resolution failed closed because duplicate tool names were discovered.");
-                        throw new InvalidOperationException(
-                            "NyxID Chat tool catalog contains duplicate tool names.");
-                    }
-
-                    discovered[tool.Name] = tool;
-                }
+                discovered.Add(tool.Name, tool);
             }
 
             if (isChannelTurn)
             {
                 _logger.LogInformation(
                     "Channel tool source discovery: source={SourceType}, discoveredTools={DiscoveredTools}, excludedDirectChannelTools={ExcludedDirectChannelTools}, excludedHumanSessionTools={ExcludedHumanSessionTools}",
-                    source.GetType().Name,
+                    sourceGroup.Key,
                     FormatToolNames(tools.Select(static tool => tool.Name)),
                     FormatToolNames(excludedDirectChannelToolNames),
                     FormatToolNames(excludedHumanSessionToolNames));
@@ -2356,7 +2362,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AgentToolExecutionContext toolContext,
         string? attachmentVisibilityInstruction = null,
         string? runtimeNotice = null,
-        AgentProfileTurnCatalog? turnCatalog = null)
+        AgentTurnToolCatalog? turnCatalog = null)
     {
         var runtimeFacts = new StringBuilder();
         AppendRuntimeFact(

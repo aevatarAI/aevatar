@@ -234,7 +234,7 @@ git commit -m "Carry NyxID execution policy in admission proofs"
 
 **Interfaces:**
 - Consumes: `IToolSetRegistry`, `ToolSetNames.NyxIdConnectedServices`, caller-scoped `NyxIdConnectedServiceToolSource`.
-- Produces: typed role/step `tool_set_refs` propagated to each LLM intent and a request-local `AgentProfileTurnCatalog` containing exact discovered tools.
+- Produces: typed role/step `tool_set_refs` propagated to each LLM intent and a request-local `AgentTurnToolCatalog` containing exact discovered tools.
 
 - [ ] **Step 1: Write RED parser and scope-propagation tests**
 
@@ -266,7 +266,7 @@ Expected: FAIL because workflow scopes carry only static tool names and Studio s
 Add `tool_set_refs` to the existing scope contract and propagate it through the run
 actor. Add a string-name `IToolSetRegistry.Resolve` overload. In
 `WorkflowRoleGAgent`, under the current typed tool context, resolve and discover each
-source for every request, construct one `AgentProfileTurnCatalog`, and union only
+source for every request, construct one `AgentTurnToolCatalog`, and union only
 those exact dynamic names into the current turn visibility. Unknown sets, discovery
 failure, and name collision fail closed for those tools without mutating actor/global
 registries.

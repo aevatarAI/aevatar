@@ -1269,8 +1269,9 @@ public sealed class ConversationReplyGeneratorTests
             forceDisableTools: false,
             CancellationToken.None);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("NyxID Chat tool catalog contains duplicate tool names.");
+        var exception = await act.Should().ThrowAsync<AgentToolDiscoveryException>();
+        exception.Which.Failure.Code.Should().Be(AgentToolDiscoveryFailureCode.ToolNameCollision);
+        exception.Which.Failure.ToolName.Should().Be("duplicate_tool");
     }
 
     [Fact]
@@ -1376,7 +1377,7 @@ public sealed class ConversationReplyGeneratorTests
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
             toolSources: [new StubToolSource(allowed, denied)]);
-        var catalog = new AgentProfileTurnCatalog(
+        var catalog = new AgentTurnToolCatalog(
             [allowed.Name],
             new ProfileRoutingPromptLayer(
                 "profile-route-sentinel",
@@ -1388,7 +1389,7 @@ public sealed class ConversationReplyGeneratorTests
                 new PromptLayerBounds(1024, 256)),
             selectedIntentId: "service_connect",
             candidateIntentId: "service_connect",
-            routeOwnedTools: [allowed]);
+            exactTools: [allowed]);
 
         var plan = await generator.BuildStepPlanAsync(
             new ChatActivity

@@ -97,12 +97,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentProfileTurnClassifier>(sp =>
             sp.GetRequiredService<StreamingAgentProfileTurnClassifier>());
         services.TryAddSingleton<INyxIdChatTurnIntentClassifier, NyxIdChatTurnIntentClassifier>();
-        services.TryAddSingleton(sp => new AgentProfileTurnCatalogMaterializer(
+        services.TryAddSingleton(sp => new AgentTurnToolCatalogMaterializer(
             sp.GetRequiredService<IToolSetRegistry>(),
             sp.GetRequiredService<IAgentProfileTurnClassifier>(),
             sp.GetService<IExactRemoteSkillFetcher>(),
             sp.GetRequiredService<SkillFrontmatterParser>(),
-            sp.GetService<ILogger<AgentProfileTurnCatalogMaterializer>>()));
+            sp.GetService<ILogger<AgentTurnToolCatalogMaterializer>>(),
+            toolDiscoveryService: sp.GetRequiredService<IAgentToolDiscoveryService>()));
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();

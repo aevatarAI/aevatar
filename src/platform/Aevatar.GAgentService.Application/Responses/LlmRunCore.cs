@@ -205,29 +205,24 @@ public sealed class LlmRunCore(
         if (string.IsNullOrWhiteSpace(toolSetName))
             return toolProviders;
 
+        ToolSetResolveResult resolved;
         try
         {
-            var resolved = toolSetRegistry.Resolve(toolSetName);
-            if (resolved.IsSuccess)
-                return toolProviders.Append(new ToolSetResponsesToolProvider(resolved.Sources, logger));
-
-            logger.LogWarning(
-                "Run tool set '{ToolSetName}' did not resolve ({Code}); using DI providers only.",
-                toolSetName,
-                resolved.Error?.Code);
+            resolved = toolSetRegistry.Resolve(toolSetName);
         }
         catch (Exception ex)
         {
-            // IToolSetRegistry.Resolve THROWS on unknown-include / cycle (not just a failure
-            // result). Never fail the whole run over a tool-set config problem — degrade to the
-            // always-on DI providers (pre-fix behavior).
-            logger.LogWarning(
-                ex,
-                "Run tool set '{ToolSetName}' resolution threw; using DI providers only.",
-                toolSetName);
+            throw new ToolSetResolutionException(new ToolSetResolveError(
+                ToolSetResolveError.ResolutionFailedCode,
+                toolSetName.Trim(),
+                $"Run tool set '{toolSetName.Trim()}' could not be resolved.",
+                toolSetRegistry.GetRegisteredNames()), ex);
         }
 
-        return toolProviders;
+        if (!resolved.IsSuccess)
+            throw new ToolSetResolutionException(resolved.Error!);
+
+        return toolProviders.Append(new ToolSetResponsesToolProvider(resolved.Sources, logger));
     }
 
     private async Task<IReadOnlyList<IAgentTool>> BuildEffectiveToolsAsync(
@@ -674,6 +669,13 @@ public sealed class LlmRunCore(
         {
             NyxIdAuthenticationRequiredException => "authentication_required",
             NyxIdUpstreamException upstream => upstream.Kind.ToString().ToLowerInvariant(),
+            ToolSetResolutionException resolution => resolution.Error.Code,
+            AgentToolDiscoveryException discovery => discovery.Failure.Code switch
+            {
+                AgentToolDiscoveryFailureCode.ToolNameCollision => "tool_name_collision",
+                AgentToolDiscoveryFailureCode.InvalidToolName => "invalid_tool_name",
+                _ => "tool_discovery_failed",
+            },
             _ => "execution_failed",
         };
 

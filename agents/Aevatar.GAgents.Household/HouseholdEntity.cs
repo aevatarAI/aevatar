@@ -88,7 +88,7 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
     protected override string DecorateSystemPrompt(
         string basePrompt,
-        AgentProfileTurnCatalog? turnCatalog)
+        AgentTurnToolCatalog? turnCatalog)
     {
         var sb = new StringBuilder(basePrompt);
 

@@ -731,7 +731,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             interactiveReplyCollector: null,
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry ?? new StaticToolSetRegistry("profile.route", [tool]),
             new NoMatchClassifier());
         return new NyxIdChatTurnOperationExecutor(
@@ -758,7 +758,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             interactiveReplyCollector: null,
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry,
             new NoMatchClassifier());
         return new NyxIdChatTurnOperationExecutor(
@@ -1098,14 +1098,14 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
             CancellationToken ct,
-            AgentProfileTurnCatalog? turnCatalog = null)
+            AgentTurnToolCatalog? turnCatalog = null)
         {
             var tools = new ToolManager();
             if (!forceDisableTools && (staticToolAvailable?.Invoke() ?? true))
             {
                 tools.Register(turnCatalog is null
                     ? [tool]
-                    : turnCatalog.RouteOwnedTools.Values);
+                    : turnCatalog.ExactTools.Values);
             }
             var runtime = new ChatRuntime(
                 () => provider,

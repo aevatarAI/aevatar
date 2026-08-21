@@ -163,7 +163,7 @@ proxy request 只接受 relative path，拒绝 absolute URL、fragment、query-i
 
 ## 6. 请求期能力与 channel inventory
 
-Class-P dynamic operation adapter set 注册为 `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`），但注册不等于 NyxID Assistant route 激活。Studio 每个 LLM turn 都在当前 caller token 与 typed context 下分别 resolve R/A route tools 与 P admitted operation tools；结果只进入该请求的 `AgentProfileTurnCatalog` 与最终 `LLMRequest.Tools`。unknown set、discovery failure 或 duplicate name 对本请求 fail closed，不写 actor/global catalog，也不跨 caller 缓存。Workflow operation authoring 使用独立的 structured capability list/readiness tools。
+Class-P dynamic operation adapter set 注册为 `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`），但注册不等于 NyxID Assistant route 激活。Studio 每个 LLM turn 都在当前 caller token 与 typed context 下分别 resolve R/A route tools 与 P admitted operation tools；结果只进入该请求的 `AgentTurnToolCatalog` 与最终 `LLMRequest.Tools`。unknown set、discovery failure 或 duplicate name 对本请求 fail closed，不写 actor/global catalog，也不跨 caller 缓存。Workflow operation authoring 使用独立的 structured capability list/readiness tools。
 
 Mainnet 不得假设 `agent-profile.nyxid-chat` 自动合并 `workspace.default` 与完整 `nyxid.connected_services`。R/A 的 route set 由 profile binding 显式激活；P operation 则只能由本次请求的 exact MCP observation 生成，并以 `user_service_id + service_slug + endpoint_id + canonical operation digest` 完成 admission 后注入，同时保留根级 `catalog_digest` 作为 observation provenance。Mainnet host 在 Milestone 40 直接启用已具备 actor-owned admission/effect facts 的 non-destructive effect exposure；其他 host 仍保持 fail-closed 默认值。raw `nyxid_proxy` 自声明不适用于 NyxID Assistant，因此 profiled 与 unprofiled NyxID Chat 都不会把它提供给模型。该 surface 限制不删除 shared proxy，也不改变 workflow、Lark 或其他拥有独立 admission contract 的调用方。
 

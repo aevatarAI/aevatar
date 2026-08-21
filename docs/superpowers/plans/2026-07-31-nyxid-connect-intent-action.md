@@ -24,9 +24,9 @@
 
 **Files:**
 - Modify: `src/Aevatar.AI.Core/AgentProfiles/IAgentProfileTurnClassifier.cs`
-- Modify: `agents/Aevatar.GAgents.NyxidChat/AgentProfiles/AgentProfileTurnCatalogMaterializer.cs`
+- Modify: `agents/Aevatar.GAgents.NyxidChat/AgentProfiles/AgentTurnToolCatalogMaterializer.cs`
 - Modify: `agents/Aevatar.GAgents.NyxidChat/AgentProfiles/StreamingAgentProfileTurnClassifier.cs`
-- Modify: `test/Aevatar.AI.Tests/AgentProfileTurnCatalogMaterializerTests.cs`
+- Modify: `test/Aevatar.AI.Tests/AgentTurnToolCatalogMaterializerTests.cs`
 - Modify: `test/Aevatar.AI.Tests/StreamingAgentProfileTurnClassifierTests.cs`
 
 **Interfaces:**
@@ -42,7 +42,7 @@ candidate unchanged and that the provider request contains the literal JSON valu
 - [ ] **Step 2: Run focused tests and verify RED**
 
 ```bash
-dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --no-restore --nologo --filter 'FullyQualifiedName~StreamingAgentProfileTurnClassifierTests|FullyQualifiedName~AgentProfileTurnCatalogMaterializerTests.MaterializeAsync_ClassifierMatch'
+dotnet test test/Aevatar.AI.Tests/Aevatar.AI.Tests.csproj --no-restore --nologo --filter 'FullyQualifiedName~StreamingAgentProfileTurnClassifierTests|FullyQualifiedName~AgentTurnToolCatalogMaterializerTests.MaterializeAsync_ClassifierMatch'
 ```
 
 Expected: compilation fails because the candidate contract has no side-effect field.

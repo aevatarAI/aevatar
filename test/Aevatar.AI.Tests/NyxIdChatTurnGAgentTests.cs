@@ -2025,7 +2025,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
 
@@ -2066,7 +2066,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         };
         generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should()
             .BeEquivalentTo(expected);
-        generationExecutor.LastTurnCatalog.RouteOwnedTools.Keys.Should()
+        generationExecutor.LastTurnCatalog.ExactTools.Keys.Should()
             .BeEquivalentTo(expected);
         generationExecutor.LastTurnCatalog.FinalAllowedToolNames.Should()
             .NotContain("github_get_current_user");
@@ -2135,7 +2135,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 new BuiltInIntentToolSetRegistry(tools),
                 new NoMatchProfileClassifier()));
 
@@ -2167,7 +2167,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
             : ["nyxid_services", "nyxid_request_key_create"];
         generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should()
             .BeEquivalentTo(expected);
-        generationExecutor.LastTurnCatalog.RouteOwnedTools.Keys.Should()
+        generationExecutor.LastTurnCatalog.ExactTools.Keys.Should()
             .BeEquivalentTo(expected);
         generationExecutor.LastTurnCatalog.FinalAllowedToolNames.Should().NotContain(
             ["use_skill", "github_get_current_user"]);
@@ -2206,7 +2206,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 new BuiltInIntentToolSetRegistry(tools),
                 new NoMatchProfileClassifier()));
 
@@ -2232,7 +2232,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
 
         generationExecutor.LastTurnCatalog.Should().NotBeNull();
         generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEmpty();
-        generationExecutor.LastTurnCatalog.RouteOwnedTools.Should().BeEmpty();
+        generationExecutor.LastTurnCatalog.ExactTools.Should().BeEmpty();
     }
 
     [Fact]
@@ -2261,7 +2261,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
 
         generationExecutor.LastTurnCatalog.Should().NotBeNull();
         generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEmpty();
-        generationExecutor.LastTurnCatalog.RouteOwnedTools.Should().BeEmpty();
+        generationExecutor.LastTurnCatalog.ExactTools.Should().BeEmpty();
     }
 
     [Fact]
@@ -2272,7 +2272,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
@@ -2326,7 +2326,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         registry.ResolveCount.Should().Be(0);
         generationExecutor.LastTurnCatalog.Should().NotBeNull();
         generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should().BeEmpty();
-        generationExecutor.LastTurnCatalog.RouteOwnedTools.Should().BeEmpty();
+        generationExecutor.LastTurnCatalog.ExactTools.Should().BeEmpty();
     }
 
     [Fact]
@@ -2338,7 +2338,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()),
             credentialLifecycle);
@@ -2396,7 +2396,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var command = DurableGenerationTwoToolCommand();
@@ -2812,7 +2812,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
@@ -2927,7 +2927,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var session = new NyxIdChatTransientExecutionSession();
@@ -2988,7 +2988,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var continuationCatalog = generationExecutor.LlmStepRequests[1].TurnCatalog;
         continuationCatalog.Should().NotBeNull();
         continuationCatalog!.FinalAllowedToolNames.Should().Equal("operation-alpha-read");
-        continuationCatalog.RouteOwnedTools.Keys.Should().Equal("operation-alpha-read");
+        continuationCatalog.ExactTools.Keys.Should().Equal("operation-alpha-read");
         registry.RequestedNames.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
     }
 
@@ -3054,7 +3054,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var session = new NyxIdChatTransientExecutionSession();
@@ -3120,7 +3120,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var continuationCatalog = generationExecutor.LlmStepRequests[1].TurnCatalog;
         continuationCatalog.Should().NotBeNull();
         continuationCatalog!.FinalAllowedToolNames.Should().Equal("operation-alpha-read");
-        continuationCatalog.RouteOwnedTools.Keys.Should().Equal("operation-alpha-read");
+        continuationCatalog.ExactTools.Keys.Should().Equal("operation-alpha-read");
         registry.RequestedNames.Should().Equal(AgentProfilePolicies.NyxIdChatRouteToolSet);
     }
 
@@ -3164,7 +3164,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         harness.GenerationExecutor.LlmStepRequests[1].TurnCatalog.Should().NotBeNull();
         harness.GenerationExecutor.LlmStepRequests[1].TurnCatalog!.FinalAllowedToolNames.Should()
             .BeEmpty();
-        harness.GenerationExecutor.LlmStepRequests[1].TurnCatalog!.RouteOwnedTools.Should()
+        harness.GenerationExecutor.LlmStepRequests[1].TurnCatalog!.ExactTools.Should()
             .BeEmpty();
         harness.Registry.RequestedNames.Should().BeEmpty();
     }
@@ -3311,7 +3311,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var (profile, authority) = ContinuationProfile(tools);
@@ -3335,7 +3335,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
         session.TurnCatalog!.FinalAllowedToolNames.Should().Contain("operation-alpha-read");
-        session.TurnCatalog.RouteOwnedTools["operation-alpha-read"].Should()
+        session.TurnCatalog.ExactTools["operation-alpha-read"].Should()
             .BeAssignableTo<IAgentToolOperationAdmissionOwner>();
         await executor.ExecuteAsync(
             new NyxIdChatOperationDispatchCommand
@@ -3379,7 +3379,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var continuationRequest = generationExecutor.LlmStepRequests[1];
         continuationRequest.TurnCatalog!.FinalAllowedToolNames.Should()
             .Equal("operation-alpha-read");
-        continuationRequest.TurnCatalog.RouteOwnedTools.Keys.Should()
+        continuationRequest.TurnCatalog.ExactTools.Keys.Should()
             .Equal("operation-alpha-read");
         continuationRequest.StepState.Messages.Should().ContainSingle(message =>
             message.Role == "system" &&
@@ -3409,7 +3409,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var (profile, authority) = ContinuationProfile(tools);
@@ -3508,7 +3508,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var (profile, authority) = ContinuationProfile(tools);
@@ -3614,7 +3614,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 new BuiltInIntentToolSetRegistry(tools),
                 new NoMatchProfileClassifier()));
         var (profile, authority) = ContinuationProfile(tools);
@@ -3712,7 +3712,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 new BuiltInIntentToolSetRegistry(tools),
                 new NoMatchProfileClassifier()));
         var (profile, authority) = ContinuationProfile(tools);
@@ -3803,7 +3803,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             postconditionPort,
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
@@ -3957,7 +3957,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             postconditionPort,
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 new BuiltInIntentToolSetRegistry(tools),
                 new NoMatchProfileClassifier()));
         var (profile, authority) = ContinuationProfile(tools);
@@ -4070,7 +4070,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             postconditionPort,
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()),
             credentialLifecycle);
@@ -4997,7 +4997,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
 
         public int ToolExecutions { get; private set; }
 
-        public AgentProfileTurnCatalog? LastTurnCatalog { get; private set; }
+        public AgentTurnToolCatalog? LastTurnCatalog { get; private set; }
 
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
@@ -5596,7 +5596,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
             new UnavailableNyxIdActionPostconditionPort(),
-            new AgentProfileTurnCatalogMaterializer(
+            new AgentTurnToolCatalogMaterializer(
                 registry,
                 new NoMatchProfileClassifier()));
         var session = new NyxIdChatTransientExecutionSession();

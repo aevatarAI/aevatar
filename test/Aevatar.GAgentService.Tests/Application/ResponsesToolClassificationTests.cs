@@ -19,9 +19,9 @@ public sealed class ResponsesToolClassificationTests
     public async Task ClassifyAsync_ShouldSubstituteForwardAndDeduplicateAdditiveTools()
     {
         var substitute = new RecordingTool("web_search", """{"type":"object","properties":{"q":{"type":"string"}}}""", "{}");
-        var duplicateSubstitute = new RecordingTool("web_search", """{"type":"object"}""", "{}");
+        var duplicateSubstitute = substitute;
         var additive = new RecordingTool("aevatar_todo_write", """{"type":"object"}""", "{}");
-        var duplicateAdditive = new RecordingTool("aevatar_todo_write", """{"type":"object"}""", "{}");
+        var duplicateAdditive = additive;
         var customAdditive = new RecordingTool("custom_additive", """{"type":"object"}""", "{}");
         var logger = new RecordingLogger();
 
@@ -50,6 +50,28 @@ public sealed class ResponsesToolClassificationTests
         await ((Func<Task>)(() => result.EffectiveTools.Single(tool => tool.Name == "client_tool").ExecuteAsync("{}")))
             .Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*must be executed by the client*");
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_WhenDifferentExactToolsShareAName_ShouldFailClosed()
+    {
+        var provider = new RecordingResponsesToolProvider(
+            [],
+            [
+                new RecordingTool("use_skill", """{"type":"object"}""", "{}"),
+                new RecordingTool("Use_Skill", """{"type":"object","properties":{"id":{"type":"string"}}}""", "{}"),
+            ]);
+
+        var act = () => ResponsesToolClassifier.ClassifyAsync(
+                [],
+                [provider],
+                ToolProviderContext,
+                new RecordingLogger())
+            .AsTask();
+
+        var exception = await act.Should().ThrowAsync<AgentToolDiscoveryException>();
+        exception.Which.Failure.Code.Should().Be(AgentToolDiscoveryFailureCode.ToolNameCollision);
+        exception.Which.Failure.ToolName.Should().Be("use_skill");
     }
 
     [Fact]

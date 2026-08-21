@@ -631,7 +631,7 @@ public sealed class LlmRunCoreTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenRouteToolSetResolutionThrows_ShouldDegradeToDiProvidersWithoutFailing()
+    public async Task RunAsync_WhenRouteToolSetResolutionThrows_ShouldFailBeforeCallingModel()
     {
         // IToolSetRegistry.Resolve throws on unknown-include / cycle. A tool-set config problem
         // must degrade to DI-only providers, never fail the whole run.
@@ -653,12 +653,14 @@ public sealed class LlmRunCoreTests
             new LlmRunCoreRequest(BuildRunRequest("resp_throw", selection), "run_1", "ApiKey"),
             sink);
 
-        sink.Completed.Should().ContainSingle().Which.OutputText.Should().Be("ok");
-        sink.Failed.Should().BeEmpty();
+        provider.Requests.Should().BeEmpty();
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().ContainSingle()
+            .Which.FailureCode.Should().Be(ToolSetResolveError.ResolutionFailedCode);
     }
 
     [Fact]
-    public async Task RunAsync_WhenRouteToolSetResolutionReturnsFailure_ShouldDegradeToDiProvidersWithoutFailing()
+    public async Task RunAsync_WhenRouteToolSetResolutionReturnsFailure_ShouldFailBeforeCallingModel()
     {
         // Failure result (not an exception) — e.g. unknown tool set name. Must also degrade to
         // DI-only, never fail the run.
@@ -681,8 +683,10 @@ public sealed class LlmRunCoreTests
             new LlmRunCoreRequest(BuildRunRequest("resp_fail", selection), "run_1", "ApiKey"),
             sink);
 
-        sink.Completed.Should().ContainSingle().Which.OutputText.Should().Be("ok");
-        sink.Failed.Should().BeEmpty();
+        provider.Requests.Should().BeEmpty();
+        sink.Completed.Should().BeEmpty();
+        sink.Failed.Should().ContainSingle()
+            .Which.FailureCode.Should().Be(ToolSetResolveError.UnknownNameCode);
     }
 
     private static LlmRunRequested BuildRunRequest(

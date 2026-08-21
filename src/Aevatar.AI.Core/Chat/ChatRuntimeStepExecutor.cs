@@ -14,21 +14,21 @@ public sealed class ChatRuntimeStepExecutor
     private readonly Func<ILLMProvider> _providerFactory;
     private readonly ToolCallLoop _toolLoop;
     private readonly AgentHookPipeline? _hooks;
-    private readonly Func<AgentProfileTurnCatalog?, LLMRequest> _requestBuilder;
+    private readonly Func<AgentTurnToolCatalog?, LLMRequest> _requestBuilder;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly TokenBudgetTracker _budgetTracker;
     private readonly IChatToolCheckpointPort _toolCheckpointPort;
-    private readonly AgentProfileTurnCatalog? _turnCatalog;
+    private readonly AgentTurnToolCatalog? _turnCatalog;
 
     internal ChatRuntimeStepExecutor(
         Func<ILLMProvider> providerFactory,
         ToolCallLoop toolLoop,
         AgentHookPipeline? hooks,
-        Func<AgentProfileTurnCatalog?, LLMRequest> requestBuilder,
+        Func<AgentTurnToolCatalog?, LLMRequest> requestBuilder,
         IReadOnlyList<ILLMCallMiddleware> llmMiddlewares,
         TokenBudgetTracker budgetTracker,
         IChatToolCheckpointPort toolCheckpointPort,
-        AgentProfileTurnCatalog? turnCatalog)
+        AgentTurnToolCatalog? turnCatalog)
     {
         _providerFactory = providerFactory;
         _toolLoop = toolLoop;
@@ -80,6 +80,9 @@ public sealed class ChatRuntimeStepExecutor
             LlmControl = baseRequest.LlmControl,
             RouteTarget = baseRequest.RouteTarget?.Clone(),
             Tools = finalNoTools ? null : baseRequest.Tools,
+            ToolCatalogProof = finalNoTools
+                ? AgentTurnToolCatalogProof.RestrictedEmpty(baseRequest.ToolCatalogProof?.Budget)
+                : baseRequest.ToolCatalogProof,
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,

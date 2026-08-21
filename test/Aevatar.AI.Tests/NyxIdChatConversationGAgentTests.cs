@@ -774,7 +774,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         ];
         var profileClassifier = new FixedProfileClassifier(
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
             profileClassifier);
         var independentClassifier = new RecordingTurnIntentClassifier(NyxIdChatTurnIntent.Unspecified);
@@ -863,7 +863,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             connectedServiceIntentId);
         var profileClassifier = new StreamingAgentProfileTurnClassifier(
             new FixedLlmProviderFactory(classifierProvider));
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
             profileClassifier);
         var independentClassifier =
@@ -930,7 +930,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
-            AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
+            AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         phaseOneInput.RootElement.GetProperty("intents")[0]
             .GetProperty("routing_description").GetString().Should()
             .Contain("already-connected exact UserService");
@@ -1020,7 +1020,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         ];
         var profileClassifier = new FixedProfileClassifier(
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
             profileClassifier);
         var serverClassifier = new RecordingTurnIntentClassifier(NyxIdChatTurnIntent.Unspecified);
@@ -1096,7 +1096,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
-            AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
+            AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         serverClassifier.UserMessages.Should().BeEmpty();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
             .Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
@@ -1227,7 +1227,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         var classifierProvider = new NaturalServiceConnectClassifierProvider();
         var classifier = new StreamingAgentProfileTurnClassifier(
             new FixedLlmProviderFactory(classifierProvider));
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new FixedToolSetRegistry("profile.route", new FixedToolSource(routeTools)),
             classifier,
             new FixedSkillFetcher(
@@ -1377,7 +1377,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
                 NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
                 NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
-                AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
+                AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         intents[0]
             .GetProperty("side_effect_class").GetString().Should().Be("external_handoff");
         provider.Requests.Should().HaveCount(2);
@@ -7819,7 +7819,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         ServiceProvider services,
         string actorId,
         IActorDispatchPort? actorDispatchPort = null,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer = null,
         TimeProvider? timeProvider = null,
         INyxIdChatTurnIntentClassifier? turnIntentClassifier = null)
     {
@@ -8037,7 +8037,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 .Select(static intent => intent.GetProperty("intent_id").GetString())
                 .ToArray();
             var phaseOne = intentIds.Contains(
-                AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId,
+                AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId,
                 StringComparer.Ordinal);
             if (phaseOne)
             {
@@ -8049,7 +8049,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
                     .Contain("Do not select this intent");
                 intents.EnumerateArray().Single(intent => string.Equals(
                         intent.GetProperty("intent_id").GetString(),
-                        AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId,
+                        AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId,
                         StringComparison.Ordinal))
                     .GetProperty("routing_description").GetString().Should()
                     .Contain("already-connected exact UserService");
@@ -8061,7 +8061,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 {
                     status = "matched",
                     intent_id = phaseOne
-                        ? AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId
+                        ? AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId
                         : profileIntentId,
                 }),
                 IsLast = true,

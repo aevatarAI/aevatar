@@ -46,7 +46,7 @@ Profile 重新发布只影响之后创建的 Conversation。旧实例不 hot-upg
 
 ## Turn Authority
 
-Turn-local materialization 继续使用已固化 snapshot 与既有 `AgentProfileTurnCatalogMaterializer`。`RoleGAgentState.agent_profile_turn_authority` 是当前 turn authority 的唯一 durable fact，`session_id + attempt` 是 reconciliation fence。Exact skill body、prompt layer、tool object、token、credential、header 和 adapter/runtime instance 不进入 actor state/read model。
+Turn-local materialization 继续使用已固化 snapshot 与既有 `AgentTurnToolCatalogMaterializer`。`RoleGAgentState.agent_profile_turn_authority` 是当前 turn authority 的唯一 durable fact，`session_id + attempt` 是 reconciliation fence。Exact skill body、prompt layer、tool object、token、credential、header 和 adapter/runtime instance 不进入 actor state/read model。
 
 Runtime 先对 route-owned tools、registered tools、typed visibility、Profile maximum/recovery/task policy 与 caller authorization 取交集，再执行 bounded routing/classification。任何 profile、exact fetch、identity、collision、capability 或 integrity 失败都只能继续缩权；交集为空即 restricted-empty，不能退回 unrestricted。
 
@@ -63,7 +63,7 @@ Task/recovery selector 的 risk 集必须是 maximum 中同 slug selector 的子
 
 connected-service selector 可以额外封存 `readiness.requested_scopes`，用于声明该 catalog service 在零 exact operation 时的连接要求。只要 `readiness` 存在，`requested_scopes` 就必须是非空、去重、规范化且由 Profile 作者从目标 NyxID catalog entry 的真实 capability 中选择；Profile validate/publish 必须拒绝空数组，`nyxid_require_service` 仍以运行时 catalog 校验具体 scope，不能把错误留给用户 turn。该字段的 presence 才启用确定性 readiness：当选中 task policy 的全部 connected-service selector 都没有 exact match，且只有一个 selector 需要恢复时，runtime 必须绕过 LLM，按封存的 `catalog_service_slug + requested_scopes` 精确调用 route-owned `nyxid_require_service`。它不得让模型决定是否连接、选择其他 service/scope，或生成 CLI/手工查询说明。工具返回的 typed authorization receipt 继续沿既有 browser-action 投影生成连接卡片；缺少 readiness、多个 selector 同时缺失或 required tool 不在最终 ceiling 时，turn 返回 typed failure，不得降级为自然语言兜底。只要 selector 已匹配到 exact connected-service operation，就不调用 readiness tool，模型只能使用匹配后的真实 operation。
 
-Request-local `AgentProfileTurnCatalog` 不是 DI service、cache 或进程级上下文。非 Profile consumer 必须显式传 `null`；当前只有 genuinely unprofiled NyxID Chat 允许这个值表达未绑定。
+Request-local `AgentTurnToolCatalog` 不是 DI service、cache 或进程级上下文。非 Profile consumer 必须显式传 `null`；当前只有 genuinely unprofiled NyxID Chat 允许这个值表达未绑定。
 
 ## Static route tool ceiling
 

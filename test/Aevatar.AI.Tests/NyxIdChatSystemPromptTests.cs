@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.AI.Abstractions.Prompting;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Prompting;
 using Aevatar.GAgents.NyxidChat;
@@ -331,9 +332,9 @@ public class NyxIdChatSystemPromptTests
             "selected skill body",
             new SelectedSkillPromptProvenance("selected-test"),
             new PromptLayerBounds(1_024, 256));
-        var enforced = new AgentProfileTurnCatalog(
+        var enforced = new AgentTurnToolCatalog(
             [], profileLayer, selectedLayer, "intent-alpha", "intent-alpha");
-        var shadow = new AgentProfileTurnCatalog(
+        var shadow = new AgentTurnToolCatalog(
             [], profileLayer, null, null, "intent-shadow");
 
         var enforcedPrompt = Decorate(agent, enforced);
@@ -346,7 +347,7 @@ public class NyxIdChatSystemPromptTests
         shadowPrompt.Should().NotContain("selected-skill-procedure");
     }
 
-    private static string Decorate(NyxIdChatGAgent agent, AgentProfileTurnCatalog catalog)
+    private static string Decorate(NyxIdChatGAgent agent, AgentTurnToolCatalog catalog)
     {
         var method = typeof(NyxIdChatGAgent).GetMethod(
             "DecorateSystemPrompt",

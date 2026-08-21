@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Core.AgentProfiles;
 
@@ -28,24 +29,24 @@ public sealed class AgentProfileTurnAuthorityPreparation
     }
 }
 
-public sealed class AgentProfileTurnCatalogMaterialization
+public sealed class AgentTurnToolCatalogMaterialization
 {
     private readonly AgentProfileTurnAuthorityState _reconcileProposal;
 
-    private AgentProfileTurnCatalogMaterialization(
-        AgentProfileTurnCatalog catalog,
+    private AgentTurnToolCatalogMaterialization(
+        AgentTurnToolCatalog catalog,
         AgentProfileTurnAuthorityState reconcileProposal)
     {
         Catalog = catalog;
         _reconcileProposal = reconcileProposal.Clone();
     }
 
-    public AgentProfileTurnCatalog Catalog { get; }
+    public AgentTurnToolCatalog Catalog { get; }
 
     public AgentProfileTurnAuthorityState ReconcileProposal => _reconcileProposal.Clone();
 
-    public static AgentProfileTurnCatalogMaterialization Create(
-        AgentProfileTurnCatalog catalog,
+    public static AgentTurnToolCatalogMaterialization Create(
+        AgentTurnToolCatalog catalog,
         AgentProfileTurnAuthorityState reconcileProposal)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -61,6 +62,6 @@ public sealed class AgentProfileTurnCatalogMaterialization
                 "The request-local catalog cannot grant tools outside the reconcile proposal ceiling.");
         }
 
-        return new AgentProfileTurnCatalogMaterialization(catalog, reconcileProposal);
+        return new AgentTurnToolCatalogMaterialization(catalog, reconcileProposal);
     }
 }

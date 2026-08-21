@@ -37,6 +37,12 @@ public sealed class LLMRequest
     /// <summary>Optional list of tools available for the LLM to invoke.</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }
 
+    /// <summary>
+    /// Frozen proof for the exact Aevatar-owned tools in <see cref="Tools"/>. A non-null proof
+    /// with zero descriptors is a restricted empty catalog, never an unrestricted request.
+    /// </summary>
+    public AgentTurnToolCatalogProof? ToolCatalogProof { get; init; }
+
     /// <summary>Optional model name that overrides the provider default model.</summary>
     public string? Model { get; init; }
 

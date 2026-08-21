@@ -1196,7 +1196,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenSingleUseToolSucceeds_ShouldRetireItBeforeTheNextRound()
+    public async Task ChatStreamAsync_WhenSingleUseToolSucceeds_ShouldRejectReuseWithoutMutatingCatalog()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -1236,16 +1236,26 @@ public sealed class ChatRuntimeStreamingBufferTests
             isReadOnly: true));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("run member", maxToolRounds: 3, turnCatalog: null))
+        var catalog = new AgentTurnToolCatalog(
+            ["aevatar_invoke_member", "aevatar_observe_run"],
+            null,
+            null,
+            null,
+            null,
+            exactTools: tools.GetAll());
+
+        await foreach (var _ in runtime.ChatStreamAsync("run member", maxToolRounds: 3, turnCatalog: catalog))
         {
         }
 
         invocationCount.Should().Be(1);
         provider.StreamRequests.Should().HaveCount(3);
-        provider.StreamRequests[1].Tools.Should().NotContain(tool =>
+        provider.StreamRequests[1].Tools.Should().Contain(tool =>
             tool.Name == "aevatar_invoke_member");
         provider.StreamRequests[1].Tools.Should().Contain(tool =>
             tool.Name == "aevatar_observe_run");
+        provider.StreamRequests[1].ToolCatalogProof!.CatalogDigest.Should().Be(
+            provider.StreamRequests[0].ToolCatalogProof!.CatalogDigest);
         provider.StreamRequests[1].Messages.Should().Contain(message =>
             message.Role == "system" &&
             message.Content != null &&
@@ -1814,7 +1824,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         ToolManager? tools = null,
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
-        Func<AgentProfileTurnCatalog?, LLMRequest>? requestBuilder = null)
+        Func<AgentTurnToolCatalog?, LLMRequest>? requestBuilder = null)
     {
         var history = new ChatHistory();
         var effectiveTools = tools ?? new ToolManager();

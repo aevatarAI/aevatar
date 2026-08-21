@@ -37,13 +37,13 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var invocation = new AgentProfileRequiredToolInvocation(
             tool.Name,
             "{\"service_slug\":\"api-github\",\"requested_scopes\":[\"repo\"]}");
-        var catalog = new AgentProfileTurnCatalog(
+        var catalog = new AgentTurnToolCatalog(
             [tool.Name],
             profilePromptLayer: null,
             selectedSkillPromptLayer: null,
             selectedIntentId: "github-via-nyxid",
             candidateIntentId: "github-via-nyxid",
-            routeOwnedTools: [tool],
+            exactTools: [tool],
             hasUnresolvedConnectedServiceSelectors: true,
             requiredToolInvocation: invocation);
         var workItem = BuildToolEnabledWorkItem() with { TurnCatalog = catalog };
@@ -2371,7 +2371,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
             CancellationToken ct,
-            AgentProfileTurnCatalog? turnCatalog = null) =>
+            AgentTurnToolCatalog? turnCatalog = null) =>
             Task.FromResult(plan);
 
         public Task<ConversationReplyResult> GenerateReplyAsync(
@@ -2406,7 +2406,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
             CancellationToken ct,
-            AgentProfileTurnCatalog? turnCatalog = null)
+            AgentTurnToolCatalog? turnCatalog = null)
         {
             var tools = new ToolManager();
             if (!forceDisableTools &&

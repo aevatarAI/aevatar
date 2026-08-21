@@ -193,7 +193,7 @@ public sealed class AgentRunToolStepInteractiveReplyTests
             ChatAttachmentInputContext? attachmentContext,
             bool forceDisableTools,
             CancellationToken ct,
-            AgentProfileTurnCatalog? turnCatalog = null) =>
+            AgentTurnToolCatalog? turnCatalog = null) =>
             Task.FromResult(plan);
 
         public Task<ConversationReplyResult> GenerateReplyAsync(

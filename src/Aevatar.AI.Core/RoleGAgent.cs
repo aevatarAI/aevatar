@@ -2638,7 +2638,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             try
             {
                 streamCt.ThrowIfCancellationRequested();
-                var turnCatalog = await MaterializeAndCommitAgentProfileTurnCatalogAsync(
+                var turnCatalog = await MaterializeAndCommitAgentTurnToolCatalogAsync(
                     request,
                     toolContext,
                     committedAuthority,
@@ -3030,7 +3030,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return ResolveCommittedTurnAuthority(request.SessionId);
     }
 
-    private async Task<AgentProfileTurnCatalog?> MaterializeAndCommitAgentProfileTurnCatalogAsync(
+    private async Task<AgentTurnToolCatalog?> MaterializeAndCommitAgentTurnToolCatalogAsync(
         ChatRequestEvent request,
         AgentToolExecutionContext toolContext,
         AgentProfileTurnAuthorityState? committedAuthority,
@@ -3039,7 +3039,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         if (committedAuthority is null)
             return null;
 
-        var materialization = await MaterializeCommittedAgentProfileTurnCatalogAsync(
+        var materialization = await MaterializeCommittedAgentTurnToolCatalogAsync(
             request,
             toolContext,
             committedAuthority.Clone(),
@@ -3117,12 +3117,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         CancellationToken ct) =>
         Task.FromResult<AgentProfileTurnAuthorityPreparation?>(null);
 
-    protected virtual Task<AgentProfileTurnCatalogMaterialization?> MaterializeCommittedAgentProfileTurnCatalogAsync(
+    protected virtual Task<AgentTurnToolCatalogMaterialization?> MaterializeCommittedAgentTurnToolCatalogAsync(
         ChatRequestEvent request,
         AgentToolExecutionContext toolContext,
         AgentProfileTurnAuthorityState committedAuthority,
         CancellationToken ct) =>
-        Task.FromResult<AgentProfileTurnCatalogMaterialization?>(null);
+        Task.FromResult<AgentTurnToolCatalogMaterialization?>(null);
 
     protected virtual void OnPlanOrHandoffObserved(bool handoffPending)
     {
@@ -3136,7 +3136,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         ChatRequestEvent request,
         LLMControlContext llmControl,
         AgentToolExecutionContext toolContext,
-        AgentProfileTurnCatalog? turnCatalog,
+        AgentTurnToolCatalog? turnCatalog,
         long turnStartedTimestamp,
         CancellationToken streamCt,
         IReadOnlyList<ChatMessage>? recoveryTranscript = null)

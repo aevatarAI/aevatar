@@ -17,7 +17,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 
-public sealed class AgentProfileTurnCatalogMaterializer
+public sealed class AgentTurnToolCatalogMaterializer
 {
     private const string NyxIdRequireServiceToolName = "nyxid_require_service";
     internal const string ProfileTaskRouteIntentId = "nyxid_profile_task_route";
@@ -53,22 +53,25 @@ public sealed class AgentProfileTurnCatalogMaterializer
     private readonly IAgentProfileTurnClassifier _classifier;
     private readonly IExactRemoteSkillFetcher? _exactRemoteSkillFetcher;
     private readonly SkillFrontmatterParser _frontmatterParser;
-    private readonly ILogger<AgentProfileTurnCatalogMaterializer> _logger;
+    private readonly IAgentToolDiscoveryService _toolDiscoveryService;
+    private readonly ILogger<AgentTurnToolCatalogMaterializer> _logger;
     private readonly TimeProvider _timeProvider;
 
-    public AgentProfileTurnCatalogMaterializer(
+    public AgentTurnToolCatalogMaterializer(
         IToolSetRegistry toolSetRegistry,
         IAgentProfileTurnClassifier classifier,
         IExactRemoteSkillFetcher? exactRemoteSkillFetcher = null,
         SkillFrontmatterParser? frontmatterParser = null,
-        ILogger<AgentProfileTurnCatalogMaterializer>? logger = null,
-        TimeProvider? timeProvider = null)
+        ILogger<AgentTurnToolCatalogMaterializer>? logger = null,
+        TimeProvider? timeProvider = null,
+        IAgentToolDiscoveryService? toolDiscoveryService = null)
     {
         _toolSetRegistry = toolSetRegistry ?? throw new ArgumentNullException(nameof(toolSetRegistry));
         _classifier = classifier ?? throw new ArgumentNullException(nameof(classifier));
         _exactRemoteSkillFetcher = exactRemoteSkillFetcher;
         _frontmatterParser = frontmatterParser ?? new SkillFrontmatterParser();
-        _logger = logger ?? NullLogger<AgentProfileTurnCatalogMaterializer>.Instance;
+        _toolDiscoveryService = toolDiscoveryService ?? AgentToolDiscoveryService.Instance;
+        _logger = logger ?? NullLogger<AgentTurnToolCatalogMaterializer>.Instance;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -262,7 +265,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             diagnostics);
     }
 
-    public async Task<AgentProfileTurnCatalogMaterialization> MaterializeCommittedAsync(
+    public async Task<AgentTurnToolCatalogMaterialization> MaterializeCommittedAsync(
         AgentProfileSnapshot profile,
         AgentProfileTurnAuthorityState committedAuthority,
         string? accessToken,
@@ -294,7 +297,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
                 diagnostics,
-                routeOwnedTools: []);
+                exactTools: []);
         }
 
         var routeTools = await DiscoverToolSetAsync(
@@ -313,7 +316,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
                 diagnostics,
-                routeOwnedTools: []);
+                exactTools: []);
         }
 
         var availableTools = MergeExactTools(
@@ -386,7 +389,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
                 diagnostics,
-                routeOwnedTools: []);
+                exactTools: []);
         }
 
         var fetched = await FetchSelectedSkillAsync(profile, candidate, accessToken, diagnostics, ct);
@@ -425,7 +428,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             readiness.RequiredToolInvocation);
     }
 
-    public async Task<AgentProfileTurnCatalog> MaterializeBuiltInIntentAsync(
+    public async Task<AgentTurnToolCatalog> MaterializeBuiltInIntentAsync(
         NyxIdChatTurnIntent intent,
         AgentToolExecutionContext toolContext,
         CancellationToken ct = default)
@@ -455,7 +458,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return RestrictedEmptyCatalog(diagnostics);
         }
 
-        return new AgentProfileTurnCatalog(
+        return new AgentTurnToolCatalog(
             builtIn.ToolNames,
             profilePromptLayer: null,
             selectedSkillPromptLayer: null,
@@ -465,7 +468,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             selectedTools.Values);
     }
 
-    internal async Task<AgentProfileTurnCatalog> MaterializeVerifiedAuthorizationContinuationAsync(
+    internal async Task<AgentTurnToolCatalog> MaterializeVerifiedAuthorizationContinuationAsync(
         AgentProfileSnapshot? profile,
         AgentProfileTurnAuthorityState? committedAuthority,
         AgentToolExecutionContext toolContext,
@@ -521,7 +524,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
 
         var selectedTools = SelectTools(routeTools.Tools, eligible);
         return profile is null
-            ? new AgentProfileTurnCatalog(
+            ? new AgentTurnToolCatalog(
                 eligible,
                 profilePromptLayer: null,
                 selectedSkillPromptLayer: null,
@@ -539,9 +542,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 selectedTools);
     }
 
-    internal static AgentProfileTurnCatalog NarrowToBuiltInIntent(
+    internal static AgentTurnToolCatalog NarrowToBuiltInIntent(
         NyxIdChatTurnIntent intent,
-        AgentProfileTurnCatalog catalog,
+        AgentTurnToolCatalog catalog,
         IEnumerable<string>? authorityCeilingToolNames = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -553,7 +556,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         allowed.IntersectWith(catalog.FinalAllowedToolNames);
         if (authorityCeilingToolNames is not null)
             allowed.IntersectWith(authorityCeilingToolNames);
-        var selectedTools = catalog.RouteOwnedTools
+        var selectedTools = catalog.ExactTools
             .Where(pair => allowed.Contains(pair.Key))
             .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.OrdinalIgnoreCase);
         if (allowed.Count != builtIn.ToolNames.Count ||
@@ -564,7 +567,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return RestrictedEmptyCatalog(catalog.Diagnostics);
         }
 
-        return new AgentProfileTurnCatalog(
+        return new AgentTurnToolCatalog(
             allowed,
             catalog.ProfilePromptLayer,
             catalog.SelectedSkillPromptLayer,
@@ -574,8 +577,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
             selectedTools.Values);
     }
 
-    internal static AgentProfileTurnCatalog NarrowToVerifiedUserService(
-        AgentProfileTurnCatalog catalog,
+    internal static AgentTurnToolCatalog NarrowToVerifiedUserService(
+        AgentTurnToolCatalog catalog,
         NyxIdChatVerifiedAuthorizationContinuation continuation)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -592,7 +595,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return RestrictedEmptyCatalog(catalog.Diagnostics);
         }
 
-        var selectedTools = catalog.RouteOwnedTools
+        var selectedTools = catalog.ExactTools
             .Where(pair =>
                 catalog.FinalAllowedToolNames.Contains(pair.Key) &&
                 pair.Value is IAgentToolOperationAdmissionOwner owner &&
@@ -611,7 +614,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         if (selectedTools.Count == 0)
             return RestrictedEmptyCatalog(catalog.Diagnostics);
 
-        return new AgentProfileTurnCatalog(
+        return new AgentTurnToolCatalog(
             selectedTools.Keys,
             catalog.ProfilePromptLayer,
             catalog.SelectedSkillPromptLayer,
@@ -1144,30 +1147,25 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 true);
         }
 
-        var discovered = new List<IAgentTool>();
-        using var toolContextScope = AgentToolContextScope.Push(toolContext);
-        foreach (var source in resolved.Sources)
+        var discovery = await _toolDiscoveryService
+            .DiscoverAsync(resolved.Sources, toolContext, ct)
+            .ConfigureAwait(false);
+        if (!discovery.IsSuccess)
         {
-            try
-            {
-                discovered.AddRange(await source.DiscoverToolsAsync(ct));
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception)
-            {
-                diagnostics.Add(new AgentProfileTurnDiagnostic(
-                    AgentProfileTurnDiagnosticCode.ToolDiscoveryFailed,
-                    resolved.Name ?? string.Empty));
-                return new ToolDiscoveryResolution(
-                    new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase),
-                    true);
-            }
+            var diagnosticCode = discovery.Failure!.Code == AgentToolDiscoveryFailureCode.ToolNameCollision
+                ? AgentProfileTurnDiagnosticCode.ToolNameCollision
+                : AgentProfileTurnDiagnosticCode.ToolDiscoveryFailed;
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                diagnosticCode,
+                string.IsNullOrWhiteSpace(discovery.Failure.ToolName)
+                    ? resolved.Name ?? string.Empty
+                    : discovery.Failure.ToolName));
+            return new ToolDiscoveryResolution(
+                new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase),
+                true);
         }
 
-        return ToEligibleTools(discovered, toolContext, diagnostics);
+        return ToEligibleTools(discovery.Tools, toolContext, diagnostics);
     }
 
     private static ToolDiscoveryResolution ToEligibleTools(
@@ -1316,7 +1314,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         return AgentProfileTurnAuthorityPreparation.Create(authority, diagnostics);
     }
 
-    private static AgentProfileTurnCatalogMaterialization BuildMaterialization(
+    private static AgentTurnToolCatalogMaterialization BuildMaterialization(
         AgentProfileSnapshot profile,
         AgentProfileTurnAuthorityState committedAuthority,
         AgentProfileTurnAuthorityKind authorityKind,
@@ -1324,7 +1322,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         string? selectedIntentId,
         SelectedSkillPromptLayer? selectedSkillPromptLayer,
         IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
-        IEnumerable<IAgentTool> routeOwnedTools,
+        IEnumerable<IAgentTool> exactTools,
         bool hasUnresolvedConnectedServiceSelectors = false,
         AgentProfileRequiredToolInvocation? requiredToolInvocation = null)
     {
@@ -1347,10 +1345,10 @@ public sealed class AgentProfileTurnCatalogMaterializer
             committedAuthority.CandidateRoute?.IntentId,
             selectedSkillPromptLayer,
             diagnostics,
-            routeOwnedTools,
+            exactTools,
             hasUnresolvedConnectedServiceSelectors,
             requiredToolInvocation);
-        return AgentProfileTurnCatalogMaterialization.Create(catalog, proposal);
+        return AgentTurnToolCatalogMaterialization.Create(catalog, proposal);
     }
 
     private static IReadOnlyList<string> CanonicalToolNames(IEnumerable<string> names) =>
@@ -1484,14 +1482,14 @@ public sealed class AgentProfileTurnCatalogMaterializer
         _ => null,
     };
 
-    private static AgentProfileTurnCatalog BuildCatalog(
+    private static AgentTurnToolCatalog BuildCatalog(
         AgentProfileSnapshot profile,
         IEnumerable<string> finalNames,
         string? selectedIntentId,
         string? candidateIntentId,
         SelectedSkillPromptLayer? selectedSkillPromptLayer,
         IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
-        IEnumerable<IAgentTool> routeOwnedTools,
+        IEnumerable<IAgentTool> exactTools,
         bool hasUnresolvedConnectedServiceSelectors = false,
         AgentProfileRequiredToolInvocation? requiredToolInvocation = null)
     {
@@ -1509,14 +1507,14 @@ public sealed class AgentProfileTurnCatalogMaterializer
             new ProfileRoutingPromptProvenance(
                 $"agent-profile:{profile.ProfileId}@{profile.ProfileVersion}"),
             new PromptLayerBounds(8 * 1024, 2 * 1024));
-        return new AgentProfileTurnCatalog(
+        return new AgentTurnToolCatalog(
             finalNames,
             profileLayer,
             selectedSkillPromptLayer,
             selectedIntentId,
             candidateIntentId,
             diagnostics,
-            routeOwnedTools,
+            exactTools,
             hasUnresolvedConnectedServiceSelectors,
             requiredToolInvocation);
     }
@@ -1556,7 +1554,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         index >= message.Length ||
         (!char.IsLetterOrDigit(message[index]) && message[index] != '_');
 
-    private static AgentProfileTurnCatalog RestrictedEmptyCatalog(
+    private static AgentTurnToolCatalog RestrictedEmptyCatalog(
         IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null) =>
         new(
             [],

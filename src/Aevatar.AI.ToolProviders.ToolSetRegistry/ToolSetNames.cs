@@ -2,6 +2,19 @@ namespace Aevatar.AI.ToolProviders.ToolSetRegistry;
 
 public static class ToolSetNames
 {
+    public const string ChatCore = "chat.core";
+    public const string WebRuntime = "web.runtime";
+    public const string SkillRuntime = "skill.runtime";
+    public const string SkillAuthoring = "skill.authoring";
+    public const string AevatarInvoke = "aevatar.invoke";
+    public const string AevatarObserve = "aevatar.observe";
+    public const string ResponsesState = "responses.state";
+    public const string NyxIdPrivileged = "nyxid.privileged";
+    public const string NyxIdExecution = "nyxid.execution";
+    public const string StorageRead = "storage.read";
+    public const string StorageWrite = "storage.write";
+    public const string ChannelLark = "channel.lark";
+    public const string ChannelTelegram = "channel.telegram";
     public const string WorkspaceDefault = "workspace.default";
     public const string LarkSelfNotify = "lark.self_notify";
 

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.ToolSetRegistry;
 
@@ -17,6 +18,7 @@ public static class ServiceCollectionExtensions
             services.AddOptions<ToolSetRegistryOptions>();
 
         services.TryAddSingleton<IToolSetRegistry, ToolSetRegistry>();
+        services.TryAddSingleton<IAgentToolDiscoveryService>(AgentToolDiscoveryService.Instance);
         return services;
     }
 }

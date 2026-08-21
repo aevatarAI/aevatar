@@ -127,10 +127,8 @@ public sealed class ToolProviderHttpClientRegistrationTests
             .BeFalse("AddNyxIdTools must not expose deleted catalog/cache services");
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>()
-            .Should()
-            .ContainSingle(toolSource => toolSource is NyxIdAgentToolSource)
-            .Which;
+        provider.GetServices<IAgentToolSource>().Should().BeEmpty();
+        var source = provider.GetRequiredService<NyxIdAgentToolSource>();
 
         var tools = await source.DiscoverToolsAsync();
         var names = tools.Select(tool => tool.Name).ToList();
@@ -1186,7 +1184,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().ContainSingle(tool => tool is NyxIdCodeExecuteTool);
@@ -1206,7 +1204,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         });
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
 
         var tools = await source.DiscoverToolsAsync();
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
@@ -1237,7 +1235,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         });
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().NotContain(tool => tool is NyxIdSshExecTool);
@@ -1258,7 +1256,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         });
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
 
         var act = () => source.DiscoverToolsAsync();
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -1272,7 +1270,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
         services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         await using var provider = services.BuildServiceProvider();
-        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var source = provider.GetRequiredService<NyxIdExecutionAgentToolSource>();
 
         var tools = await source.DiscoverToolsAsync();
 

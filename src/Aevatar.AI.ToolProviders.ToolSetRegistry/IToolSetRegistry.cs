@@ -55,4 +55,16 @@ public sealed record ToolSetResolveError(
 {
     public const string EmptyNameCode = "tool_set_name_required";
     public const string UnknownNameCode = "unknown_tool_set";
+    public const string ResolutionFailedCode = "tool_set_resolution_failed";
+}
+
+public sealed class ToolSetResolutionException : InvalidOperationException
+{
+    public ToolSetResolutionException(ToolSetResolveError error, Exception? innerException = null)
+        : base(error?.Message, innerException)
+    {
+        Error = error ?? throw new ArgumentNullException(nameof(error));
+    }
+
+    public ToolSetResolveError Error { get; }
 }

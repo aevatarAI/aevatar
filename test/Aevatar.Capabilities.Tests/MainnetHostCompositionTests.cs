@@ -438,16 +438,19 @@ public sealed class MainnetHostCompositionTests
         routePatterns.Should().Contain("/v1/chat/completions");
         routePatterns.Should().NotContain("/v1/chat/completion");
 
-        // Both Lark and Telegram tool providers must register with IAgentToolSource so the
-        // declared agent tools (lark_messages_send / telegram_messages_send / telegram_chats_lookup
-        // / etc.) are actually discoverable at runtime. Without this assertion the host can
-        // silently drop a tool provider after a project-reference change and tests still pass.
+        // Legacy ambient sources stay available only where an older route still consumes them.
+        // Capability-sensitive sources are named-set-only and must never re-enter this global bag.
         var toolSources = app.Services.GetServices<IAgentToolSource>().ToList();
         toolSources.Should().Contain(source => source is LarkAgentToolSource);
         toolSources.Should().Contain(source => source is TelegramAgentToolSource);
         toolSources.Should().Contain(source => source is SkillsAgentToolSource);
-        toolSources.Should().Contain(source => source is OrnnAgentToolSource);
         toolSources.Should().Contain(source => source is HumanInteractionChannelToolSource);
+        toolSources.Should().NotContain(source => source is OrnnSearchAgentToolSource);
+        toolSources.Should().NotContain(source => source is OrnnAuthoringAgentToolSource);
+        toolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
+        toolSources.Should().NotContain(source => source is NyxIdExecutionAgentToolSource);
+        toolSources.Should().NotContain(source => source is ChronoStorageReadAgentToolSource);
+        toolSources.Should().NotContain(source => source is ChronoStorageWriteAgentToolSource);
         toolSources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         app.Services.GetRequiredService<IHumanInteractionPort>()
             .Should()
@@ -747,35 +750,53 @@ public sealed class MainnetHostCompositionTests
             .Value.Defaults.DefaultForwardToModelToolSetName.Should().Be(ToolSetNames.WorkspaceDefault);
 
         registry.GetRegisteredNames().Should().Equal(
+            ToolSetNames.AevatarInvoke,
+            ToolSetNames.AevatarObserve,
             AgentProfilePolicies.NyxIdChatRouteToolSet,
+            ToolSetNames.ChannelLark,
+            ToolSetNames.ChannelTelegram,
+            ToolSetNames.ChatCore,
             ToolSetNames.LarkSelfNotify,
             ToolSetNames.NyxIdAssistantAdmission,
             ToolSetNames.NyxIdConnectedServices,
+            ToolSetNames.NyxIdExecution,
+            ToolSetNames.NyxIdPrivileged,
+            ToolSetNames.ResponsesState,
+            ToolSetNames.SkillAuthoring,
+            ToolSetNames.SkillRuntime,
+            ToolSetNames.StorageRead,
+            ToolSetNames.StorageWrite,
             ToolSetNames.StudioLocal,
+            ToolSetNames.WebRuntime,
             ToolSetNames.WorkspaceDefault);
 
         var workspace = registry.Resolve(ToolSetNames.WorkspaceDefault);
         workspace.IsSuccess.Should().BeTrue(workspace.Error?.Message);
-        workspace.Sources.Should().Contain(source => source is InvokeGAgentToolSource);
-        workspace.Sources.Should().Contain(source => source is InvokeTeamToolSource);
-        workspace.Sources.Should().Contain(source => source is InvokeMemberToolSource);
-        workspace.Sources.Should().Contain(source => source is StartWorkflowToolSource);
-        workspace.Sources.Should().Contain(source => source is ObserveRunToolSource);
-        workspace.Sources.Should().Contain(source => source is ReadWorkflowRunArtifactToolSource);
-        workspace.Sources.Should().Contain(source => source is WorkflowCatalogAgentToolSource);
+        workspace.Sources.Select(static source => source.GetType()).Should().Equal(
+            typeof(AskUserAgentToolSource),
+            typeof(WebAgentToolSource),
+            typeof(SkillsAgentToolSource),
+            typeof(OrnnSearchAgentToolSource),
+            typeof(InvokeGAgentToolSource),
+            typeof(InvokeTeamToolSource),
+            typeof(InvokeMemberToolSource),
+            typeof(StartWorkflowToolSource),
+            typeof(WorkflowCatalogAgentToolSource),
+            typeof(ObserveRunToolSource),
+            typeof(ReadWorkflowRunArtifactToolSource));
         workspace.Sources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
-        workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
-        workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
-        workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
-        workspace.Sources.Should().Contain(source => source is AgentDeliveryTargetToolSource);
-        workspace.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
+        workspace.Sources.Should().NotContain(source => source is ChannelInteractiveReplyToolSource);
+        workspace.Sources.Should().NotContain(source => source is ChannelRegistrationToolSource);
+        workspace.Sources.Should().NotContain(source => source is AgentDeliveryTargetToolSource);
+        workspace.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is NyxIdExecutionAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceInventoryToolSource);
-        workspace.Sources.Should().Contain(source => source is LarkAgentToolSource);
-        workspace.Sources.Should().Contain(source => source is TelegramAgentToolSource);
-        workspace.Sources.Should().Contain(source => source is ChronoStorageAgentToolSource);
-        workspace.Sources.Should().Contain(source => source is WebAgentToolSource);
-        workspace.Sources.Should().Contain(source => source is SkillsAgentToolSource);
-        workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is LarkAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is TelegramAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is ChronoStorageReadAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is ChronoStorageWriteAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is OrnnAuthoringAgentToolSource);
         app.Services.GetServices<IAgentToolSource>()
             .Select(static source => source.GetType())
             .Should()
@@ -870,10 +891,16 @@ public sealed class MainnetHostCompositionTests
         var larkSelfNotify = registry.Resolve(ToolSetNames.LarkSelfNotify);
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
         larkSelfNotify.Sources.Select(static source => source.GetType()).Should()
-            .Equal(workspace.Sources.Select(static source => source.GetType()));
+            .Equal(workspace.Sources.Select(static source => source.GetType()).Concat(
+            [
+                typeof(ChannelInteractiveReplyToolSource),
+                typeof(ChannelRegistrationToolSource),
+                typeof(AgentDeliveryTargetToolSource),
+                typeof(LarkAgentToolSource),
+            ]));
         larkSelfNotify.Sources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         larkSelfNotify.Sources.Should().Contain(source => source is LarkAgentToolSource);
-        larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+        larkSelfNotify.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
 
         var studioLocal = registry.Resolve(ToolSetNames.StudioLocal);
         studioLocal.IsSuccess.Should().BeTrue(studioLocal.Error?.Message);
@@ -919,7 +946,7 @@ public sealed class MainnetHostCompositionTests
             source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source => source is WebAgentToolSource);
-        nyxIdChatProfile.Sources.Should().NotContain(source => source is OrnnAgentToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source => source is OrnnAuthoringAgentToolSource);
         var nyxIdChatWebTools = await nyxIdChatProfile.Sources
             .OfType<WebSearchAgentToolSource>()
             .Single()

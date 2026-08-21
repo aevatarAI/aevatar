@@ -1256,7 +1256,7 @@ public class NyxIdChatGAgentTests
             [new LLMStreamChunk { DeltaContent = "done" }],
         ]);
         var registry = new CountingToolSetRegistry();
-        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        var materializer = new AgentTurnToolCatalogMaterializer(registry, new NoMatchClassifier());
         const string actorId = "nyxid-chat-catalog-bound";
         await AppendCommittedEventsAsync(
             provider,
@@ -1285,7 +1285,7 @@ public class NyxIdChatGAgentTests
         var timeProvider = new ManualDeadlineTimeProvider();
         var blockingSource = new ReleasableBlockingToolSource();
         var registry = new BlockingProfileToolSetRegistry("profile.route", blockingSource);
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry,
             new NoMatchClassifier(),
             timeProvider: timeProvider);
@@ -1343,7 +1343,7 @@ public class NyxIdChatGAgentTests
             new DelegateTool("hidden", _ => "hidden"),
         };
         var fetcher = new CancellationBlockingExactFetcher();
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new StaticProfileToolSetRegistry("profile.route", tools),
             new NoMatchClassifier(),
             fetcher,
@@ -1443,7 +1443,7 @@ public class NyxIdChatGAgentTests
             ExactSkillPublisher,
             ExactSkillSha256,
             "---\nname: skill-alpha\n---\nSelected turn instructions."));
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry,
             new NoMatchClassifier(),
             fetcher);
@@ -1504,7 +1504,7 @@ public class NyxIdChatGAgentTests
             ExactSkillPublisher,
             ExactSkillSha256,
             "---\nname: skill-alpha\n---\nSelected turn instructions."));
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry,
             new NoMatchClassifier(),
             fetcher);
@@ -1575,7 +1575,7 @@ public class NyxIdChatGAgentTests
             new DelegateTool("recovery", _ => "recovered"),
             new DelegateTool("task", _ => "task complete"),
         };
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new StaticProfileToolSetRegistry("profile.route", tools),
             new NoMatchClassifier(),
             new RecordingExactFetcher(ExactRemoteSkillFetchResult.Success(
@@ -1623,7 +1623,7 @@ public class NyxIdChatGAgentTests
     [Fact]
     public async Task HandleChatRequest_BoundTurnWhenMaterializerThrows_ShouldRejectAllTools()
     {
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new ThrowingNameToolSetRegistry(),
             new NoMatchClassifier());
 
@@ -1641,7 +1641,7 @@ public class NyxIdChatGAgentTests
             [new LLMStreamChunk { DeltaContent = "done" }],
         ]);
         var registry = new CountingToolSetRegistry();
-        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        var materializer = new AgentTurnToolCatalogMaterializer(registry, new NoMatchClassifier());
         var agent = CreateAgent(
             provider,
             "nyxid-chat-catalog-unbound",
@@ -1669,7 +1669,7 @@ public class NyxIdChatGAgentTests
             [new LLMStreamChunk { DeltaContent = "done" }],
         ]);
         var registry = new CountingToolSetRegistry();
-        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        var materializer = new AgentTurnToolCatalogMaterializer(registry, new NoMatchClassifier());
         const string actorId = "nyxid-chat-catalog-replay";
         await AppendCommittedEventsAsync(
             provider,
@@ -2637,7 +2637,7 @@ public class NyxIdChatGAgentTests
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer = null,
         RoleChatExecutionOptions? chatExecutionOptions = null,
         bool loopbackHistoryDelivery = false)
     {
@@ -2690,7 +2690,7 @@ public class NyxIdChatGAgentTests
     }
 
     private static async Task AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         string actorId)
     {
         var executeCount = 0;

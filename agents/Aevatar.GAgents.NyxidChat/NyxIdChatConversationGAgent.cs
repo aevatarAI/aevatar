@@ -53,7 +53,7 @@ public sealed class NyxIdChatConversationGAgent
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly TimeProvider _timeProvider;
-    private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
+    private readonly AgentTurnToolCatalogMaterializer? _turnCatalogMaterializer;
     private readonly INyxIdChatTurnIntentClassifier? _turnIntentClassifier;
 
     public NyxIdChatConversationGAgent(
@@ -68,7 +68,7 @@ public sealed class NyxIdChatConversationGAgent
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         TimeProvider timeProvider,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer)
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer)
         : this(actorRuntime, actorDispatchPort, timeProvider, turnCatalogMaterializer, null)
     {
     }
@@ -77,7 +77,7 @@ public sealed class NyxIdChatConversationGAgent
         IActorRuntime actorRuntime,
         IActorDispatchPort actorDispatchPort,
         TimeProvider timeProvider,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         INyxIdChatTurnIntentClassifier? turnIntentClassifier = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));

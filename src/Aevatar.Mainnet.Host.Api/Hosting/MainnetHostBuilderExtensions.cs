@@ -493,33 +493,95 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddToolSetRegistry(options =>
         {
             options.AddToolSet(
-                ToolSetNames.WorkspaceDefault,
+                ToolSetNames.ChatCore,
+                [CreateToolSource<AskUserAgentToolSource>],
+                "Typed user clarification for ordinary chat routes.");
+            options.AddToolSet(
+                ToolSetNames.WebRuntime,
+                [CreateToolSource<WebAgentToolSource>],
+                "Canonical web_search and web_fetch runtime tools.");
+            options.AddToolSet(
+                ToolSetNames.SkillRuntime,
+                [
+                    CreateToolSource<SkillsAgentToolSource>,
+                    CreateToolSource<OrnnSearchAgentToolSource>,
+                ],
+                "Runtime skill discovery and exact skill execution.");
+            options.AddToolSet(
+                ToolSetNames.SkillAuthoring,
+                [CreateToolSource<OrnnAuthoringAgentToolSource>],
+                "Opt-in Ornn skill publishing and update tools.");
+            options.AddToolSet(
+                ToolSetNames.AevatarInvoke,
                 [
                     CreateToolSource<InvokeGAgentToolSource>,
                     CreateToolSource<InvokeTeamToolSource>,
                     CreateToolSource<InvokeMemberToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
+                    CreateToolSource<WorkflowCatalogAgentToolSource>,
+                ],
+                "Typed Aevatar agent, team, member, and workflow invocation tools.");
+            options.AddToolSet(
+                ToolSetNames.AevatarObserve,
+                [
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
-                    CreateToolSource<WorkflowCatalogAgentToolSource>,
-                    CreateToolSource<ResponsesAevatarToolProvider>,
+                ],
+                "Typed run observation and artifact reads.");
+            options.AddToolSet(
+                ToolSetNames.ResponsesState,
+                [CreateToolSource<ResponsesAevatarToolProvider>],
+                "Responses-owned state tools without ingress Web aliases.");
+            options.AddToolSet(
+                ToolSetNames.NyxIdPrivileged,
+                [CreateToolSource<NyxIdAgentToolSource>],
+                "Opt-in NyxID account, service, credential, proxy, approval, node, and admin tools.");
+            options.AddToolSet(
+                ToolSetNames.NyxIdExecution,
+                [CreateToolSource<NyxIdExecutionAgentToolSource>],
+                "Opt-in NyxID SSH, code, and Codex execution tools.");
+            options.AddToolSet(
+                ToolSetNames.StorageRead,
+                [CreateToolSource<ChronoStorageReadAgentToolSource>],
+                "Read-only ChronoStorage browsing tools.");
+            options.AddToolSet(
+                ToolSetNames.StorageWrite,
+                [CreateToolSource<ChronoStorageWriteAgentToolSource>],
+                "Mutating ChronoStorage tools.");
+            options.AddToolSet(
+                ToolSetNames.ChannelLark,
+                [
                     CreateToolSource<ChannelInteractiveReplyToolSource>,
                     CreateToolSource<ChannelRegistrationToolSource>,
                     CreateToolSource<AgentDeliveryTargetToolSource>,
-                    CreateToolSource<NyxIdAgentToolSource>,
                     CreateToolSource<LarkAgentToolSource>,
-                    CreateToolSource<TelegramAgentToolSource>,
-                    CreateToolSource<ChronoStorageAgentToolSource>,
-                    CreateToolSource<WebAgentToolSource>,
-                    CreateToolSource<SkillsAgentToolSource>,
-                    CreateToolSource<OrnnAgentToolSource>,
                 ],
-                "Default /v1/responses workspace tool composition.");
+                "Lark-only channel tools.");
+            options.AddToolSet(
+                ToolSetNames.ChannelTelegram,
+                [
+                    CreateToolSource<ChannelInteractiveReplyToolSource>,
+                    CreateToolSource<ChannelRegistrationToolSource>,
+                    CreateToolSource<AgentDeliveryTargetToolSource>,
+                    CreateToolSource<TelegramAgentToolSource>,
+                ],
+                "Telegram-only channel tools.");
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                [
+                    ToolSetNames.ChatCore,
+                    ToolSetNames.WebRuntime,
+                    ToolSetNames.SkillRuntime,
+                    ToolSetNames.AevatarInvoke,
+                    ToolSetNames.AevatarObserve,
+                ],
+                [],
+                "Public text route ceiling composed from reviewed runtime capabilities.");
             options.AddToolSet(
                 ToolSetNames.LarkSelfNotify,
-                [ToolSetNames.WorkspaceDefault],
+                [ToolSetNames.WorkspaceDefault, ToolSetNames.ChannelLark],
                 [],
-                "Lark route tool composition with the default workspace tools.");
+                "Explicit Lark route composition with the public workspace ceiling.");
             options.AddToolSet(
                 ToolSetNames.StudioLocal,
                 [

@@ -317,7 +317,7 @@ public class WorkflowRoleGAgent(
         ct.ThrowIfCancellationRequested();
         var catalog = await BuildRequestToolCatalogAsync(ToToolScope(continuation), effectiveContext, ct);
         ct.ThrowIfCancellationRequested();
-        var tool = catalog?.RouteOwnedTools.GetValueOrDefault(pending.ToolName)
+        var tool = catalog?.ExactTools.GetValueOrDefault(pending.ToolName)
                    ?? throw new InvalidOperationException(
                        $"Approved workflow tool '{pending.ToolName}' is no longer available.");
         return (tool, effectiveContext);
@@ -425,7 +425,7 @@ public class WorkflowRoleGAgent(
             executionContext,
             ct);
         ct.ThrowIfCancellationRequested();
-        return catalog?.RouteOwnedTools.GetValueOrDefault(intent.ToolName)
+        return catalog?.ExactTools.GetValueOrDefault(intent.ToolName)
                ?? Tools.Get(intent.ToolName);
     }
 
@@ -1377,7 +1377,7 @@ public class WorkflowRoleGAgent(
         var firstIntentFileRef = intent.InputFileRefs.FirstOrDefault();
         var firstToolContextFileRef = toolContext.InputFileRefs.FirstOrDefault();
         Logger.LogWarning(
-            "Workflow LLM request tool catalog resolved. runId={RunId} stepId={StepId} sessionId={SessionId} intentInputFileRefCount={IntentInputFileRefCount} requestInputPartCount={RequestInputPartCount} toolContextInputFileRefCount={ToolContextInputFileRefCount} toolSetRefCount={ToolSetRefCount} routeOwnedToolCount={RouteOwnedToolCount} routeOwnedToolNames={RouteOwnedToolNames} firstIntentFileId={FirstIntentFileId} firstIntentArtifactId={FirstIntentArtifactId} firstIntentMediaType={FirstIntentMediaType} firstToolContextFileId={FirstToolContextFileId} firstToolContextArtifactId={FirstToolContextArtifactId} firstToolContextMediaType={FirstToolContextMediaType}",
+            "Workflow LLM request tool catalog resolved. runId={RunId} stepId={StepId} sessionId={SessionId} intentInputFileRefCount={IntentInputFileRefCount} requestInputPartCount={RequestInputPartCount} toolContextInputFileRefCount={ToolContextInputFileRefCount} toolSetRefCount={ToolSetRefCount} routeOwnedToolCount={ExactToolCount} routeOwnedToolNames={ExactToolNames} firstIntentFileId={FirstIntentFileId} firstIntentArtifactId={FirstIntentArtifactId} firstIntentMediaType={FirstIntentMediaType} firstToolContextFileId={FirstToolContextFileId} firstToolContextArtifactId={FirstToolContextArtifactId} firstToolContextMediaType={FirstToolContextMediaType}",
             intent.RunId ?? string.Empty,
             intent.StepId ?? string.Empty,
             intent.SessionId ?? string.Empty,
@@ -1385,8 +1385,8 @@ public class WorkflowRoleGAgent(
             inputParts.Count,
             toolContext.InputFileRefs.Count,
             intent.AgentToolScope?.ToolSetRefs.Count ?? 0,
-            turnCatalog?.RouteOwnedTools.Count ?? 0,
-            turnCatalog is null ? string.Empty : string.Join(',', turnCatalog.RouteOwnedTools.Keys),
+            turnCatalog?.ExactTools.Count ?? 0,
+            turnCatalog is null ? string.Empty : string.Join(',', turnCatalog.ExactTools.Keys),
             firstIntentFileRef?.FileId ?? string.Empty,
             firstIntentFileRef?.ArtifactId ?? string.Empty,
             firstIntentFileRef?.MediaType ?? string.Empty,
@@ -1394,7 +1394,7 @@ public class WorkflowRoleGAgent(
             firstToolContextFileRef?.ArtifactId ?? string.Empty,
             firstToolContextFileRef?.MediaType ?? string.Empty);
         if (turnCatalog is not null)
-            toolContext = AddRequestToolsToVisibility(toolContext, turnCatalog.RouteOwnedTools.Keys);
+            toolContext = AddRequestToolsToVisibility(toolContext, turnCatalog.ExactTools.Keys);
         var metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
                 new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
@@ -1679,7 +1679,7 @@ public class WorkflowRoleGAgent(
         return false;
     }
 
-    private async Task<AgentProfileTurnCatalog?> BuildRequestToolCatalogAsync(
+    private async Task<AgentTurnToolCatalog?> BuildRequestToolCatalogAsync(
         WorkflowAgentToolScope? scope,
         AgentToolExecutionContext toolContext,
         CancellationToken ct)
@@ -1759,7 +1759,7 @@ public class WorkflowRoleGAgent(
                 ? scope.AllowedToolNames
                 : Tools.GetAll().Select(static tool => tool.Name))
             .Concat(exactTools.Select(static tool => tool.Name));
-        return new AgentProfileTurnCatalog(
+        return new AgentTurnToolCatalog(
             allowedNames,
             profilePromptLayer: null,
             selectedSkillPromptLayer: null,

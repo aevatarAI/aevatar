@@ -17,7 +17,7 @@ using Google.Protobuf;
 
 namespace Aevatar.AI.Tests;
 
-public sealed class AgentProfileTurnCatalogMaterializerTests
+public sealed class AgentTurnToolCatalogMaterializerTests
 {
     private const string SkillGuid = "11111111-1111-1111-1111-111111111111";
     private const string SkillVersion = "1.2";
@@ -134,11 +134,11 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             "nyxid_catalog",
             "nyxid_require_service");
-        catalog.RouteOwnedTools.Keys.Should().BeEquivalentTo(
+        catalog.ExactTools.Keys.Should().BeEquivalentTo(
             "nyxid_catalog",
             "nyxid_require_service");
-        catalog.RouteOwnedTools["nyxid_catalog"].Should().BeSameAs(catalogTool);
-        catalog.RouteOwnedTools["nyxid_require_service"].Should().BeSameAs(requireServiceTool);
+        catalog.ExactTools["nyxid_catalog"].Should().BeSameAs(catalogTool);
+        catalog.ExactTools["nyxid_require_service"].Should().BeSameAs(requireServiceTool);
         catalog.SelectedIntentId.Should().Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
         catalog.CandidateIntentId.Should().Be(NyxIdChatTurnIntentClassifier.ServiceConnectIntentId);
     }
@@ -167,8 +167,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             "nyxid_services",
             "nyxid_request_key_create");
-        catalog.RouteOwnedTools["nyxid_services"].Should().BeSameAs(servicesTool);
-        catalog.RouteOwnedTools["nyxid_request_key_create"].Should().BeSameAs(keyCreateTool);
+        catalog.ExactTools["nyxid_services"].Should().BeSameAs(servicesTool);
+        catalog.ExactTools["nyxid_request_key_create"].Should().BeSameAs(keyCreateTool);
         catalog.SelectedIntentId.Should().Be(NyxIdChatTurnIntentClassifier.KeyCreateIntentId);
     }
 
@@ -220,7 +220,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             "nyxid_services",
             "nyxid_request_key_create");
-        catalog.RouteOwnedTools.Keys.Should().BeEquivalentTo(
+        catalog.ExactTools.Keys.Should().BeEquivalentTo(
             "nyxid_services",
             "nyxid_request_key_create");
         catalog.Diagnostics.Should().NotContain(static diagnostic =>
@@ -251,8 +251,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             "nyxid_api_keys",
             "nyxid_request_key_rotate");
-        catalog.RouteOwnedTools["nyxid_api_keys"].Should().BeSameAs(keysTool);
-        catalog.RouteOwnedTools["nyxid_request_key_rotate"].Should().BeSameAs(keyRotateTool);
+        catalog.ExactTools["nyxid_api_keys"].Should().BeSameAs(keysTool);
+        catalog.ExactTools["nyxid_request_key_rotate"].Should().BeSameAs(keyRotateTool);
         catalog.SelectedIntentId.Should().Be(NyxIdChatTurnIntentClassifier.KeyRotateIntentId);
     }
 
@@ -274,7 +274,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             CancellationToken.None);
 
         catalog.FinalAllowedToolNames.Should().BeEmpty();
-        catalog.RouteOwnedTools.Should().BeEmpty();
+        catalog.ExactTools.Should().BeEmpty();
     }
 
     [Fact]
@@ -304,7 +304,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
-            AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId);
+            AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         classifier.Requests[1].Candidates.Should().ContainSingle().Which.IntentId.Should()
             .Be("intent-alpha");
     }
@@ -412,7 +412,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         profile.MaximumToolPolicy.ToolNames.Add("lark-message-create");
         var classifier = new SequencedClassifier(
             AgentProfileTurnClassificationResult.Matched(
-                AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId),
+                AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
             AgentProfileTurnClassificationResult.Matched("connected-service-write"));
 
         var preparation = await NewMaterializer(
@@ -438,7 +438,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 candidate.IntentId == NyxIdChatTurnIntentClassifier.ServiceConnectIntentId)
             .RoutingDescription.Should().Contain("already-connected exact UserService");
         classifier.Requests[0].Candidates.Should().ContainSingle(candidate =>
-            candidate.IntentId == AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId &&
+            candidate.IntentId == AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId &&
             candidate.RoutingDescription.Contains("already-connected exact UserService"));
         classifier.Requests[1].Candidates.Should().ContainSingle(candidate =>
             candidate.IntentId == "connected-service-write" &&
@@ -464,7 +464,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         }
         var classifier = new SequencedClassifier(
             AgentProfileTurnClassificationResult.Matched(
-                AgentProfileTurnCatalogMaterializer.ProfileTaskRouteIntentId),
+                AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId),
             AgentProfileTurnClassificationResult.Matched("intent-31"));
 
         var preparation = await NewMaterializer(
@@ -619,13 +619,13 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         classifier.CallCount.Should().Be(0);
         fetcher.CallCount.Should().Be(1);
 
-        var invalidCatalog = new AgentProfileTurnCatalog(
+        var invalidCatalog = new AgentTurnToolCatalog(
             ["hidden"],
             profilePromptLayer: null,
             selectedSkillPromptLayer: null,
             selectedIntentId: null,
             candidateIntentId: null);
-        var create = () => AgentProfileTurnCatalogMaterialization.Create(
+        var create = () => AgentTurnToolCatalogMaterialization.Create(
             invalidCatalog,
             preparation.Authority);
         create.Should().Throw<InvalidOperationException>().WithMessage("*ceiling*");
@@ -662,8 +662,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
 
         source.ObservedTokens.Should().Equal("turn-token", "turn-token");
         preparation.Authority.AuthorityCeilingToolNames.Should().Equal("recovery", "task");
-        materialization.Catalog.RouteOwnedTools["recovery"].Should().BeSameAs(tools[0]);
-        materialization.Catalog.RouteOwnedTools["task"].Should().BeSameAs(tools[1]);
+        materialization.Catalog.ExactTools["recovery"].Should().BeSameAs(tools[0]);
+        materialization.Catalog.ExactTools["task"].Should().BeSameAs(tools[1]);
     }
 
     [Fact]
@@ -973,8 +973,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 CancellationToken.None);
 
         catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("task");
-        catalog.RouteOwnedTools.Should().ContainSingle();
-        catalog.RouteOwnedTools["task"].Should().BeSameAs(routeTool);
+        catalog.ExactTools.Should().ContainSingle();
+        catalog.ExactTools["task"].Should().BeSameAs(routeTool);
     }
 
     [Fact]
@@ -1001,7 +1001,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 CancellationToken.None);
 
         catalog.FinalAllowedToolNames.Should().BeEmpty();
-        catalog.RouteOwnedTools.Should().BeEmpty();
+        catalog.ExactTools.Should().BeEmpty();
         catalog.Diagnostics.Should().ContainSingle(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolNameCollision &&
             diagnostic.Detail == "task");
@@ -1068,7 +1068,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "recovery-outside-maximum",
             "task-outside-maximum",
         ]);
-        catalog.RouteOwnedTools.Keys.Should().BeEquivalentTo("recovery-from-set", "task-from-set");
+        catalog.ExactTools.Keys.Should().BeEquivalentTo("recovery-from-set", "task-from-set");
 
         var toolManager = new ToolManager();
         toolManager.Register(registeredTools);
@@ -1156,7 +1156,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
             "nyxop_github_read_alpha",
             "nyxop_github_read_beta");
-        catalog.RouteOwnedTools.Values
+        catalog.ExactTools.Values
             .Cast<IAgentToolOperationAdmissionOwner>()
             .Select(static owner => owner.OperationAdmission.ServiceInstanceId)
             .Should().BeEquivalentTo("us-github-alpha", "us-github-beta");
@@ -2029,9 +2029,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolNameCollision &&
             diagnostic.Detail == "recovery");
-        catalog.Diagnostics.Should().Contain(diagnostic =>
-            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected &&
-            diagnostic.Detail == "task");
+        catalog.Diagnostics.Should().NotContain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected);
         fetcher.CallCount.Should().Be(0);
     }
 
@@ -2115,7 +2114,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 CancellationToken.None);
 
         catalog.FinalAllowedToolNames.Should().BeEmpty();
-        catalog.RouteOwnedTools.Should().BeEmpty();
+        catalog.ExactTools.Should().BeEmpty();
         catalog.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected &&
             diagnostic.Detail == "task");
@@ -2152,7 +2151,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
 
         catalog.FinalAllowedToolNames.Should()
             .BeEquivalentTo("nyxid_require_service", "nyxid_service_inventory");
-        catalog.RouteOwnedTools.Keys.Should()
+        catalog.ExactTools.Keys.Should()
             .BeEquivalentTo("nyxid_require_service", "nyxid_service_inventory");
     }
 
@@ -2200,22 +2199,22 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 CreateReadAdmission("us-beta", "service-beta", "endpoint-read")),
             new TestTool("global-fallback"),
         ];
-        var catalog = new AgentProfileTurnCatalog(
+        var catalog = new AgentTurnToolCatalog(
             tools.Select(static tool => tool.Name),
             profilePromptLayer: null,
             selectedSkillPromptLayer: null,
             selectedIntentId: "general_nyxid_assistant",
             candidateIntentId: "general_nyxid_assistant",
-            routeOwnedTools: tools);
+            exactTools: tools);
 
-        var narrowed = AgentProfileTurnCatalogMaterializer.NarrowToVerifiedUserService(
+        var narrowed = AgentTurnToolCatalogMaterializer.NarrowToVerifiedUserService(
             catalog,
             VerifiedAuthorization("us-alpha", "service-alpha"));
 
         narrowed.FinalAllowedToolNames.Should().BeEquivalentTo(
             "operation-alpha-read",
             "operation-alpha-list");
-        narrowed.RouteOwnedTools.Keys.Should().BeEquivalentTo(
+        narrowed.ExactTools.Keys.Should().BeEquivalentTo(
             "operation-alpha-read",
             "operation-alpha-list");
         narrowed.FinalAllowedToolNames.Should().NotContain("global-fallback");
@@ -2235,21 +2234,21 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 CreateReadAdmission("us-alpha", "service-alpha", "endpoint-read")),
             new TestTool("global-fallback"),
         ];
-        var catalog = new AgentProfileTurnCatalog(
+        var catalog = new AgentTurnToolCatalog(
             tools.Select(static tool => tool.Name),
             profilePromptLayer: null,
             selectedSkillPromptLayer: null,
             selectedIntentId: "general_nyxid_assistant",
             candidateIntentId: "general_nyxid_assistant",
-            routeOwnedTools: tools);
+            exactTools: tools);
 
-        var narrowed = AgentProfileTurnCatalogMaterializer.NarrowToVerifiedUserService(
+        var narrowed = AgentTurnToolCatalogMaterializer.NarrowToVerifiedUserService(
             catalog,
             VerifiedAuthorization(userServiceId, serviceSlug));
 
         narrowed.FinalAllowedToolNames.Should().BeEmpty();
         narrowed.ToolVisibility.IsRestricted.Should().BeTrue();
-        narrowed.RouteOwnedTools.Should().BeEmpty();
+        narrowed.ExactTools.Should().BeEmpty();
     }
 
     private static NyxIdChatVerifiedAuthorizationContinuation VerifiedAuthorization(
@@ -2331,7 +2330,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         AllowedRisks = { allowedRisks },
     };
 
-    private static AgentProfileTurnCatalogMaterializer NewMaterializer(
+    private static AgentTurnToolCatalogMaterializer NewMaterializer(
         IToolSetRegistry registry,
         IAgentProfileTurnClassifier classifier,
         IExactRemoteSkillFetcher? fetcher,
@@ -2646,10 +2645,10 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 }
 
-internal static class AgentProfileTurnCatalogMaterializerTestExtensions
+internal static class AgentTurnToolCatalogMaterializerTestExtensions
 {
-    public static async Task<AgentProfileTurnCatalog> MaterializeAsync(
-        this AgentProfileTurnCatalogMaterializer materializer,
+    public static async Task<AgentTurnToolCatalog> MaterializeAsync(
+        this AgentTurnToolCatalogMaterializer materializer,
         AgentProfileSnapshot profile,
         string userMessage,
         string? accessToken,
@@ -2668,9 +2667,9 @@ internal static class AgentProfileTurnCatalogMaterializerTestExtensions
     }
 
     public static async Task<(
-        AgentProfileTurnCatalog Catalog,
+        AgentTurnToolCatalog Catalog,
         AgentProfileTurnAuthorityPreparation Preparation)> MaterializeWithPreparationAsync(
-        this AgentProfileTurnCatalogMaterializer materializer,
+        this AgentTurnToolCatalogMaterializer materializer,
         AgentProfileSnapshot profile,
         string userMessage,
         string? accessToken,

@@ -20,7 +20,7 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     public async Task ToolSource_WithoutCodePort_DoesNotExposeCodeExecute()
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
-        var source = new NyxIdAgentToolSource(
+        var source = new NyxIdExecutionAgentToolSource(
             options,
             new NyxIdApiClient(options, new HttpClient()));
 
@@ -36,7 +36,7 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
         var outcome = CodeExecutionOutcome.Succeeded(
             new CodeExecutionResult(string.Empty, string.Empty, 0),
             ResolvedRoute);
-        var source = new NyxIdAgentToolSource(
+        var source = new NyxIdExecutionAgentToolSource(
             options,
             new NyxIdApiClient(options, new HttpClient()),
             codeExecutionPorts: [

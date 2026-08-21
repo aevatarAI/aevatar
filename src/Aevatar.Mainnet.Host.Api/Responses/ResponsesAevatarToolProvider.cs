@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -41,26 +40,11 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
         CancellationToken ct = default) =>
         ValueTask.FromResult<IReadOnlyList<IAgentTool>>([]);
 
-    public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
-    {
-        var context = new ResponsesToolProviderContext(
-            AgentToolExecutionContext.Empty with
-            {
-                Channel = new AgentToolChannelContext(
-                    LlmSessionOriginKind.ApiKey.ToString(),
-                    null,
-                    null,
-                    null,
-                    null),
-            });
-        var tools = new List<IAgentTool>();
-        tools.AddRange(await GetSubstituteToolsAsync(context, ct).ConfigureAwait(false));
-        tools.AddRange(await GetAdditiveToolsAsync(context, ct).ConfigureAwait(false));
-        return tools
-            .GroupBy(static tool => tool.Name, StringComparer.Ordinal)
-            .Select(static group => group.First())
-            .ToArray();
-    }
+    // Responses aliases are an ingress-boundary substitute contract. When this provider is used
+    // as an internal route source, expose only Responses-owned state; WebFetch/WebSearch aliases
+    // must never become additive route tools alongside canonical web_fetch/web_search.
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<IAgentTool>>([new TodoWriteTool(_commandPort)]);
 
     private abstract class ResponsesStateTool : IAgentTool
     {
