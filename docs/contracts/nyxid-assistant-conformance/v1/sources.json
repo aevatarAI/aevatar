@@ -2,8 +2,8 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "1458d15691b3e19293905d8868722c89e8272c62",
-    "contract_files_sha256": "b364a580c99dfc65329471c312b1cb5e3f0ff2d0f009097c14c8eaa99b13c7d5",
+    "revision": "1d8a531ced051675400ea891e0c3ddccc299f68f",
+    "contract_files_sha256": "92f31b6fe6531ea2807421e7dac56e5bfb6fe740dfdf12aed9e21c3156d1bc75",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "23fd2cf48541c4b8da3fa1ef07277a7700c8478f9c638be8221465bf877fbb31",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "99605fdacc1e15b369d53b8953620b122dbba19d8b386486fd1892a2537ff82b",
@@ -12,7 +12,7 @@
       "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_recovery_secret.proto": "07dbc449a732df6c7a6d0a97054ddbe35a517f4af4c5670b05ed0bea0bf2011a",
       "agents/Aevatar.GAgents.NyxidChat/protos/nyxid_chat_task.proto": "9bf8d08a1658d0d89aa677a91666ba5cf3c27ecbba70e49600473d3377925322",
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "884aca09774e773e68154c923fec8078610b2cf8e97f581fedc36e10451ccec3",
-      "src/Aevatar.AI.Abstractions/ai_messages.proto": "135ad581f478ccffe714b386deda8d07efda167bcdbf92d5b8c84a31ffe3d459",
+      "src/Aevatar.AI.Abstractions/ai_messages.proto": "188cc029a530e1c7cf76cc926cd7a5d3cc15f3aba5461273157b0a5669f44c3b",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "9aaf3d1e8f071bdf2bc81e3a82f861440dade2a02d040c906477065cc147082e",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "1b033df9cb55c741e9b52054cbd4a91067f03c8c3797bd076a7e3d6133eb0fcb",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "2c4f2cda99154f2e667c6cfd291497e697ef11df17f081f96ec70070a8af8b8c",
