@@ -1,4 +1,8 @@
-import { observeDraftMaterialization } from './useDraftMaterialization';
+import { studioApi } from '@/shared/studio/api';
+import {
+  observeDraftMaterialization,
+  readWorkflowDraftAfterList,
+} from './useDraftMaterialization';
 
 describe('observeDraftMaterialization', () => {
   it('treats bounded 404 as projection delay and keeps observing the exact receipt id', async () => {
@@ -71,6 +75,53 @@ describe('observeDraftMaterialization', () => {
       workflow: { workflowId: 'wf-alpha', name: 'New name' },
     });
     expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for the draft list before requesting the draft document', async () => {
+    const listWorkflowDrafts = jest
+      .spyOn(studioApi, 'listWorkflowDrafts')
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          workflowId: 'wf-template',
+          name: 'Template workflow',
+          description: '',
+          fileName: 'template-workflow.yaml',
+          filePath: 'scope/template-workflow.yaml',
+          directoryId: 'scope:scope-1',
+          directoryLabel: 'scope-1',
+          stepCount: 1,
+          hasLayout: false,
+          updatedAtUtc: '2026-08-20T00:00:00.000Z',
+        },
+      ]);
+    const getWorkflowDraftFile = jest
+      .spyOn(studioApi, 'getWorkflowDraftFile')
+      .mockResolvedValue({
+        workflowId: 'wf-template',
+        name: 'Template workflow',
+        fileName: 'template-workflow.yaml',
+        filePath: 'scope/template-workflow.yaml',
+        directoryId: 'scope:scope-1',
+        directoryLabel: 'scope-1',
+        yaml: 'name: template-workflow\n',
+        layout: null,
+        updatedAtUtc: '2026-08-20T00:00:00.000Z',
+        findings: [],
+      });
+
+    await expect(
+      readWorkflowDraftAfterList('wf-template', 'scope-1'),
+    ).resolves.toBeNull();
+    await expect(
+      readWorkflowDraftAfterList('wf-template', 'scope-1'),
+    ).resolves.toMatchObject({ workflowId: 'wf-template' });
+
+    expect(listWorkflowDrafts).toHaveBeenCalledWith('scope-1');
+    expect(getWorkflowDraftFile).toHaveBeenCalledWith('wf-template', 'scope-1');
+
+    listWorkflowDrafts.mockRestore();
+    getWorkflowDraftFile.mockRestore();
   });
 
   it('surfaces non-404 failures immediately', async () => {

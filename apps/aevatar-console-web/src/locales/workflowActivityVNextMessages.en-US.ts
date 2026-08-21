@@ -312,7 +312,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.chooserAria': 'Workflow creation methods',
   'workflowActivityVNext.new.createBlank': 'Create and open',
   'workflowActivityVNext.new.createFailed': "Workflow couldn't be created",
-  'workflowActivityVNext.new.createTemplate': 'Use template and open',
   'workflowActivityVNext.new.creatingDescription':
     'This usually takes only a moment.',
   'workflowActivityVNext.new.description': 'Choose how you want to start.',
@@ -347,12 +346,88 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.reviewAccess': 'Review access',
   'workflowActivityVNext.new.saveTargetRequired':
     'Choose an available save location before creating the workflow.',
-  'workflowActivityVNext.new.template': 'Template',
-  'workflowActivityVNext.new.templateDescription.incidentTriage':
-    'Classify an incident, prepare a response, and request human approval.',
-  'workflowActivityVNext.new.templateCopyName.incidentTriage':
-    'Incident triage copy',
-  'workflowActivityVNext.new.templateName.incidentTriage': 'Incident triage',
+  'workflowActivityVNext.new.templateBrowser.title': 'Start from a template',
+  'workflowActivityVNext.new.templateBrowser.description':
+    'Browse public templates, inspect details, or create a draft directly.',
+  'workflowActivityVNext.new.templateBrowser.changeMethod': 'Change method',
+  'workflowActivityVNext.new.templateBrowser.search': 'Search templates',
+  'workflowActivityVNext.new.templateBrowser.sort': 'Sort templates',
+  'workflowActivityVNext.new.templateBrowser.sortBy': 'Sort by',
+  'workflowActivityVNext.new.templateBrowser.sort.recent':
+    'Last updated: newest first',
+  'workflowActivityVNext.new.templateBrowser.sort.nameAsc': 'Name: A to Z',
+  'workflowActivityVNext.new.templateBrowser.sort.nameDesc': 'Name: Z to A',
+  'workflowActivityVNext.new.templateBrowser.sort.oldest':
+    'Last updated: oldest first',
+  'workflowActivityVNext.new.templateBrowser.loading': 'Loading templates…',
+  'workflowActivityVNext.new.templateBrowser.loadFailed':
+    'Templates could not be loaded',
+  'workflowActivityVNext.new.templateBrowser.unavailable':
+    'Templates are not available in this environment.',
+  'workflowActivityVNext.new.templateBrowser.unavailableDescription':
+    'The template catalog is not available in this environment yet.',
+  'workflowActivityVNext.new.templateBrowser.retry': 'Retry',
+  'workflowActivityVNext.new.templateBrowser.signIn':
+    'Sign in to browse public workflow templates.',
+  'workflowActivityVNext.new.templateBrowser.noSearchResults':
+    'No templates matched your search.',
+  'workflowActivityVNext.new.templateBrowser.noTemplates':
+    'No public workflow templates are available yet.',
+  'workflowActivityVNext.new.templateBrowser.view': 'View',
+  'workflowActivityVNext.new.templateBrowser.viewNamed': 'View {name}',
+  'workflowActivityVNext.new.templateBrowser.use': 'Use template',
+  'workflowActivityVNext.new.templateBrowser.useNamed': 'Use template {name}',
+  'workflowActivityVNext.new.templateBrowser.catalogue':
+    'Workflow template catalogue',
+  'workflowActivityVNext.new.templateBrowser.template': 'Template',
+  'workflowActivityVNext.new.templateBrowser.reads': 'Reads',
+  'workflowActivityVNext.new.templateBrowser.connection': 'Connection',
+  'workflowActivityVNext.new.templateBrowser.does': 'Does',
+  'workflowActivityVNext.new.templateBrowser.updatedColumn': 'Updated',
+  'workflowActivityVNext.new.templateBrowser.actions': 'Actions',
+  'workflowActivityVNext.new.templateBrowser.workflowInputs': 'Workflow inputs',
+  'workflowActivityVNext.new.templateBrowser.none': 'None',
+  'workflowActivityVNext.new.templateBrowser.llmProvider': 'LLM provider',
+  'workflowActivityVNext.new.templateBrowser.runsSteps': 'Runs {count} {unit}',
+  'workflowActivityVNext.new.templateBrowser.step': 'step',
+  'workflowActivityVNext.new.templateBrowser.steps': 'steps',
+  'workflowActivityVNext.new.templateBrowser.fallbackDescription':
+    'A ready-made workflow for your workspace.',
+  'workflowActivityVNext.new.templateBrowser.contract': '{name} contract',
+  'workflowActivityVNext.new.templateBrowser.detailLoading':
+    'Loading template details…',
+  'workflowActivityVNext.new.templateBrowser.detailFailed':
+    'Template details could not be loaded',
+  'workflowActivityVNext.new.templateBrowser.noLongerAvailable':
+    'This template is no longer available.',
+  'workflowActivityVNext.new.templateBrowser.preview': 'Workflow preview',
+  'workflowActivityVNext.new.templateBrowser.previewDescription':
+    '{count} {unit} and the paths between them.',
+  'workflowActivityVNext.new.templateBrowser.noPreviewSteps':
+    'This template does not expose any workflow steps.',
+  'workflowActivityVNext.new.templateBrowser.source':
+    'Source: public workflow template · version {version}',
+  'workflowActivityVNext.new.templateBrowser.cancel': 'Cancel',
+  'workflowActivityVNext.new.templateBrowser.useThis': 'Use this template',
+  'workflowActivityVNext.new.templateBrowser.templateOutOfDate':
+    'Template is out of date',
+  'workflowActivityVNext.new.templateBrowser.templateOutOfDateDescription':
+    'This template changed while you were viewing it. Refresh the catalog and try again.',
+  'workflowActivityVNext.new.templateBrowser.refreshCatalog': 'Refresh catalog',
+  'workflowActivityVNext.new.templateBrowser.creationFailed':
+    'Template creation failed',
+  'workflowActivityVNext.new.templateBrowser.couldNotUse':
+    'Workflow template could not be used',
+  'workflowActivityVNext.new.templateBrowser.creating': 'Creating workflow…',
+  'workflowActivityVNext.new.templateBrowser.projectionDelayed':
+    'This is taking longer than expected',
+  'workflowActivityVNext.new.templateBrowser.observationFailed':
+    "Workflow couldn't be opened",
+  'workflowActivityVNext.new.templateBrowser.safeToRetry':
+    'Your work is safe. Try again to finish opening the workflow.',
+  'workflowActivityVNext.new.templateBrowser.creatingDescription':
+    'This usually takes only a moment.',
+  'workflowActivityVNext.new.templateBrowser.tryAgain': 'Try again',
   'workflowActivityVNext.new.title': 'New workflow',
   'workflowActivityVNext.new.validateCreate': 'Import and open',
   'workflowActivityVNext.new.workspaceUnavailable':

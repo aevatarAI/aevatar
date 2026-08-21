@@ -205,6 +205,7 @@ describe('console routes', () => {
       namespace,
       `${namespace}/workflows`,
       `${namespace}/workflows/new`,
+      `${namespace}/workflows/new/templates`,
       `${namespace}/workflows/:workflowId`,
       `${namespace}/activity`,
       `${namespace}/activity/:runId`,
@@ -221,7 +222,15 @@ describe('console routes', () => {
     expect(findRoute(routes, `${namespace}/workflows`).component).toBe(
       './workflow-activity-vnext',
     );
+    expect(
+      findRoute(routes, `${namespace}/workflows/new/templates`).component,
+    ).toBe('./workflow-activity-vnext');
     expect(findRouteIndex(routes, `${namespace}/workflows/new`)).toBeLessThan(
+      findRouteIndex(routes, `${namespace}/workflows/:workflowId`),
+    );
+    expect(
+      findRouteIndex(routes, `${namespace}/workflows/new/templates`),
+    ).toBeLessThan(
       findRouteIndex(routes, `${namespace}/workflows/:workflowId`),
     );
 

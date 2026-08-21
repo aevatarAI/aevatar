@@ -3136,6 +3136,24 @@ export const studioApi = {
     });
   },
 
+  instantiateWorkflowTemplate(input: {
+    scopeId: string;
+    templateId: string;
+    expectedAuthorityStateVersion: number;
+  }): Promise<StudioWorkflowDraftCreateAcceptedReceipt> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/workflow-templates/${encodeURIComponent(input.templateId.trim())}:instantiate`,
+      decodeStudioWorkflowDraftCreateAcceptedReceipt,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          expectedAuthorityStateVersion: input.expectedAuthorityStateVersion,
+        }),
+      },
+    );
+  },
+
   updateWorkflowDraft(
     input: StudioSaveWorkflowInput & { workflowId: string },
   ): Promise<StudioWorkflowDraft> {
