@@ -58,7 +58,7 @@ public sealed class CodeExecuteWorkflowAuditTests
         durablePort.SubmitCallCount.Should().Be(1);
         durablePort.StatusCallCount.Should().Be(1);
         durablePort.ResultCallCount.Should().Be(1);
-        durablePort.SubmitRequest!.Execution.Caller.ExecutionNyxIdAccessToken
+        durablePort.SubmitRequest!.Execution.Caller.ExecutionNyxIdCredential
             .Should().Be("source-readable-bearer");
         durablePort.SubmitRequest.Execution.Caller.SourceReadableNyxIdAccessToken
             .Should().Be("source-readable-bearer");

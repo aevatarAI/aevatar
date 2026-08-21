@@ -741,7 +741,7 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     }
 
     [Fact]
-    public async Task Ingress_WithExactUnattendedBinding_ShouldAttachAuthorityOnlyCredential()
+    public async Task Ingress_WithExactUnattendedBinding_ShouldAttachAgentKeyCredential()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
         var plan = DurableWritePlan();
@@ -799,7 +799,7 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         command.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
         command.CallerCredential.Should().NotBeNull();
         command.CallerCredential!.BearerToken.Should().BeNull();
-        command.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        command.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
         command.CallerCredential.NyxIdAuthority!.BindingId.Should().Be("bnd-owner-alpha");
         command.CallerCredential.UnattendedEffectAuthorization!.AuthorizationDigest
             .Should().Be(authorization.AuthorizationDigest);

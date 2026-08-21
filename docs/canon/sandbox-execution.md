@@ -49,38 +49,50 @@ canonical `catalog_service_id` and cannot shadow the platform route. The resolve
 UserService ID is sent through `_nyxid_via`; there is no slug fallback or first-candidate
 selection.
 
-### Accepted execution credential
+### Accepted execution credentials
 
-The code runtime authenticates the request itself; the route only decides which credential
-reaches it. NyxID delivers the two credentials through different headers and keeps their settings
-independent, so the accepted route policy is a disjunction, not a matched pair:
+The shared `chrono-sandbox` route must deliver two credentials with different typed purposes:
 
-- `forward_access_token=true` re-sends the caller's own bearer as `Authorization`. The runtime
-  introspects it and requires the caller to hold the `sandbox:execute` permission. This is the
-  authoritative credential whenever it is present.
-- Otherwise `inject_delegation_token=true` with `sandbox:execute` among the whitespace-separated
-  `delegation_token_scope` values. NyxID mints a short-lived delegated token in
-  `X-NyxID-Delegation-Token`, which the runtime accepts only as the fallback when no bearer was
-  forwarded.
+- `forward_access_token=true` forwards the caller credential as `Authorization`. Channel,
+  webhook, and scheduled workflow paths must resolve their Vault-backed NyxID Agent Key at the
+  outbound call and keep its credential kind as `AgentKey`; they must not relabel it as
+  `ProxyDelegation`. A direct human invocation may still use a source-readable bearer.
+- `inject_delegation_token=true` and a whitespace-separated `delegation_token_scope` containing
+  both `proxy:*` and `sandbox:execute` makes NyxID add the short-lived
+  `X-NyxID-Delegation-Token`. The `sandbox:execute` grant authenticates Chrono's exact execution
+  request, while `proxy:*` preserves the managed Codex contract on the same route.
 
-A route satisfying neither is rejected as `CODE_EXECUTION_ROUTE_POLICY_MISMATCH`, and the blocker
-names the unsatisfied setting so the owner can repair the service without reading logs. Admission
-reads scope membership, never an exact scope set: unrelated delegated scopes on the same route do
-not affect code execution and must not block it. `delegation_token_scope` is a NyxID delegation
-scope and is a different namespace from the runtime's `sandbox:execute` RBAC permission, which
-Aevatar cannot observe — a route can therefore pass admission and still be refused by the runtime
-for a caller who lacks that permission.
+This policy is a conjunction. A route missing any setting or required scope is rejected as
+`CODE_EXECUTION_ROUTE_POLICY_MISMATCH`, and the blocker names the unsatisfied contract. Admission
+checks scope membership rather than exact string order and preserves unrelated existing scopes.
+
+For an exact forwarded `nyxid_ag_` Agent Key, Chrono validates the separate delegation token for
+the request and injects the Agent Key into the isolated program as `NYXID_API_KEY`, together with
+`NYXID_BASE_URL`. The short token is not the program's NyxID credential and is not subject to a
+five-minute mid-run cliff. An ordinary bearer remains authoritative for direct-human execution and
+is never injected into program environment. Caller-authored environment values cannot override
+either server-owned NyxID variable.
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    A["Aevatar late-resolves typed AgentKey"] -->|"Authorization"| N["NyxID exact chrono-sandbox route"]
+    N -->|"forwarded Agent Key + short delegation"| C["Chrono request boundary"]
+    C -->|"verify sandbox:execute delegation"| X["Exact /execute or /executions"]
+    X -->|"native env: NYXID_API_KEY + NYXID_BASE_URL"| S["Isolated program"]
+    S -->|"long-running caller-scoped NyxID calls"| N
+```
 
 Fresh workflow command admission may converge this mismatch without a platform administrator.
 `code_execute` owns the typed route contract above; it does not own a second route-management
 lifecycle. When authenticated ingress supplies a verified direct human NyxID access token and
 there is exactly one active, catalog-backed candidate that token may write, the shared route
-convergence boundary updates only that exact UserService to `forward_access_token=false`,
+convergence boundary updates only that exact UserService to `forward_access_token=true`,
 `inject_delegation_token=true`, preserves the observed unique delegation scopes, and appends
-`sandbox:execute`. Write authority means either a caller-owned personal route or an organization
+`proxy:*` plus `sandbox:execute`. Write authority means either a caller-owned personal route or an organization
 route for which the caller is an organization admin. It then rereads NyxID and admits only when
 the exact route identity, catalog identity, credential policy, and preserved scopes verify. An
-already accepted forwarding or delegated route remains unchanged.
+already compliant route remains unchanged.
 
 An allowed organization member/viewer may use an already compatible route but may not change it;
 a mismatch remains a typed write-authority blocker. Readiness queries and runtime never write.
@@ -94,17 +106,15 @@ closed on final drift, and does not claim that a concurrent scope edit cannot be
 Managed `codex_exec` selects the same exact `chrono-sandbox` UserService ID but calls
 `/codex/execute` with its own request credential and eligibility contract. The UserService route
 configuration is shared: managed execution requires delegation containing `proxy:*`, while
-`code_execute` convergence preserves existing scopes and appends `sandbox:execute`. Neither
+`code_execute` convergence preserves existing scopes and ensures both `proxy:*` and
+`sandbox:execute`. Neither
 capability may replace the other's contract or fall back to the other's runtime path.
 
 Interactive NyxID ingress may authorize that admission read with either a source-readable user
 bearer or the short-lived proxy delegation token injected for Aevatar when it carries NyxID's
-`account:read` grant. The delegation token remains the execution credential for the exact proxy
-route. It is presented to NyxID as the request bearer, so on a route that forwards access tokens
-NyxID re-sends it to the runtime, which introspects it as the caller. Reason about its blast radius
-as a short-lived caller credential the runtime sees, not as one that stops at NyxID. This
-code-execution admission rule is not shared by connected-service discovery, ordinary `nyxid_proxy`,
-LLM, or managed Codex paths.
+`account:read` grant. This code-execution admission rule is not shared by connected-service
+discovery, ordinary `nyxid_proxy`, LLM, or managed Codex paths. Unattended channel, webhook, and
+scheduled paths do not substitute such a short token for their Vault-backed Agent Key.
 
 For workflows, `code_execute` is compiled as an external capability with no caller-authored route
 selector. Fresh draft-run, save, and bind command admission performs the bounded exact-route
@@ -120,10 +130,10 @@ then performs the final live credential and allowlist check on that exact proxy 
 response or an inventory read that succeeds and explicitly denies the route still fails closed. With
 delegation-only interactive ingress, runtime does not read inventory again and may call only the
 exact UserService ID sealed in the valid admission proof. Scheduled runtime follows the same
-exact-proof rule:
-authority-refreshed tokens, short-lived tokens projected through a scheduled durable handle, and
-restricted scheduled-invocation Agent Keys all retain the `ProxyDelegation` kind. They are execution
-credentials, not source-readable inventory credentials, so none may auto-resolve a slug.
+exact-proof rule. Authority-refreshed tokens and short-lived tokens projected through a scheduled
+durable handle retain the `ProxyDelegation` kind; restricted scheduled-invocation, channel, and
+webhook Agent Keys retain the distinct `AgentKey` kind. These are execution credentials, not
+source-readable inventory credentials, so none may auto-resolve a slug.
 NyxID then enforces the exact route's slug constraint and credential allowlist on the proxy
 request. Without either a source-readable credential or an exact admitted route, execution fails
 before network access. Existing v4 plans did not contain code-execution proofs; they remain
@@ -145,8 +155,9 @@ The workflow lifecycle is actor-owned:
 2. Before registering any callback, the workflow actor persists the receipt, provider operation ID,
    exact route identity, ETag, expiry, retry time, callback identity, and a verified protected-material
    reference plus digest. Source, idempotency key, file references, and external invocation details
-   stay in the runtime secret store rather than actor state. Bearer and delegation tokens are never
-   persisted.
+   stay in the runtime secret store rather than actor state. Raw credentials never enter actor state,
+   events, projections, logs, or API responses; Agent Keys remain Vault-backed and are resolved again
+   at outbound execution.
 3. A typed durable self-callback performs one bounded status request. It sends `If-None-Match` when
    an ETag is known, saves the next callback identity before scheduling it, and never polls with
    `Task.Delay` inside an actor turn.

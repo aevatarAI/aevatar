@@ -527,11 +527,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                     ? source.CallerDurableCredential.Clone()
                     : null,
                 NyxIdAuthority = authority,
-                Kind = source.CallerDurableCredential.SourceKind is
-                       DurableCallerCredentialSourceKind.ScheduledDispatch or
-                       DurableCallerCredentialSourceKind.ChannelRegistration
-                    ? NyxIdCallerCredentialKind.ProxyDelegation
-                    : NyxIdCallerCredentialKind.Unspecified,
+                Kind = ResolveDurableCredentialKind(source.CallerDurableCredential),
             };
         }
 
@@ -602,6 +598,15 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                         sourceReadable.NormalizedBearerToken ?? string.Empty;
                 }
                 break;
+            case AgentToolNyxIdCredentialKindPayload.AgentKey:
+                if (sourceReadable.IsValid)
+                {
+                    throw new ArgumentException(
+                        "An Agent Key cannot be combined with a supplemental source-readable caller credential.",
+                        nameof(sourceReadableUserBearerToken));
+                }
+                credential.Kind = NyxIdCallerCredentialKind.AgentKey;
+                break;
             case AgentToolNyxIdCredentialKindPayload.Unspecified:
                 if (sourceReadable.IsValid)
                 {
@@ -630,6 +635,19 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 
     private static bool HasDurableCallerCredential(DurableCallerCredentialRef? reference) =>
         reference != null && !string.IsNullOrWhiteSpace(reference.Ref);
+
+    private static NyxIdCallerCredentialKind ResolveDurableCredentialKind(
+        DurableCallerCredentialRef credential)
+    {
+        if (DurableCallerAgentKeyContract.Matches(credential))
+        {
+            return NyxIdCallerCredentialKind.AgentKey;
+        }
+
+        return credential.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch
+            ? NyxIdCallerCredentialKind.ProxyDelegation
+            : NyxIdCallerCredentialKind.Unspecified;
+    }
 
     private static bool HasNyxIdBearerMaterial(AgentToolCredentialsPayload? credentials) =>
         !string.IsNullOrWhiteSpace(credentials?.NyxIdAccessToken) ||

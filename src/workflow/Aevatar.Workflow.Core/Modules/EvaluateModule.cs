@@ -122,7 +122,7 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
                 ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
             };
-            WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyChannelAgentKeyOrSenderNyxIdAccessToken(
+            WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyDurableAgentKeyOrSenderNyxIdAccessToken(
                 ctx,
                 intent);
             CopyParametersToIntent(request.Parameters, intent);

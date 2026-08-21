@@ -3731,6 +3731,8 @@ const response = await fetch("{{invokePath}}", {
                 AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
             Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.ProxyDelegation =>
                 AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.AgentKey =>
+                AgentToolNyxIdCredentialKindPayload.AgentKey,
             _ => AgentToolNyxIdCredentialKindPayload.Unspecified,
         };
 

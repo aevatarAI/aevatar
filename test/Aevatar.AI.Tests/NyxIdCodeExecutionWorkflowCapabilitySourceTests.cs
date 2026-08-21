@@ -86,14 +86,13 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
     }
 
     [Theory]
-    // A forwarded caller bearer is what the platform code runtime authenticates, so the
-    // delegation policy alongside it never constrains admission.
-    [InlineData(true, "llm:proxy")]
-    [InlineData(false, "llm:proxy")]
-    [InlineData(true, "proxy:*")]
-    [InlineData(true, "proxy:* sandbox:execute")]
-    [InlineData(false, "sandbox:execute")]
-    public async Task InspectAsync_RouteForwardingCallerBearer_IsAdmittedRegardlessOfDelegation(
+    [InlineData(false, true, "proxy:* sandbox:execute")]
+    [InlineData(true, false, "proxy:* sandbox:execute")]
+    [InlineData(true, true, "proxy:*")]
+    [InlineData(true, true, "sandbox:execute")]
+    [InlineData(true, true, "llm:proxy sandbox:execute")]
+    public async Task InspectAsync_RouteMissingEitherCredentialContract_IsRejected(
+        bool forwardAccessToken,
         bool injectDelegationToken,
         string scope)
     {
@@ -103,15 +102,16 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
             allowed: true,
             injectDelegationToken: injectDelegationToken,
             scope: scope,
-            forwardAccessToken: true)));
+            forwardAccessToken: forwardAccessToken)));
 
         var readiness = await source.InspectAsync(
             Access(),
             Selector(),
             ExternalCapabilityExecutionMode.Interactive);
 
-        readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
-        readiness.SelectedCapability.CodeExecution.UserServiceId.Should().Be("us-code-alpha");
+        readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.ContractDrift);
+        readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("CODE_EXECUTION_ROUTE_POLICY_MISMATCH");
     }
 
     [Fact]
@@ -139,6 +139,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
         blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_POLICY_MISMATCH");
         blocker.SafeMessage.Should().Contain("forward_access_token")
             .And.Contain("inject_delegation_token")
+            .And.Contain("proxy:*")
             .And.Contain("sandbox:execute");
         var remediation = readiness.Remediations.Should().ContainSingle().Subject;
         remediation.ActionKind.Should()
@@ -148,12 +149,14 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
     }
 
     [Theory]
-    [InlineData(false, true, "sandbox:execute", true, "CODE_EXECUTION_ROUTE_ACCESS_DENIED")]
-    [InlineData(true, false, "sandbox:execute", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
-    [InlineData(true, true, "wrong:scope", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
-    [InlineData(true, true, "llm:proxy account:read", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
+    [InlineData(false, true, true, "proxy:* sandbox:execute", true, "CODE_EXECUTION_ROUTE_ACCESS_DENIED")]
+    [InlineData(true, false, true, "proxy:* sandbox:execute", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
+    [InlineData(true, true, false, "proxy:* sandbox:execute", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
+    [InlineData(true, true, true, "wrong:scope", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
+    [InlineData(true, true, true, "llm:proxy account:read", false, "CODE_EXECUTION_ROUTE_POLICY_MISMATCH")]
     public async Task InspectAsync_UnusableCanonicalRoute_ReturnsTypedPlatformBlocker(
         bool allowed,
+        bool forwardAccessToken,
         bool injectDelegationToken,
         string scope,
         bool organization,
@@ -164,7 +167,8 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
             organization ? "org" : "personal",
             allowed,
             injectDelegationToken: injectDelegationToken,
-            scope: scope)));
+            scope: scope,
+            forwardAccessToken: forwardAccessToken)));
 
         var readiness = await source.InspectAsync(
             Access(),
@@ -316,9 +320,9 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
         bool allowed,
         string? catalogServiceId = "catalog-chrono-sandbox",
         bool injectDelegationToken = true,
-        string scope = "sandbox:execute",
+        string scope = "proxy:* sandbox:execute",
         bool isActive = true,
-        bool forwardAccessToken = false)
+        bool forwardAccessToken = true)
     {
         var credentialSource = credentialSourceType == "personal"
             ? (object)new { type = "personal" }

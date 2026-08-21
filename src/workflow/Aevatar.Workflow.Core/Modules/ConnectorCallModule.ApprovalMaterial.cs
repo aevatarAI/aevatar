@@ -372,7 +372,9 @@ public sealed partial class ConnectorCallModule
             Credentials = new AgentToolCredentials(
                 resolved.BearerToken,
                 NyxIdOrgToken: null,
-                SenderNyxIdAccessToken: null),
+                SenderNyxIdAccessToken: null,
+                NyxIdCredentialKind: ResolveAgentToolCredentialKind(resolved.Kind)),
+            DurableNyxIdCredential = resolved.DurableCallerCredential?.Clone(),
             Caller = new AgentToolCallerContext(
                 provenance.ScopeId,
                 provenance.PrincipalSubject,
@@ -386,6 +388,19 @@ public sealed partial class ConnectorCallModule
         using var scope = AgentToolContextScope.Push(toolContext);
         return await operation();
     }
+
+    private static AgentToolNyxIdCredentialKind ResolveAgentToolCredentialKind(
+        NyxIdCallerCredentialKind kind) =>
+        kind switch
+        {
+            NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            NyxIdCallerCredentialKind.ProxyDelegation =>
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+            NyxIdCallerCredentialKind.AgentKey =>
+                AgentToolNyxIdCredentialKind.AgentKey,
+            _ => AgentToolNyxIdCredentialKind.Unspecified,
+        };
 
     private static RemoteToolApprovalRequest BuildRemoteApprovalRequest(WorkflowExternalActionPlan plan) =>
         new(

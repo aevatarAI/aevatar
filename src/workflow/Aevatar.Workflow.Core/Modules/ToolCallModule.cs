@@ -1313,17 +1313,17 @@ public sealed partial class ToolCallModule :
         ToolApprovalGrant? approvalGrant = null,
         WorkflowCapabilityInvocationAdmission? admission = null)
     {
-        var usesChannelAgentKey =
+        var usesDurableAgentKey =
             WorkflowRunExecutionContextStateAccess.TryGetDurableCallerCredential(
                 ctx,
                 out var durableCredential) &&
-            durableCredential.DurableCallerCredential?.SourceKind ==
-            DurableCallerCredentialSourceKind.ChannelRegistration;
+            WorkflowLlmExecutionIntentRuntimeContextAccess.IsDurableAgentKeyCredential(
+                durableCredential.DurableCallerCredential);
         var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
-        if (usesChannelAgentKey && !credential.Found)
+        if (usesDurableAgentKey && !credential.Found)
         {
             throw new InvalidOperationException(
-                "The channel bot Agent Key is unavailable for workflow tool execution.");
+                "The workflow Agent Key is unavailable for workflow tool execution.");
         }
 
         var callerCredential = credential.Found
@@ -1355,7 +1355,7 @@ public sealed partial class ToolCallModule :
             IdempotencyKey: request.IdempotencyKey ?? string.Empty,
             ScheduleId: ctx.ScheduleId ?? string.Empty,
             InvocationAdmission: admission,
-            LlmControl: GetLlmControl(ctx, suppressSenderNyxIdAccessToken: usesChannelAgentKey),
+            LlmControl: GetLlmControl(ctx, suppressSenderNyxIdAccessToken: usesDurableAgentKey),
             IssuedAtUnixMs: issuedAtUnixMs,
             UnattendedInvocationPermit: unattendedPermit);
     }

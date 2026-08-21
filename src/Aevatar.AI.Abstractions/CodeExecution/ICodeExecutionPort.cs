@@ -62,8 +62,17 @@ public enum CodeExecutionLanguage
 }
 
 public sealed record CodeExecutionCallerContext(
-    string? ExecutionNyxIdAccessToken,
-    string? SourceReadableNyxIdAccessToken);
+    string? ExecutionNyxIdCredential,
+    string? SourceReadableNyxIdAccessToken,
+    CodeExecutionNyxIdCredentialKind ExecutionCredentialKind =
+        CodeExecutionNyxIdCredentialKind.Unspecified);
+
+public enum CodeExecutionNyxIdCredentialKind
+{
+    Unspecified = 0,
+    Bearer = 1,
+    AgentKey = 2,
+}
 
 public enum CodeExecutionRouteIdentitySource
 {

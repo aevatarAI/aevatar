@@ -441,7 +441,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
-        if (!WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyChannelAgentKeyOrSenderNyxIdAccessToken(
+        if (!WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyDurableAgentKeyOrSenderNyxIdAccessToken(
                 ctx,
                 intent))
         {
@@ -495,15 +495,15 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return new WorkflowCallerCredential();
 
         var durable = resolved.Credential.DurableCallerCredential;
-        if (durable?.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration)
+        if (WorkflowLlmExecutionIntentRuntimeContextAccess.IsDurableAgentKeyCredential(durable))
         {
-            // Channel workflows carry only the vault-backed bot Agent Key handle across
+            // Unattended workflows carry only the vault-backed Agent Key handle across
             // the role-actor boundary. The role resolves it locally for every NyxID-backed
-            // tool path; the inbound user's short-lived bearer never enters the workflow.
+            // tool path; a short-lived delegation token never replaces this authority.
             return new WorkflowCallerCredential
             {
                 DurableCallerCredential = durable.Clone(),
-                Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+                Kind = NyxIdCallerCredentialKind.AgentKey,
             };
         }
 

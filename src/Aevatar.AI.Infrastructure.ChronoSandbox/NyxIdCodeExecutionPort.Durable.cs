@@ -28,9 +28,9 @@ internal sealed partial class NyxIdCodeExecutionPort
                 "The durable code execution request is invalid."));
         }
 
-        var executionBearerToken = NormalizeBearerToken(
-            execution!.Caller?.ExecutionNyxIdAccessToken);
-        if (executionBearerToken is null)
+        var executionCredential = NormalizeCredential(
+            execution!.Caller?.ExecutionNyxIdCredential);
+        if (executionCredential is null)
         {
             return SubmitFailed(DurableFailure(
                 DurableCodeExecutionFailureKind.AdmissionDenied,
@@ -65,7 +65,7 @@ internal sealed partial class NyxIdCodeExecutionPort
         try
         {
             response = await SendDurableProxyAsync(
-                    executionBearerToken,
+                    executionCredential,
                     route,
                     DurableSubmitPath,
                     HttpMethod.Post.Method,
@@ -318,7 +318,7 @@ internal sealed partial class NyxIdCodeExecutionPort
                 null);
         }
 
-        var sourceReadableBearerToken = NormalizeBearerToken(
+        var sourceReadableBearerToken = NormalizeCredential(
             request.Caller?.SourceReadableNyxIdAccessToken);
         if (sourceReadableBearerToken is null)
         {
@@ -773,15 +773,16 @@ internal sealed partial class NyxIdCodeExecutionPort
 
     private static bool TryValidateOperationRequest(
         DurableCodeExecutionOperationRequest? request,
-        out string? executionBearerToken,
+        out string? executionCredential,
         out DurableCodeExecutionFailure? failure)
     {
-        executionBearerToken = NormalizeBearerToken(
-            request?.Caller?.ExecutionNyxIdAccessToken);
+        executionCredential = NormalizeCredential(
+            request?.Caller?.ExecutionNyxIdCredential);
         if (request is null ||
             !IsValidProviderOperationId(request.ProviderOperationId) ||
             !IsValidResolvedRoute(request.Route) ||
-            executionBearerToken is null ||
+            !IsValidExecutionCredentialKind(request.Caller?.ExecutionCredentialKind) ||
+            executionCredential is null ||
             request.ETag is not null && !IsValidETag(request.ETag))
         {
             failure = DurableFailure(
@@ -802,6 +803,7 @@ internal sealed partial class NyxIdCodeExecutionPort
         !string.IsNullOrWhiteSpace(request.Source) &&
         CodeExecutionContract.IsValidTimeoutSeconds(request.TimeoutSeconds) &&
         request.Route is not null &&
+        IsValidExecutionCredentialKind(request.Caller?.ExecutionCredentialKind) &&
         string.Equals(request.Route.ServiceSlug, RequiredServiceSlug, StringComparison.Ordinal);
 
     private static bool IsValidResolvedRoute(CodeExecutionRouteIdentity? route) =>

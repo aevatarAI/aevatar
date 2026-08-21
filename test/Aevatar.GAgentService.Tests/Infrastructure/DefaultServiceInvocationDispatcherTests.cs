@@ -896,7 +896,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
             .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
         workflowRequest.CallerCredential.BearerToken.Should().BeEmpty();
-        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
         workflowRequest.CallerCredential.NyxIdAuthority.Should().BeNull();
         workflowRequest.CallerCredential.DurableCallerCredential.Should().NotBeNull();
         workflowRequest.CallerCredential.DurableCallerCredential.Ref.Should().Be(descriptor.Ref);
@@ -1134,7 +1134,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldMapScheduledInvocationAgentKeyToProxyDelegationWorkflowCredential()
+    public async Task DispatchAsync_ShouldMapScheduledInvocationAgentKeyToAgentKeyWorkflowCredential()
     {
         var dispatchPort = new RecordingDispatchPort();
         var workflowPort = new RecordingWorkflowRunActorPort();
@@ -1194,7 +1194,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowRequest.CallerCredential.DurableCallerCredential.Ref.Should().Be("sec_scheduled");
         workflowRequest.CallerCredential.DurableCallerCredential.SourceKind
             .Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
-        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        workflowRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
         workflowRequest.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
             new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
             {

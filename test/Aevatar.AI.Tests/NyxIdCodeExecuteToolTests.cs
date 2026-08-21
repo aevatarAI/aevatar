@@ -871,7 +871,10 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
                     CodeExecutionContract.ServiceSlug,
                     "us-code-admitted",
                     CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
-                new CodeExecutionCallerContext("workflow-bearer", "workflow-bearer")));
+                new CodeExecutionCallerContext(
+                    "workflow-bearer",
+                    "workflow-bearer",
+                    CodeExecutionNyxIdCredentialKind.Bearer)));
     }
 
     [Fact]
@@ -1198,7 +1201,8 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
                 CodeExecutionRouteIdentitySource.CodeExecutionContract),
             new CodeExecutionCallerContext(
                 "request-delegation",
-                "source-readable-bearer")));
+                "source-readable-bearer",
+                CodeExecutionNyxIdCredentialKind.Bearer)));
         terminal.Receipt.Should().NotBeNull();
         terminal.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         terminal.Receipt.SubjectId.Should().Be("svc-code-alpha");
@@ -1238,17 +1242,18 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
             CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
         port.Request.Caller.Should().Be(new CodeExecutionCallerContext(
             "source-readable-bearer",
-            "source-readable-bearer"));
+            "source-readable-bearer",
+            CodeExecutionNyxIdCredentialKind.Bearer));
     }
 
     [Fact]
-    public async Task ExecuteWithOutcomeAsync_ScheduledDelegationUsesExactAdmissionWithoutSourceReadableCredential()
+    public async Task ExecuteWithOutcomeAsync_AgentKeyUsesExactAdmissionWithoutSourceReadableCredential()
     {
         var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
             new CodeExecutionResult("ok", string.Empty, 0),
             ResolvedRoute));
         var tool = new NyxIdCodeExecuteTool(port);
-        SetProxyDelegation("scheduled-agent-key", sourceReadableBearer: null);
+        SetAgentKey("scheduled-agent-key");
         AgentToolRequestContext.Current = AgentToolRequestContext.Current! with
         {
             OperationAdmission = CodeExecutionAdmission("us-code-admitted"),
@@ -1266,7 +1271,8 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
             CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
         port.Request.Caller.Should().Be(new CodeExecutionCallerContext(
             "scheduled-agent-key",
-            null));
+            null,
+            CodeExecutionNyxIdCredentialKind.AgentKey));
     }
 
     [Fact]
@@ -1697,6 +1703,18 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
                 null,
                 AgentToolNyxIdCredentialKind.ProxyDelegation,
                 sourceReadableBearer),
+        };
+    }
+
+    private static void SetAgentKey(string agentKey)
+    {
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                agentKey,
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.AgentKey),
         };
     }
 

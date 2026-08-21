@@ -533,11 +533,46 @@ public sealed class WorkflowRuntimeModuleBranchTests
     }
 
     [Theory]
-    [InlineData("llm_call")]
-    [InlineData("evaluate")]
-    [InlineData("reflect")]
-    public async Task NyxIdLlmModules_WithChannelAgentKey_ShouldSuppressUserTokenAndPropagateAgentKeyHandle(
-        string stepType)
+    [InlineData(
+        "llm_call",
+        DurableCallerCredentialSourceKind.ChannelRegistration,
+        CredentialSecretPurposes.ChannelNyxIdAgentKey)]
+    [InlineData(
+        "evaluate",
+        DurableCallerCredentialSourceKind.ChannelRegistration,
+        CredentialSecretPurposes.ChannelNyxIdAgentKey)]
+    [InlineData(
+        "reflect",
+        DurableCallerCredentialSourceKind.ChannelRegistration,
+        CredentialSecretPurposes.ChannelNyxIdAgentKey)]
+    [InlineData(
+        "llm_call",
+        DurableCallerCredentialSourceKind.WebhookBinding,
+        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey)]
+    [InlineData(
+        "evaluate",
+        DurableCallerCredentialSourceKind.WebhookBinding,
+        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey)]
+    [InlineData(
+        "reflect",
+        DurableCallerCredentialSourceKind.WebhookBinding,
+        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey)]
+    [InlineData(
+        "llm_call",
+        DurableCallerCredentialSourceKind.ScheduledDispatch,
+        CredentialSecretPurposes.ScheduledInvocationAgentKey)]
+    [InlineData(
+        "evaluate",
+        DurableCallerCredentialSourceKind.ScheduledDispatch,
+        CredentialSecretPurposes.ScheduledInvocationAgentKey)]
+    [InlineData(
+        "reflect",
+        DurableCallerCredentialSourceKind.ScheduledDispatch,
+        CredentialSecretPurposes.ScheduledInvocationAgentKey)]
+    public async Task NyxIdLlmModules_WithDurableAgentKey_ShouldSuppressUserTokenAndPropagateAgentKeyHandle(
+        string stepType,
+        DurableCallerCredentialSourceKind sourceKind,
+        string purpose)
     {
         IEventModule<IWorkflowExecutionContext> module = stepType switch
         {
@@ -551,13 +586,13 @@ public sealed class WorkflowRuntimeModuleBranchTests
         {
             DurableCallerCredential = new DurableCallerCredentialRef
             {
-                Ref = "secret://channel-agent-key",
-                Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey,
-                OwnerScopeKey = "scope-channel",
-                SubjectId = "agent-key-channel",
-                SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+                Ref = "secret://workflow-agent-key",
+                Purpose = purpose,
+                OwnerScopeKey = "scope-workflow",
+                SubjectId = "agent-key-workflow",
+                SourceKind = sourceKind,
             },
-            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+            Kind = NyxIdCallerCredentialKind.AgentKey,
         };
         ctx.RuntimeContext.ApplySenderNyxIdAccessToken("short-lived-user-token");
 
@@ -577,12 +612,12 @@ public sealed class WorkflowRuntimeModuleBranchTests
         intent.CallerCredential.Should().NotBeNull();
         intent.CallerCredential.BearerToken.Should().BeEmpty();
         intent.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
-        intent.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        intent.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
         intent.CallerCredential.DurableCallerCredential.Should().NotBeNull();
         intent.CallerCredential.DurableCallerCredential.Ref.Should()
-            .Be("secret://channel-agent-key");
+            .Be("secret://workflow-agent-key");
         intent.CallerCredential.DurableCallerCredential.SourceKind.Should()
-            .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
+            .Be(sourceKind);
     }
 
     [Fact]

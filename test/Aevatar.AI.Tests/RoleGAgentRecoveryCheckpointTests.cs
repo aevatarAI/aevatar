@@ -832,7 +832,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
                 agentKey,
                 null,
                 null,
-                AgentToolNyxIdCredentialKind.ProxyDelegation),
+                AgentToolNyxIdCredentialKind.AgentKey),
             CredentialSource = AgentToolCredentialSource.ChannelRegistration,
         };
         await StartCredentialSessionAsync(fixture, "session-a", context, durableReference);
@@ -855,7 +855,7 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         var request = executionPort.Requests.Should().ContainSingle().Which;
         request.ExecutionContext.Credentials.NyxIdAccessToken.Should().Be(agentKey);
         request.ExecutionContext.Credentials.NyxIdCredentialKind.Should()
-            .Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+            .Be(AgentToolNyxIdCredentialKind.AgentKey);
         request.ExecutionContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
         fixture.Agent.State.Sessions["session-a"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
     }

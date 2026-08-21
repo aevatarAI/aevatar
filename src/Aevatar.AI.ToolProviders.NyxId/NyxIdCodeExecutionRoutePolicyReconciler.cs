@@ -21,9 +21,9 @@ public sealed record NyxIdCodeExecutionRouteReconciliation(
 public sealed class NyxIdCodeExecutionRoutePolicyReconciler
 {
     private static readonly NyxIdUserServiceRouteContract RouteContract = new(
-        NyxIdUserServiceBooleanRequirement.Disabled,
         NyxIdUserServiceBooleanRequirement.Enabled,
-        ["sandbox:execute"]);
+        NyxIdUserServiceBooleanRequirement.Enabled,
+        ["proxy:*", "sandbox:execute"]);
 
     private readonly NyxIdUserServiceRouteConverger _converger;
 

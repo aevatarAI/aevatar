@@ -217,7 +217,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
             ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
-        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyChannelAgentKeyOrSenderNyxIdAccessToken(
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyDurableAgentKeyOrSenderNyxIdAccessToken(
             ctx,
             intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
@@ -258,7 +258,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
             ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
-        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyChannelAgentKeyOrSenderNyxIdAccessToken(
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyDurableAgentKeyOrSenderNyxIdAccessToken(
             ctx,
             intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);

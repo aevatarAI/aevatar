@@ -1732,6 +1732,8 @@ public sealed class AevatarInvocationDispatcher
                 AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
             NyxIdCallerCredentialKind.ProxyDelegation =>
                 AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            NyxIdCallerCredentialKind.AgentKey =>
+                AgentToolNyxIdCredentialKindPayload.AgentKey,
             _ => AgentToolNyxIdCredentialKindPayload.Unspecified,
         };
         if (!string.IsNullOrWhiteSpace(callerCredential?.SourceReadableUserBearerToken) &&
@@ -2107,20 +2109,19 @@ public sealed class AevatarInvocationDispatcher
 
     private static WorkflowCallerCredentialResolution ResolveWorkflowCallerCredential(AgentToolExecutionContext? context)
     {
-        if (context?.DurableNyxIdCredential?.SourceKind ==
-            DurableCallerCredentialSourceKind.ChannelRegistration)
+        if (context?.DurableNyxIdCredential is { } inherited &&
+            IsDurableAgentKeyCandidate(context, inherited))
         {
-            var inherited = context.DurableNyxIdCredential;
-            if (!IsValidChannelAgentKeyReference(inherited))
+            if (!IsValidDurableAgentKeyReference(inherited))
             {
                 return WorkflowCallerCredentialResolution.Failed(Error(
-                    "channel_agent_key_invalid",
-                    "The inherited channel bot Agent Key handle is invalid."));
+                    "workflow_agent_key_invalid",
+                    "The inherited workflow Agent Key handle is invalid."));
             }
 
             return WorkflowCallerCredentialResolution.Success(
                 new WorkflowRunCallerCredential(
-                    Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                    Kind: NyxIdCallerCredentialKind.AgentKey,
                     DurableCallerCredential: inherited.Clone()));
         }
 
@@ -2140,6 +2141,8 @@ public sealed class AevatarInvocationDispatcher
                 NyxIdCallerCredentialKind.SourceReadableUserBearer,
             AgentToolNyxIdCredentialKind.ProxyDelegation =>
                 NyxIdCallerCredentialKind.ProxyDelegation,
+            AgentToolNyxIdCredentialKind.AgentKey =>
+                NyxIdCallerCredentialKind.AgentKey,
             _ => NyxIdCallerCredentialKind.Unspecified,
         };
         if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
@@ -2212,7 +2215,7 @@ public sealed class AevatarInvocationDispatcher
 
         return ChannelAgentKeyCredentialResolution.Available(
             new WorkflowRunCallerCredential(
-                Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                Kind: NyxIdCallerCredentialKind.AgentKey,
                 DurableCallerCredential: new DurableCallerCredentialRef
                 {
                     Ref = reference.Ref,
@@ -2224,20 +2227,46 @@ public sealed class AevatarInvocationDispatcher
                 }));
     }
 
-    private static bool IsValidChannelAgentKeyReference(DurableCallerCredentialRef reference) =>
+    private static bool IsValidDurableAgentKeyReference(DurableCallerCredentialRef reference) =>
         !string.IsNullOrWhiteSpace(reference.Ref) &&
         !string.IsNullOrWhiteSpace(reference.OwnerScopeKey) &&
         !string.IsNullOrWhiteSpace(reference.SubjectId) &&
-        reference.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration &&
+        IsAgentKeySourceAndPurpose(reference) &&
+        HasMatchingRequiredDescriptor(reference);
+
+    private static bool IsAgentKeySourceAndPurpose(DurableCallerCredentialRef reference) =>
+        DurableCallerAgentKeyContract.Matches(reference);
+
+    private static bool IsDurableAgentKeyCandidate(
+        AgentToolExecutionContext context,
+        DurableCallerCredentialRef reference) =>
+        reference.SourceKind is
+            DurableCallerCredentialSourceKind.ChannelRegistration or
+            DurableCallerCredentialSourceKind.WebhookBinding ||
         string.Equals(
             reference.Purpose,
-            CredentialSecretPurposes.ChannelNyxIdAgentKey,
-            StringComparison.Ordinal) &&
-        reference.SecretReference is { } descriptor &&
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            StringComparison.Ordinal) ||
+        context.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey;
+
+    private static bool HasMatchingRequiredDescriptor(DurableCallerCredentialRef reference)
+    {
+        if (reference.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch &&
+            reference.SecretReference is null)
+        {
+            return true;
+        }
+
+        return reference.SecretReference is { } descriptor &&
         !string.IsNullOrWhiteSpace(descriptor.Ref) &&
         string.Equals(reference.Ref, descriptor.Ref, StringComparison.Ordinal) &&
         string.Equals(reference.Purpose, descriptor.Purpose, StringComparison.Ordinal) &&
         string.Equals(reference.OwnerScopeKey, descriptor.OwnerScopeKey, StringComparison.Ordinal);
+    }
+
+    private static bool IsValidChannelAgentKeyReference(DurableCallerCredentialRef reference) =>
+        reference.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration &&
+        IsValidDurableAgentKeyReference(reference);
 
     private async Task<InvocationToolError?> EnsureChannelAgentKeyReadyAsync(
         WorkflowRunCallerCredential? callerCredential,

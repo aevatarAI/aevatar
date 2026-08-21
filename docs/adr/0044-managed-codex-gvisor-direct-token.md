@@ -6,6 +6,10 @@ owner: eanzhao
 
 # ADR-0044: Managed codex_exec runs on gVisor with a directly injected short-lived token
 
+> The generic `code_execute` credential statements in this ADR are superseded by
+> [ADR-0050](0050-code-execution-agent-key-runtime-authority.md). The managed
+> `/codex/execute` gVisor and short-token decision remains accepted and unchanged.
+
 ## Context
 
 The managed `codex_exec` protection stack was designed to guard a high-value, long-lived

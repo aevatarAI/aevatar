@@ -2096,13 +2096,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return null;
 
         var token = resolved.Secret.Trim();
-        var referenceCredentialKind = ResolveDurableCredentialKind(reference.Purpose);
+        var referenceCredentialKind = ResolveDurableCredentialKind(reference);
         var credentialKind = context.Credentials.NyxIdCredentialKind !=
                              AgentToolNyxIdCredentialKind.Unspecified
             ? context.Credentials.NyxIdCredentialKind
             : referenceCredentialKind;
         if (credentialKind != referenceCredentialKind ||
-            credentialKind == AgentToolNyxIdCredentialKind.ProxyDelegation &&
+            (credentialKind is AgentToolNyxIdCredentialKind.ProxyDelegation or
+                AgentToolNyxIdCredentialKind.AgentKey) &&
             checkpoint.RecoveryContext.RequiresSourceReadableNyxIdAccessToken)
         {
             return null;
@@ -2172,13 +2173,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     StringComparison.Ordinal));
     }
 
-    private static AgentToolNyxIdCredentialKind ResolveDurableCredentialKind(string purpose) =>
+    private static AgentToolNyxIdCredentialKind ResolveDurableCredentialKind(
+        DurableCallerCredentialRef reference) =>
         string.Equals(
-            purpose,
+            reference.Purpose,
             CredentialSecretPurposes.WorkflowCallerSourceReadableUserBearerToken,
             StringComparison.Ordinal)
             ? AgentToolNyxIdCredentialKind.SourceReadableUserBearer
-            : AgentToolNyxIdCredentialKind.ProxyDelegation;
+            : DurableCallerAgentKeyContract.Matches(reference)
+                ? AgentToolNyxIdCredentialKind.AgentKey
+                : AgentToolNyxIdCredentialKind.ProxyDelegation;
 
     private static bool MatchesResolvedCredentialReference(
         DurableCallerCredentialRef expected,

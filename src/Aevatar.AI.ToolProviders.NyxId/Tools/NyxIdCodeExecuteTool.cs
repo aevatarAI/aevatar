@@ -845,8 +845,9 @@ public sealed class NyxIdCodeExecuteTool(
         }
 
         var credentials = AgentToolRequestContext.Current?.Credentials;
-        var executionBearerToken = ResolveExecutionBearerToken(credentials);
-        if (executionBearerToken is null)
+        var executionCredential = ResolveExecutionCredential(credentials);
+        if (executionCredential.Token is null ||
+            executionCredential.Kind == CodeExecutionNyxIdCredentialKind.Unspecified)
         {
             return CodeExecutionPreparation.Failed(new CodeExecutionFailure(
                     CodeExecutionFailureKind.AdmissionDenied,
@@ -882,23 +883,28 @@ public sealed class NyxIdCodeExecuteTool(
                     ? CodeExecutionRouteIdentitySource.CodeExecutionContract
                     : CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
             new CodeExecutionCallerContext(
-                executionBearerToken,
-                sourceReadableBearerToken)));
+                executionCredential.Token,
+                sourceReadableBearerToken,
+                executionCredential.Kind)));
     }
 
-    private static string? ResolveExecutionBearerToken(AgentToolCredentials? credentials)
+    private static (string? Token, CodeExecutionNyxIdCredentialKind Kind)
+        ResolveExecutionCredential(AgentToolCredentials? credentials)
     {
-        if (credentials?.NyxIdCredentialKind is not (
-                AgentToolNyxIdCredentialKind.SourceReadableUserBearer or
-                AgentToolNyxIdCredentialKind.ProxyDelegation))
+        var kind = credentials?.NyxIdCredentialKind switch
         {
-            return null;
-        }
+            AgentToolNyxIdCredentialKind.SourceReadableUserBearer or
+                AgentToolNyxIdCredentialKind.ProxyDelegation =>
+                CodeExecutionNyxIdCredentialKind.Bearer,
+            AgentToolNyxIdCredentialKind.AgentKey =>
+                CodeExecutionNyxIdCredentialKind.AgentKey,
+            _ => CodeExecutionNyxIdCredentialKind.Unspecified,
+        };
 
-        return NormalizeBearerToken(credentials.NyxIdAccessToken);
+        return (NormalizeCredential(credentials?.NyxIdAccessToken), kind);
     }
 
-    private static string? NormalizeBearerToken(string? token)
+    private static string? NormalizeCredential(string? token)
     {
         if (string.IsNullOrWhiteSpace(token))
             return null;

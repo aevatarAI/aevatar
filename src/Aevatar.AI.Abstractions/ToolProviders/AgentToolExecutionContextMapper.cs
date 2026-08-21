@@ -414,6 +414,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
             AgentToolNyxIdCredentialKindPayload.ProxyDelegation =>
                 AgentToolNyxIdCredentialKind.ProxyDelegation,
+            AgentToolNyxIdCredentialKindPayload.AgentKey =>
+                AgentToolNyxIdCredentialKind.AgentKey,
             _ => AgentToolNyxIdCredentialKind.Unspecified,
         };
 
@@ -425,6 +427,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
             AgentToolNyxIdCredentialKind.ProxyDelegation =>
                 AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            AgentToolNyxIdCredentialKind.AgentKey =>
+                AgentToolNyxIdCredentialKindPayload.AgentKey,
             _ => AgentToolNyxIdCredentialKindPayload.Unspecified,
         };
 

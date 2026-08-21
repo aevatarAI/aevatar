@@ -23,9 +23,9 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             Inventory("personal", false, true, "proxy:*"),
             KeysInventory("personal"),
             "{}",
-            Inventory("personal", false, true, "proxy:* sandbox:execute"),
+            Inventory("personal", true, true, "proxy:* sandbox:execute"),
             KeysInventory("personal"),
-            Inventory("personal", false, true, "proxy:* sandbox:execute"),
+            Inventory("personal", true, true, "proxy:* sandbox:execute"),
             KeysInventory("personal"));
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
         var client = new NyxIdApiClient(options, new HttpClient(handler));
@@ -80,13 +80,13 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
     }
 
     [Fact]
-    public async Task PrepareAsync_PersonalLegacyRoute_ReconcilesDelegationOnlyAndVerifiesReadBack()
+    public async Task PrepareAsync_PersonalLegacyRoute_ReconcilesDualCredentialPolicyAndVerifiesReadBack()
     {
         var handler = new SequenceHandler(
             Inventory("personal", false, true, "proxy:*"),
             KeysInventory("personal"),
             "{}",
-            Inventory("personal", false, true, "proxy:* sandbox:execute"),
+            Inventory("personal", true, true, "proxy:* sandbox:execute"),
             KeysInventory("personal"));
         var preparer = CreatePreparer(handler);
 
@@ -108,7 +108,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         handler.Requests[2].Uri.Should()
             .Be("https://nyx.example/api/v1/user-services/us-code-alpha");
         using var body = JsonDocument.Parse(handler.Requests[2].Body!);
-        body.RootElement.GetProperty("forward_access_token").GetBoolean().Should().BeFalse();
+        body.RootElement.GetProperty("forward_access_token").GetBoolean().Should().BeTrue();
         body.RootElement.GetProperty("inject_delegation_token").GetBoolean().Should().BeTrue();
         body.RootElement.GetProperty("delegation_token_scope").GetString().Should()
             .Be("proxy:* sandbox:execute");
@@ -118,7 +118,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
     public async Task PrepareAsync_CanonicalRoute_IsReadOnly()
     {
         var handler = new SequenceHandler(
-            Inventory("personal", false, true, "proxy:* sandbox:execute"),
+            Inventory("personal", true, true, "proxy:* sandbox:execute"),
             KeysInventory("personal"));
         var preparer = CreatePreparer(handler);
 
@@ -155,7 +155,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             Inventory("personal", false, true, "proxy:*"),
             KeysInventory("personal"),
             "{}",
-            Inventory("personal", false, true, "sandbox:execute"),
+            Inventory("personal", true, true, "sandbox:execute"),
             KeysInventory("personal"));
         var preparer = CreatePreparer(handler);
 
@@ -204,7 +204,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             Inventory("org", false, true, "proxy:*", "admin"),
             KeysInventory("org", "admin"),
             "{}",
-            Inventory("org", false, true, "proxy:* sandbox:execute", "admin"),
+            Inventory("org", true, true, "proxy:* sandbox:execute", "admin"),
             KeysInventory("org", "admin"));
         var preparer = CreatePreparer(handler);
 
@@ -231,7 +231,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             MixedInventory(personalScope: "proxy:*"),
             MixedKeysInventory(),
             "{}",
-            MixedInventory(personalScope: "proxy:* sandbox:execute"),
+            MixedInventory(personalScope: "proxy:* sandbox:execute", personalForward: true),
             MixedKeysInventory());
         var preparer = CreatePreparer(handler);
 
@@ -275,7 +275,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             MultiplePersonalInventory("proxy:*"),
             MultiplePersonalKeysInventory(),
             "{}",
-            MultiplePersonalInventory("proxy:* sandbox:execute"),
+            MultiplePersonalInventory("proxy:* sandbox:execute", forwardAccessToken: true),
             MultiplePersonalKeysInventory());
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
         var reconciler = new NyxIdCodeExecutionRoutePolicyReconciler(
@@ -485,9 +485,9 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
     }
 
     [Fact]
-    public void AddCodeExecutionDelegationScope_PreservesOrderAndRemovesDuplicates()
+    public void AddRequiredDelegationScopes_PreservesOrderAndRemovesDuplicates()
     {
-        NyxIdCodeExecutionRouteResolver.AddCodeExecutionDelegationScope(
+        NyxIdCodeExecutionRouteResolver.AddRequiredDelegationScopes(
                 " proxy:*  proxy:* account:read ")
             .Should().Be("proxy:* account:read sandbox:execute");
     }
@@ -582,7 +582,9 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         });
     }
 
-    private static string MixedInventory(string personalScope) =>
+    private static string MixedInventory(
+        string personalScope,
+        bool personalForward = false) =>
         JsonSerializer.Serialize(new
         {
             services = new object[]
@@ -593,7 +595,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     slug = "chrono-sandbox",
                     catalog_service_id = "catalog-chrono-sandbox",
                     is_active = true,
-                    forward_access_token = false,
+                    forward_access_token = personalForward,
                     inject_delegation_token = true,
                     delegation_token_scope = personalScope,
                     credential_source = new { type = "personal" },
@@ -686,7 +688,9 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             },
         });
 
-    private static string MultiplePersonalInventory(string betaScope) =>
+    private static string MultiplePersonalInventory(
+        string betaScope,
+        bool forwardAccessToken = false) =>
         JsonSerializer.Serialize(new
         {
             services = new[]
@@ -708,7 +712,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     slug = "chrono-sandbox",
                     catalog_service_id = "catalog-chrono-sandbox",
                     is_active = true,
-                    forward_access_token = false,
+                    forward_access_token = forwardAccessToken,
                     inject_delegation_token = true,
                     delegation_token_scope = betaScope,
                     credential_source = new { type = "personal" },

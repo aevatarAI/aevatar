@@ -207,6 +207,7 @@ public enum AgentToolNyxIdCredentialKind
     Unspecified = 0,
     SourceReadableUserBearer = 1,
     ProxyDelegation = 2,
+    AgentKey = 3,
 }
 
 public enum AgentToolNyxIdCredentialAuthority

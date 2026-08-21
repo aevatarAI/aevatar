@@ -34,6 +34,7 @@ public sealed record NyxIdCodeExecutionRouteResolution(
 public static class NyxIdCodeExecutionRouteResolver
 {
     private const string CodeDelegationScope = "sandbox:execute";
+    private const string ProxyDelegationScope = "proxy:*";
 
     public static async Task<NyxIdCodeExecutionRouteResolution> ResolveAsync(
         INyxIdApiClientFactory clientFactory,
@@ -173,20 +174,20 @@ public static class NyxIdCodeExecutionRouteResolver
     }
 
     /// <summary>
-    /// Whether the route delivers a credential the deployed platform runtime accepts. Existing
-    /// forwarding routes remain valid; otherwise NyxID must inject a short-lived token whose
-    /// whitespace scope membership includes <c>sandbox:execute</c>. Command-side reconciliation
-    /// targets the non-forwarding delegated shape without invalidating already-admitted routes.
+    /// Whether the shared route delivers both credentials required by platform code execution.
+    /// The caller's Agent Key is forwarded for sandbox outbound calls, while NyxID's short-lived
+    /// delegation authenticates the Chrono execution boundary and preserves managed Codex's
+    /// <c>proxy:*</c> capability on the same UserService.
     /// </summary>
     public static bool HasUsableExecutionCredential(NyxIdUserService service)
     {
         ArgumentNullException.ThrowIfNull(service);
-        return service.ForwardAccessToken == true ||
-               (service.InjectDelegationToken == true &&
-                GrantsCodeExecutionDelegation(service.DelegationTokenScope));
+        return service.ForwardAccessToken == true &&
+               service.InjectDelegationToken == true &&
+               GrantsRequiredDelegationScopes(service.DelegationTokenScope);
     }
 
-    public static string AddCodeExecutionDelegationScope(string? delegationTokenScope)
+    public static string AddRequiredDelegationScopes(string? delegationTokenScope)
     {
         var scopes = string.IsNullOrWhiteSpace(delegationTokenScope)
             ? []
@@ -196,18 +197,24 @@ public static class NyxIdCodeExecutionRouteResolver
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
+        if (!scopes.Contains(ProxyDelegationScope, StringComparer.Ordinal))
+            scopes.Add(ProxyDelegationScope);
         if (!scopes.Contains(CodeDelegationScope, StringComparer.Ordinal))
             scopes.Add(CodeDelegationScope);
         return string.Join(' ', scopes);
     }
 
-    private static bool GrantsCodeExecutionDelegation(string? delegationTokenScope) =>
-        !string.IsNullOrWhiteSpace(delegationTokenScope) &&
-        delegationTokenScope
-            .Split(
-                (char[]?)null,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Contains(CodeDelegationScope, StringComparer.Ordinal);
+    private static bool GrantsRequiredDelegationScopes(string? delegationTokenScope)
+    {
+        if (string.IsNullOrWhiteSpace(delegationTokenScope))
+            return false;
+
+        var scopes = delegationTokenScope.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return scopes.Contains(CodeDelegationScope, StringComparer.Ordinal) &&
+               scopes.Contains(ProxyDelegationScope, StringComparer.Ordinal);
+    }
 
     private static bool IsAccessible(NyxIdUserService service) =>
         service.CredentialSource.Kind switch

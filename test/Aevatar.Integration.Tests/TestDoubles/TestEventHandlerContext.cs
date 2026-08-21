@@ -641,9 +641,13 @@ internal static class WorkflowExecutionContextTestState
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+                SourceReadableUserBearerToken = delta.CallerCredential.SourceReadableUserBearerToken,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                SourceReadableUserBearerRuntimeSecretReference =
+                    delta.CallerCredential.SourceReadableUserBearerRuntimeSecretReference?.Clone(),
                 DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
                 NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
+                Kind = delta.CallerCredential.Kind,
             };
         }
     }

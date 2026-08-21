@@ -60,6 +60,8 @@ internal static class WorkflowCallerCredentialToolContextMapper
                 AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
             NyxIdCallerCredentialKind.ProxyDelegation =>
                 AgentToolNyxIdCredentialKind.ProxyDelegation,
+            NyxIdCallerCredentialKind.AgentKey =>
+                AgentToolNyxIdCredentialKind.AgentKey,
             _ => AgentToolNyxIdCredentialKind.Unspecified,
         };
         var sourceReadableToken = supplementalSourceReadableToken.IsValid

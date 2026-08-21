@@ -1607,17 +1607,28 @@ public sealed class ToolCallModuleContextTests
         tokenProvider.Authorities.Should().HaveCount(2);
     }
 
-    [Fact]
-    public async Task ToolCallModule_WithChannelAgentKey_ShouldNeverRefreshOrForwardUserToken()
+    [Theory]
+    [InlineData(
+        DurableCallerCredentialSourceKind.ChannelRegistration,
+        CredentialSecretPurposes.ChannelNyxIdAgentKey)]
+    [InlineData(
+        DurableCallerCredentialSourceKind.WebhookBinding,
+        CredentialSecretPurposes.WorkflowWebhookBindingAgentKey)]
+    [InlineData(
+        DurableCallerCredentialSourceKind.ScheduledDispatch,
+        CredentialSecretPurposes.ScheduledInvocationAgentKey)]
+    public async Task ToolCallModule_WithDurableAgentKey_ShouldNeverRefreshOrForwardUserToken(
+        DurableCallerCredentialSourceKind sourceKind,
+        string purpose)
     {
-        const string agentKey = "nyxid_ag_channel_tool_key";
+        const string agentKey = "nyxid_ag_workflow_tool_key";
         var vault = new InMemorySecretVault();
         var stored = await vault.PutAsync(new StoreSecretRequest(
-            CredentialSecretPurposes.ChannelNyxIdAgentKey,
-            "scope-channel",
-            "agent-key-channel",
+            purpose,
+            "scope-workflow",
+            "agent-key-workflow",
             agentKey,
-            "channel-tool-test"));
+            "workflow-tool-test"));
         var tool = new CapturingWorkflowTool("nyxid_tool");
         var tokenProvider = new RotatingCallerAccessTokenProvider();
         var module = CreateModule(tool, tokenProvider);
@@ -1632,12 +1643,12 @@ public sealed class ToolCallModuleContextTests
                 Ref = stored.Reference.Ref,
                 Purpose = stored.Reference.Purpose,
                 OwnerScopeKey = stored.Reference.OwnerScopeKey,
-                SubjectId = "agent-key-channel",
-                SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+                SubjectId = "agent-key-workflow",
+                SourceKind = sourceKind,
                 SecretReference = stored.Reference.Clone(),
             },
             NyxIdAuthority = CreateCallerAuthority(),
-            Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+            Kind = NyxIdCallerCredentialKind.AgentKey,
         };
         ctx.ExecutionContextState.Llm = new WorkflowLlmExecutionContextState
         {
@@ -1649,9 +1660,10 @@ public sealed class ToolCallModuleContextTests
 
         tool.LastRequest.Should().NotBeNull();
         tool.LastRequest!.CallerCredential.BearerToken.Should().Be(agentKey);
+        tool.LastRequest.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
         tool.LastRequest.CallerCredential.DurableCallerCredential.Should().NotBeNull();
         tool.LastRequest.CallerCredential.DurableCallerCredential.SourceKind.Should()
-            .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
+            .Be(sourceKind);
         tool.LastRequest.LlmControl.Should().NotBeNull();
         tool.LastRequest.LlmControl!.SenderNyxIdAccessToken.Should().BeEmpty();
         tokenProvider.Authorities.Should().BeEmpty();

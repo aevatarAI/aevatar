@@ -80,7 +80,10 @@ public sealed class NyxIdDurableCodeExecutionPortTests
             "print(42)",
             CodeExecutionContract.DefaultTimeoutSeconds,
             Route(),
-            new CodeExecutionCallerContext("execution-token", "source-readable-token"));
+            new CodeExecutionCallerContext(
+                "execution-token",
+                "source-readable-token",
+                CodeExecutionNyxIdCredentialKind.Bearer));
 
         var outcome = await port.SubmitAsync(new DurableCodeExecutionSubmitRequest(
             execution,
@@ -413,13 +416,19 @@ public sealed class NyxIdDurableCodeExecutionPortTests
             "print(42)",
             CodeExecutionContract.DefaultTimeoutSeconds,
             Route(),
-            new CodeExecutionCallerContext("execution-token", null));
+            new CodeExecutionCallerContext(
+                "execution-token",
+                null,
+                CodeExecutionNyxIdCredentialKind.Bearer));
 
     private static DurableCodeExecutionOperationRequest OperationRequest(string? etag = null) =>
         new(
             OperationId,
             Route(),
-            new CodeExecutionCallerContext("execution-token", null),
+            new CodeExecutionCallerContext(
+                "execution-token",
+                null,
+                CodeExecutionNyxIdCredentialKind.Bearer),
             etag);
 
     private static CodeExecutionRouteIdentity Route() =>

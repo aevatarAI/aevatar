@@ -1575,23 +1575,29 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         bool isMutation,
         string toolName)
     {
-        if (context.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.ProxyDelegation)
+        if (context.Credentials.NyxIdCredentialKind is
+            AgentToolNyxIdCredentialKind.ProxyDelegation or
+            AgentToolNyxIdCredentialKind.AgentKey)
         {
-            var proxyDelegationToken = NormalizeIdentity(context.Credentials.NyxIdAccessToken);
-            if (proxyDelegationToken is null)
+            var primaryCredential = NormalizeIdentity(context.Credentials.NyxIdAccessToken);
+            if (primaryCredential is null)
             {
+                var credentialLabel = context.Credentials.NyxIdCredentialKind ==
+                                      AgentToolNyxIdCredentialKind.AgentKey
+                    ? "Agent Key"
+                    : "proxy delegation credential";
                 return new CredentialDecision(
                     false,
                     context,
                     ResolveCredentialSource(context),
-                    $"Tool '{toolName}' was not executed because the typed NyxID proxy delegation credential has no valid primary token. Credential fallback was not used.");
+                    $"Tool '{toolName}' was not executed because the typed NyxID {credentialLabel} has no valid primary value. Credential fallback was not used.");
             }
 
-            var delegationContext = context with
+            var primaryContext = context with
             {
                 Credentials = context.Credentials with
                 {
-                    NyxIdAccessToken = proxyDelegationToken,
+                    NyxIdAccessToken = primaryCredential,
                     NyxIdOrgToken = null,
                     SenderNyxIdAccessToken = null,
                     SourceReadableNyxIdAccessToken =
@@ -1600,8 +1606,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             };
             return new CredentialDecision(
                 true,
-                delegationContext,
-                ResolveCredentialSource(delegationContext),
+                primaryContext,
+                ResolveCredentialSource(primaryContext),
                 string.Empty);
         }
 
@@ -1704,8 +1710,9 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                !callSafety.IsReadOnly &&
                !callSafety.IsDestructive &&
                executionContext.InvocationSurface == AgentToolInvocationSurface.WorkflowToolCall &&
-               executionContext.Credentials.NyxIdCredentialKind ==
-                   AgentToolNyxIdCredentialKind.ProxyDelegation &&
+               (executionContext.Credentials.NyxIdCredentialKind is
+                   AgentToolNyxIdCredentialKind.ProxyDelegation or
+                   AgentToolNyxIdCredentialKind.AgentKey) &&
                !string.IsNullOrWhiteSpace(executionContext.Credentials.NyxIdAccessToken) &&
                !string.IsNullOrWhiteSpace(executionContext.NyxIdAuthority.Platform) &&
                !string.IsNullOrWhiteSpace(executionContext.NyxIdAuthority.ExternalUserId) &&

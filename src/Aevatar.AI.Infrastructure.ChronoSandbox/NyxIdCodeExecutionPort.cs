@@ -46,6 +46,7 @@ internal sealed partial class NyxIdCodeExecutionPort(
             string.IsNullOrWhiteSpace(request.Source) ||
             !CodeExecutionContract.IsValidTimeoutSeconds(request.TimeoutSeconds) ||
             request.Route is null ||
+            !IsValidExecutionCredentialKind(request.Caller?.ExecutionCredentialKind) ||
             !string.Equals(request.Route.ServiceSlug, RequiredServiceSlug, StringComparison.Ordinal))
         {
             return Failed(
@@ -54,8 +55,8 @@ internal sealed partial class NyxIdCodeExecutionPort(
                 "The code execution request is invalid.");
         }
 
-        var executionBearerToken = NormalizeBearerToken(request.Caller?.ExecutionNyxIdAccessToken);
-        if (executionBearerToken is null)
+        var executionCredential = NormalizeCredential(request.Caller?.ExecutionNyxIdCredential);
+        if (executionCredential is null)
         {
             return Failed(
                 CodeExecutionFailureKind.AdmissionDenied,
@@ -64,7 +65,7 @@ internal sealed partial class NyxIdCodeExecutionPort(
         }
 
         var localDiagnosticId = CreateLocalDiagnosticId();
-        var sourceReadableBearerToken = NormalizeBearerToken(
+        var sourceReadableBearerToken = NormalizeCredential(
             request.Caller?.SourceReadableNyxIdAccessToken);
         CodeExecutionRouteIdentity route;
         if (sourceReadableBearerToken is null)
@@ -162,7 +163,7 @@ internal sealed partial class NyxIdCodeExecutionPort(
         try
         {
             response = await client.ProxyRequestBoundedAsync(
-                    executionBearerToken,
+                    executionCredential,
                     route.ServiceSlug,
                     resolvedUserServiceId,
                     ExecutionPath,
@@ -212,7 +213,7 @@ internal sealed partial class NyxIdCodeExecutionPort(
                string.Equals(userServiceId, userServiceId.Trim(), StringComparison.Ordinal);
     }
 
-    private static string? NormalizeBearerToken(string? token)
+    private static string? NormalizeCredential(string? token)
     {
         if (string.IsNullOrWhiteSpace(token))
             return null;
@@ -227,6 +228,11 @@ internal sealed partial class NyxIdCodeExecutionPort(
 
         return normalized;
     }
+
+    private static bool IsValidExecutionCredentialKind(
+        CodeExecutionNyxIdCredentialKind? kind) =>
+        kind is CodeExecutionNyxIdCredentialKind.Bearer or
+            CodeExecutionNyxIdCredentialKind.AgentKey;
 
     private static string SerializeLanguage(CodeExecutionLanguage language) => language switch
     {

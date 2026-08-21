@@ -101,6 +101,7 @@ Immutable records of architectural choices and their rationale.
 - [0047 - Kafka fixed-assignment ownership follows Orleans queue balancing](adr/0047-kafka-fixed-assignment-ownership.md)
 - [NyxID Assistant Operation-Class Boundary](adr/0048-nyxid-assistant-operation-class-boundary.md)
 - [NyxID Assistant Plan Progress and Operation Authorization](adr/0049-nyxid-assistant-plan-progress-and-operation-authorization.md)
+- [Code Execution Uses Agent Key Runtime Authority](adr/0050-code-execution-agent-key-runtime-authority.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History

@@ -285,7 +285,7 @@ internal static class WorkflowWebhookIngressEndpoints
                     authority.ExternalUserId,
                     authority.Scope,
                     authority.BindingId),
-                Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                Kind: NyxIdCallerCredentialKind.AgentKey,
                 SourceReadableUserBearerToken: null,
                 UnattendedEffectAuthorization: authorization.Clone(),
                 DurableCallerCredential: record.CallerDurableCredential?.Clone()),

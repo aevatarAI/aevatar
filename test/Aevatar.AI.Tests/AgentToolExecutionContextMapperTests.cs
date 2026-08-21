@@ -464,7 +464,7 @@ public sealed class AgentToolExecutionContextMapperTests
                 " access-1 ",
                 " org-1 ",
                 " sender-access-1 ",
-                AgentToolNyxIdCredentialKind.ProxyDelegation),
+                AgentToolNyxIdCredentialKind.AgentKey),
             new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
             new AgentToolChannelContext(
                 " telegram ",
@@ -515,7 +515,7 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Credentials.NyxIdAccessToken.Should().Be("access-1");
         copy.Credentials.NyxIdOrgToken.Should().Be("org-1");
         copy.Credentials.SenderNyxIdAccessToken.Should().Be("sender-access-1");
-        copy.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+        copy.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
         copy.Caller.ScopeId.Should().Be("scope-1");
         copy.Caller.OwnerSubject.Should().Be("owner-1");
         copy.Caller.ResponseId.Should().Be("response-1");
