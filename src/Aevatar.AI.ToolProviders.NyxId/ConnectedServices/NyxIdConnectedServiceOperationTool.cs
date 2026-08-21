@@ -89,7 +89,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     private const string ProxyResponseTooLargeErrorCode = "NYXID_PROXY_RESPONSE_TOO_LARGE";
     private const string ReadTooLargeErrorCode = "NYXID_CONNECTED_SERVICE_READ_TOO_LARGE";
     private const string ReadTooLargeErrorMessage =
-        "The connected-service read result exceeded the bounded projection limit.";
+        "The connected-service read result exceeded the bounded projection limit. " +
+        "Retry with a narrower query or smaller page size and paginate across bounded reads.";
     private const string ReadProjectionKind = "connected_service_read_projection";
     private const string EffectReceiptKind = "connected_service_effect_receipt";
 
@@ -306,19 +307,20 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         string toolName)
     {
         var result = BuildReadProjection(
-            "rejected",
+            "retry_required",
             data: null,
             ReadTooLargeErrorCode,
             ReadTooLargeErrorMessage);
+        var receipt = NyxIdProxyReceiptFactory.CreateSuccess(
+            callId,
+            toolName,
+            OperationAdmission.ServiceInstanceId,
+            result) ?? throw new InvalidOperationException(
+            "A connected-service operation must have a valid UserService identity.");
+        receipt.Effect = AgentToolReceiptEffect.ReadOnly;
         return new AgentToolTerminalOutcome(
             result,
-            NyxIdProxyReceiptFactory.CreateError(
-                callId,
-                toolName,
-                OperationAdmission.ServiceInstanceId,
-                ReadTooLargeErrorCode,
-                ReadTooLargeErrorMessage,
-                result));
+            receipt);
     }
 
     private AgentToolTerminalOutcome BuildEffectOutcome(

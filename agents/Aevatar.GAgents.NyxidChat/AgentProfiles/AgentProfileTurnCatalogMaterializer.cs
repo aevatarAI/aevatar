@@ -1446,11 +1446,33 @@ public sealed class AgentProfileTurnCatalogMaterializer
 
         var message = userMessage.Trim();
         var normalizedAlias = alias.Trim();
-        return string.Equals(message, normalizedAlias, StringComparison.OrdinalIgnoreCase) ||
-               (message.StartsWith(normalizedAlias, StringComparison.OrdinalIgnoreCase) &&
-                message.Length > normalizedAlias.Length &&
-                char.IsWhiteSpace(message[normalizedAlias.Length]));
+        var searchFrom = 0;
+        while (searchFrom <= message.Length - normalizedAlias.Length)
+        {
+            var relativeIndex = message.IndexOf(
+                normalizedAlias,
+                searchFrom,
+                StringComparison.OrdinalIgnoreCase);
+            if (relativeIndex < 0)
+                return false;
+
+            var matchEnd = relativeIndex + normalizedAlias.Length;
+            if (IsAliasBoundary(message, relativeIndex - 1) &&
+                IsAliasBoundary(message, matchEnd))
+            {
+                return true;
+            }
+
+            searchFrom = relativeIndex + 1;
+        }
+
+        return false;
     }
+
+    private static bool IsAliasBoundary(string message, int index) =>
+        index < 0 ||
+        index >= message.Length ||
+        (!char.IsLetterOrDigit(message[index]) && message[index] != '_');
 
     private static AgentProfileTurnCatalog RestrictedEmptyCatalog(
         IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null) =>

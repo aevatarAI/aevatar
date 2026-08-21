@@ -370,6 +370,36 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task PrepareNyxIdChatAsync_ExplicitAliasInsideNaturalLanguage_ShouldBypassClassification()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var classifier = new RecordingClassifier(
+            new InvalidOperationException("an explicit alias must not classify"));
+        var profile = BuildProfile();
+        profile.Members[0].ExplicitTriggerAliases.Add("github");
+
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                classifier,
+                fetcher: null)
+            .PrepareNyxIdChatAsync(
+                SealProfile(profile),
+                "session-natural-language-alias",
+                "hi can you check what are the issues assigned to me on my github ?",
+                tools,
+                ToolContext(),
+                llmControl: null,
+                CancellationToken.None);
+
+        preparation.Authority.CandidateRoute!.IntentId.Should().Be("intent-alpha");
+        preparation.Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Selected);
+        preparation.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.AliasMatched &&
+            diagnostic.Detail == "intent-alpha");
+        classifier.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task PrepareNyxIdChatAsync_ExactConnectedServiceOperation_ShouldNotBecomeServiceConnect()
     {
         var tools = NewTools("recovery", "lark-message-create", "extra");

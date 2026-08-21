@@ -100,6 +100,13 @@ request-local connected-service tools 已成功发现后把 authority 降为 emp
 存在但没有工具”。预算调整属于 immutable Profile 内容变更，必须重新 validate/publish，并用新
 Conversation 验证。
 
+ROUTED member 的 `explicitTriggerAliases` 是 classifier 之前的确定性触发项。每个 alias 按
+case-insensitive、完整 token/phrase boundary 在整条用户消息中匹配，而不是只检查消息前缀；因此
+`github` 可以命中 “issues assigned to me on my GitHub”，但不能命中 `githubish`。一个 alias 只可
+归属一个 member；同一消息命中多个 member 时仍按 collision fail closed，不能靠 member 顺序或
+classifier 猜测。Profile 作者应使用稳定服务/能力词作为 natural-language alias，slash command
+alias 继续遵守同一 boundary 规则。
+
 ## Legacy 删除
 
 以下链路不再是生产事实源，也不得回归：

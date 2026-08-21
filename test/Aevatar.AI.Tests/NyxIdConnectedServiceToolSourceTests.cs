@@ -700,12 +700,15 @@ public class NyxIdConnectedServiceToolSourceTests
             """{"path_params":{"orderId":"order-alpha"}}""");
 
         using var result = JsonDocument.Parse(outcome.ResultJson);
-        result.RootElement.GetProperty("status").GetString().Should().Be("rejected");
+        result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
         result.RootElement.GetProperty("error_code").GetString()
             .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
         Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
         outcome.ResultJson.Should().NotContain(marker);
-        outcome.Receipt!.ErrorCode.Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ErrorCode.Should().BeEmpty();
+        outcome.Receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
         handler.ProxyRequests.Should().ContainSingle();
     }
 
@@ -725,11 +728,14 @@ public class NyxIdConnectedServiceToolSourceTests
             """{"path_params":{"orderId":"order-alpha"}}""");
 
         using var result = JsonDocument.Parse(outcome.ResultJson);
-        result.RootElement.GetProperty("status").GetString().Should().Be("rejected");
+        result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
         result.RootElement.GetProperty("error_code").GetString()
             .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
         Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
-        outcome.Receipt!.ErrorCode.Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ErrorCode.Should().BeEmpty();
+        outcome.Receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
         handler.ProxyRequests.Should().ContainSingle();
     }
 
