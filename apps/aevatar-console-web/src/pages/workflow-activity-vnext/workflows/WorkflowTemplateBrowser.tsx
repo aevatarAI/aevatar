@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { type Edge, MarkerType } from '@xyflow/react';
+import { MarkerType } from '@xyflow/react';
 import {
   Alert,
   Button,
@@ -22,7 +22,10 @@ import type {
 } from '@/shared/models/runtime/workflowTemplates';
 import { history } from '@/shared/navigation/history';
 import { isStudioApiErrorCode, studioApi } from '@/shared/studio/api';
-import { buildStudioGraphElements } from '@/shared/studio/graph';
+import {
+  buildStudioGraphElements,
+  type StudioGraphElements,
+} from '@/shared/studio/graph';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useDraftMaterialization } from '../hooks/useDraftMaterialization';
 import { buildWorkflowActivityEditorHref } from '../navigation';
@@ -33,6 +36,8 @@ const TEMPLATE_PAGE_SIZE = 12;
 type WorkflowTemplateBrowserProps = {
   readonly scopeId: string;
 };
+
+type PreviewEdge = StudioGraphElements['edges'][number];
 
 interface TemplatePaginationState {
   readonly filterKey: string;
@@ -205,7 +210,9 @@ function TemplateRow({
   );
 }
 
-export function buildTemplatePreviewGraph(detail: WorkflowTemplateDetail) {
+export function buildTemplatePreviewGraph(
+  detail: WorkflowTemplateDetail,
+): StudioGraphElements {
   const stepIds = new Set(detail.definition.steps.map((step) => step.id));
   const validEdges = detail.edges.flatMap((edge, index) =>
     stepIds.has(edge.from) && stepIds.has(edge.to) ? [{ edge, index }] : [],
@@ -244,7 +251,7 @@ export function buildTemplatePreviewGraph(detail: WorkflowTemplateDetail) {
   const nodeIdByStepId = new Map(
     baseGraph.nodes.map((node) => [String(node.data.stepId), node.id]),
   );
-  const authoritativeEdges = validEdges.map<Edge>(({ edge, index }) => {
+  const authoritativeEdges = validEdges.map<PreviewEdge>(({ edge, index }) => {
     const source = nodeIdByStepId.get(edge.from);
     const target = nodeIdByStepId.get(edge.to);
 

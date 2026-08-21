@@ -1,6 +1,10 @@
 import type { WorkflowTemplateDetail } from '@/shared/models/runtime/workflowTemplates';
 import { buildTemplatePreviewGraph } from './WorkflowTemplateBrowser';
 
+function stepBranches(stepId: string): Record<string, string> {
+  return stepId === 'classify' ? { approved: 'publish' } : {};
+}
+
 function createDetailWithImplicitEdges(): WorkflowTemplateDetail {
   return {
     template: {
@@ -30,7 +34,7 @@ function createDetailWithImplicitEdges(): WorkflowTemplateDetail {
         targetRole: '',
         parameters: {},
         next: '',
-        branches: id === 'classify' ? { approved: 'publish' } : {},
+        branches: stepBranches(id),
         children:
           id === 'capture'
             ? [{ id: 'child', type: 'llm_call', targetRole: 'assistant' }]
