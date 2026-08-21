@@ -151,7 +151,8 @@ public static partial class AgentProfilePolicies
             if (selector.Readiness is not null)
             {
                 var scopes = selector.Readiness.RequestedScopes;
-                if (scopes.Count > 64 ||
+                if (scopes.Count == 0 ||
+                    scopes.Count > 64 ||
                     scopes.Any(static scope =>
                         string.IsNullOrWhiteSpace(scope) ||
                         !string.Equals(scope, scope.Trim(), StringComparison.Ordinal) ||
@@ -162,7 +163,7 @@ public static partial class AgentProfilePolicies
                     diagnostics.Add(Diagnostic(
                         "PROFILE_CONNECTED_SERVICE_READINESS_SCOPES_INVALID",
                         $"{selectorField}.readiness.requestedScopes",
-                        "Readiness scopes must be a distinct normalized set of at most 64 values."));
+                        "Readiness scopes must be a non-empty distinct normalized set of at most 64 values."));
                 }
             }
         }

@@ -1011,7 +1011,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         if (readiness is null)
             return true;
 
-        return readiness.RequestedScopes.Count <= 64 &&
+        return readiness.RequestedScopes.Count > 0 &&
+               readiness.RequestedScopes.Count <= 64 &&
                readiness.RequestedScopes.All(static scope =>
                    !string.IsNullOrWhiteSpace(scope) &&
                    string.Equals(scope, scope.Trim(), StringComparison.Ordinal) &&

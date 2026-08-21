@@ -1282,6 +1282,35 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_EmptySealedReadinessScopes_ShouldReturnRestrictedEmpty()
+    {
+        IAgentTool[] tools = [new NyxIdBuiltInTestTool("nyxid_require_service")];
+        var profile = BuildProfile(withAlias: true);
+        var selector = ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly);
+        selector.Readiness = new AgentProfileConnectedServiceReadiness();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(selector);
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+        catalog.RequiredToolInvocation.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ProfileInvalid);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_DuplicateAlias_ShouldUseRecoveryWithoutFetching()
     {
         var tools = NewTools("recovery", "task", "extra");

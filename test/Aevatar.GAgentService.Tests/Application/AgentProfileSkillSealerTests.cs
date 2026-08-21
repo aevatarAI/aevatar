@@ -220,6 +220,23 @@ public sealed class AgentProfileSkillSealerTests
     }
 
     [Fact]
+    public async Task ResolveAndSealAsync_ShouldRejectEmptyReadinessScopes()
+    {
+        var draft = Draft();
+        var selector = Selector("api-github", AgentToolOperationRiskPayload.ReadOnly);
+        selector.Readiness = new AgentProfileConnectedServiceReadiness();
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(selector);
+
+        var result = await NewSealer(new RecordingResolver())
+            .ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "PROFILE_CONNECTED_SERVICE_READINESS_SCOPES_INVALID" &&
+            diagnostic.Field.EndsWith(".readiness.requestedScopes", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ResolveAndSealAsync_ShouldKeepTaskReadinessScopesWithinMaximum()
     {
         var draft = Draft();
