@@ -2233,17 +2233,32 @@ describe('Workflow Activity vNext editor', () => {
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
-    const saveWorkflowButton = await screen.findByRole('button', {
+    const workflowName = await screen.findByDisplayValue('Committed source');
+    const saveWorkflowButton = screen.getByRole('button', {
       name: 'Save workflow',
     });
-    fireEvent.change(screen.getByLabelText('Workflow name'), {
+    fireEvent.change(workflowName, {
       target: { value: 'Committed source updated' },
     });
+    await waitFor(() => expect(saveWorkflowButton).toBeEnabled());
     fireEvent.click(saveWorkflowButton);
 
     await waitFor(() =>
       expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
-        document: parsedDocument,
+        document: expect.objectContaining({
+          roles: [
+            expect.objectContaining({
+              id: 'studio',
+              toolSets: ['studio.local', 'nyxid.connected_services'],
+            }),
+          ],
+          steps: [
+            expect.objectContaining({
+              id: 'reply',
+              toolSets: ['nyxid.connected_services'],
+            }),
+          ],
+        }),
       }),
     );
     await waitFor(() =>
