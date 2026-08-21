@@ -469,6 +469,57 @@ describe('New workflow save-target recovery', () => {
 
   it('renders only decision-useful template facts with step help', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockRuntimeCatalogApi.getWorkflowTemplate.mockResolvedValue({
+      template: {
+        templateId: 'template-incident-triage',
+        displayName: 'Incident triage',
+        description: 'Classify an incident.',
+        defaultDraftName: 'Incident triage',
+        authorityStateVersion: 7,
+        stepCount: 2,
+        requiredConnections: ['pagerduty'],
+        requiresLlmProvider: true,
+        freshness: {
+          projectionWatermark: '2026-08-18T00:00:00Z',
+          lastEventId: 'event-template-7',
+          versionSemantics: 'workflow-catalog-authority-state-version',
+        },
+      },
+      yaml: 'name: incident_triage\nsteps: []\n',
+      definition: {
+        name: 'incident_triage',
+        description: 'Classify an incident.',
+        closedWorldMode: true,
+        roles: [],
+        steps: [
+          {
+            id: 'classify',
+            type: 'llm_call',
+            targetRole: '',
+            parameters: {},
+            next: 'notify',
+            branches: {},
+            children: [],
+          },
+          {
+            id: 'notify',
+            type: 'connector_call',
+            targetRole: '',
+            parameters: {},
+            next: '',
+            branches: {},
+            children: [],
+          },
+        ],
+      },
+      edges: [],
+      authorityStateVersion: 7,
+      freshness: {
+        projectionWatermark: '2026-08-18T00:00:00Z',
+        lastEventId: 'event-template-7',
+        versionSemantics: 'workflow-catalog-authority-state-version',
+      },
+    });
 
     renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
 
@@ -488,6 +539,11 @@ describe('New workflow save-target recovery', () => {
         within(table).getByRole('columnheader', { name }),
       ),
     ).toEqual(headers);
+    expect(headers[0]).toHaveClass('wa-vnext__template-cell--left');
+    expect(headers[1]).toHaveClass('wa-vnext__template-cell--left');
+    expect(headers[2]).toHaveClass('wa-vnext__template-cell--left');
+    expect(headers[3]).toHaveClass('wa-vnext__template-cell--right');
+    expect(headers[4]).toHaveClass('wa-vnext__template-cell--right');
     expect(cells).toHaveLength(5);
     expect(screen.queryByText('Reads')).not.toBeInTheDocument();
     expect(screen.queryByText('Workflow inputs')).not.toBeInTheDocument();
@@ -500,13 +556,27 @@ describe('New workflow save-target recovery', () => {
     expect(
       within(cells[1]).getByText('LLM provider, pagerduty'),
     ).toBeInTheDocument();
+    expect(cells[0]).toHaveClass('wa-vnext__template-cell--left');
+    expect(cells[1]).toHaveClass('wa-vnext__template-cell--left');
+    expect(cells[2]).toHaveClass('wa-vnext__template-cell--left');
+    expect(cells[3]).toHaveClass('wa-vnext__template-cell--right');
+    expect(cells[4]).toHaveClass('wa-vnext__template-cell--right');
     const stepSummary = within(cells[2]).getByRole('button', {
       name: 'Runs 2 steps',
     });
+    expect(mockRuntimeCatalogApi.getWorkflowTemplate).not.toHaveBeenCalled();
     fireEvent.mouseEnter(stepSummary);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      'This template contains 2 configured workflow steps.',
-    );
+    await waitFor(() => {
+      expect(mockRuntimeCatalogApi.getWorkflowTemplate).toHaveBeenCalledWith(
+        'template-incident-triage',
+      );
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveTextContent('Workflow steps (2)');
+      expect(tooltip).toHaveTextContent('classify');
+      expect(tooltip).toHaveTextContent('LLM call');
+      expect(tooltip).toHaveTextContent('notify');
+      expect(tooltip).toHaveTextContent('Connector call');
+    });
     expect(within(cells[3]).getByText('2026/08/18')).toBeInTheDocument();
     expect(
       within(cells[4]).getByRole('button', {
@@ -518,6 +588,28 @@ describe('New workflow save-target recovery', () => {
         name: 'Use template Incident triage',
       }),
     ).toBeInTheDocument();
+  });
+
+  it('shows an actionable tooltip state when step details are unavailable', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockRuntimeCatalogApi.getWorkflowTemplate.mockRejectedValue(
+      new Error('Template details unavailable'),
+    );
+
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
+
+    const stepSummary = await screen.findByRole('button', {
+      name: 'Runs 2 steps',
+    });
+    fireEvent.mouseEnter(stepSummary);
+
+    await waitFor(() => {
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveTextContent(
+        'Step details are unavailable. Open View to inspect this template.',
+      );
+      expect(tooltip).not.toHaveTextContent('Loading step details');
+    });
   });
 
   it('lets vertical wheel input over the template table reach the page scroller', async () => {

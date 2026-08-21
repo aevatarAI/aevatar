@@ -379,8 +379,14 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.templateBrowser.none': 'None',
   'workflowActivityVNext.new.templateBrowser.llmProvider': 'LLM provider',
   'workflowActivityVNext.new.templateBrowser.runsSteps': 'Runs {count} {unit}',
-  'workflowActivityVNext.new.templateBrowser.runsStepsTooltip':
-    'This template contains {count} configured workflow {unit}.',
+  'workflowActivityVNext.new.templateBrowser.stepsTooltipTitle':
+    'Workflow steps ({count})',
+  'workflowActivityVNext.new.templateBrowser.stepsTooltipLoading':
+    'Loading step details…',
+  'workflowActivityVNext.new.templateBrowser.stepsTooltipUnavailable':
+    'Step details are unavailable. Open View to inspect this template.',
+  'workflowActivityVNext.new.templateBrowser.stepsTooltipEmpty':
+    'No workflow steps are exposed for this template.',
   'workflowActivityVNext.new.templateBrowser.step': 'step',
   'workflowActivityVNext.new.templateBrowser.steps': 'steps',
   'workflowActivityVNext.new.templateBrowser.fallbackDescription':

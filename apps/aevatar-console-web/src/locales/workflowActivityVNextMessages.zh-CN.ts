@@ -357,8 +357,14 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateBrowser.llmProvider': 'LLM Provider',
     'workflowActivityVNext.new.templateBrowser.runsSteps':
       '运行 {count} 个{unit}',
-    'workflowActivityVNext.new.templateBrowser.runsStepsTooltip':
-      '此模板包含 {count} 个已配置的工作流{unit}。',
+    'workflowActivityVNext.new.templateBrowser.stepsTooltipTitle':
+      '工作流步骤（{count}）',
+    'workflowActivityVNext.new.templateBrowser.stepsTooltipLoading':
+      '正在加载步骤详情…',
+    'workflowActivityVNext.new.templateBrowser.stepsTooltipUnavailable':
+      '暂时无法加载步骤详情，请点击“查看”查看完整工作流。',
+    'workflowActivityVNext.new.templateBrowser.stepsTooltipEmpty':
+      '该模板未提供可展示的工作流步骤。',
     'workflowActivityVNext.new.templateBrowser.step': '步骤',
     'workflowActivityVNext.new.templateBrowser.steps': '步骤',
     'workflowActivityVNext.new.templateBrowser.fallbackDescription':

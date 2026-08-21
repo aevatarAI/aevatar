@@ -235,6 +235,8 @@ export const workflowActivityVNextCss = `
 .wa-vnext__table-wrap.wa-vnext__template-table-region { border: 0; border-radius: 0; max-height: none; overflow-y: hidden; overscroll-behavior-y: auto; scrollbar-gutter: auto; }
 .wa-vnext__template-table { min-width: 1040px; }
 .wa-vnext__template-table th { background: #f4f6fa; border-bottom: 0; height: 52px; padding-inline: 14px; position: static; }
+.wa-vnext__template-table .wa-vnext__template-cell--left { text-align: left; }
+.wa-vnext__template-table .wa-vnext__template-cell--right { text-align: right; }
 .wa-vnext__template-table th:first-child { border-radius: 8px 0 0 8px; }
 .wa-vnext__template-table th:last-child { border-radius: 0 8px 8px 0; }
 .wa-vnext__template-column--identity { width: 43%; }
@@ -253,6 +255,13 @@ export const workflowActivityVNextCss = `
 .wa-vnext__template-fact strong { font-size: 12px; font-weight: 600; line-height: 17px; overflow-wrap: anywhere; }
 .wa-vnext__template-step-summary { background: none; border: 0; border-radius: 4px; color: inherit; cursor: help; display: inline-block; font: inherit; font-size: 12px; font-weight: 600; line-height: 17px; margin: 0; padding: 0; text-align: left; }
 .wa-vnext__template-step-summary:focus-visible { outline: 2px solid var(--wa-blue); outline-offset: 2px; }
+.wa-vnext__template-step-tooltip { display: grid; gap: 8px; max-width: 320px; min-width: 220px; }
+.wa-vnext__template-step-tooltip > strong { font-size: 12px; line-height: 17px; }
+.wa-vnext__template-step-tooltip > span { line-height: 18px; }
+.wa-vnext__template-step-tooltip ol { display: grid; gap: 5px; margin: 0; max-height: 220px; overflow-y: auto; padding: 0 4px 0 20px; }
+.wa-vnext__template-step-tooltip li { line-height: 17px; padding-left: 2px; }
+.wa-vnext__template-step-tooltip li > span { display: block; overflow-wrap: anywhere; }
+.wa-vnext__template-step-tooltip li > small { color: rgba(255, 255, 255, 0.72); display: block; font-size: 11px; line-height: 15px; }
 .wa-vnext__template-updated { color: var(--wa-muted); white-space: nowrap; }
 .wa-vnext__template-actions-cell { text-align: right; }
 .wa-vnext__template-actions { align-items: center; display: inline-flex; gap: 8px; justify-content: flex-end; white-space: nowrap; }

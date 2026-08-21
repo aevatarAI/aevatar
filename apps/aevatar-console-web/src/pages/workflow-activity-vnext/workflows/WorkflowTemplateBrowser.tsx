@@ -30,6 +30,7 @@ import { history } from '@/shared/navigation/history';
 import { isStudioApiErrorCode, studioApi } from '@/shared/studio/api';
 import {
   buildStudioGraphElements,
+  formatStudioStepTypeLabel,
   type StudioGraphElements,
 } from '@/shared/studio/graph';
 import AevatarTooltip from '@/shared/ui/AevatarTooltip';
@@ -104,6 +105,65 @@ function formatUpdatedAt(template: WorkflowTemplateSummary): string {
   return `${date.getUTCFullYear()}/${month}/${day}`;
 }
 
+function TemplateStepTooltip({
+  detail,
+  hasRequestedDetails,
+  isError,
+  isLoading,
+  stepCount,
+}: {
+  readonly detail?: WorkflowTemplateDetail;
+  readonly hasRequestedDetails: boolean;
+  readonly isError: boolean;
+  readonly isLoading: boolean;
+  readonly stepCount: number;
+}) {
+  const steps = detail?.definition.steps ?? [];
+
+  return (
+    <div className="wa-vnext__template-step-tooltip">
+      <strong>
+        {t(
+          'workflowActivityVNext.new.templateBrowser.stepsTooltipTitle',
+          'Workflow steps ({count})',
+          { count: detail?.definition.steps.length ?? stepCount },
+        )}
+      </strong>
+      {!hasRequestedDetails || isLoading ? (
+        <span>
+          {t(
+            'workflowActivityVNext.new.templateBrowser.stepsTooltipLoading',
+            'Loading step details…',
+          )}
+        </span>
+      ) : isError ? (
+        <span>
+          {t(
+            'workflowActivityVNext.new.templateBrowser.stepsTooltipUnavailable',
+            'Step details are unavailable. Open View to inspect this template.',
+          )}
+        </span>
+      ) : steps.length === 0 ? (
+        <span>
+          {t(
+            'workflowActivityVNext.new.templateBrowser.stepsTooltipEmpty',
+            'No workflow steps are exposed for this template.',
+          )}
+        </span>
+      ) : (
+        <ol>
+          {steps.map((step) => (
+            <li key={step.id}>
+              <span>{step.id}</span>
+              <small>{formatStudioStepTypeLabel(step.type)}</small>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function TemplateRow({
   creating,
   disabled,
@@ -117,6 +177,17 @@ function TemplateRow({
   readonly onView: (templateId: string) => void;
   readonly template: WorkflowTemplateSummary;
 }) {
+  const [stepTooltipOpen, setStepTooltipOpen] = React.useState(false);
+  const stepDetailQuery = useQuery({
+    enabled: stepTooltipOpen,
+    queryKey: [
+      'workflow-activity-vnext',
+      'workflow-template',
+      template.templateId,
+    ],
+    queryFn: () => runtimeCatalogApi.getWorkflowTemplate(template.templateId),
+    retry: false,
+  });
   const templateLabel = t(
     'workflowActivityVNext.new.templateBrowser.template',
     'Template',
@@ -145,15 +216,9 @@ function TemplateRow({
     'Runs {count} {unit}',
     { count: template.stepCount, unit: stepUnit },
   );
-  const stepHelp = t(
-    'workflowActivityVNext.new.templateBrowser.runsStepsTooltip',
-    'This template contains {count} configured workflow {unit}.',
-    { count: template.stepCount, unit: stepUnit },
-  );
-
   return (
     <tr className="wa-vnext__template-row">
-      <td data-label={templateLabel}>
+      <td className="wa-vnext__template-cell--left" data-label={templateLabel}>
         <div className="wa-vnext__template-identity">
           <div className="wa-vnext__template-copy">
             <AevatarTooltip title={template.displayName}>
@@ -171,20 +236,44 @@ function TemplateRow({
           </div>
         </div>
       </td>
-      <td className="wa-vnext__template-fact" data-label={connectionLabel}>
+      <td
+        className="wa-vnext__template-cell--left wa-vnext__template-fact"
+        data-label={connectionLabel}
+      >
         <strong>{formatConnections(template)}</strong>
       </td>
-      <td className="wa-vnext__template-fact" data-label={doesLabel}>
-        <AevatarTooltip title={stepHelp} trigger={['hover', 'focus', 'click']}>
+      <td
+        className="wa-vnext__template-cell--left wa-vnext__template-fact"
+        data-label={doesLabel}
+      >
+        <AevatarTooltip
+          onOpenChange={setStepTooltipOpen}
+          title={
+            <TemplateStepTooltip
+              detail={stepDetailQuery.data}
+              hasRequestedDetails={stepTooltipOpen}
+              isError={stepDetailQuery.isError}
+              isLoading={stepDetailQuery.isLoading}
+              stepCount={template.stepCount}
+            />
+          }
+          trigger={['hover', 'focus', 'click']}
+        >
           <button className="wa-vnext__template-step-summary" type="button">
             {stepSummary}
           </button>
         </AevatarTooltip>
       </td>
-      <td className="wa-vnext__template-updated" data-label={updatedLabel}>
+      <td
+        className="wa-vnext__template-cell--right wa-vnext__template-updated"
+        data-label={updatedLabel}
+      >
         {formatUpdatedAt(template)}
       </td>
-      <td className="wa-vnext__template-actions-cell" data-label={actionsLabel}>
+      <td
+        className="wa-vnext__template-cell--right wa-vnext__template-actions-cell"
+        data-label={actionsLabel}
+      >
         <div className="wa-vnext__template-actions">
           <Button
             aria-label={t(
@@ -893,7 +982,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
               </colgroup>
               <thead>
                 <tr>
-                  <th scope="col">
+                  <th className="wa-vnext__template-cell--left" scope="col">
                     <span className="wa-vnext__template-header-label">
                       <ProfileOutlined aria-hidden="true" />
                       {t(
@@ -902,7 +991,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                       )}
                     </span>
                   </th>
-                  <th scope="col">
+                  <th className="wa-vnext__template-cell--left" scope="col">
                     <span className="wa-vnext__template-header-label">
                       <LinkOutlined aria-hidden="true" />
                       {t(
@@ -911,7 +1000,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                       )}
                     </span>
                   </th>
-                  <th scope="col">
+                  <th className="wa-vnext__template-cell--left" scope="col">
                     <span className="wa-vnext__template-header-label">
                       <PlayCircleOutlined aria-hidden="true" />
                       {t(
@@ -920,7 +1009,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                       )}
                     </span>
                   </th>
-                  <th scope="col">
+                  <th className="wa-vnext__template-cell--right" scope="col">
                     <span className="wa-vnext__template-header-label">
                       <CalendarOutlined aria-hidden="true" />
                       {t(
@@ -934,6 +1023,7 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                       'workflowActivityVNext.new.templateBrowser.actions',
                       'Actions',
                     )}
+                    className="wa-vnext__template-cell--right"
                     scope="col"
                   />
                 </tr>
