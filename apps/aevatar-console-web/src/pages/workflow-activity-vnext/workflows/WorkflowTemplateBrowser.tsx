@@ -1,3 +1,15 @@
+import {
+  ApartmentOutlined,
+  ApiOutlined,
+  CalendarOutlined,
+  CodeOutlined,
+  EyeOutlined,
+  LinkOutlined,
+  MessageOutlined,
+  PlayCircleOutlined,
+  ProfileOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MarkerType } from '@xyflow/react';
 import {
@@ -29,6 +41,7 @@ import {
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useDraftMaterialization } from '../hooks/useDraftMaterialization';
 import { buildWorkflowActivityEditorHref } from '../navigation';
+import TableScrollRegion from '../TableScrollRegion';
 import TechnicalDetails from '../TechnicalDetails';
 
 const TEMPLATE_PAGE_SIZE = 12;
@@ -90,34 +103,41 @@ function formatUpdatedAt(template: WorkflowTemplateSummary): string {
   const timestamp = Date.parse(template.freshness.projectionWatermark);
   if (!Number.isFinite(timestamp))
     return template.freshness.projectionWatermark;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-  }).format(timestamp);
+  const date = new Date(timestamp);
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${date.getUTCFullYear()}/${month}/${day}`;
 }
 
-function TemplateFact({ value }: { readonly value: string }) {
-  return (
-    <div className="wa-vnext__template-fact">
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function TemplateFactsHeader() {
-  return (
-    <div className="wa-vnext__template-facts-header">
-      <span>
-        {t('workflowActivityVNext.new.templateBrowser.reads', 'Reads')}
-      </span>
-      <span>
-        {t(
-          'workflowActivityVNext.new.templateBrowser.connection',
-          'Connection',
-        )}
-      </span>
-      <span>{t('workflowActivityVNext.new.templateBrowser.does', 'Does')}</span>
-    </div>
-  );
+function templateMarker(template: WorkflowTemplateSummary) {
+  if (template.requiredConnections.length > 0) {
+    return {
+      icon: <ApiOutlined />,
+      tone: 'teal',
+    } as const;
+  }
+  if (template.requiresLlmProvider && template.stepCount > 4) {
+    return {
+      icon: <MessageOutlined />,
+      tone: 'coral',
+    } as const;
+  }
+  if (template.stepCount > 1) {
+    return {
+      icon: <ApartmentOutlined />,
+      tone: 'violet',
+    } as const;
+  }
+  if (template.requiresLlmProvider) {
+    return {
+      icon: <ThunderboltOutlined />,
+      tone: 'amber',
+    } as const;
+  }
+  return {
+    icon: <CodeOutlined />,
+    tone: 'green',
+  } as const;
 }
 
 function TemplateRow({
@@ -133,35 +153,67 @@ function TemplateRow({
   readonly onView: (templateId: string) => void;
   readonly template: WorkflowTemplateSummary;
 }) {
+  const marker = templateMarker(template);
+  const templateLabel = t(
+    'workflowActivityVNext.new.templateBrowser.template',
+    'Template',
+  );
+  const readsLabel = t(
+    'workflowActivityVNext.new.templateBrowser.reads',
+    'Reads',
+  );
+  const connectionLabel = t(
+    'workflowActivityVNext.new.templateBrowser.connection',
+    'Connection',
+  );
+  const doesLabel = t('workflowActivityVNext.new.templateBrowser.does', 'Does');
+  const updatedLabel = t(
+    'workflowActivityVNext.new.templateBrowser.updatedColumn',
+    'Updated',
+  );
+  const actionsLabel = t(
+    'workflowActivityVNext.new.templateBrowser.actions',
+    'Actions',
+  );
+
   return (
-    <article className="wa-vnext__template-row">
-      <div className="wa-vnext__template-identity">
-        <Typography.Title level={2}>{template.displayName}</Typography.Title>
-        <p>
-          {template.description ||
-            t(
-              'workflowActivityVNext.new.templateBrowser.fallbackDescription',
-              'A ready-made workflow for your workspace.',
-            )}
-        </p>
-        <span className="wa-vnext__template-meta">
+    <tr className="wa-vnext__template-row">
+      <td data-label={templateLabel}>
+        <div className="wa-vnext__template-identity">
+          <span
+            aria-hidden="true"
+            className={`wa-vnext__template-marker wa-vnext__template-marker--${marker.tone}`}
+          >
+            {marker.icon}
+          </span>
+          <div className="wa-vnext__template-copy">
+            <Typography.Title level={2} title={template.displayName}>
+              {template.displayName}
+            </Typography.Title>
+            <p>
+              {template.description ||
+                t(
+                  'workflowActivityVNext.new.templateBrowser.fallbackDescription',
+                  'A ready-made workflow for your workspace.',
+                )}
+            </p>
+          </div>
+        </div>
+      </td>
+      <td className="wa-vnext__template-fact" data-label={readsLabel}>
+        <strong>
           {t(
-            'workflowActivityVNext.new.templateBrowser.updated',
-            'updated {date}',
-            { date: formatUpdatedAt(template) },
-          )}
-        </span>
-      </div>
-      <div className="wa-vnext__template-facts">
-        <TemplateFact
-          value={t(
             'workflowActivityVNext.new.templateBrowser.workflowInputs',
             'Workflow inputs',
           )}
-        />
-        <TemplateFact value={formatConnections(template)} />
-        <TemplateFact
-          value={t(
+        </strong>
+      </td>
+      <td className="wa-vnext__template-fact" data-label={connectionLabel}>
+        <strong>{formatConnections(template)}</strong>
+      </td>
+      <td className="wa-vnext__template-fact" data-label={doesLabel}>
+        <strong>
+          {t(
             'workflowActivityVNext.new.templateBrowser.runsSteps',
             'Runs {count} {unit}',
             {
@@ -174,39 +226,44 @@ function TemplateRow({
               ),
             },
           )}
-        />
-      </div>
-      <div className="wa-vnext__template-actions">
-        <Button
-          aria-label={t(
-            'workflowActivityVNext.new.templateBrowser.viewNamed',
-            'View {name}',
-            {
-              name: template.displayName,
-            },
-          )}
-          disabled={disabled}
-          onClick={() => onView(template.templateId)}
-        >
-          {t('workflowActivityVNext.new.templateBrowser.view', 'View')}
-        </Button>
-        <Button
-          aria-label={t(
-            'workflowActivityVNext.new.templateBrowser.useNamed',
-            'Use template {name}',
-            {
-              name: template.displayName,
-            },
-          )}
-          disabled={disabled}
-          loading={creating}
-          onClick={() => onCreate(template)}
-          type="primary"
-        >
-          {t('workflowActivityVNext.new.templateBrowser.use', 'Use template')}
-        </Button>
-      </div>
-    </article>
+        </strong>
+      </td>
+      <td className="wa-vnext__template-updated" data-label={updatedLabel}>
+        {formatUpdatedAt(template)}
+      </td>
+      <td className="wa-vnext__template-actions-cell" data-label={actionsLabel}>
+        <div className="wa-vnext__template-actions">
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.new.templateBrowser.viewNamed',
+              'View {name}',
+              {
+                name: template.displayName,
+              },
+            )}
+            disabled={disabled}
+            onClick={() => onView(template.templateId)}
+          >
+            {t('workflowActivityVNext.new.templateBrowser.view', 'View')}
+          </Button>
+          <Button
+            aria-label={t(
+              'workflowActivityVNext.new.templateBrowser.useNamed',
+              'Use template {name}',
+              {
+                name: template.displayName,
+              },
+            )}
+            disabled={disabled}
+            loading={creating}
+            onClick={() => onCreate(template)}
+            type="primary"
+          >
+            {t('workflowActivityVNext.new.templateBrowser.use', 'Use template')}
+          </Button>
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -860,23 +917,100 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
             />
           </div>
         ) : (
-          <div className="wa-vnext__template-list">
-            <div className="wa-vnext__template-list-header">
-              <TemplateFactsHeader />
-            </div>
-            {currentItems.map((template) => (
-              <TemplateRow
-                creating={creationBusy}
-                disabled={creationLocked}
-                key={template.templateId}
-                onCreate={(selected) =>
-                  void createFromTemplate(selected, 'browser')
-                }
-                onView={setSelectedTemplateId}
-                template={template}
-              />
-            ))}
-          </div>
+          <TableScrollRegion
+            ariaLabel={t(
+              'workflowActivityVNext.new.templateBrowser.catalogue',
+              'Workflow template catalogue',
+            )}
+            className="wa-vnext__template-table-region"
+          >
+            <table
+              aria-label={t(
+                'workflowActivityVNext.new.templateBrowser.catalogue',
+                'Workflow template catalogue',
+              )}
+              className="wa-vnext__table wa-vnext__template-table"
+            >
+              <colgroup>
+                <col className="wa-vnext__template-column--identity" />
+                <col className="wa-vnext__template-column--reads" />
+                <col className="wa-vnext__template-column--connection" />
+                <col className="wa-vnext__template-column--does" />
+                <col className="wa-vnext__template-column--updated" />
+                <col className="wa-vnext__template-column--actions" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th scope="col">
+                    <span className="wa-vnext__template-header-label">
+                      <ProfileOutlined aria-hidden="true" />
+                      {t(
+                        'workflowActivityVNext.new.templateBrowser.template',
+                        'Template',
+                      )}
+                    </span>
+                  </th>
+                  <th scope="col">
+                    <span className="wa-vnext__template-header-label">
+                      <EyeOutlined aria-hidden="true" />
+                      {t(
+                        'workflowActivityVNext.new.templateBrowser.reads',
+                        'Reads',
+                      )}
+                    </span>
+                  </th>
+                  <th scope="col">
+                    <span className="wa-vnext__template-header-label">
+                      <LinkOutlined aria-hidden="true" />
+                      {t(
+                        'workflowActivityVNext.new.templateBrowser.connection',
+                        'Connection',
+                      )}
+                    </span>
+                  </th>
+                  <th scope="col">
+                    <span className="wa-vnext__template-header-label">
+                      <PlayCircleOutlined aria-hidden="true" />
+                      {t(
+                        'workflowActivityVNext.new.templateBrowser.does',
+                        'Does',
+                      )}
+                    </span>
+                  </th>
+                  <th scope="col">
+                    <span className="wa-vnext__template-header-label">
+                      <CalendarOutlined aria-hidden="true" />
+                      {t(
+                        'workflowActivityVNext.new.templateBrowser.updatedColumn',
+                        'Updated',
+                      )}
+                    </span>
+                  </th>
+                  <th
+                    aria-label={t(
+                      'workflowActivityVNext.new.templateBrowser.actions',
+                      'Actions',
+                    )}
+                    scope="col"
+                  />
+                </tr>
+              </thead>
+              <tbody>
+                {currentItems.map((template) => (
+                  <TemplateRow
+                    creating={creationBusy}
+                    disabled={creationLocked}
+                    key={template.templateId}
+                    onCreate={(selected) =>
+                      void createFromTemplate(selected, 'browser')
+                    }
+                    onView={setSelectedTemplateId}
+                    template={template}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </TableScrollRegion>
         )}
 
         <div className="wa-vnext__activity-footer">

@@ -347,9 +347,13 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateBrowser.viewNamed': '查看 {name}',
     'workflowActivityVNext.new.templateBrowser.use': '使用模板',
     'workflowActivityVNext.new.templateBrowser.useNamed': '使用模板 {name}',
+    'workflowActivityVNext.new.templateBrowser.catalogue': '工作流模板目录',
+    'workflowActivityVNext.new.templateBrowser.template': '模板',
     'workflowActivityVNext.new.templateBrowser.reads': '读取',
     'workflowActivityVNext.new.templateBrowser.connection': '连接',
     'workflowActivityVNext.new.templateBrowser.does': '执行',
+    'workflowActivityVNext.new.templateBrowser.updatedColumn': '更新时间',
+    'workflowActivityVNext.new.templateBrowser.actions': '操作',
     'workflowActivityVNext.new.templateBrowser.workflowInputs': '工作流输入',
     'workflowActivityVNext.new.templateBrowser.none': '无',
     'workflowActivityVNext.new.templateBrowser.llmProvider': 'LLM Provider',
@@ -357,7 +361,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '运行 {count} 个{unit}',
     'workflowActivityVNext.new.templateBrowser.step': '步骤',
     'workflowActivityVNext.new.templateBrowser.steps': '步骤',
-    'workflowActivityVNext.new.templateBrowser.updated': '更新于 {date}',
     'workflowActivityVNext.new.templateBrowser.fallbackDescription':
       '适用于当前工作区的现成工作流。',
     'workflowActivityVNext.new.templateBrowser.contract': '{name} 契约',
@@ -369,7 +372,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '该模板已不可用。',
     'workflowActivityVNext.new.templateBrowser.preview': '工作流预览',
     'workflowActivityVNext.new.templateBrowser.previewDescription':
-      '共 {count} 个步骤及其执行路径。',
+      '共 {count} 个{unit}及其执行路径。',
     'workflowActivityVNext.new.templateBrowser.noPreviewSteps':
       '该模板未提供可预览的工作流步骤。',
     'workflowActivityVNext.new.templateBrowser.source':
