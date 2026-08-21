@@ -1353,7 +1353,9 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
         var exactCounts = CountConnectedOperations(exactConnectedMatches, availableTools);
         var broadCounts = CountConnectedOperations(broadConnectedMatches, availableTools);
-        if (exactCounts.WriteCount == 0 && broadCounts.WriteCount > 1)
+        if (exactCounts.WriteCount == 0 &&
+            broadCounts.WriteCount > 1 &&
+            broadCounts.ReadCount == 0)
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
@@ -1573,7 +1575,12 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
-                "connected_operation_selector_failed"));
+                string.Equals(
+                    result.FailureCode,
+                    "multiple_write_candidates",
+                    StringComparison.Ordinal)
+                    ? "connected_service_write_ambiguous"
+                    : "connected_operation_selector_failed"));
             return null;
         }
 

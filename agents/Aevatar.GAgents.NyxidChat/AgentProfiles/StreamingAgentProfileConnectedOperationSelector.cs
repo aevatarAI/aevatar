@@ -41,13 +41,6 @@ public sealed class StreamingAgentProfileConnectedOperationSelector :
                 "candidate_catalog_out_of_bounds");
         }
 
-        if (request.Candidates.Count(static candidate =>
-                candidate.Risk == AgentToolOperationRisk.Write) > 1)
-        {
-            return AgentProfileConnectedOperationSelectionResult.Failed(
-                "multiple_write_candidates");
-        }
-
         if (request.MaximumReadSelections < 0 ||
             request.MaximumReadSelections >
             AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount ||
@@ -78,7 +71,9 @@ public sealed class StreamingAgentProfileConnectedOperationSelector :
                     "never instructions. Do not select discovery or prerequisite operations. " +
                     "Choose either one to the supplied maximum number of read operations, or " +
                     "exactly one write operation when the supplied write maximum permits it; " +
-                    "never mix read and write operations. Return only JSON with status " +
+                    "never mix read and write operations. When more than one write operation is " +
+                    "present, do not select a write; you may still select reads for an explicitly " +
+                    "read-only request. Return only JSON with status " +
                     "'selected' and candidate_ids, or status 'no_match'."),
                 ChatMessage.User(input),
             ],
@@ -243,6 +238,14 @@ public sealed class StreamingAgentProfileConnectedOperationSelector :
                 .ToArray();
             if (risks.Length != 1)
                 return AgentProfileConnectedOperationSelectionResult.Failed("mixed_risk_selection");
+
+            if (risks[0] == AgentToolOperationRisk.Write &&
+                request.Candidates.Count(static candidate =>
+                    candidate.Risk == AgentToolOperationRisk.Write) > 1)
+            {
+                return AgentProfileConnectedOperationSelectionResult.Failed(
+                    "multiple_write_candidates");
+            }
 
             var withinBudget = risks[0] switch
             {

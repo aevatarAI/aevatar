@@ -1577,6 +1577,70 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_MixedBroadSelector_ShouldSelectReadDespiteMultipleWrites()
+    {
+        IAgentTool[] tools =
+        [
+            .. Enumerable.Range(1, 4)
+                .Select(index => (IAgentTool)new AdmittedTestTool(
+                    $"nyxop_github_read_{index}",
+                    CreateReadAdmission(
+                        "us-github-alpha",
+                        "api-github-alpha",
+                        $"endpoint-read-{index}",
+                        "api-github"))),
+            .. Enumerable.Range(1, 2)
+                .Select(index => (IAgentTool)new AdmittedTestTool(
+                    $"nyxop_github_write_{index}",
+                    CreateWriteAdmission(
+                        "us-github-alpha",
+                        "api-github-alpha",
+                        $"endpoint-write-{index}",
+                        "api-github"))),
+            new TestTool("ask_user"),
+        ];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("ask_user");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly,
+            AgentToolOperationRiskPayload.Write));
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly,
+            AgentToolOperationRiskPayload.Write));
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+            [request.Candidates.Single(candidate =>
+                candidate.DisplayName == "nyxop_github_read_2").CandidateId]));
+
+        var (catalog, preparation) = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
+            .MaterializeWithPreparationAsync(
+                SealProfile(profile),
+                "/alpha read the repository metadata",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle()
+            .Which.Should().Be("nyxop_github_read_2");
+        preparation.Authority.AuthorityCeilingToolNames.Should().ContainSingle()
+            .Which.Should().Be("nyxop_github_read_2");
+        connectedSelector.CallCount.Should().Be(1);
+        connectedSelector.LastRequest!.Candidates.Should().HaveCount(6);
+        connectedSelector.LastRequest.Candidates.Count(candidate =>
+            candidate.Risk == AgentToolOperationRisk.Write).Should().Be(2);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_InvalidConnectedSelection_ShouldExposeOnlyClarificationTool()
     {
         IAgentTool[] tools = Enumerable.Range(1, 4)

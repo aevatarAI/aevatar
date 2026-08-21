@@ -125,9 +125,15 @@ public sealed class StreamingAgentProfileConnectedOperationSelectorTests
     }
 
     [Fact]
-    public async Task SelectAsync_MultipleWriteCandidates_ShouldFailBeforeCallingProvider()
+    public async Task SelectAsync_MultipleWriteCandidates_ShouldStillPermitReadSelection()
     {
-        var provider = new StubProvider([]);
+        var provider = new StubProvider([
+            new LLMStreamChunk
+            {
+                DeltaContent =
+                    "{\"status\":\"selected\",\"candidate_ids\":[\"operation-002\"]}",
+            },
+        ]);
         var selector = new StreamingAgentProfileConnectedOperationSelector(
             new StubProviderFactory(provider));
         var request = NewRequest() with
@@ -141,8 +147,38 @@ public sealed class StreamingAgentProfileConnectedOperationSelectorTests
 
         var result = await selector.SelectAsync(request);
 
-        result.FailureCode.Should().Be("multiple_write_candidates");
-        provider.CallCount.Should().Be(0);
+        result.Status.Should().Be(AgentProfileConnectedOperationSelectionStatus.Selected);
+        result.CandidateIds.Should().Equal("operation-002");
+        provider.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task SelectAsync_MultipleWriteCandidates_ShouldRejectWriteSelection()
+    {
+        var provider = new StubProvider([
+            new LLMStreamChunk
+            {
+                DeltaContent =
+                    "{\"status\":\"selected\",\"candidate_ids\":[\"operation-003\"]}",
+            },
+        ]);
+        var selector = new StreamingAgentProfileConnectedOperationSelector(
+            new StubProviderFactory(provider));
+        var request = NewRequest() with
+        {
+            Candidates =
+            [
+                .. NewRequest().Candidates,
+                Candidate("operation-005", AgentToolOperationRisk.Write),
+            ],
+        };
+
+        var result = await selector.SelectAsync(request);
+
+        result.Should().Be(
+            AgentProfileConnectedOperationSelectionResult.Failed(
+                "multiple_write_candidates"));
+        provider.CallCount.Should().Be(1);
     }
 
     [Fact]
