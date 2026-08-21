@@ -16,6 +16,7 @@ import {
   AevatarWorkbenchLayout,
 } from "@/shared/ui/aevatarPageShells";
 import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
+import AevatarTooltip from "@/shared/ui/AevatarTooltip";
 import {
   cardListActionStyle,
   cardListStyle,
@@ -132,15 +133,17 @@ const PrimitiveCatalogCard: React.FC<{
         <Typography.Text strong style={{ fontSize: 16, lineHeight: 1.4 }}>
           {primitive.name}
         </Typography.Text>
-        <Typography.Paragraph
-          ellipsis={{ rows: 2, tooltip: summary }}
-          style={{
-            color: "var(--ant-color-text-secondary)",
-            margin: 0,
-          }}
-        >
-          {summary}
-        </Typography.Paragraph>
+        <AevatarTooltip title={summary}>
+          <Typography.Paragraph
+            ellipsis={{ rows: 2 }}
+            style={{
+              color: "var(--ant-color-text-secondary)",
+              margin: 0,
+            }}
+          >
+            {summary}
+          </Typography.Paragraph>
+        </AevatarTooltip>
       </div>
 
       <div

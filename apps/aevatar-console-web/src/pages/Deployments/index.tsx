@@ -19,12 +19,12 @@ import {
   Table,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
   theme,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import {
   readServiceQueryDraft,
   trimServiceQuery,
@@ -714,7 +714,7 @@ const DeploymentsScopeCard: React.FC<{
         >
           {t("pages.deployments.index.team.application.namespace.2", "team/Application/Namespace")}</span>
       </Space>
-      <Tooltip title={scopeLabel}>
+      <AevatarTooltip title={scopeLabel}>
         <div
           style={{
             alignItems: 'center',
@@ -736,7 +736,7 @@ const DeploymentsScopeCard: React.FC<{
         >
           {scopeLabel}
         </div>
-      </Tooltip>
+      </AevatarTooltip>
     </div>
 
     <div
@@ -2328,7 +2328,7 @@ const DeploymentsPage: React.FC = () => {
                           </div>
                         </td>
                         <td style={tableCellStyle}>
-                          <Tooltip
+                          <AevatarTooltip
                             title={`${service.tenantId}/${service.appId}/${service.namespace}`}
                           >
                             <Typography.Text
@@ -2343,7 +2343,7 @@ const DeploymentsPage: React.FC = () => {
                                 service.namespace,
                               )}
                             </Typography.Text>
-                          </Tooltip>
+                          </AevatarTooltip>
                         </td>
                         <td style={tableCellStyle}>
                           {service.activeServingRevisionId ||
@@ -2428,7 +2428,7 @@ const DeploymentsPage: React.FC = () => {
                 type="primary"
               >
                 {t("pages.deployments.index.deploy.release.candidate.3", "Deploy a release candidate")}</Button>
-              <Tooltip title={servingEntryAvailability.reason}>
+              <AevatarTooltip title={servingEntryAvailability.reason}>
                 <span>
                   <Button
                     disabled={!servingEntryAvailability.enabled}
@@ -2440,8 +2440,8 @@ const DeploymentsPage: React.FC = () => {
                       : t("pages.deployments.index.view.traffic.status", "View traffic status")}
                   </Button>
                 </span>
-              </Tooltip>
-              <Tooltip title={rolloutControlEntryAvailability.reason}>
+              </AevatarTooltip>
+              <AevatarTooltip title={rolloutControlEntryAvailability.reason}>
                 <span>
                   <Button
                     disabled={!rolloutControlEntryAvailability.enabled}
@@ -2453,7 +2453,7 @@ const DeploymentsPage: React.FC = () => {
                       : t("pages.deployments.index.no.activity.control", "No activity control")}
                   </Button>
                 </span>
-              </Tooltip>
+              </AevatarTooltip>
             </Space>
           ) : null
         }
@@ -2629,7 +2629,7 @@ const DeploymentsPage: React.FC = () => {
                                 {t("pages.deployments.index.rollout.active", "Rollout active")}
                               </Tag>
                             ) : null}
-                            <Tooltip title={servingEntryAvailability.reason}>
+                            <AevatarTooltip title={servingEntryAvailability.reason}>
                               <span>
                                 <Button
                                   disabled={!servingEntryAvailability.enabled}
@@ -2641,7 +2641,7 @@ const DeploymentsPage: React.FC = () => {
                                     : t("pages.deployments.index.view.traffic.status.2", "View traffic status")}
                                 </Button>
                               </span>
-                            </Tooltip>
+                            </AevatarTooltip>
                           </Space>
                         }
                       >
@@ -2682,7 +2682,7 @@ const DeploymentsPage: React.FC = () => {
                             <Tag>
                               {t("pages.deployments.index.generation.4", "Generation")}{trafficQuery.data?.generation ?? 0}
                             </Tag>
-                            <Tooltip title={servingEntryAvailability.reason}>
+                            <AevatarTooltip title={servingEntryAvailability.reason}>
                               <span>
                                 <Button
                                   disabled={!servingEntryAvailability.enabled}
@@ -2694,7 +2694,7 @@ const DeploymentsPage: React.FC = () => {
                                     : t("pages.deployments.index.view.traffic.status.3", "View traffic status")}
                                 </Button>
                               </span>
-                            </Tooltip>
+                            </AevatarTooltip>
                           </Space>
                         }
                       >
@@ -3061,7 +3061,7 @@ const DeploymentsPage: React.FC = () => {
                         servingTargetPlanStatus.enabled ? 'info' : 'warning'
                       }
                     />
-                    <Tooltip title={servingTargetPlanStatus.reason}>
+                    <AevatarTooltip title={servingTargetPlanStatus.reason}>
                       <span
                         style={{ display: 'inline-flex', width: 'fit-content' }}
                       >
@@ -3074,7 +3074,7 @@ const DeploymentsPage: React.FC = () => {
                         >
                           {t("pages.deployments.index.apply.weights.2", "Apply weights")}</Button>
                       </span>
-                    </Tooltip>
+                    </AevatarTooltip>
                   </div>
                 ),
                 key: 'weights',
@@ -3124,7 +3124,7 @@ const DeploymentsPage: React.FC = () => {
                           rolloutActionAvailability[definition.action];
 
                         return (
-                          <Tooltip
+                          <AevatarTooltip
                             key={definition.action}
                             title={availability.reason}
                           >
@@ -3144,7 +3144,7 @@ const DeploymentsPage: React.FC = () => {
                                 {formatConsoleMessage(definition.label)}
                               </Button>
                             </span>
-                          </Tooltip>
+                          </AevatarTooltip>
                         );
                       })}
                     </Space>
@@ -3372,7 +3372,7 @@ const DeploymentsPage: React.FC = () => {
                       }}
                     >
                       {t("pages.deployments.index.adjust.flow.10", "Adjust flow")}</Button>
-                    <Tooltip title={deploymentDeactivateAvailability.reason}>
+                    <AevatarTooltip title={deploymentDeactivateAvailability.reason}>
                       <span>
                         <Button
                           danger
@@ -3394,7 +3394,7 @@ const DeploymentsPage: React.FC = () => {
                             : t("pages.deployments.index.cannot.be.deactivated", "Cannot be deactivated")}
                         </Button>
                       </span>
-                    </Tooltip>
+                    </AevatarTooltip>
                   </Space>
                 </DrawerSection>
               </div>

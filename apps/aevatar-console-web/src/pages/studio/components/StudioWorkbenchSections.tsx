@@ -46,6 +46,7 @@ import {
 } from '@/shared/ui/proComponents';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
 import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { describeError } from '@/shared/ui/errorText';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -1893,12 +1894,14 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 }}
               >
                 <Typography.Text type="secondary">{row.label}</Typography.Text>
-                <Typography.Text ellipsis={{ tooltip: row.current }}>
-                  {row.current}
-                </Typography.Text>
-                <Typography.Text type="secondary" ellipsis={{ tooltip: row.baseline }}>
-                  {row.baseline}
-                </Typography.Text>
+                <AevatarTooltip title={row.current}>
+                  <Typography.Text ellipsis>{row.current}</Typography.Text>
+                </AevatarTooltip>
+                <AevatarTooltip title={row.baseline}>
+                  <Typography.Text ellipsis type="secondary">
+                    {row.baseline}
+                  </Typography.Text>
+                </AevatarTooltip>
                 <AevatarStatusTag
                   domain="observation"
                   label="delta"

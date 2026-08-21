@@ -1,14 +1,8 @@
 import {
-  ApartmentOutlined,
-  ApiOutlined,
   CalendarOutlined,
-  CodeOutlined,
-  EyeOutlined,
   LinkOutlined,
-  MessageOutlined,
   PlayCircleOutlined,
   ProfileOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MarkerType } from '@xyflow/react';
@@ -38,6 +32,7 @@ import {
   buildStudioGraphElements,
   type StudioGraphElements,
 } from '@/shared/studio/graph';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useDraftMaterialization } from '../hooks/useDraftMaterialization';
 import { buildWorkflowActivityEditorHref } from '../navigation';
@@ -109,37 +104,6 @@ function formatUpdatedAt(template: WorkflowTemplateSummary): string {
   return `${date.getUTCFullYear()}/${month}/${day}`;
 }
 
-function templateMarker(template: WorkflowTemplateSummary) {
-  if (template.requiredConnections.length > 0) {
-    return {
-      icon: <ApiOutlined />,
-      tone: 'teal',
-    } as const;
-  }
-  if (template.requiresLlmProvider && template.stepCount > 4) {
-    return {
-      icon: <MessageOutlined />,
-      tone: 'coral',
-    } as const;
-  }
-  if (template.stepCount > 1) {
-    return {
-      icon: <ApartmentOutlined />,
-      tone: 'violet',
-    } as const;
-  }
-  if (template.requiresLlmProvider) {
-    return {
-      icon: <ThunderboltOutlined />,
-      tone: 'amber',
-    } as const;
-  }
-  return {
-    icon: <CodeOutlined />,
-    tone: 'green',
-  } as const;
-}
-
 function TemplateRow({
   creating,
   disabled,
@@ -153,14 +117,9 @@ function TemplateRow({
   readonly onView: (templateId: string) => void;
   readonly template: WorkflowTemplateSummary;
 }) {
-  const marker = templateMarker(template);
   const templateLabel = t(
     'workflowActivityVNext.new.templateBrowser.template',
     'Template',
-  );
-  const readsLabel = t(
-    'workflowActivityVNext.new.templateBrowser.reads',
-    'Reads',
   );
   const connectionLabel = t(
     'workflowActivityVNext.new.templateBrowser.connection',
@@ -175,21 +134,33 @@ function TemplateRow({
     'workflowActivityVNext.new.templateBrowser.actions',
     'Actions',
   );
+  const stepUnit = t(
+    template.stepCount === 1
+      ? 'workflowActivityVNext.new.templateBrowser.step'
+      : 'workflowActivityVNext.new.templateBrowser.steps',
+    template.stepCount === 1 ? 'step' : 'steps',
+  );
+  const stepSummary = t(
+    'workflowActivityVNext.new.templateBrowser.runsSteps',
+    'Runs {count} {unit}',
+    { count: template.stepCount, unit: stepUnit },
+  );
+  const stepHelp = t(
+    'workflowActivityVNext.new.templateBrowser.runsStepsTooltip',
+    'This template contains {count} configured workflow {unit}.',
+    { count: template.stepCount, unit: stepUnit },
+  );
 
   return (
     <tr className="wa-vnext__template-row">
       <td data-label={templateLabel}>
         <div className="wa-vnext__template-identity">
-          <span
-            aria-hidden="true"
-            className={`wa-vnext__template-marker wa-vnext__template-marker--${marker.tone}`}
-          >
-            {marker.icon}
-          </span>
           <div className="wa-vnext__template-copy">
-            <Typography.Title level={2} title={template.displayName}>
-              {template.displayName}
-            </Typography.Title>
+            <AevatarTooltip title={template.displayName}>
+              <Typography.Title level={2}>
+                {template.displayName}
+              </Typography.Title>
+            </AevatarTooltip>
             <p>
               {template.description ||
                 t(
@@ -200,33 +171,15 @@ function TemplateRow({
           </div>
         </div>
       </td>
-      <td className="wa-vnext__template-fact" data-label={readsLabel}>
-        <strong>
-          {t(
-            'workflowActivityVNext.new.templateBrowser.workflowInputs',
-            'Workflow inputs',
-          )}
-        </strong>
-      </td>
       <td className="wa-vnext__template-fact" data-label={connectionLabel}>
         <strong>{formatConnections(template)}</strong>
       </td>
       <td className="wa-vnext__template-fact" data-label={doesLabel}>
-        <strong>
-          {t(
-            'workflowActivityVNext.new.templateBrowser.runsSteps',
-            'Runs {count} {unit}',
-            {
-              count: template.stepCount,
-              unit: t(
-                template.stepCount === 1
-                  ? 'workflowActivityVNext.new.templateBrowser.step'
-                  : 'workflowActivityVNext.new.templateBrowser.steps',
-                template.stepCount === 1 ? 'step' : 'steps',
-              ),
-            },
-          )}
-        </strong>
+        <AevatarTooltip title={stepHelp} trigger={['hover', 'focus', 'click']}>
+          <button className="wa-vnext__template-step-summary" type="button">
+            {stepSummary}
+          </button>
+        </AevatarTooltip>
       </td>
       <td className="wa-vnext__template-updated" data-label={updatedLabel}>
         {formatUpdatedAt(template)}
@@ -933,7 +886,6 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
             >
               <colgroup>
                 <col className="wa-vnext__template-column--identity" />
-                <col className="wa-vnext__template-column--reads" />
                 <col className="wa-vnext__template-column--connection" />
                 <col className="wa-vnext__template-column--does" />
                 <col className="wa-vnext__template-column--updated" />
@@ -947,15 +899,6 @@ const WorkflowTemplateBrowser: React.FC<WorkflowTemplateBrowserProps> = ({
                       {t(
                         'workflowActivityVNext.new.templateBrowser.template',
                         'Template',
-                      )}
-                    </span>
-                  </th>
-                  <th scope="col">
-                    <span className="wa-vnext__template-header-label">
-                      <EyeOutlined aria-hidden="true" />
-                      {t(
-                        'workflowActivityVNext.new.templateBrowser.reads',
-                        'Reads',
                       )}
                     </span>
                   </th>

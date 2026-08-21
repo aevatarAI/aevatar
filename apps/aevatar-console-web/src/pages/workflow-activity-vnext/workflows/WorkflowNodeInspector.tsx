@@ -7,10 +7,10 @@ import {
   Modal,
   Select,
   Switch,
-  Tooltip,
   Typography,
 } from 'antd';
 import React from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { formatConsoleMessage, t } from '@/shared/i18n/messages';
 import {
   parseInspectorParameters,
@@ -486,7 +486,7 @@ const WorkflowNodeInspector = React.forwardRef<
                 {stepDraft.id}
               </Typography.Text>
             </div>
-            <Tooltip
+            <AevatarTooltip
               title={t(
                 'workflowActivityVNext.nodeInspector.close',
                 'Close configuration',
@@ -502,7 +502,7 @@ const WorkflowNodeInspector = React.forwardRef<
                 onClick={requestClose}
                 type="text"
               />
-            </Tooltip>
+            </AevatarTooltip>
           </header>
           <div className="wa-vnext__node-inspector-body">
             <section aria-labelledby="wa-vnext-node-configuration-title">

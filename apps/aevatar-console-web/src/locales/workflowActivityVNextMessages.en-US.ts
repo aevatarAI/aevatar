@@ -372,15 +372,15 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.templateBrowser.catalogue':
     'Workflow template catalogue',
   'workflowActivityVNext.new.templateBrowser.template': 'Template',
-  'workflowActivityVNext.new.templateBrowser.reads': 'Reads',
   'workflowActivityVNext.new.templateBrowser.connection': 'Connection',
   'workflowActivityVNext.new.templateBrowser.does': 'Does',
   'workflowActivityVNext.new.templateBrowser.updatedColumn': 'Updated',
   'workflowActivityVNext.new.templateBrowser.actions': 'Actions',
-  'workflowActivityVNext.new.templateBrowser.workflowInputs': 'Workflow inputs',
   'workflowActivityVNext.new.templateBrowser.none': 'None',
   'workflowActivityVNext.new.templateBrowser.llmProvider': 'LLM provider',
   'workflowActivityVNext.new.templateBrowser.runsSteps': 'Runs {count} {unit}',
+  'workflowActivityVNext.new.templateBrowser.runsStepsTooltip':
+    'This template contains {count} configured workflow {unit}.',
   'workflowActivityVNext.new.templateBrowser.step': 'step',
   'workflowActivityVNext.new.templateBrowser.steps': 'steps',
   'workflowActivityVNext.new.templateBrowser.fallbackDescription':

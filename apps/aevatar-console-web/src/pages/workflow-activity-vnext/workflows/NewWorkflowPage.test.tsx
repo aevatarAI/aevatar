@@ -467,7 +467,7 @@ describe('New workflow save-target recovery', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('renders template facts in aligned table columns', async () => {
+  it('renders only decision-useful template facts with step help', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
 
     renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
@@ -482,30 +482,39 @@ describe('New workflow save-target recovery', () => {
     const row = within(table).getByRole('row', { name: /Incident triage/ });
     const cells = within(row).getAllByRole('cell');
 
-    expect(headers).toHaveLength(6);
+    expect(headers).toHaveLength(5);
     expect(
-      ['Template', 'Reads', 'Connection', 'Does', 'Updated', 'Actions'].map(
-        (name) => within(table).getByRole('columnheader', { name }),
+      ['Template', 'Connection', 'Does', 'Updated', 'Actions'].map((name) =>
+        within(table).getByRole('columnheader', { name }),
       ),
     ).toEqual(headers);
-    expect(cells).toHaveLength(6);
-    expect(screen.getAllByText('Reads')).toHaveLength(1);
+    expect(cells).toHaveLength(5);
+    expect(screen.queryByText('Reads')).not.toBeInTheDocument();
+    expect(screen.queryByText('Workflow inputs')).not.toBeInTheDocument();
     expect(screen.getAllByText('Connection')).toHaveLength(1);
     expect(screen.getAllByText('Does')).toHaveLength(1);
     expect(within(cells[0]).getByText('Incident triage')).toBeInTheDocument();
-    expect(within(cells[1]).getByText('Workflow inputs')).toBeInTheDocument();
     expect(
-      within(cells[2]).getByText('LLM provider, pagerduty'),
+      cells[0].querySelector('.wa-vnext__template-marker'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(cells[1]).getByText('LLM provider, pagerduty'),
     ).toBeInTheDocument();
-    expect(within(cells[3]).getByText('Runs 2 steps')).toBeInTheDocument();
-    expect(within(cells[4]).getByText('2026/08/18')).toBeInTheDocument();
+    const stepSummary = within(cells[2]).getByRole('button', {
+      name: 'Runs 2 steps',
+    });
+    fireEvent.mouseEnter(stepSummary);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'This template contains 2 configured workflow steps.',
+    );
+    expect(within(cells[3]).getByText('2026/08/18')).toBeInTheDocument();
     expect(
-      within(cells[5]).getByRole('button', {
+      within(cells[4]).getByRole('button', {
         name: 'View Incident triage',
       }),
     ).toBeInTheDocument();
     expect(
-      within(cells[5]).getByRole('button', {
+      within(cells[4]).getByRole('button', {
         name: 'Use template Incident triage',
       }),
     ).toBeInTheDocument();

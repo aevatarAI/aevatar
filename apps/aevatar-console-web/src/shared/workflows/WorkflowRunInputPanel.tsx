@@ -5,8 +5,9 @@ import {
   PaperClipOutlined,
   PlayCircleOutlined,
 } from '@ant-design/icons';
-import { Button, Input, Tooltip, Typography } from 'antd';
+import { Button, Input, Typography } from 'antd';
 import React from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { t } from '@/shared/i18n/messages';
 import WorkflowSidePanel from './WorkflowSidePanel';
 
@@ -351,7 +352,7 @@ const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
             style={fileDropZoneStyle}
           >
             <div style={attachmentToolbarStyle}>
-              <Tooltip
+              <AevatarTooltip
                 title={t(
                   'teamMemberWorkflowStudio.draftRunPanel.attachFiles',
                   'Attach files',
@@ -371,7 +372,7 @@ const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
                     'Add files',
                   )}
                 </Button>
-              </Tooltip>
+              </AevatarTooltip>
               <Typography.Text style={{ color: '#64748b', fontSize: 12 }}>
                 {t(
                   'teamMemberWorkflowStudio.draftRunPanel.dropFiles',
@@ -395,11 +396,11 @@ const WorkflowRunInputPanel: React.FC<WorkflowRunInputPanelProps> = ({
                     style={attachmentChipStyle}
                   >
                     {getFileIcon(file)}
-                    <Tooltip
+                    <AevatarTooltip
                       title={`${file.name} · ${file.type || 'file'} · ${formatFileSize(file.size)}`}
                     >
                       <span style={attachmentNameStyle}>{file.name}</span>
-                    </Tooltip>
+                    </AevatarTooltip>
                     <span style={attachmentMetaStyle}>
                       {formatFileSize(file.size)}
                     </span>

@@ -349,16 +349,16 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateBrowser.useNamed': '使用模板 {name}',
     'workflowActivityVNext.new.templateBrowser.catalogue': '工作流模板目录',
     'workflowActivityVNext.new.templateBrowser.template': '模板',
-    'workflowActivityVNext.new.templateBrowser.reads': '读取',
     'workflowActivityVNext.new.templateBrowser.connection': '连接',
     'workflowActivityVNext.new.templateBrowser.does': '执行',
     'workflowActivityVNext.new.templateBrowser.updatedColumn': '更新时间',
     'workflowActivityVNext.new.templateBrowser.actions': '操作',
-    'workflowActivityVNext.new.templateBrowser.workflowInputs': '工作流输入',
     'workflowActivityVNext.new.templateBrowser.none': '无',
     'workflowActivityVNext.new.templateBrowser.llmProvider': 'LLM Provider',
     'workflowActivityVNext.new.templateBrowser.runsSteps':
       '运行 {count} 个{unit}',
+    'workflowActivityVNext.new.templateBrowser.runsStepsTooltip':
+      '此模板包含 {count} 个已配置的工作流{unit}。',
     'workflowActivityVNext.new.templateBrowser.step': '步骤',
     'workflowActivityVNext.new.templateBrowser.steps': '步骤',
     'workflowActivityVNext.new.templateBrowser.fallbackDescription':

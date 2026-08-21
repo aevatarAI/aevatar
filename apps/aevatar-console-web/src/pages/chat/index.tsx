@@ -16,7 +16,6 @@ import {
   Space,
   Spin,
   Tag,
-  Tooltip,
   Typography,
   theme,
 } from "antd";
@@ -28,6 +27,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { studioApi } from "@/shared/studio/api";
 import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
 import { useConsoleToast } from "@/shared/ui/ConsoleToast";
@@ -1886,7 +1886,7 @@ const ChatPage: React.FC = () => {
                   </button>
                   {conversation.historyReconciliation?.status === "failed" &&
                   conversation.historyReconciliation.retryable ? (
-                    <Tooltip
+                    <AevatarTooltip
                       title={t(
                         "pages.chat.index.retryHistorySave",
                         "Retry saving {title}",
@@ -1907,9 +1907,9 @@ const ChatPage: React.FC = () => {
                         style={{ minHeight: 40, minWidth: 40 }}
                         type="text"
                       />
-                    </Tooltip>
+                    </AevatarTooltip>
                   ) : null}
-                  <Tooltip
+                  <AevatarTooltip
                     title={t("pages.chat.index.deleteChat", "Delete {title}", {
                       title: conversation.title,
                     })}
@@ -1927,7 +1927,7 @@ const ChatPage: React.FC = () => {
                       style={{ minHeight: 40, minWidth: 40 }}
                       type="text"
                     />
-                  </Tooltip>
+                  </AevatarTooltip>
                 </div>
               );
             })}
@@ -1991,7 +1991,7 @@ const ChatPage: React.FC = () => {
               padding: "10px 14px",
             }}
           >
-            <Tooltip
+            <AevatarTooltip
               title={t("pages.chat.index.openHistory", "Open chat history")}
             >
               <Button
@@ -2002,7 +2002,7 @@ const ChatPage: React.FC = () => {
                 style={{ minHeight: 44, minWidth: 44 }}
                 type="text"
               />
-            </Tooltip>
+            </AevatarTooltip>
             <div style={{ flex: 1, minWidth: 0 }}>
               <Typography.Text
                 strong
