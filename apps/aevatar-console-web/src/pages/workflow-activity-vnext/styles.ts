@@ -232,7 +232,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__template-sort { align-items: center; display: flex; flex: 0 0 auto; gap: 8px; }
 .wa-vnext__template-sort-label { color: var(--wa-muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .wa-vnext__template-sort .ant-select { min-width: 224px; }
-.wa-vnext__table-wrap.wa-vnext__template-table-region { border: 0; border-radius: 0; max-height: none; overflow-y: hidden; scrollbar-gutter: auto; }
+.wa-vnext__table-wrap.wa-vnext__template-table-region { border: 0; border-radius: 0; max-height: none; overflow-y: hidden; overscroll-behavior-y: auto; scrollbar-gutter: auto; }
 .wa-vnext__template-table { min-width: 1160px; }
 .wa-vnext__template-table th { background: #f4f6fa; border-bottom: 0; height: 52px; padding-inline: 14px; position: static; }
 .wa-vnext__template-table th:first-child { border-radius: 8px 0 0 8px; }

@@ -511,6 +511,24 @@ describe('New workflow save-target recovery', () => {
     ).toBeInTheDocument();
   });
 
+  it('lets vertical wheel input over the template table reach the page scroller', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
+
+    const catalogue = await screen.findByRole('region', {
+      name: 'Workflow template catalogue',
+    });
+    const shellStyles = Array.from(document.querySelectorAll('style')).find(
+      (style) => style.textContent?.includes('wa-vnext__template-table-region'),
+    );
+
+    expect(catalogue).toBeInTheDocument();
+    expect(shellStyles?.textContent).toMatch(
+      /\.wa-vnext__table-wrap\.wa-vnext__template-table-region \{[^}]*overscroll-behavior-y: auto;[^}]*\}/,
+    );
+  });
+
   it('opens a known template page with its saved cursor', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
     mockRuntimeCatalogApi.listWorkflowTemplates
