@@ -93,6 +93,13 @@ MINUS deny policy
 
 Task/recovery selector 必须按 catalog slug 被 maximum selector 的 risk 集覆盖；selector 不能触发 rediscovery、创建连接、改变 credential，或扩大静态 route ceiling。validate/publish 会拒绝非法 slug、空/未知/破坏性 risk 与 policy 内重复 slug，canonical sealing 会稳定排序 selector 与 risk。maximum 拒绝掉动态 operation 时 runtime 只记录按 typed presentation kind 聚合的 bounded count，不记录工具名、连接或 endpoint 身份。
 
+发布契约固定使用 `15000ms` classifier budget 与 `15000ms` exact-skill fetch budget。前者覆盖
+streaming LLM classification 的正常网络/首 token 时延，后者覆盖经 NyxID proxy 的 exact Ornn
+读取；两者超时都继续 fail closed。不得用亚秒 classifier budget 发布 Profile，因为 timeout 会在
+request-local connected-service tools 已成功发现后把 authority 降为 empty recovery，看起来像“连接
+存在但没有工具”。预算调整属于 immutable Profile 内容变更，必须重新 validate/publish，并用新
+Conversation 验证。
+
 ## Legacy 删除
 
 以下链路不再是生产事实源，也不得回归：

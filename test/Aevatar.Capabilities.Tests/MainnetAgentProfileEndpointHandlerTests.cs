@@ -154,6 +154,9 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         payload.RootElement.GetProperty("agentSources").EnumerateArray()
             .Select(static item => item.GetString())
             .Should().BeEquivalentTo("my_agents", "system_agents");
+        var runtimeParameters = payload.RootElement.GetProperty("runtimeParameters");
+        runtimeParameters.GetProperty("classifierTimeoutMs").GetInt32().Should().Be(15_000);
+        runtimeParameters.GetProperty("exactSkillFetchTimeoutMs").GetInt32().Should().Be(15_000);
         var json = payload.RootElement.GetRawText().ToLowerInvariant();
         json.Should().NotContain("owner");
         json.Should().NotContain("caller");
@@ -176,6 +179,9 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         payload.RootElement.GetProperty("referenceOwnerKinds").EnumerateArray()
             .Select(static item => item.GetString())
             .Should().BeEquivalentTo("caller", "system");
+        var runtimeParameters = payload.RootElement.GetProperty("runtimeParameters");
+        runtimeParameters.GetProperty("classifierTimeoutMs").GetInt32().Should().Be(15_000);
+        runtimeParameters.GetProperty("exactSkillFetchTimeoutMs").GetInt32().Should().Be(15_000);
         payload.RootElement.TryGetProperty("agentSources", out _).Should().BeFalse();
     }
 

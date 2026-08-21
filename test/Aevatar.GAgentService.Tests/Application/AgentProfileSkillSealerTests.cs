@@ -246,6 +246,27 @@ public sealed class AgentProfileSkillSealerTests
         resolver.Requests.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("classifier", "PROFILE_CLASSIFIER_TIMEOUT_INVALID")]
+    [InlineData("exact-skill", "PROFILE_EXACT_SKILL_TIMEOUT_INVALID")]
+    public async Task ResolveAndSealAsync_ShouldRejectLegacySubsecondTurnBudgets(
+        string budget,
+        string expectedCode)
+    {
+        var draft = Draft();
+        if (budget == "classifier")
+            draft.RuntimeProfile.ClassifierTimeoutMs = 600;
+        else
+            draft.RuntimeProfile.ExactSkillFetchTimeoutMs = 1_500;
+        var resolver = new RecordingResolver();
+
+        var result = await NewSealer(resolver).ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().ContainSingle(diagnostic => diagnostic.Code == expectedCode);
+        resolver.Requests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task ResolveAndSealAsync_ShouldRejectMissingTokenAndTypedResolverFailure()
     {
@@ -321,8 +342,8 @@ public sealed class AgentProfileSkillSealerTests
             RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
             MaxPlanSteps = 4,
             HandoffTtlSeconds = 900,
-            ClassifierTimeoutMs = 600,
-            ExactSkillFetchTimeoutMs = 1_500,
+            ClassifierTimeoutMs = 15_000,
+            ExactSkillFetchTimeoutMs = 15_000,
             MaxSelectedSkillBytes = 24_576,
             MaximumToolPolicy = new AgentProfileToolPolicy
             {

@@ -8,8 +8,8 @@ public sealed class AgentProfileValidationLimits
 {
     public const int RequiredMaxPlanSteps = 4;
     public const int RequiredHandoffTtlSeconds = 900;
-    public const int RequiredClassifierTimeoutMs = 600;
-    public const int RequiredExactSkillFetchTimeoutMs = 1_500;
+    public const int RequiredClassifierTimeoutMs = 15_000;
+    public const int RequiredExactSkillFetchTimeoutMs = 15_000;
     public const int RequiredMaxSelectedSkillBytes = 24_576;
     public const int MaximumMembers = 32;
 
