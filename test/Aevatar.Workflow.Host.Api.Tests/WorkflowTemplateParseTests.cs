@@ -1,3 +1,4 @@
+using Aevatar.Configuration;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Core;
@@ -6,7 +7,7 @@ using FluentAssertions;
 namespace Aevatar.Workflow.Host.Api.Tests;
 
 /// <summary>
-/// Every YAML under the repository's workflows/ directory must round-trip through
+/// Every YAML under the repository's workflow-templates/ directory must round-trip through
 /// <see cref="WorkflowParser"/> and pass <see cref="WorkflowValidator"/>: the catalog file
 /// loader only stores raw strings, so without this test a malformed template would surface
 /// only at first run time.
@@ -16,7 +17,7 @@ public class WorkflowTemplateParseTests
     public static TheoryData<string> TemplateFiles()
     {
         var data = new TheoryData<string>();
-        var directory = Path.Combine(FindRepositoryRoot(), "workflows");
+        var directory = Path.Combine(FindRepositoryRoot(), AevatarPaths.WorkflowTemplatesDirectoryName);
         foreach (var file in Directory.EnumerateFiles(directory, "*.yaml", SearchOption.TopDirectoryOnly).OrderBy(f => f))
             data.Add(Path.GetFileName(file));
         return data;
@@ -26,7 +27,7 @@ public class WorkflowTemplateParseTests
     [MemberData(nameof(TemplateFiles))]
     public void Template_ShouldParse(string fileName)
     {
-        var yaml = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "workflows", fileName));
+        var yaml = File.ReadAllText(Path.Combine(FindRepositoryRoot(), AevatarPaths.WorkflowTemplatesDirectoryName, fileName));
 
         var definition = new WorkflowParser().Parse(yaml);
 

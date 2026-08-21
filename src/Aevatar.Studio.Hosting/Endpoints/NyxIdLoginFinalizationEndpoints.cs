@@ -328,6 +328,7 @@ public static class NyxIdLoginFinalizationEndpoints
                     false,
                     catalogRefreshLifecycle,
                     catalogVisibilityPort,
+                    request.RequiredUserServiceIds,
                     logger,
                     ct);
             }
@@ -345,6 +346,7 @@ public static class NyxIdLoginFinalizationEndpoints
                         false,
                         catalogRefreshLifecycle,
                         catalogVisibilityPort,
+                        request.RequiredUserServiceIds,
                         logger,
                         ct);
                 }
@@ -397,6 +399,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 true,
                 catalogRefreshLifecycle,
                 catalogVisibilityPort,
+                request.RequiredUserServiceIds,
                 logger,
                 ct);
         }
@@ -435,6 +438,7 @@ public static class NyxIdLoginFinalizationEndpoints
             true,
             catalogRefreshLifecycle,
             catalogVisibilityPort,
+            request.RequiredUserServiceIds,
             logger,
             ct);
     }
@@ -445,9 +449,12 @@ public static class NyxIdLoginFinalizationEndpoints
         bool bindingDispatchAccepted,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefreshLifecycle,
         INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort,
+        IReadOnlyList<string>? requiredUserServiceIds,
         ILogger logger,
         CancellationToken ct)
     {
+        var owner = PersonalCatalogOwner(user.Sub);
+        var requiredServices = BuildRequiredServiceRefs(requiredUserServiceIds);
         NyxIdAuthorizationCatalogRefreshResult catalogRefresh;
         if (catalogRefreshLifecycle is null)
         {
@@ -459,9 +466,17 @@ public static class NyxIdLoginFinalizationEndpoints
         {
             try
             {
-                catalogRefresh = await catalogRefreshLifecycle
-                    .RefreshPersonalAsync(user.Sub, exchange.AccessToken!, ct)
-                    .ConfigureAwait(false);
+                catalogRefresh = requiredServices == null
+                    ? await catalogRefreshLifecycle
+                        .RefreshPersonalAsync(user.Sub, exchange.AccessToken!, ct)
+                        .ConfigureAwait(false)
+                    : await catalogRefreshLifecycle
+                        .RefreshAsync(
+                            owner,
+                            exchange.AccessToken!,
+                            new NyxIdAuthorizationCatalogRefreshRequest(requiredServices, LLMTarget: null),
+                            ct)
+                        .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -492,11 +507,18 @@ public static class NyxIdLoginFinalizationEndpoints
             {
                 try
                 {
-                    visibility = await catalogVisibilityPort.ResolveAsync(
-                            PersonalCatalogOwner(user.Sub),
-                            catalogRefresh.StateVersion,
-                            ct)
-                        .ConfigureAwait(false);
+                    visibility = requiredServices == null
+                        ? await catalogVisibilityPort.ResolveAsync(
+                                owner,
+                                catalogRefresh.StateVersion,
+                                ct)
+                            .ConfigureAwait(false)
+                        : await catalogVisibilityPort.ResolveRequiredServicesAsync(
+                                owner,
+                                catalogRefresh.StateVersion,
+                                requiredServices,
+                                ct)
+                            .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -770,6 +792,21 @@ public static class NyxIdLoginFinalizationEndpoints
         OwnerSubject = ownerSubject.Trim(),
     };
 
+    private static IReadOnlyList<NyxIdUserServiceCapabilityRef>? BuildRequiredServiceRefs(
+        IReadOnlyList<string>? requiredUserServiceIds)
+    {
+        var serviceIds = (requiredUserServiceIds ?? [])
+            .Select(static serviceId => serviceId?.Trim() ?? string.Empty)
+            .Where(static serviceId => !string.IsNullOrWhiteSpace(serviceId))
+            .Distinct(StringComparer.Ordinal)
+            .Select(static serviceId => new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = serviceId,
+            })
+            .ToArray();
+        return serviceIds.Length == 0 ? null : serviceIds;
+    }
+
     private static string ToCatalogRefreshStatus(NyxIdAuthorizationCatalogRefreshStatus status) => status switch
     {
         NyxIdAuthorizationCatalogRefreshStatus.Observed => "observed",
@@ -926,6 +963,7 @@ public sealed record NyxIdLoginFinalizationRequest
     public string? CodeVerifier { get; init; }
     public string? RedirectUri { get; init; }
     public bool ServiceAccessReview { get; init; }
+    public IReadOnlyList<string>? RequiredUserServiceIds { get; init; }
 }
 
 public sealed record NyxIdLoginFinalizationResponse(
