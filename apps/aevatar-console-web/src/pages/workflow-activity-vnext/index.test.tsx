@@ -253,6 +253,7 @@ jest.mock('@umijs/max', () => ({
 }));
 
 jest.mock('@/shared/studio/api', () => ({
+  isStudioApiErrorCode: () => false,
   isStudioApiStatus: (error: unknown, status: number) =>
     Boolean(
       error &&
@@ -277,6 +278,7 @@ jest.mock('@/shared/studio/api', () => ({
     getWorkflow: jest.fn(),
     getWorkflowDraft: jest.fn(),
     getWorkflowDraftFile: jest.fn(),
+    instantiateWorkflowTemplate: jest.fn(),
     listWorkflowDrafts: jest.fn(),
     parseYaml: jest.fn(),
     previewExplicitRequests: jest.fn(),
@@ -286,6 +288,13 @@ jest.mock('@/shared/studio/api', () => ({
     saveUserLlmSettings: jest.fn(),
     serializeYaml: jest.fn(),
     updateWorkflowDraft: jest.fn(),
+  },
+}));
+
+jest.mock('@/shared/api/runtimeCatalogApi', () => ({
+  runtimeCatalogApi: {
+    getWorkflowTemplate: jest.fn(),
+    listWorkflowTemplates: jest.fn(),
   },
 }));
 
@@ -449,6 +458,7 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   getWorkflow: jest.Mock;
   getWorkflowDraft: jest.Mock;
   getWorkflowDraftFile: jest.Mock;
+  instantiateWorkflowTemplate: jest.Mock;
   listWorkflowDrafts: jest.Mock;
   parseYaml: jest.Mock;
   previewExplicitRequests: jest.Mock;
@@ -458,6 +468,11 @@ const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   saveUserLlmSettings: jest.Mock;
   serializeYaml: jest.Mock;
   updateWorkflowDraft: jest.Mock;
+};
+const mockRuntimeCatalogApi = jest.requireMock('@/shared/api/runtimeCatalogApi')
+  .runtimeCatalogApi as {
+  getWorkflowTemplate: jest.Mock;
+  listWorkflowTemplates: jest.Mock;
 };
 const mockCreateWorkflowRevisionIdentityCandidate = jest.requireMock(
   '@/shared/studio/explicitRequestConfirmation',
@@ -2215,6 +2230,96 @@ describe('Workflow Activity vNext editor', () => {
     ).toHaveTextContent('Saved at 2026-08-04 10:01:00 UTC');
   });
 
+  it('opens an instantiated template draft as already saved', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const saveWorkflowButton = await screen.findByRole('button', {
+      name: 'Save workflow',
+    });
+    expect(saveWorkflowButton).toBeDisabled();
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Saved at 2026-08-04 10:00:00 UTC');
+    expect(mockStudioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(history.replace).not.toHaveBeenCalled();
+  });
+
+  it('preserves template tool set scopes through serialize and save', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
+    const parsedDocument = {
+      name: 'committed_source',
+      roles: [
+        {
+          id: 'studio',
+          toolSets: ['studio.local', 'nyxid.connected_services'],
+        },
+      ],
+      steps: [
+        {
+          id: 'reply',
+          type: 'llm_call',
+          targetRole: 'studio',
+          toolSets: ['nyxid.connected_services'],
+        },
+      ],
+    };
+    mockStudioApi.parseYaml.mockResolvedValueOnce({
+      document: parsedDocument,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockImplementationOnce(
+      async ({ document }) => ({
+        yaml: 'name: committed_source\nroles:\n  - id: studio\n    tool_sets: [studio.local, nyxid.connected_services]\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: studio\n    tool_sets: [nyxid.connected_services]\n',
+        document,
+        findings: [],
+      }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    const workflowName = await screen.findByDisplayValue('Committed source');
+    const saveWorkflowButton = screen.getByRole('button', {
+      name: 'Save workflow',
+    });
+    fireEvent.change(workflowName, {
+      target: { value: 'Committed source updated' },
+    });
+    await waitFor(() => expect(saveWorkflowButton).toBeEnabled());
+    fireEvent.click(saveWorkflowButton);
+
+    await waitFor(() =>
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+        document: expect.objectContaining({
+          roles: [
+            expect.objectContaining({
+              id: 'studio',
+              toolSets: ['studio.local', 'nyxid.connected_services'],
+            }),
+          ],
+          steps: [
+            expect.objectContaining({
+              id: 'reply',
+              toolSets: ['nyxid.connected_services'],
+            }),
+          ],
+        }),
+      }),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.saveWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          yaml: expect.stringContaining(
+            'tool_sets: [nyxid.connected_services]',
+          ),
+        }),
+      ),
+    );
+  });
+
   it('publishes a saved workflow in one click and waits for observed evidence before showing Published', async () => {
     mockLocation =
       '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
@@ -2370,6 +2475,75 @@ describe('Workflow Activity vNext editor', () => {
     );
     expect(mockConsoleToast.success).toHaveBeenCalledTimes(1);
     expect(mockScopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
+  });
+
+  it('publishes saved runtime YAML without reprocessing it through the Studio parser', async () => {
+    arrangeObservedWorkflowPublication();
+    const savedYaml =
+      'name: studio\nroles:\n  - id: studio\n    tool_sets: [studio.local]\nsteps:\n  - id: reply\n    type: llm_call\n    role: studio\n    tool_sets: [studio.local]\n';
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-draft-alpha',
+      name: 'studio',
+      fileName: 'studio.yaml',
+      filePath: '/workflows/studio.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: savedYaml,
+      updatedAtUtc: '2026-08-20T15:25:00Z',
+      document: {
+        name: 'studio',
+        roles: [{ id: 'studio', toolSets: ['studio.local'] }],
+        steps: [
+          {
+            id: 'reply',
+            type: 'llm_call',
+            targetRole: 'studio',
+            toolSets: ['studio.local'],
+          },
+        ],
+      },
+      draftExists: true,
+      findings: [
+        {
+          code: 'unknown_field',
+          level: 2,
+          message: "Unknown field 'tool_sets'.",
+        },
+      ],
+    });
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: null,
+      findings: [
+        {
+          code: 'unknown_field',
+          level: 'error',
+          message: "Unknown field 'tool_sets'.",
+        },
+      ],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish' }));
+
+    await waitFor(() =>
+      expect(mockStudioApi.previewExplicitRequests).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowYaml: savedYaml }),
+      ),
+    );
+    await waitFor(() =>
+      expect(mockStudioApi.publishWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({ workflowYaml: savedYaml }),
+      ),
+    );
+    expect(mockStudioApi.parseYaml).not.toHaveBeenCalled();
+    expect(mockStudioApi.serializeYaml).not.toHaveBeenCalled();
+    expect(
+      await screen.findByRole('status', {
+        name: 'Workflow publication status',
+      }),
+    ).toHaveTextContent('Published');
+    expect(screen.getByRole('button', { name: 'Run' })).toBeEnabled();
   });
 
   it.each([
@@ -3091,6 +3265,9 @@ describe('Workflow Activity vNext editor', () => {
     mockStudioApi.getWorkflowDraftFile
       .mockRejectedValueOnce(unavailable)
       .mockResolvedValueOnce(adoptedDraft);
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      { workflowId: 'wf-draft-api' },
+    ]);
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -3441,6 +3618,66 @@ describe('Workflow Activity vNext editor', () => {
     ).toHaveTextContent('Save failed');
   });
 
+  it('reports a parse validation save failure instead of failing silently', async () => {
+    mockStudioApi.parseYaml.mockResolvedValueOnce({
+      document: {
+        name: 'committed_source',
+        roles: [],
+        steps: [],
+      },
+      findings: [{ level: 'error', message: 'Workflow steps are invalid.' }],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    await screen.findByDisplayValue('Committed source');
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Updated source' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow couldn't be saved",
+      ),
+    );
+    expect(mockStudioApi.serializeYaml).not.toHaveBeenCalled();
+    expect(mockStudioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Save failed');
+  });
+
+  it('reports a serialization validation save failure instead of failing silently', async () => {
+    mockStudioApi.serializeYaml.mockResolvedValueOnce({
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      document: {
+        name: 'committed_source',
+        roles: [],
+        steps: [],
+      },
+      findings: [{ level: 'error', message: 'Workflow steps are invalid.' }],
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    await screen.findByDisplayValue('Committed source');
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Updated source' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Workflow couldn't be saved",
+      ),
+    );
+    expect(mockStudioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('status', { name: 'Workflow save status' }),
+    ).toHaveTextContent('Save failed');
+  });
+
   it('puts editable node configuration first and keeps raw JSON advanced', async () => {
     mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
       yaml: 'name: committed_source\nroles: []\nsteps:\n  - id: step-root\n    type: llm_call\n    parameters:\n      prompt_prefix: Updated prompt\n',
@@ -3626,6 +3863,9 @@ describe('Workflow Activity vNext editor', () => {
       },
     });
     mockStudioApi.getWorkflowDraftFile.mockReturnValue(new Promise(() => {}));
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      { workflowId: 'wf-draft-api' },
+    ]);
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -5613,6 +5853,59 @@ describe('Workflow Activity vNext creation', () => {
     });
     mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
     mockScopesApi.listWorkflows.mockResolvedValue([]);
+    mockRuntimeCatalogApi.listWorkflowTemplates.mockResolvedValue({
+      items: [
+        {
+          templateId: 'template-incident-triage',
+          displayName: 'Incident triage',
+          description: 'Classify an incident.',
+          defaultDraftName: 'Incident triage',
+          authorityStateVersion: 7,
+          stepCount: 2,
+          requiredConnections: ['pagerduty'],
+          requiresLlmProvider: true,
+          freshness: {
+            projectionWatermark: '2026-08-18T00:00:00Z',
+            lastEventId: 'event-template-7',
+            versionSemantics: 'workflow-catalog-authority-state-version',
+          },
+        },
+      ],
+      nextCursor: null,
+      freshness: {
+        projectionWatermark: '2026-08-18T00:00:00Z',
+        lastEventId: 'event-template-7',
+        versionSemantics: 'workflow-catalog-authority-state-version',
+      },
+    });
+    mockStudioApi.instantiateWorkflowTemplate.mockResolvedValue({
+      accepted: true,
+      workflowId: 'wf-created-alpha',
+      commandId: 'cmd-template-alpha',
+      ackStage: 'accepted',
+      actorId: 'actor-workspace-alpha',
+      workspaceId: 'workspace-scope-alpha',
+      expectedVersion: 1,
+      ackedAtUtc: '2026-08-18T00:00:00Z',
+      readiness: {
+        readable: false,
+        stage: 'materializing',
+        message: 'Draft accepted.',
+      },
+    });
+    mockStudioApi.getWorkflowDraftFile.mockResolvedValue({
+      workflowId: 'wf-created-alpha',
+      name: 'Incident triage',
+      fileName: 'incident-triage.yaml',
+      filePath: '/workflows/incident-triage.yaml',
+      directoryId: 'directory-alpha',
+      directoryLabel: 'Workflows',
+      yaml: 'name: incident_triage\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-18T00:00:00Z',
+      document: { name: 'incident_triage', roles: [], steps: [] },
+      draftExists: true,
+      findings: [],
+    });
   });
 
   afterEach(() => cleanupTestQueryClients());
@@ -5767,7 +6060,7 @@ describe('Workflow Activity vNext creation', () => {
     expect(screen.getByLabelText('Workflow name')).toHaveValue('Weekly review');
   });
 
-  it('keeps bundled template version metadata out of the primary interface', async () => {
+  it('keeps implementation version metadata out of the public template browser', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     const templateButton = await screen.findByRole('button', {
       name: 'Use template',
@@ -5778,32 +6071,93 @@ describe('Workflow Activity vNext creation', () => {
     expect(screen.queryByText(/2026\.08\.1/)).not.toBeInTheDocument();
   });
 
-  it('submits bundled template YAML with the backend parser field names', async () => {
-    mockStudioApi.parseYaml.mockResolvedValue({
-      document: {
-        name: 'incident_triage',
-        roles: [],
-        steps: [{ id: 'classify', type: 'llm_call' }],
-      },
-      findings: [],
-    });
+  it('navigates to the canonical template route from the creation chooser', async () => {
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
 
+    const templateButton = await screen.findByRole('button', {
+      name: 'Use template',
+    });
+    await waitFor(() => expect(templateButton).toBeEnabled());
+    fireEvent.click(templateButton);
+
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates',
+    );
+    expect(screen.queryByText('Incident triage')).not.toBeInTheDocument();
+  });
+
+  it('renders the template route with one page heading and returns to the chooser', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates';
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Start from a template' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole('heading', { name: 'Start from a template' }),
+    ).toHaveLength(1);
+    expect(
+      screen.getByText(
+        'Browse public templates, inspect details, or create a draft directly.',
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change method' }));
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new',
+    );
+  });
+
+  it('explains when the template contract is unavailable and keeps the raw error in technical details', async () => {
+    mockLocation =
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates';
+    mockRuntimeCatalogApi.listWorkflowTemplates.mockRejectedValue(
+      Object.assign(new Error('HTTP 404 Not Found'), { status: 404 }),
+    );
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+
+    expect(
+      await screen.findByText(
+        'Templates are not available in this environment.',
+      ),
+    ).toBeVisible();
+    expect(screen.getByText('HTTP 404 Not Found')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+  });
+
+  it('instantiates a public template with its authority version and opens the materialized draft', async () => {
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([
+      { workflowId: 'wf-created-alpha' },
+    ]);
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     const templateButton = await screen.findByRole('button', {
       name: 'Use template',
     });
     await waitFor(() => expect(templateButton).toBeEnabled());
     fireEvent.click(templateButton);
+    setMockLocation(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates',
+    );
     fireEvent.click(
-      screen.getByRole('button', { name: 'Use template and open' }),
+      await screen.findByRole('button', {
+        name: 'Use template Incident triage',
+      }),
     );
 
-    await waitFor(() => expect(mockStudioApi.parseYaml).toHaveBeenCalled());
-    const submittedYaml = mockStudioApi.parseYaml.mock.calls[0][0].yaml;
-    expect(submittedYaml).toContain('system_prompt:');
-    expect(submittedYaml).toContain('target_role:');
-    expect(submittedYaml).not.toContain('systemPrompt:');
-    expect(submittedYaml).not.toContain('targetRole:');
+    await waitFor(() =>
+      expect(mockStudioApi.instantiateWorkflowTemplate).toHaveBeenCalledWith({
+        expectedAuthorityStateVersion: 7,
+        scopeId: 'scope-alpha',
+        templateId: 'template-incident-triage',
+      }),
+    );
+    expect(mockStudioApi.parseYaml).not.toHaveBeenCalled();
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+    );
   });
 
   it('validates imported YAML before creating and preserves invalid input', async () => {

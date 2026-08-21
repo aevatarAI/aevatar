@@ -13,7 +13,7 @@ type ObservationInput<T> = {
   readonly delaysMs?: readonly number[];
   readonly isNotFound: (error: unknown) => boolean;
   readonly isObserved?: (workflow: T) => boolean;
-  readonly read: (workflowId: string) => Promise<T>;
+  readonly read: (workflowId: string) => Promise<T | null>;
   readonly wait?: (delayMs: number) => Promise<void>;
   readonly workflowId: string;
 };
@@ -36,7 +36,10 @@ export async function observeDraftMaterialization<T>(
     if (delayMs > 0) await wait(delayMs);
     try {
       const workflow = await input.read(input.workflowId);
-      if (!input.isObserved || input.isObserved(workflow)) {
+      if (
+        workflow !== null &&
+        (!input.isObserved || input.isObserved(workflow))
+      ) {
         return { kind: 'readable', workflow };
       }
     } catch (error) {
@@ -45,6 +48,16 @@ export async function observeDraftMaterialization<T>(
   }
 
   return { kind: 'delayed' };
+}
+
+export async function readWorkflowDraftAfterList(
+  workflowId: string,
+  scopeId: string,
+): Promise<StudioWorkflowFile | null> {
+  const drafts = await studioApi.listWorkflowDrafts(scopeId);
+  if (!drafts.some((draft) => draft.workflowId === workflowId)) return null;
+
+  return studioApi.getWorkflowDraftFile(workflowId, scopeId);
 }
 
 export type DraftMaterializationPhase =
@@ -77,8 +90,7 @@ export function useDraftMaterialization(scopeId: string) {
       try {
         const result = await observeDraftMaterialization({
           workflowId: nextReceipt.workflowId,
-          read: (workflowId) =>
-            studioApi.getWorkflowDraftFile(workflowId, scopeId),
+          read: (workflowId) => readWorkflowDraftAfterList(workflowId, scopeId),
           isNotFound: (candidate) => isStudioApiStatus(candidate, 404),
         });
         if (generation !== generationRef.current) return null;

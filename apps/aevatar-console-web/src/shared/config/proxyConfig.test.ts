@@ -185,6 +185,31 @@ describe('proxy config', () => {
     });
   });
 
+  it('routes public workflow templates and scoped instantiation to the Studio host', () => {
+    process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
+    process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';
+
+    const proxyModule = require('../../../config/proxy');
+    const devProxy = proxyModule.default.dev as Record<string, ProxyEntry>;
+
+    for (const pathname of [
+      '/api/workflow-templates',
+      '/api/workflow-templates/template-alpha',
+      '/api/scopes/scope-alpha/workflow-templates/template-alpha:instantiate',
+    ]) {
+      expect(resolveProxyEntry(devProxy, pathname)).toEqual({
+        target: 'http://127.0.0.1:5180',
+        changeOrigin: true,
+        ws: true,
+      });
+    }
+    expect(resolveProxyEntry(devProxy, '/api/workflows')).toEqual({
+      target: 'http://127.0.0.1:5080',
+      changeOrigin: true,
+      ws: true,
+    });
+  });
+
   it('routes scoped chat history endpoints to the Studio host', () => {
     process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
     process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';

@@ -8,6 +8,7 @@ import WorkflowActivityVNextShell from './WorkflowActivityVNextShell';
 import NewWorkflowPage from './workflows/NewWorkflowPage';
 import WorkflowEditorPage from './workflows/WorkflowEditorPage';
 import WorkflowsPage from './workflows/WorkflowsPage';
+import WorkflowTemplatesPage from './workflows/WorkflowTemplatesPage';
 
 const WorkflowActivityVNextPage: React.FC = () => {
   const location = useConsoleLocation();
@@ -16,6 +17,10 @@ const WorkflowActivityVNextPage: React.FC = () => {
     pathname,
   );
   const scopeId = scopeMatch ? decodeURIComponent(scopeMatch[1]) : '';
+
+  if (pathname.endsWith('/workflows/new/templates')) {
+    return <WorkflowTemplatesPage scopeId={scopeId} />;
+  }
 
   if (pathname.endsWith('/workflows/new')) {
     return <NewWorkflowPage scopeId={scopeId} />;
