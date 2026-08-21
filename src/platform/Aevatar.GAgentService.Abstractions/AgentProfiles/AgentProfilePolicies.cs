@@ -147,6 +147,24 @@ public static partial class AgentProfilePolicies
                     $"{selectorField}.allowedRisks",
                     "Connected-service selector risks may contain only READ_ONLY and WRITE."));
             }
+
+            if (selector.Readiness is not null)
+            {
+                var scopes = selector.Readiness.RequestedScopes;
+                if (scopes.Count > 64 ||
+                    scopes.Any(static scope =>
+                        string.IsNullOrWhiteSpace(scope) ||
+                        !string.Equals(scope, scope.Trim(), StringComparison.Ordinal) ||
+                        scope.Length > 256 ||
+                        scope.Any(char.IsControl)) ||
+                    scopes.Distinct(StringComparer.Ordinal).Count() != scopes.Count)
+                {
+                    diagnostics.Add(Diagnostic(
+                        "PROFILE_CONNECTED_SERVICE_READINESS_SCOPES_INVALID",
+                        $"{selectorField}.readiness.requestedScopes",
+                        "Readiness scopes must be a distinct normalized set of at most 64 values."));
+                }
+            }
         }
 
         return diagnostics;

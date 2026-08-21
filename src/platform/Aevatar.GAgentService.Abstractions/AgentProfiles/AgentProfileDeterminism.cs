@@ -315,6 +315,7 @@ public static class AgentProfileDeterminism
                     .ToArray();
                 normalized.AllowedRisks.Clear();
                 normalized.AllowedRisks.Add(risks);
+                SortDistinct(normalized.Readiness?.RequestedScopes);
                 return normalized;
             })
             .OrderBy(static selector => selector.CatalogServiceSlug, StringComparer.Ordinal)

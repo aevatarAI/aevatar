@@ -184,6 +184,30 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.ProxyRequests.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task DiscoverToolsAsync_DelegatedBrowserCredentials_ShouldSplitInventoryAndExecutionAuthority()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["discovery-token"] = Keys(
+            InstanceWithOpenApiUrl(
+                "usvc-alpha",
+                "api-shop",
+                "svc-shop",
+                "https://nyx.test/api/v1/proxy/services/usvc-alpha/openapi.json"));
+        handler.McpConfigByToken["execution-token"] = ExactMcpCatalog;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext(
+            "execution-token",
+            sourceReadableToken: "discovery-token",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation);
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle();
+        handler.DiscoveryTokens.Should().Equal("discovery-token");
+        handler.McpConfigTokens.Should().Equal("execution-token");
+    }
+
     [Theory]
     [InlineData("expired", true, null, null)]
     [InlineData("pending_auth", true, null, null)]
@@ -1463,10 +1487,17 @@ public class NyxIdConnectedServiceToolSourceTests
 
     private static AgentToolContextScope PushContext(
         string userToken,
-        string? organizationToken = null) =>
+        string? organizationToken = null,
+        string? sourceReadableToken = null,
+        AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentials(userToken, organizationToken, null),
+            Credentials = new AgentToolCredentials(
+                userToken,
+                organizationToken,
+                null,
+                credentialKind,
+                sourceReadableToken),
             Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
         });
 
@@ -2102,6 +2133,8 @@ public class NyxIdConnectedServiceToolSourceTests
 
         public Dictionary<string, string> KeysByToken { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> McpConfigByToken { get; } = new(StringComparer.Ordinal);
+        public List<string> DiscoveryTokens { get; } = [];
+        public List<string> McpConfigTokens { get; } = [];
         public List<string> RawOpenApiRequests { get; } = [];
         public List<string> ExactReads { get; } = [];
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
@@ -2125,6 +2158,7 @@ public class NyxIdConnectedServiceToolSourceTests
             if (path == "/api/v1/keys")
             {
                 DiscoveryRequests++;
+                DiscoveryTokens.Add(token);
                 if (CancelDiscoveryWith is not null)
                 {
                     CancelDiscoveryWith.Cancel();
@@ -2138,6 +2172,7 @@ public class NyxIdConnectedServiceToolSourceTests
             if (path == "/api/v1/mcp/config")
             {
                 McpConfigRequests++;
+                McpConfigTokens.Add(token);
                 if (CancelMcpConfigWith is not null)
                 {
                     CancelMcpConfigWith.Cancel();

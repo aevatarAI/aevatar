@@ -61,6 +61,8 @@ Conversation 不会热更新。
 
 Task/recovery selector 的 risk 集必须是 maximum 中同 slug selector 的子集。非法 slug、空 risk、`UNSPECIFIED/DESTRUCTIVE` 或同一 policy 内重复 slug 在 validate/publish 时拒绝；runtime 对无效 sealed snapshot 继续 fail closed。maximum 过滤动态工具时只按 typed presentation kind 输出 bounded count diagnostic，不记录 opaque name、connection identity、endpoint 或参数，且该诊断不改变既有降级判定。
 
+connected-service selector 可以额外封存 `readiness.requested_scopes`，用于声明该 catalog service 在零 exact operation 时的连接要求。该字段的 presence 才启用确定性 readiness：当选中 task policy 的全部 connected-service selector 都没有 exact match，且只有一个 selector 需要恢复时，runtime 必须绕过 LLM，按封存的 `catalog_service_slug + requested_scopes` 精确调用 route-owned `nyxid_require_service`。它不得让模型决定是否连接、选择其他 service/scope，或生成 CLI/手工查询说明。工具返回的 typed authorization receipt 继续沿既有 browser-action 投影生成连接卡片；缺少 readiness、多个 selector 同时缺失或 required tool 不在最终 ceiling 时，turn 返回 typed failure，不得降级为自然语言兜底。只要 selector 已匹配到 exact connected-service operation，就不调用 readiness tool，模型只能使用匹配后的真实 operation。
+
 Request-local `AgentProfileTurnCatalog` 不是 DI service、cache 或进程级上下文。非 Profile consumer 必须显式传 `null`；当前只有 genuinely unprofiled NyxID Chat 允许这个值表达未绑定。
 
 ## Static route tool ceiling

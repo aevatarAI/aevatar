@@ -19,6 +19,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
+internal sealed class AgentProfileRequiredToolUnavailableException()
+    : InvalidOperationException("The sealed Profile readiness tool is unavailable.");
+
 // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
 //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
 //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
@@ -245,7 +248,24 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 await workItem.ReportChunkAsync(chunk, token).ConfigureAwait(false);
         }
 
-        var recoveryToolCall = workItem.StepState.FinalNoToolsStep
+        ChatRuntimeStepRecoveryToolCall? requiredToolCall = null;
+        if (!workItem.StepState.FinalNoToolsStep &&
+            workItem.StepState.Round == 0 &&
+            workItem.TurnCatalog?.HasUnresolvedConnectedServiceSelectors == true)
+        {
+            if (workItem.TurnCatalog.RequiredToolInvocation is null)
+                throw new AgentProfileRequiredToolUnavailableException();
+
+            requiredToolCall = await plan.StepExecutor.TryAuthorizeRequiredToolCallAsync(
+                    llmRequest,
+                    workItem.TurnCatalog.RequiredToolInvocation,
+                    ct)
+                .ConfigureAwait(false);
+            if (requiredToolCall is null)
+                throw new AgentProfileRequiredToolUnavailableException();
+        }
+
+        var recoveryToolCall = requiredToolCall is not null || workItem.StepState.FinalNoToolsStep
             ? null
             : await plan.StepExecutor.TryPlanSkillRecoveryToolCallAsync(
                     llmRequest,
@@ -254,7 +274,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     ct)
                 .ConfigureAwait(false);
         ChatRuntimeStepLlmResult llmResult;
-        if (recoveryToolCall is not null)
+        if (requiredToolCall is not null)
+        {
+            llmResult = BuildSkillRecoveryLlmResult(requiredToolCall);
+        }
+        else if (recoveryToolCall is not null)
         {
             llmResult = BuildSkillRecoveryLlmResult(recoveryToolCall);
         }

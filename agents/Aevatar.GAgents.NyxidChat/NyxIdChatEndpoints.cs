@@ -335,11 +335,30 @@ public static partial class NyxIdChatEndpoints
             var credentialKind = NyxIdDelegationTokenClaims.IsDelegationToken(bearerToken)
                 ? AgentToolNyxIdCredentialKind.ProxyDelegation
                 : AgentToolNyxIdCredentialKind.SourceReadableUserBearer;
+
+            string? sourceReadableAccessToken = null;
+            if (credentialKind == AgentToolNyxIdCredentialKind.ProxyDelegation &&
+                http.Request.Headers.TryGetValue(
+                    NyxIdDelegationTokenHeader,
+                    out var sourceReadableDelegationValues))
+            {
+                if (sourceReadableDelegationValues.Count != 1)
+                    return null;
+
+                sourceReadableAccessToken = sourceReadableDelegationValues[0]?.Trim();
+                if (string.IsNullOrWhiteSpace(sourceReadableAccessToken) ||
+                    sourceReadableAccessToken.Any(char.IsWhiteSpace))
+                {
+                    return null;
+                }
+            }
+
             return new AgentToolCredentials(
                 bearerToken,
                 null,
                 null,
-                credentialKind);
+                credentialKind,
+                sourceReadableAccessToken);
         }
 
         if (http.Request.Headers.TryGetValue(NyxIdDelegationTokenHeader, out var delegationValues))

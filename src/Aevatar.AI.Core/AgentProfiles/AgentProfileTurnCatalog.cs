@@ -26,6 +26,16 @@ public enum AgentProfileTurnDiagnosticCode
 
 public sealed record AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode Code, string Detail);
 
+public sealed record AgentProfileRequiredToolInvocation(string ToolName, string ArgumentsJson)
+{
+    public AgentProfileRequiredToolInvocation Normalize()
+    {
+        var toolName = string.IsNullOrWhiteSpace(ToolName) ? string.Empty : ToolName.Trim();
+        var argumentsJson = string.IsNullOrWhiteSpace(ArgumentsJson) ? "{}" : ArgumentsJson.Trim();
+        return new AgentProfileRequiredToolInvocation(toolName, argumentsJson);
+    }
+}
+
 public sealed class AgentProfileTurnCatalog
 {
     public const int MaximumDiagnostics = 16;
@@ -38,7 +48,9 @@ public sealed class AgentProfileTurnCatalog
         string? selectedIntentId,
         string? candidateIntentId,
         IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null,
-        IEnumerable<IAgentTool>? routeOwnedTools = null)
+        IEnumerable<IAgentTool>? routeOwnedTools = null,
+        bool hasUnresolvedConnectedServiceSelectors = false,
+        AgentProfileRequiredToolInvocation? requiredToolInvocation = null)
     {
         ArgumentNullException.ThrowIfNull(finalAllowedToolNames);
 
@@ -53,6 +65,8 @@ public sealed class AgentProfileTurnCatalog
         SelectedIntentId = Normalize(selectedIntentId);
         CandidateIntentId = Normalize(candidateIntentId);
         Diagnostics = CopyDiagnostics(diagnostics);
+        HasUnresolvedConnectedServiceSelectors = hasUnresolvedConnectedServiceSelectors;
+        RequiredToolInvocation = requiredToolInvocation?.Normalize();
     }
 
     public IReadOnlySet<string> FinalAllowedToolNames { get; }
@@ -70,6 +84,10 @@ public sealed class AgentProfileTurnCatalog
     public string? CandidateIntentId { get; }
 
     public IReadOnlyList<AgentProfileTurnDiagnostic> Diagnostics { get; }
+
+    public bool HasUnresolvedConnectedServiceSelectors { get; }
+
+    public AgentProfileRequiredToolInvocation? RequiredToolInvocation { get; }
 
     private static IReadOnlyList<AgentProfileTurnDiagnostic> CopyDiagnostics(
         IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics)

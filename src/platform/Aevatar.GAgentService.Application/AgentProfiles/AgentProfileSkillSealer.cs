@@ -187,11 +187,15 @@ public sealed class AgentProfileSkillSealer : IAgentProfileSkillSealer
             .GroupBy(static selector => selector.CatalogServiceSlug, StringComparer.Ordinal)
             .ToDictionary(
                 static group => group.Key,
-                static group => group.SelectMany(static selector => selector.AllowedRisks).ToHashSet(),
+                static group => group.First(),
                 StringComparer.Ordinal) ?? [];
         var selectorsWithinMaximum = policy?.ConnectedServiceSelectors.All(selector =>
-            maximumSelectors.TryGetValue(selector.CatalogServiceSlug, out var allowedRisks) &&
-            selector.AllowedRisks.All(allowedRisks.Contains)) ?? true;
+            maximumSelectors.TryGetValue(selector.CatalogServiceSlug, out var maximumSelector) &&
+            selector.AllowedRisks.All(maximumSelector.AllowedRisks.Contains) &&
+            (selector.Readiness is null ||
+             maximumSelector.Readiness is not null &&
+             selector.Readiness.RequestedScopes.All(
+                 maximumSelector.Readiness.RequestedScopes.Contains))) ?? true;
         return toolNames.IsSubsetOf(maximumToolNames) &&
                toolSetRefs.IsSubsetOf(maximumToolSetRefs) &&
                selectorsWithinMaximum

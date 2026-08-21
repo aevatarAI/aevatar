@@ -995,6 +995,14 @@ message AgentProfileConnectedServiceSelector {
   string catalog_service_slug = 1;
   // Only READ_ONLY and WRITE are valid Profile policy values.
   repeated aevatar.ai.tool_providers.AgentToolOperationRiskPayload allowed_risks = 2;
+  // Optional sealed recovery authority used only when this selector matches no
+  // caller-visible exact operation. Presence opts into deterministic typed
+  // readiness; requested scopes are copied unchanged into the readiness call.
+  AgentProfileConnectedServiceReadiness readiness = 3;
+}
+
+message AgentProfileConnectedServiceReadiness {
+  repeated string requested_scopes = 1;
 }
 
 message AgentProfileToolPolicy {

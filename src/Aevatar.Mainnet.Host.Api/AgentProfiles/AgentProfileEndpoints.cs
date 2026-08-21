@@ -423,6 +423,12 @@ internal static class AgentProfileEndpoints
             {
                 catalogServiceSlug = selector.CatalogServiceSlug,
                 allowedRisks = selector.AllowedRisks.Select(Risk).ToArray(),
+                readiness = selector.Readiness is null
+                    ? null
+                    : new
+                    {
+                        requestedScopes = selector.Readiness.RequestedScopes.ToArray(),
+                    },
             }).ToArray<object>(),
     };
 
@@ -443,6 +449,12 @@ internal static class AgentProfileEndpoints
             {
                 CatalogServiceSlug = selector.CatalogServiceSlug?.Trim() ?? string.Empty,
                 AllowedRisks = { selector.AllowedRisks?.Select(Risk) ?? [] },
+                Readiness = selector.Readiness is null
+                    ? null
+                    : new AgentProfileConnectedServiceReadiness
+                    {
+                        RequestedScopes = { selector.Readiness.RequestedScopes ?? [] },
+                    },
             }) ?? [],
         },
     };
@@ -699,7 +711,11 @@ internal static class AgentProfileEndpoints
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AgentProfileConnectedServiceSelectorInput(
         string? CatalogServiceSlug,
-        IReadOnlyList<string>? AllowedRisks);
+        IReadOnlyList<string>? AllowedRisks,
+        AgentProfileConnectedServiceReadinessInput? Readiness);
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    internal sealed record AgentProfileConnectedServiceReadinessInput(
+        IReadOnlyList<string>? RequestedScopes);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     internal sealed record AgentProfileSkillMemberInput(string? IntentId, string? RoutingDescription, ExactRemoteSkillRefInput? SkillRef, IReadOnlyList<string>? ExplicitTriggerAliases, AgentProfileToolPolicyInput? TaskToolPolicy, string? SideEffectClass, string? ExpectedSkillName, string? ReviewedPublisherId);
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

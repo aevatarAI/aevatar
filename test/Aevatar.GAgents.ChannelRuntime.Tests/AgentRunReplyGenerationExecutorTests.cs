@@ -29,6 +29,39 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class AgentRunReplyGenerationExecutorTests
 {
     [Fact]
+    public async Task BuildLlmStepContinuation_WithRequiredProfileReadiness_ShouldBypassProviderAndAuthorizeExactTool()
+    {
+        var provider = new RecordingProvider("must-not-be-used");
+        var tool = new CountingTool("nyxid_require_service");
+        var executor = CreateToolEnabledExecutor(tool, provider);
+        var invocation = new AgentProfileRequiredToolInvocation(
+            tool.Name,
+            "{\"service_slug\":\"api-github\",\"requested_scopes\":[\"repo\"]}");
+        var catalog = new AgentProfileTurnCatalog(
+            [tool.Name],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "github-via-nyxid",
+            candidateIntentId: "github-via-nyxid",
+            routeOwnedTools: [tool],
+            hasUnresolvedConnectedServiceSelectors: true,
+            requiredToolInvocation: invocation);
+        var workItem = BuildToolEnabledWorkItem() with { TurnCatalog = catalog };
+
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            workItem,
+            CancellationToken.None);
+
+        provider.Requests.Should().BeEmpty();
+        var call = execution.Continuation.LlmStepResult!.ToolCalls.Should().ContainSingle().Subject;
+        call.Name.Should().Be(tool.Name);
+        call.ArgumentsJson.Should().Be(invocation.ArgumentsJson);
+        execution.AuthorizedToolStep.Should().NotBeNull();
+        execution.AuthorizedToolCallSafeties.Should().ContainSingle()
+            .Which.ToolName.Should().Be(tool.Name);
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenToolEnabledFirstRoundHasNoSuccessfulMutatingReceipt_ShouldPassMutationClaimConstraint()
     {
         var provider = new RecordingProvider();

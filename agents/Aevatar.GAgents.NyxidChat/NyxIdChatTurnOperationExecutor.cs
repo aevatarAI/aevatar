@@ -313,6 +313,8 @@ public sealed class NyxIdChatTurnOperationExecutor
     internal const string AuthorizationContinuationCapabilityUnavailableCode =
         NyxIdChatTaskLifecycle.AuthorizationContinuationCapabilityUnavailable;
     private const string InvalidExecutionResultCode = "NYXID_CHAT_INVALID_EXECUTION_RESULT";
+    private const string ProfileRequiredToolUnavailableCode =
+        "NYXID_CHAT_PROFILE_REQUIRED_TOOL_UNAVAILABLE";
     private const string UnsupportedOperationCode = "NYXID_CHAT_OPERATION_NOT_SUPPORTED";
     private const string ToolCapabilityLostMessage =
         "The authorized tool capability is no longer available. Retry from a safe checkpoint.";
@@ -326,6 +328,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         "The delegated NyxID credential could not be refreshed.";
     private const string InvalidExecutionResultMessage =
         "The operation executor returned an invalid typed result.";
+    private const string ProfileRequiredToolUnavailableMessage =
+        "The selected Profile requires typed connected-service readiness, but that bounded capability is unavailable.";
     private const string UnsupportedOperationMessage =
         "This operation kind is not available in the turn executor.";
     private const string InvalidPostconditionInputCode =
@@ -832,6 +836,15 @@ public sealed class NyxIdChatTurnOperationExecutor
                         ct)
                     .ConfigureAwait(false);
                 await batcher.FlushAsync(ct).ConfigureAwait(false);
+            }
+            catch (AgentProfileRequiredToolUnavailableException)
+            {
+                ClearAuthorization(session);
+                return Failure(
+                    command.Key,
+                    ProfileRequiredToolUnavailableCode,
+                    ProfileRequiredToolUnavailableMessage,
+                    NyxIdChatEffectEvidence.NotStarted);
             }
             finally
             {

@@ -723,6 +723,7 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
                 {
                     catalogServiceSlug = "api-github",
                     allowedRisks = new[] { "READ_ONLY", "WRITE" },
+                    readiness = new { requestedScopes = new[] { "read:user", "repo" } },
                 },
             ]),
             expectedVersion = 9,
@@ -738,6 +739,8 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         selector.AllowedRisks.Should().Equal(
             AgentToolOperationRiskPayload.ReadOnly,
             AgentToolOperationRiskPayload.Write);
+        selector.Readiness.Should().NotBeNull();
+        selector.Readiness.RequestedScopes.Should().Equal("read:user", "repo");
     }
 
     [Fact]
@@ -754,6 +757,10 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
                 {
                     AgentToolOperationRiskPayload.ReadOnly,
                     AgentToolOperationRiskPayload.Write,
+                },
+                Readiness = new AgentProfileConnectedServiceReadiness
+                {
+                    RequestedScopes = { "read:user", "repo" },
                 },
             });
         var management = new RecordingManagementQuery { Snapshot = snapshot };
@@ -780,6 +787,9 @@ public sealed class MainnetAgentProfileEndpointHandlerTests
         selector.GetProperty("allowedRisks").EnumerateArray()
             .Select(static value => value.GetString())
             .Should().Equal("READ_ONLY", "WRITE");
+        selector.GetProperty("readiness").GetProperty("requestedScopes").EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("read:user", "repo");
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Prompting;
@@ -7,6 +8,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
@@ -17,6 +19,7 @@ namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 
 public sealed class AgentProfileTurnCatalogMaterializer
 {
+    private const string NyxIdRequireServiceToolName = "nyxid_require_service";
     internal const string ProfileTaskRouteIntentId = "nyxid_profile_task_route";
     internal const string ProfileTaskRouteRoutingDescription =
         "Perform an ordinary NyxID Assistant task, including invoking, reading from, or " +
@@ -405,6 +408,10 @@ public sealed class AgentProfileTurnCatalogMaterializer
             new SelectedSkillPromptProvenance(
                 $"ornn:{committedAuthority.SelectedExactSkillRef.Guid}@{committedAuthority.SelectedExactSkillRef.LiteralVersion}"),
             new PromptLayerBounds(profile.MaxSelectedSkillBytes, Math.Max(1, profile.MaxSelectedSkillBytes / 4)));
+        var readiness = ResolveConnectedServiceReadinessRequirement(
+            candidate.TaskToolPolicy,
+            availableTools,
+            eligible);
         return BuildMaterialization(
             profile,
             committedAuthority,
@@ -413,7 +420,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
             candidate.IntentId,
             selectedLayer,
             diagnostics,
-            SelectTools(routeTools.Tools, eligible));
+            SelectTools(routeTools.Tools, eligible),
+            readiness.HasUnresolvedSelectors,
+            readiness.RequiredToolInvocation);
     }
 
     public async Task<AgentProfileTurnCatalog> MaterializeBuiltInIntentAsync(
@@ -968,9 +977,22 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 continue;
             }
 
-            names.UnionWith(availableTools
+            var matches = availableTools
+                .Where(pair => toolContext.ToolVisibility.Allows(pair.Key))
                 .Where(pair => MatchesConnectedServiceSelector(pair.Value, selector))
-                .Select(static pair => pair.Key));
+                .Select(static pair => pair.Key)
+                .ToArray();
+            names.UnionWith(matches);
+            if (matches.Length == 0)
+            {
+                if (selector.Readiness is not null &&
+                    toolContext.ToolVisibility.Allows(NyxIdRequireServiceToolName) &&
+                    availableTools.TryGetValue(NyxIdRequireServiceToolName, out var readinessTool) &&
+                    readinessTool is INyxIdBuiltInTool)
+                {
+                    names.Add(NyxIdRequireServiceToolName);
+                }
+            }
         }
 
         return new ToolPolicyResolution(names, hadFailure);
@@ -981,7 +1003,58 @@ public sealed class AgentProfileTurnCatalogMaterializer
         NyxIdServiceSlugPolicy.IsCanonical(selector.CatalogServiceSlug) &&
         selector.AllowedRisks.Count > 0 &&
         selector.AllowedRisks.All(static risk =>
-            risk is AgentToolOperationRiskPayload.ReadOnly or AgentToolOperationRiskPayload.Write);
+            risk is AgentToolOperationRiskPayload.ReadOnly or AgentToolOperationRiskPayload.Write) &&
+        IsValidReadiness(selector.Readiness);
+
+    private static bool IsValidReadiness(AgentProfileConnectedServiceReadiness? readiness)
+    {
+        if (readiness is null)
+            return true;
+
+        return readiness.RequestedScopes.Count <= 64 &&
+               readiness.RequestedScopes.All(static scope =>
+                   !string.IsNullOrWhiteSpace(scope) &&
+                   string.Equals(scope, scope.Trim(), StringComparison.Ordinal) &&
+                   scope.Length <= 256 &&
+                   !scope.Any(char.IsControl)) &&
+               readiness.RequestedScopes.Distinct(StringComparer.Ordinal).Count() ==
+               readiness.RequestedScopes.Count;
+    }
+
+    private static ConnectedServiceReadinessResolution ResolveConnectedServiceReadinessRequirement(
+        AgentProfileToolPolicy? policy,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        IReadOnlySet<string> finalAllowedToolNames)
+    {
+        if (policy is null || policy.ConnectedServiceSelectors.Count == 0)
+            return ConnectedServiceReadinessResolution.None;
+
+        var unmatched = policy.ConnectedServiceSelectors
+            .Where(selector => !availableTools.Any(pair =>
+                finalAllowedToolNames.Contains(pair.Key) &&
+                MatchesConnectedServiceSelector(pair.Value, selector)))
+            .ToArray();
+        if (unmatched.Length != policy.ConnectedServiceSelectors.Count)
+            return ConnectedServiceReadinessResolution.None;
+
+        if (unmatched.Length != 1 ||
+            unmatched[0].Readiness is null ||
+            !finalAllowedToolNames.Contains(NyxIdRequireServiceToolName))
+        {
+            return new ConnectedServiceReadinessResolution(true, null);
+        }
+
+        var argumentsJson = JsonSerializer.Serialize(new
+        {
+            service_slug = unmatched[0].CatalogServiceSlug,
+            requested_scopes = unmatched[0].Readiness.RequestedScopes.ToArray(),
+        });
+        return new ConnectedServiceReadinessResolution(
+            true,
+            new AgentProfileRequiredToolInvocation(
+                NyxIdRequireServiceToolName,
+                argumentsJson));
+    }
 
     private static bool MatchesConnectedServiceSelector(
         IAgentTool tool,
@@ -1250,7 +1323,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
         string? selectedIntentId,
         SelectedSkillPromptLayer? selectedSkillPromptLayer,
         IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
-        IEnumerable<IAgentTool> routeOwnedTools)
+        IEnumerable<IAgentTool> routeOwnedTools,
+        bool hasUnresolvedConnectedServiceSelectors = false,
+        AgentProfileRequiredToolInvocation? requiredToolInvocation = null)
     {
         var canonicalCeilingToolNames = CanonicalToolNames(ceilingToolNames);
         var proposal = committedAuthority.Clone();
@@ -1271,7 +1346,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
             committedAuthority.CandidateRoute?.IntentId,
             selectedSkillPromptLayer,
             diagnostics,
-            routeOwnedTools);
+            routeOwnedTools,
+            hasUnresolvedConnectedServiceSelectors,
+            requiredToolInvocation);
         return AgentProfileTurnCatalogMaterialization.Create(catalog, proposal);
     }
 
@@ -1413,7 +1490,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
         string? candidateIntentId,
         SelectedSkillPromptLayer? selectedSkillPromptLayer,
         IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
-        IEnumerable<IAgentTool> routeOwnedTools)
+        IEnumerable<IAgentTool> routeOwnedTools,
+        bool hasUnresolvedConnectedServiceSelectors = false,
+        AgentProfileRequiredToolInvocation? requiredToolInvocation = null)
     {
         var profileText = new StringBuilder()
             .Append("Agent profile: ").Append(profile.ProfileId)
@@ -1436,7 +1515,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
             selectedIntentId,
             candidateIntentId,
             diagnostics,
-            routeOwnedTools);
+            routeOwnedTools,
+            hasUnresolvedConnectedServiceSelectors,
+            requiredToolInvocation);
     }
 
     private static bool MatchesAlias(string? userMessage, string? alias)
@@ -1485,6 +1566,13 @@ public sealed class AgentProfileTurnCatalogMaterializer
             diagnostics);
 
     private sealed record ToolPolicyResolution(IReadOnlySet<string> Names, bool HadFailure);
+
+    private sealed record ConnectedServiceReadinessResolution(
+        bool HasUnresolvedSelectors,
+        AgentProfileRequiredToolInvocation? RequiredToolInvocation)
+    {
+        public static ConnectedServiceReadinessResolution None { get; } = new(false, null);
+    }
 
     private sealed record ToolDiscoveryResolution(IReadOnlyDictionary<string, IAgentTool> Tools, bool HadFailure)
     {

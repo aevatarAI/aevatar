@@ -117,6 +117,45 @@ public sealed class ChatRuntimeStepExecutor
         return authorized;
     }
 
+    public Task<ChatRuntimeStepRecoveryToolCall?> TryAuthorizeRequiredToolCallAsync(
+        LLMRequest request,
+        AgentProfileRequiredToolInvocation invocation,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(invocation);
+        var normalized = invocation.Normalize();
+        if (string.IsNullOrWhiteSpace(normalized.ToolName) ||
+            normalized.ArgumentsJson.Length > 8 * 1024)
+        {
+            return Task.FromResult<ChatRuntimeStepRecoveryToolCall?>(null);
+        }
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(normalized.ArgumentsJson);
+            if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return Task.FromResult<ChatRuntimeStepRecoveryToolCall?>(null);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return Task.FromResult<ChatRuntimeStepRecoveryToolCall?>(null);
+        }
+
+        var callId = string.Concat(
+            request.ToolContext?.Request.CallId ?? request.RequestId ?? "profile",
+            ":required");
+        return TryAuthorizePlannedToolCallAsync(
+            request,
+            _ => new ToolCall
+            {
+                Id = callId,
+                Name = normalized.ToolName,
+                ArgumentsJson = normalized.ArgumentsJson,
+            },
+            ct);
+    }
+
     private async Task<ChatRuntimeStepRecoveryToolCall?> TryAuthorizePlannedToolCallAsync(
         LLMRequest request,
         Func<LLMRequest, ToolCall?> resolveToolCall,

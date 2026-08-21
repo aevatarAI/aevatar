@@ -201,6 +201,47 @@ public sealed class AgentProfileSkillSealerTests
     }
 
     [Fact]
+    public async Task ResolveAndSealAsync_ShouldRejectNonCanonicalReadinessScopes()
+    {
+        var draft = Draft();
+        var selector = Selector("api-github", AgentToolOperationRiskPayload.ReadOnly);
+        selector.Readiness = new AgentProfileConnectedServiceReadiness
+        {
+            RequestedScopes = { "repo", " repo" },
+        };
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(selector);
+
+        var result = await NewSealer(new RecordingResolver())
+            .ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == "PROFILE_CONNECTED_SERVICE_READINESS_SCOPES_INVALID");
+    }
+
+    [Fact]
+    public async Task ResolveAndSealAsync_ShouldKeepTaskReadinessScopesWithinMaximum()
+    {
+        var draft = Draft();
+        var maximum = Selector("api-github", AgentToolOperationRiskPayload.ReadOnly);
+        maximum.Readiness = new AgentProfileConnectedServiceReadiness
+        {
+            RequestedScopes = { "repo" },
+        };
+        var task = maximum.Clone();
+        task.Readiness.RequestedScopes.Add("read:user");
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(maximum);
+        draft.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(task);
+
+        var result = await NewSealer(new RecordingResolver())
+            .ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "PROFILE_TOOL_POLICY_EXCEEDS_MAXIMUM");
+    }
+
+    [Fact]
     public void NormalizeDraft_ShouldCanonicalizeConnectedServiceSelectorsAndRisks()
     {
         var left = Draft();
@@ -211,6 +252,11 @@ public sealed class AgentProfileSkillSealerTests
                 AgentToolOperationRiskPayload.ReadOnly),
             Selector("api-github", AgentToolOperationRiskPayload.ReadOnly),
         ]);
+        left.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors[1].Readiness =
+            new AgentProfileConnectedServiceReadiness
+            {
+                RequestedScopes = { "repo", "read:user" },
+            };
         var right = Draft();
         right.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add([
             Selector("api-github", AgentToolOperationRiskPayload.ReadOnly),
@@ -219,6 +265,11 @@ public sealed class AgentProfileSkillSealerTests
                 AgentToolOperationRiskPayload.ReadOnly,
                 AgentToolOperationRiskPayload.Write),
         ]);
+        right.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors[0].Readiness =
+            new AgentProfileConnectedServiceReadiness
+            {
+                RequestedScopes = { "read:user", "repo" },
+            };
 
         var normalized = AgentProfileDeterminism.NormalizeDraft(left);
 
@@ -231,6 +282,8 @@ public sealed class AgentProfileSkillSealerTests
             .Should().Equal(
                 AgentToolOperationRiskPayload.ReadOnly,
                 AgentToolOperationRiskPayload.Write);
+        normalized.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors[0]
+            .Readiness.RequestedScopes.Should().Equal("read:user", "repo");
     }
 
     [Fact]

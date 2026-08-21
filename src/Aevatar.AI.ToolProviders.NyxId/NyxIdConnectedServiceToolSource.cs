@@ -37,15 +37,15 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
             return [];
         var context = AgentToolRequestContext.Current;
         var executionToken = context?.Credentials.NyxIdAccessToken;
-        var catalogToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials)
-                           ?? executionToken;
-        if (string.IsNullOrWhiteSpace(executionToken) || string.IsNullOrWhiteSpace(catalogToken))
+        var inventoryToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials)
+                             ?? executionToken;
+        if (string.IsNullOrWhiteSpace(executionToken) || string.IsNullOrWhiteSpace(inventoryToken))
             return [];
 
         try
         {
             var discovered = await _client.DiscoverAsync(
-                catalogToken,
+                inventoryToken,
                 AgentToolRequestContext.NyxIdOrgToken,
                 ct);
             var bindings = discovered
@@ -55,7 +55,7 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
             if (bindings.Length == 0)
                 return [];
 
-            var catalog = await ReadMcpCatalogAsync(catalogToken, ct);
+            var catalog = await ReadMcpCatalogAsync(executionToken, ct);
             if (catalog is null)
                 return [];
 

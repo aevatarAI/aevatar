@@ -1167,6 +1167,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         ]);
         catalog.Diagnostics.Should().NotContain(static diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ProfileInvalid);
+        catalog.HasUnresolvedConnectedServiceSelectors.Should().BeFalse();
+        catalog.RequiredToolInvocation.Should().BeNull();
     }
 
     [Fact]
@@ -1233,6 +1235,50 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("task");
         catalog.Diagnostics.Should().NotContain(static diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ProfileInvalid);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_UnmatchedSealedReadinessSelector_ShouldRequireBoundedToolWithoutLlmChoice()
+    {
+        IAgentTool[] tools = [new NyxIdBuiltInTestTool("nyxid_require_service")];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        var maximumSelector = ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly);
+        maximumSelector.Readiness = new AgentProfileConnectedServiceReadiness
+        {
+            RequestedScopes = { "read:user", "repo" },
+        };
+        var taskSelector = maximumSelector.Clone();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(maximumSelector);
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(taskSelector);
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle()
+            .Which.Should().Be("nyxid_require_service");
+        catalog.HasUnresolvedConnectedServiceSelectors.Should().BeTrue();
+        catalog.RequiredToolInvocation.Should().NotBeNull();
+        catalog.RequiredToolInvocation!.ToolName.Should().Be("nyxid_require_service");
+        using var arguments = System.Text.Json.JsonDocument.Parse(
+            catalog.RequiredToolInvocation.ArgumentsJson);
+        arguments.RootElement.GetProperty("service_slug").GetString().Should().Be("api-github");
+        arguments.RootElement.GetProperty("requested_scopes").EnumerateArray()
+            .Select(static scope => scope.GetString())
+            .Should().Equal("read:user", "repo");
     }
 
     [Fact]
@@ -2516,6 +2562,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
     }
+
+    private sealed class NyxIdBuiltInTestTool(string name) : TestTool(name), INyxIdBuiltInTool;
 
     private sealed class AdmittedTestTool(
         string name,
