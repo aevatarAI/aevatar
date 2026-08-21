@@ -19,7 +19,7 @@ internal sealed class WorkflowAuthoringPreviewGenerator
     private static readonly string[] BaseAuthoringSchemaRules =
     [
         "Use canonical step types only. For a simple assistant/chat workflow, the step type must be llm_call (not llm, chat, or task).",
-        "Use only these step-level fields: id, type, target_role (or role), parameters, next, branches, children, retry, on_error, timeout_ms.",
+        "Use only these step-level fields: id, type, target_role (or role), allowed_tools, tool_sets, parameters, next, branches, children, retry, on_error, timeout_ms.",
         "Do not put model, provider, temperature, max_tokens, max_history_messages, connectors, or system_prompt on steps. Those belong under roles[*].",
         "Do not use steps[*].messages.",
         "Do not use steps[*].params. Put step options under steps[*].parameters.",
