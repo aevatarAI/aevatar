@@ -26,6 +26,24 @@ jest.mock('@/shared/api/workflowScheduleApi', () => ({
 
 const mockedWorkflowScheduleApi = jest.mocked(workflowScheduleApi);
 
+function createScheduleSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    scheduleId: 'schedule-alpha',
+    displayName: 'Daily workflow run',
+    prompt: '',
+    cronExpression: '0 9 * * 1-5',
+    timezone: 'Asia/Shanghai',
+    enabled: true,
+    createdAt: '2026-08-18T00:00:00Z',
+    updatedAt: '2026-08-20T01:02:00Z',
+    nextFireAt: '2026-08-21T01:00:00Z',
+    lastFireAt: '2026-08-20T01:00:00Z',
+    fireCount: 12,
+    failureCount: 1,
+    ...overrides,
+  };
+}
+
 const mockToast = {
   error: jest.fn(),
   info: jest.fn(),
@@ -517,26 +535,31 @@ describe('WorkflowScheduleSurface', () => {
     ).toHaveClass('wa-vnext__schedule-empty-title');
   });
 
-  it('opens the modal list with existing schedules ready to edit', async () => {
+  it('opens authoritative Schedule details with recent fires before editing', async () => {
+    const schedule = createScheduleSummary();
     mockedWorkflowScheduleApi.list.mockResolvedValue({
-      items: [
-        {
-          scheduleId: 'schedule-alpha',
-          displayName: 'Daily workflow run',
-          prompt: '',
-          cronExpression: '0 9 * * 1-5',
-          timezone: 'Asia/Shanghai',
-          enabled: true,
-          createdAt: '2026-08-20T00:00:00Z',
-          updatedAt: '2026-08-20T00:00:00Z',
-          nextFireAt: '2026-08-21T01:00:00Z',
-          lastFireAt: null,
-          fireCount: 0,
-          failureCount: 0,
-        },
-      ],
+      items: [schedule],
       nextCursor: null,
       totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get.mockResolvedValue({
+      schedule,
+      recentFires: [
+        {
+          scheduledFireAt: '2026-08-20T01:00:00Z',
+          completedAt: '2026-08-20T01:02:00Z',
+          idempotencyKey: 'schedule-alpha:fire:1',
+          error: '',
+          manual: false,
+        },
+        {
+          scheduledFireAt: '2026-08-19T03:00:00Z',
+          completedAt: '2026-08-19T03:01:00Z',
+          idempotencyKey: 'schedule-alpha:manual:1',
+          error: 'Workflow invocation failed',
+          manual: true,
+        },
+      ],
     });
 
     renderSurface(true, 'modal', jest.fn(), 'list');
@@ -548,22 +571,86 @@ describe('WorkflowScheduleSurface', () => {
       screen.getByText('Schedules', { selector: '.ant-modal-title' }),
     ).toBeVisible();
     expect(
-      screen.getByRole('button', { name: 'Edit Daily workflow run' }),
+      screen.getByRole('button', { name: 'View Daily workflow run' }),
     ).toBeVisible();
     expect(screen.getByRole('button', { name: 'New schedule' })).toBeVisible();
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Edit Daily workflow run' }),
+      screen.getByRole('button', { name: 'View Daily workflow run' }),
     );
-    expect(screen.getByText('Edit schedule')).toBeVisible();
+    await waitFor(() =>
+      expect(workflowScheduleApi.get).toHaveBeenCalledWith(
+        'scope-alpha',
+        'wf-alpha',
+        'schedule-alpha',
+      ),
+    );
+    expect(
+      screen.getByText('Schedule details', { selector: '.ant-modal-title' }),
+    ).toBeVisible();
+    expect(await screen.findByText('Recent fires')).toBeVisible();
+    expect(screen.getByText('Succeeded')).toBeVisible();
+    expect(screen.getByText('Failed')).toBeVisible();
+    expect(screen.getByText('Scheduled')).toBeVisible();
+    expect(screen.getByText('Manual')).toBeVisible();
+    expect(screen.getByText('Workflow invocation failed')).toBeVisible();
+    expect(screen.getByText('12 total')).toBeVisible();
+    expect(screen.getByText('1 failed')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change schedule' }));
+    expect(
+      screen.getByText('Edit schedule', { selector: '.ant-modal-title' }),
+    ).toBeVisible();
     expect(screen.getByRole('textbox', { name: 'Schedule name' })).toHaveValue(
       'Daily workflow run',
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByText('Daily workflow run')).toBeVisible();
     expect(
-      screen.getByText('Schedules', { selector: '.ant-modal-title' }),
+      screen.getByText('Schedule details', { selector: '.ant-modal-title' }),
     ).toBeVisible();
+    expect(screen.getByText('Recent fires')).toBeVisible();
+  });
+
+  it('keeps a detail failure distinct from an empty recent-fire result', async () => {
+    const schedule = createScheduleSummary({
+      lastFireAt: null,
+      fireCount: 0,
+      failureCount: 0,
+    });
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get
+      .mockRejectedValueOnce(new Error('Schedule detail unavailable'))
+      .mockResolvedValueOnce({ schedule, recentFires: [] });
+
+    renderSurface(true, 'modal', jest.fn(), 'list');
+
+    await waitFor(() =>
+      expect(screen.getByText('Daily workflow run')).toBeVisible(),
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'View Daily workflow run' }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Schedule details couldn't be loaded"),
+      ).toBeVisible(),
+    );
+    expect(screen.queryByText('No fires yet')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() =>
+      expect(workflowScheduleApi.get).toHaveBeenCalledTimes(2),
+    );
+    expect(await screen.findByText('No fires yet')).toBeVisible();
+    expect(
+      screen.queryByText("Schedule details couldn't be loaded"),
+    ).not.toBeInTheDocument();
   });
 });

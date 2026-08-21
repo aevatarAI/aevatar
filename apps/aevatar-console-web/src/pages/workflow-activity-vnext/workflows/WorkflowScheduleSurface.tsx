@@ -2,6 +2,7 @@ import {
   CalendarOutlined,
   DeleteOutlined,
   EditOutlined,
+  EyeOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -50,7 +51,7 @@ type ScheduleForm = {
 };
 
 type CreationStep = 'configure' | 'previewing' | 'review';
-type ScheduleSurfaceView = 'list' | 'form';
+type ScheduleSurfaceView = 'list' | 'detail' | 'form';
 type RepeatPreset = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly';
 
 const weekdayValues = ['1', '2', '3', '4', '5', '6', '0'] as const;
@@ -214,6 +215,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     React.useState<CreationStep>('configure');
   const [editingSchedule, setEditingSchedule] =
     React.useState<WorkflowScheduleSummary | null>(null);
+  const [selectedSchedule, setSelectedSchedule] =
+    React.useState<WorkflowScheduleSummary | null>(null);
   const [form, setForm] = React.useState<ScheduleForm>(() => emptyForm());
   const [repeatPreset, setRepeatPreset] =
     React.useState<RepeatPreset>('weekdays');
@@ -255,11 +258,28 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     retry: false,
   });
 
+  const scheduleDetail = useQuery({
+    enabled: open && available && Boolean(selectedSchedule),
+    queryKey: [...queryKey, 'detail', selectedSchedule?.scheduleId],
+    queryFn: () => {
+      if (!selectedSchedule) {
+        throw new Error('A Schedule must be selected.');
+      }
+      return workflowScheduleApi.get(
+        scopeId,
+        workflowId,
+        selectedSchedule.scheduleId,
+      );
+    },
+    retry: false,
+  });
+
   React.useEffect(() => {
     if (!open) return;
     setSurfaceView(initialView ?? (mode === 'modal' ? 'form' : 'list'));
     setCreationStep('configure');
     setEditingSchedule(null);
+    setSelectedSchedule(null);
     setForm(emptyForm());
     setRepeatPreset('weekdays');
     setRepeatTime('09:00');
@@ -289,6 +309,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
 
   const openCreate = () => {
     setEditingSchedule(null);
+    setSelectedSchedule(null);
     setForm(emptyForm());
     setRepeatPreset('weekdays');
     setRepeatTime('09:00');
@@ -300,7 +321,15 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setSurfaceView('form');
   };
 
-  const openEdit = (schedule: WorkflowScheduleSummary) => {
+  const openDetail = (schedule: WorkflowScheduleSummary) => {
+    setSelectedSchedule(schedule);
+    setEditingSchedule(null);
+    setSurfaceView('detail');
+  };
+
+  const openEdit = () => {
+    const schedule = scheduleDetail.data?.schedule;
+    if (!schedule) return;
     const repeat = repeatFromCron(schedule.cronExpression);
     setEditingSchedule(schedule);
     setForm(formFromSchedule(schedule));
@@ -316,6 +345,13 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
 
   const leaveForm = () => {
     if (busy) return;
+    if (editingSchedule && selectedSchedule) {
+      setEditingSchedule(null);
+      setCreationStep('configure');
+      setPreview(null);
+      setSurfaceView('detail');
+      return;
+    }
     if (mode === 'modal' && initialView !== 'list') {
       onClose();
       return;
@@ -389,7 +425,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
             'Schedule update accepted. Refreshing Workflow schedules.',
           ),
         );
-        setSurfaceView('list');
+        setSurfaceView('detail');
         setEditingSchedule(null);
         await refreshSchedules();
       } else {
@@ -476,6 +512,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         ),
       );
       await refreshSchedules();
+      setSelectedSchedule(null);
+      setSurfaceView('list');
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -541,13 +579,15 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
 
   const surfaceTitle = editingSchedule
     ? t('workflowActivityVNext.schedule.editTitle', 'Edit schedule')
-    : surfaceView === 'list'
-      ? mode === 'modal'
-        ? t('workflowActivityVNext.schedule.title', 'Schedules')
-        : workflowName
-      : creationStep === 'review'
-        ? t('workflowActivityVNext.schedule.reviewTitle', 'Review schedule')
-        : t('workflowActivityVNext.schedule.new', 'New schedule');
+    : surfaceView === 'detail'
+      ? t('workflowActivityVNext.schedule.detailTitle', 'Schedule details')
+      : surfaceView === 'list'
+        ? mode === 'modal'
+          ? t('workflowActivityVNext.schedule.title', 'Schedules')
+          : workflowName
+        : creationStep === 'review'
+          ? t('workflowActivityVNext.schedule.reviewTitle', 'Review schedule')
+          : t('workflowActivityVNext.schedule.new', 'New schedule');
 
   const workflowContext = (
     <div className="wa-vnext__schedule-context">
@@ -1028,13 +1068,13 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                 <Space wrap>
                   <Button
                     aria-label={t(
-                      'workflowActivityVNext.schedule.editAria',
-                      'Edit {name}',
+                      'workflowActivityVNext.schedule.viewAria',
+                      'View {name}',
                       { name: schedule.displayName },
                     )}
                     className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                    icon={<EditOutlined />}
-                    onClick={() => openEdit(schedule)}
+                    icon={<EyeOutlined />}
+                    onClick={() => openDetail(schedule)}
                   />
                   <Button
                     aria-label={t(
@@ -1098,6 +1138,279 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     </div>
   );
 
+  const detailView = (
+    <div className="wa-vnext__schedule-detail">
+      {scheduleDetail.isPending ? (
+        <div className="wa-vnext__state wa-vnext__state--compact" role="status">
+          <p>
+            {t(
+              'workflowActivityVNext.schedule.detailLoading',
+              'Loading schedule details…',
+            )}
+          </p>
+        </div>
+      ) : scheduleDetail.isError ? (
+        <Alert
+          action={
+            <Button onClick={() => void scheduleDetail.refetch()}>
+              {t('workflowActivityVNext.common.retry', 'Retry')}
+            </Button>
+          }
+          description={errorMessage(scheduleDetail.error)}
+          showIcon
+          title={t(
+            'workflowActivityVNext.schedule.detailLoadFailed',
+            "Schedule details couldn't be loaded",
+          )}
+          type="error"
+        />
+      ) : scheduleDetail.data ? (
+        <>
+          <div className="wa-vnext__schedule-context">
+            <strong>
+              {workflowName} ·{' '}
+              {t('workflowActivityVNext.schedule.published', 'Published')}
+            </strong>
+            <Tag
+              color={scheduleDetail.data.schedule.enabled ? 'green' : 'default'}
+            >
+              {scheduleDetail.data.schedule.enabled
+                ? t('workflowActivityVNext.schedule.enabled', 'Enabled')
+                : t('workflowActivityVNext.schedule.disabled', 'Disabled')}
+            </Tag>
+          </div>
+          {acceptedMessage ? (
+            <Alert showIcon title={acceptedMessage} type="info" />
+          ) : null}
+          <dl className="wa-vnext__schedule-detail-facts">
+            <div>
+              <dt>
+                {t(
+                  'workflowActivityVNext.schedule.scheduleName',
+                  'Schedule name',
+                )}
+              </dt>
+              <dd>{scheduleDetail.data.schedule.displayName}</dd>
+            </div>
+            <div>
+              <dt>
+                {t('workflowActivityVNext.schedule.nextFireLabel', 'Next fire')}
+              </dt>
+              <dd>
+                {formatScheduleDate(scheduleDetail.data.schedule.nextFireAt)}
+              </dd>
+            </div>
+            <div>
+              <dt>
+                {t('workflowActivityVNext.schedule.lastFire', 'Last fire')}
+              </dt>
+              <dd>
+                {formatScheduleDate(scheduleDetail.data.schedule.lastFireAt)}
+              </dd>
+            </div>
+            <div>
+              <dt>
+                {t('workflowActivityVNext.schedule.totalFires', 'Total fires')}
+              </dt>
+              <dd>
+                {t(
+                  'workflowActivityVNext.schedule.totalCount',
+                  '{count} total',
+                  {
+                    count: scheduleDetail.data.schedule.fireCount,
+                  },
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>
+                {t(
+                  'workflowActivityVNext.schedule.failedFires',
+                  'Failed fires',
+                )}
+              </dt>
+              <dd>
+                {t(
+                  'workflowActivityVNext.schedule.failedCount',
+                  '{count} failed',
+                  { count: scheduleDetail.data.schedule.failureCount },
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>
+                {t('workflowActivityVNext.schedule.cron', 'Cron expression')}
+              </dt>
+              <dd>
+                <code>{scheduleDetail.data.schedule.cronExpression}</code>
+              </dd>
+            </div>
+            <div>
+              <dt>
+                {t('workflowActivityVNext.schedule.timezone', 'Timezone')}
+              </dt>
+              <dd>{scheduleDetail.data.schedule.timezone}</dd>
+            </div>
+            <div>
+              <dt>
+                {t('workflowActivityVNext.schedule.promptReview', 'Run input')}
+              </dt>
+              <dd>
+                {scheduleDetail.data.schedule.prompt.trim()
+                  ? scheduleDetail.data.schedule.prompt
+                  : t('workflowActivityVNext.schedule.noPrompt', 'No prompt')}
+              </dd>
+            </div>
+          </dl>
+          <section className="wa-vnext__schedule-detail-history">
+            <div className="wa-vnext__schedule-detail-history-header">
+              <h3>
+                {t(
+                  'workflowActivityVNext.schedule.recentFires',
+                  'Recent fires',
+                )}
+              </h3>
+            </div>
+            {scheduleDetail.data.recentFires.length ? (
+              <div className="wa-vnext__schedule-fire-list">
+                {scheduleDetail.data.recentFires.map((fire) => {
+                  const failed = Boolean(fire.error.trim());
+                  return (
+                    <div
+                      className="wa-vnext__schedule-fire-row"
+                      key={`${fire.idempotencyKey}:${fire.completedAt}`}
+                    >
+                      <div className="wa-vnext__schedule-fire-heading">
+                        <Space size={6} wrap>
+                          <Tag color={failed ? 'red' : 'green'}>
+                            {failed
+                              ? t(
+                                  'workflowActivityVNext.schedule.failed',
+                                  'Failed',
+                                )
+                              : t(
+                                  'workflowActivityVNext.schedule.succeeded',
+                                  'Succeeded',
+                                )}
+                          </Tag>
+                          <Tag>
+                            {fire.manual
+                              ? t(
+                                  'workflowActivityVNext.schedule.manual',
+                                  'Manual',
+                                )
+                              : t(
+                                  'workflowActivityVNext.schedule.scheduled',
+                                  'Scheduled',
+                                )}
+                          </Tag>
+                        </Space>
+                      </div>
+                      <div className="wa-vnext__schedule-fire-times">
+                        <span>
+                          {t(
+                            'workflowActivityVNext.schedule.scheduledAt',
+                            'Scheduled {date}',
+                            { date: formatScheduleDate(fire.scheduledFireAt) },
+                          )}
+                        </span>
+                        <span>
+                          {t(
+                            'workflowActivityVNext.schedule.completedAt',
+                            'Completed {date}',
+                            { date: formatScheduleDate(fire.completedAt) },
+                          )}
+                        </span>
+                      </div>
+                      {failed ? (
+                        <p className="wa-vnext__schedule-fire-error">
+                          {fire.error}
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="wa-vnext__schedule-empty wa-vnext__schedule-empty--history">
+                <p>
+                  {t('workflowActivityVNext.schedule.noFires', 'No fires yet')}
+                </p>
+              </div>
+            )}
+          </section>
+        </>
+      ) : null}
+      <footer className="wa-vnext__schedule-footer">
+        <Button
+          onClick={() => {
+            setSelectedSchedule(null);
+            setSurfaceView('list');
+          }}
+        >
+          {t(
+            'workflowActivityVNext.schedule.backToSchedules',
+            'Back to schedules',
+          )}
+        </Button>
+        {scheduleDetail.data ? (
+          <Space wrap>
+            <Button
+              disabled={
+                actionScheduleId === scheduleDetail.data.schedule.scheduleId ||
+                !scheduleDetail.data.schedule.enabled
+              }
+              icon={<PlayCircleOutlined />}
+              onClick={() =>
+                void changeState(scheduleDetail.data.schedule, 'runNow')
+              }
+            >
+              {t('workflowActivityVNext.schedule.runNow', 'Run now')}
+            </Button>
+            <Button icon={<EditOutlined />} onClick={openEdit}>
+              {t('workflowActivityVNext.schedule.change', 'Change schedule')}
+            </Button>
+            <Button
+              disabled={
+                actionScheduleId === scheduleDetail.data.schedule.scheduleId
+              }
+              icon={
+                scheduleDetail.data.schedule.enabled ? (
+                  <StopOutlined />
+                ) : (
+                  <CalendarOutlined />
+                )
+              }
+              loading={
+                actionScheduleId === scheduleDetail.data.schedule.scheduleId
+              }
+              onClick={() =>
+                void changeState(
+                  scheduleDetail.data.schedule,
+                  scheduleDetail.data.schedule.enabled ? 'disable' : 'enable',
+                )
+              }
+            >
+              {scheduleDetail.data.schedule.enabled
+                ? t('workflowActivityVNext.schedule.pause', 'Pause')
+                : t('workflowActivityVNext.schedule.enable', 'Enable')}
+            </Button>
+            <Button
+              danger
+              disabled={
+                actionScheduleId === scheduleDetail.data.schedule.scheduleId
+              }
+              icon={<DeleteOutlined />}
+              onClick={() => void deleteSchedule(scheduleDetail.data.schedule)}
+            >
+              {t('workflowActivityVNext.common.delete', 'Delete')}
+            </Button>
+          </Space>
+        ) : null}
+      </footer>
+    </div>
+  );
+
   const activeBody = !available ? (
     <Alert
       showIcon
@@ -1113,6 +1426,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     />
   ) : surfaceView === 'list' ? (
     listView
+  ) : surfaceView === 'detail' ? (
+    detailView
   ) : creationStep === 'review' ? (
     reviewView
   ) : (
