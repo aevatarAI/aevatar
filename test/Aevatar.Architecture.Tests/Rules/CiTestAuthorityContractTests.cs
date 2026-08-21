@@ -289,7 +289,7 @@ public class CiTestAuthorityContractTests
 
         Assert.Contains("query_workflow_name()", script, StringComparison.Ordinal);
         Assert.Contains("method=\"GET\"", script, StringComparison.Ordinal);
-        Assert.Contains("required_workflow = \"simple_qa\"", script, StringComparison.Ordinal);
+        Assert.Contains("required_workflow = \"mission_wall_15_node_probe\"", script, StringComparison.Ordinal);
         Assert.Contains("max_attempts = 10", script, StringComparison.Ordinal);
         Assert.Contains("/api/workflows/", script, StringComparison.Ordinal);
         Assert.Contains("urllib.parse.quote(required_workflow, safe='')", script, StringComparison.Ordinal);

@@ -198,7 +198,7 @@ import urllib.request
 port = os.environ["OLD_NODE_PORT"]
 bearer_token = os.environ["AEVATAR_TEST_CLUSTER_BEARER_TOKEN"]
 max_attempts = 10
-required_workflow = "simple_qa"
+required_workflow = "mission_wall_15_node_probe"
 readiness_status_codes = {404, 502, 503, 504}
 
 for attempt in range(1, max_attempts + 1):
