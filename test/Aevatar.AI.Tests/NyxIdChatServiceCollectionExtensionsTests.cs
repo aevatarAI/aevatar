@@ -96,6 +96,9 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IAgentProfileTurnClassifier) &&
             descriptor.ImplementationFactory != null);
         services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IAgentProfileConnectedOperationSelector) &&
+            descriptor.ImplementationFactory != null);
+        services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(AgentTurnToolCatalogMaterializer));
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType == typeof(AgentTurnToolCatalog));

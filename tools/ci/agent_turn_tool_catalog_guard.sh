@@ -40,6 +40,10 @@ conversation_events_proto="agents/Aevatar.GAgents.Channel.Runtime/protos/convers
 conversation_actor="agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs"
 channel_executor_tests="test/Aevatar.GAgents.ChannelRuntime.Tests/AgentRunReplyGenerationExecutorTests.cs"
 conversation_tests="test/Aevatar.GAgents.ChannelRuntime.Tests/ConversationGAgentTargetActorIdTests.cs"
+connected_selector="agents/Aevatar.GAgents.NyxidChat/AgentProfiles/StreamingAgentProfileConnectedOperationSelector.cs"
+connected_materializer="agents/Aevatar.GAgents.NyxidChat/AgentProfiles/AgentTurnToolCatalogMaterializer.cs"
+connected_selector_tests="test/Aevatar.AI.Tests/StreamingAgentProfileConnectedOperationSelectorTests.cs"
+connected_materializer_tests="test/Aevatar.AI.Tests/AgentTurnToolCatalogMaterializerTests.cs"
 
 workspace_block="$({
   awk '
@@ -133,6 +137,36 @@ require_pattern \
   'new\(8, 48 \* 1024, MaximumConnectedReadToolCount: 3, MaximumConnectedWriteToolCount: 1\)' \
   "${catalog_contract}" \
   "connected operations must remain inside 8 tools / 48 KiB with 3 reads and 1 write."
+require_pattern 'MaximumCandidates = 64' "${connected_selector}" \
+  "the connected-operation selector presentation index must remain bounded."
+require_pattern 'Tools = null' "${connected_selector}" \
+  "the connected-operation selector must remain tool-free."
+require_pattern 'ChatStreamAsync' "${connected_selector}" \
+  "the connected-operation selector must use the streaming LLM path."
+require_pattern 'eligibleToolNames: available' "${connected_materializer}" \
+  "the connected-operation selector must receive only the authority-filtered ceiling."
+require_pattern 'connected_service_connection_ambiguous' "${connected_materializer}" \
+  "multi-connection connected-service selectors must fail to clarification."
+require_pattern 'PrepareAsync_BroadConnectedSelector_ShouldCommitOnlyBoundedExactSelection' \
+  "${connected_materializer_tests}" \
+  "the actor-owned bounded exact-selection replay proof test is missing."
+require_pattern 'MaterializeAsync_BroadSelectorAcrossConnections_ShouldRequireClarification' \
+  "${connected_materializer_tests}" \
+  "the multi-connection clarification proof test is missing."
+require_pattern 'MaterializeAsync_MultipleBroadWrites_ShouldRequireClarificationWithoutSelector' \
+  "${connected_materializer_tests}" \
+  "multiple broad write candidates must require clarification before selection."
+require_pattern 'VerifiedAuthorizationContinuation_BroadProfile_ShouldSelectInsideExactVerifiedService' \
+  "${connected_materializer_tests}" \
+  "authorization continuation must narrow to the verified UserService before bounded selection."
+require_pattern 'VerifiedAuthorizationContinuation_ProfileMemberWithoutSkill_ShouldKeepCommittedTaskPolicy' \
+  "${connected_materializer_tests}" \
+  "authorization continuation must preserve a committed non-skill task policy."
+require_pattern 'AuthorityFilteredExistingOperation_ShouldNotRequestConnectionAgain' \
+  "${connected_materializer_tests}" \
+  "authority-filtered existing operations must not be mistaken for a missing connection."
+require_pattern 'SelectAsync_InvalidOutput_ShouldFailClosed' "${connected_selector_tests}" \
+  "the connected-operation selector malformed-output proof test is missing."
 require_pattern 'new\(6, 32 \* 1024\)' "${catalog_contract}" \
   "voice catalog budget must remain 6 tools / 32 KiB."
 require_pattern 'new\(16, 128 \* 1024\)' "${catalog_contract}" \

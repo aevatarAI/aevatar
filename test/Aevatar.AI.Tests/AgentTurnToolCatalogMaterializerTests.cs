@@ -1095,7 +1095,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
-    public async Task MaterializeAsync_ConnectedServiceSelector_ShouldAdmitMatchingRiskAcrossExactInstances()
+    public async Task MaterializeAsync_BroadSelectorAcrossConnections_ShouldRequireClarification()
     {
         IAgentTool[] tools =
         [
@@ -1128,9 +1128,11 @@ public sealed class AgentTurnToolCatalogMaterializerTests
                     "endpoint-read",
                     "api-slack")),
             new PresentedTestTool("presentation-spoof", "api-github"),
+            new TestTool("ask_user"),
         ];
         var profile = BuildProfile(withAlias: true);
         profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("ask_user");
         profile.RecoveryToolPolicy.ToolNames.Clear();
         profile.Members[0].TaskToolPolicy.ToolNames.Clear();
         profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
@@ -1153,20 +1155,18 @@ public sealed class AgentTurnToolCatalogMaterializerTests
                 ToolContext(),
                 CancellationToken.None);
 
-        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
-            "nyxop_github_read_alpha",
-            "nyxop_github_read_beta");
-        catalog.ExactTools.Values
-            .Cast<IAgentToolOperationAdmissionOwner>()
-            .Select(static owner => owner.OperationAdmission.ServiceInstanceId)
-            .Should().BeEquivalentTo("us-github-alpha", "us-github-beta");
+        catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("ask_user");
         catalog.FinalAllowedToolNames.Should().NotContain([
+            "nyxop_github_read_alpha",
+            "nyxop_github_read_beta",
             "nyxop_github_write_alpha",
             "nyxop_slack_read",
             "presentation-spoof",
         ]);
         catalog.Diagnostics.Should().NotContain(static diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ProfileInvalid);
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation);
         catalog.HasUnresolvedConnectedServiceSelectors.Should().BeFalse();
         catalog.RequiredToolInvocation.Should().BeNull();
     }
@@ -1204,10 +1204,13 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         taskSelector.EndpointId = "endpoint-read-beta";
         profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(taskSelector);
 
+        var connectedSelector = new RecordingConnectedOperationSelector(
+            AgentProfileConnectedOperationSelectionResult.NoMatch());
         var catalog = await NewMaterializer(
                 RegistryWithRoute(tools),
                 new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
-                new RecordingFetcher(SuccessfulFetch()))
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
             .MaterializeAsync(
                 SealProfile(profile),
                 "/alpha",
@@ -1222,6 +1225,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             .Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
         owner.OperationAdmission.Identity.Should().Be(
             new AgentToolOperationIdentity.PublishedEndpoint("endpoint-read-beta"));
+        connectedSelector.CallCount.Should().Be(0);
     }
 
     [Fact]
@@ -1249,10 +1253,13 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             "api-github",
             AgentToolOperationRiskPayload.ReadOnly));
 
+        var connectedSelector = new RecordingConnectedOperationSelector(
+            AgentProfileConnectedOperationSelectionResult.NoMatch());
         var catalog = await NewMaterializer(
                 RegistryWithRoute(tools),
                 new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
-                new RecordingFetcher(SuccessfulFetch()))
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
             .MaterializeAsync(
                 SealProfile(profile),
                 "/alpha",
@@ -1264,6 +1271,404 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("ask_user");
         catalog.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation);
+        connectedSelector.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PrepareAsync_BroadConnectedSelector_ShouldCommitOnlyBoundedExactSelection()
+    {
+        var connectedTools = Enumerable.Range(1, 5)
+            .Select(index => (IAgentTool)new AdmittedTestTool(
+                $"nyxop_github_read_{index}",
+                CreateReadAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    $"endpoint-read-{index}",
+                    "api-github")))
+            .ToArray();
+        IAgentTool[] tools = [.. connectedTools, new TestTool("ask_user")];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("ask_user");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+            [request.Candidates.Single(candidate =>
+                candidate.DisplayName == "nyxop_github_read_2").CandidateId]));
+        var toolContext = ToolContext() with
+        {
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(
+                [.. connectedTools.Take(4).Select(static tool => tool.Name), "ask_user"]),
+        };
+        var materializer = NewMaterializer(
+            RegistryWithRoute(tools),
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            new RecordingFetcher(SuccessfulFetch()),
+            connectedOperationSelector: connectedSelector);
+
+        var (catalog, preparation) = await materializer.MaterializeWithPreparationAsync(
+            SealProfile(profile),
+            "/alpha read repository metadata",
+            "token",
+            tools,
+            toolContext,
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle()
+            .Which.Should().Be("nyxop_github_read_2");
+        preparation.Authority.AuthorityCeilingToolNames.Should().ContainSingle()
+            .Which.Should().Be("nyxop_github_read_2");
+        connectedSelector.CallCount.Should().Be(1);
+        connectedSelector.LastRequest!.Candidates.Should().HaveCount(4);
+        connectedSelector.LastRequest.Candidates.Should().OnlyContain(candidate =>
+            candidate.CatalogServiceSlug == "api-github" &&
+            candidate.ConnectorDisplayName.Length <= 160 &&
+            candidate.ConnectionLabel.Length <= 160 &&
+            candidate.Description.Length <= 512);
+        connectedSelector.LastRequest.Candidates.Should().NotContain(candidate =>
+            candidate.DisplayName == "nyxop_github_read_5");
+        var admission = ((IAgentToolOperationAdmissionOwner)catalog.ExactTools.Values.Single())
+            .OperationAdmission;
+        catalog.Proof.ToolDescriptors.Should().ContainSingle().Which.SelectorDigest
+            .Should().Be(AgentToolOperationSelector.ComputeDigest(admission));
+
+        var replay = await materializer.MaterializeCommittedAsync(
+            SealProfile(profile),
+            preparation.Authority,
+            "token",
+            tools,
+            toolContext,
+            CancellationToken.None);
+
+        replay.Catalog.FinalAllowedToolNames.Should().Equal(catalog.FinalAllowedToolNames);
+        replay.Catalog.Proof.CatalogDigest.Should().Be(catalog.Proof.CatalogDigest);
+        connectedSelector.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task VerifiedAuthorizationContinuation_BroadProfile_ShouldSelectInsideExactVerifiedService()
+    {
+        var verifiedServiceTools = Enumerable.Range(1, 5)
+            .Select(index => (IAgentTool)new AdmittedTestTool(
+                $"nyxop_github_read_{index}",
+                CreateReadAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    $"endpoint-read-{index}",
+                    "api-github")))
+            .ToArray();
+        IAgentTool[] tools =
+        [
+            .. verifiedServiceTools,
+            new AdmittedTestTool(
+                "nyxop_github_other_connection",
+                CreateReadAdmission(
+                    "us-github-other",
+                    "api-github-other",
+                    "endpoint-read-other",
+                    "api-github")),
+            new TestTool("ask_user"),
+        ];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("ask_user");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        var sealedProfile = SealProfile(profile);
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+            {
+                ProfileId = sealedProfile.ProfileId,
+                ProfileVersion = sealedProfile.ProfileVersion,
+                PolicyRevision = sealedProfile.PolicyRevision,
+                IntentId = "intent-alpha",
+            },
+            SelectedExactSkillRef = new ExactRemoteSkillRef
+            {
+                Guid = SkillGuid,
+                LiteralVersion = SkillVersion,
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            AuthorityCeilingToolNames = { "nyxid_require_service" },
+        };
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+            [request.Candidates.Single(candidate =>
+                candidate.DisplayName == "nyxop_github_read_2").CandidateId]));
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
+            .MaterializeVerifiedAuthorizationContinuationAsync(
+                sealedProfile,
+                authority,
+                new NyxIdChatVerifiedAuthorizationContinuation
+                {
+                    OriginTurnId = "turn-origin-alpha",
+                    ServiceSlug = "api-github-alpha",
+                    VerifiedResource = new NyxIdChatSafeResourceRef
+                    {
+                        UserService = new NyxIdChatUserServiceRef
+                        {
+                            UserServiceId = "us-github-alpha",
+                        },
+                    },
+                },
+                "Read repository metadata from my GitHub connection.",
+                llmControl: null,
+                toolContext: ToolContext(),
+                ct: CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle()
+            .Which.Should().Be("nyxop_github_read_2");
+        connectedSelector.CallCount.Should().Be(1);
+        connectedSelector.LastRequest!.Candidates.Should().HaveCount(5);
+        connectedSelector.LastRequest.Candidates.Should().NotContain(candidate =>
+            candidate.DisplayName == "nyxop_github_other_connection");
+    }
+
+    [Fact]
+    public async Task VerifiedAuthorizationContinuation_ProfileMemberWithoutSkill_ShouldKeepCommittedTaskPolicy()
+    {
+        var connectedTools = Enumerable.Range(1, 5)
+            .Select(index => (IAgentTool)new AdmittedTestTool(
+                $"nyxop_github_read_{index}",
+                CreateReadAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    $"endpoint-read-{index}",
+                    "api-github")))
+            .ToArray();
+        var profile = BuildProfile(withAlias: true);
+        profile.Members[0].SkillRef = null;
+        profile.Members[0].ExpectedSkillName = string.Empty;
+        profile.Members[0].ReviewedPublisherId = string.Empty;
+        profile.Members[0].SealedSkillSha256 = ByteString.Empty;
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        var exactTaskSelector = ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly);
+        exactTaskSelector.EndpointId = "endpoint-read-4";
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(exactTaskSelector);
+        var sealedProfile = SealProfile(profile);
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+            {
+                ProfileId = sealedProfile.ProfileId,
+                ProfileVersion = sealedProfile.ProfileVersion,
+                PolicyRevision = sealedProfile.PolicyRevision,
+                IntentId = "intent-alpha",
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            AuthorityCeilingToolNames = { "nyxid_require_service" },
+        };
+        var connectedSelector = new RecordingConnectedOperationSelector(
+            AgentProfileConnectedOperationSelectionResult.Failed("must_not_select"));
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(connectedTools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
+            .MaterializeVerifiedAuthorizationContinuationAsync(
+                sealedProfile,
+                authority,
+                new NyxIdChatVerifiedAuthorizationContinuation
+                {
+                    OriginTurnId = "turn-origin-alpha",
+                    ServiceSlug = "api-github-alpha",
+                    VerifiedResource = new NyxIdChatSafeResourceRef
+                    {
+                        UserService = new NyxIdChatUserServiceRef
+                        {
+                            UserServiceId = "us-github-alpha",
+                        },
+                    },
+                },
+                "Read the fourth repository operation.",
+                llmControl: null,
+                toolContext: ToolContext(),
+                ct: CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle()
+            .Which.Should().Be("nyxop_github_read_4");
+        connectedSelector.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_BroadWriteSelector_ShouldAdmitExactlyOneSelectedWrite()
+    {
+        IAgentTool[] tools =
+        [
+            .. Enumerable.Range(1, 4)
+                .Select(index => (IAgentTool)new AdmittedTestTool(
+                    $"nyxop_github_read_{index}",
+                    CreateReadAdmission(
+                        "us-github-alpha",
+                        "api-github-alpha",
+                        $"endpoint-read-{index}",
+                        "api-github"))),
+            new AdmittedTestTool(
+                "nyxop_github_write",
+                CreateWriteAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    "endpoint-write",
+                    "api-github")),
+            new TestTool("ask_user"),
+        ];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("ask_user");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly,
+            AgentToolOperationRiskPayload.Write));
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly,
+            AgentToolOperationRiskPayload.Write));
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+            [request.Candidates.Single(candidate =>
+                candidate.DisplayName == "nyxop_github_write").CandidateId]));
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha update the repository",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle()
+            .Which.Should().Be("nyxop_github_write");
+        connectedSelector.LastRequest!.MaximumReadSelections.Should().Be(3);
+        connectedSelector.LastRequest.MaximumWriteSelections.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_InvalidConnectedSelection_ShouldExposeOnlyClarificationTool()
+    {
+        IAgentTool[] tools = Enumerable.Range(1, 4)
+            .Select(index => (IAgentTool)new AdmittedTestTool(
+                $"nyxop_github_read_{index}",
+                CreateReadAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    $"endpoint-read-{index}",
+                    "api-github")))
+            .Append(new TestTool("ask_user"))
+            .ToArray();
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("ask_user");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly));
+        var connectedSelector = new RecordingConnectedOperationSelector(request =>
+            AgentProfileConnectedOperationSelectionResult.Selected(
+                request.Candidates.Select(static candidate => candidate.CandidateId).ToArray()));
+
+        var (catalog, preparation) = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
+            .MaterializeWithPreparationAsync(
+                SealProfile(profile),
+                "/alpha update the repository",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("ask_user");
+        preparation.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation &&
+            diagnostic.Detail == "connected_operation_selector_output_invalid");
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_MultipleBroadWrites_ShouldRequireClarificationWithoutSelector()
+    {
+        IAgentTool[] tools = Enumerable.Range(1, 2)
+            .Select(index => (IAgentTool)new AdmittedTestTool(
+                $"nyxop_github_write_{index}",
+                CreateWriteAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    $"endpoint-write-{index}",
+                    "api-github")))
+            .Append(new TestTool("ask_user"))
+            .ToArray();
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("ask_user");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.Write));
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.Write));
+        var connectedSelector = new RecordingConnectedOperationSelector(
+            AgentProfileConnectedOperationSelectionResult.NoMatch());
+
+        var result = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()),
+                connectedOperationSelector: connectedSelector)
+            .MaterializeWithPreparationAsync(
+                SealProfile(profile),
+                "/alpha update the repository",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        result.Catalog.FinalAllowedToolNames.Should().ContainSingle()
+            .Which.Should().Be("ask_user");
+        result.Preparation.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation &&
+            diagnostic.Detail == "connected_service_write_ambiguous");
+        connectedSelector.CallCount.Should().Be(0);
     }
 
     [Fact]
@@ -1374,6 +1779,51 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         arguments.RootElement.GetProperty("requested_scopes").EnumerateArray()
             .Select(static scope => scope.GetString())
             .Should().Equal("read:user", "repo");
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_AuthorityFilteredExistingOperation_ShouldNotRequestConnectionAgain()
+    {
+        IAgentTool[] tools =
+        [
+            new AdmittedTestTool(
+                "nyxop_github_read",
+                CreateReadAdmission(
+                    "us-github-alpha",
+                    "api-github-alpha",
+                    "endpoint-read",
+                    "api-github")),
+            new NyxIdBuiltInTestTool("nyxid_require_service"),
+        ];
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("nyxid_require_service");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        var taskSelector = ConnectedServiceSelector(
+            "api-github",
+            AgentToolOperationRiskPayload.ReadOnly);
+        taskSelector.Readiness = new AgentProfileConnectedServiceReadiness
+        {
+            RequestedScopes = { "read:user" },
+        };
+        profile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(taskSelector);
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+        catalog.HasUnresolvedConnectedServiceSelectors.Should().BeFalse();
+        catalog.RequiredToolInvocation.Should().BeNull();
     }
 
     [Fact]
@@ -2322,6 +2772,33 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         narrowed.FinalAllowedToolNames.Should().NotContain("global-fallback");
     }
 
+    [Fact]
+    public void NarrowToVerifiedUserService_ClarificationCatalog_ShouldPreserveAskUser()
+    {
+        IAgentTool askUser = new TestTool("ask_user");
+        var diagnostics = new[]
+        {
+            new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_service_write_ambiguous"),
+        };
+        var catalog = new AgentTurnToolCatalog(
+            [askUser.Name],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "general_nyxid_assistant",
+            candidateIntentId: "general_nyxid_assistant",
+            diagnostics,
+            exactTools: [askUser]);
+
+        var narrowed = AgentTurnToolCatalogMaterializer.NarrowToVerifiedUserService(
+            catalog,
+            VerifiedAuthorization("us-alpha", "service-alpha"));
+
+        narrowed.Should().BeSameAs(catalog);
+        narrowed.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("ask_user");
+    }
+
     [Theory]
     [InlineData("us-other", "service-alpha")]
     [InlineData("us-alpha", "service-other")]
@@ -2436,8 +2913,14 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         IToolSetRegistry registry,
         IAgentProfileTurnClassifier classifier,
         IExactRemoteSkillFetcher? fetcher,
-        TimeProvider? timeProvider = null) =>
-        new(registry, classifier, fetcher, timeProvider: timeProvider);
+        TimeProvider? timeProvider = null,
+        IAgentProfileConnectedOperationSelector? connectedOperationSelector = null) =>
+        new(
+            registry,
+            classifier,
+            fetcher,
+            timeProvider: timeProvider,
+            connectedOperationSelector: connectedOperationSelector);
 
     private static AgentProfileSnapshot BuildProfile(bool withAlias = false)
     {
@@ -2544,6 +3027,38 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
             return Task.FromResult(_results.Dequeue());
+        }
+    }
+
+    private sealed class RecordingConnectedOperationSelector :
+        IAgentProfileConnectedOperationSelector
+    {
+        private readonly Func<
+            AgentProfileConnectedOperationSelectionRequest,
+            AgentProfileConnectedOperationSelectionResult> _select;
+
+        public RecordingConnectedOperationSelector(
+            AgentProfileConnectedOperationSelectionResult result)
+            : this(_ => result)
+        {
+        }
+
+        public RecordingConnectedOperationSelector(Func<
+            AgentProfileConnectedOperationSelectionRequest,
+            AgentProfileConnectedOperationSelectionResult> select) =>
+            _select = select;
+
+        public int CallCount { get; private set; }
+        public AgentProfileConnectedOperationSelectionRequest? LastRequest { get; private set; }
+
+        public Task<AgentProfileConnectedOperationSelectionResult> SelectAsync(
+            AgentProfileConnectedOperationSelectionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            CallCount++;
+            LastRequest = request;
+            return Task.FromResult(_select(request));
         }
     }
 

@@ -96,6 +96,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<StreamingAgentProfileTurnClassifier>();
         services.TryAddSingleton<IAgentProfileTurnClassifier>(sp =>
             sp.GetRequiredService<StreamingAgentProfileTurnClassifier>());
+        services.TryAddSingleton<StreamingAgentProfileConnectedOperationSelector>();
+        services.TryAddSingleton<IAgentProfileConnectedOperationSelector>(sp =>
+            sp.GetRequiredService<StreamingAgentProfileConnectedOperationSelector>());
         services.TryAddSingleton<INyxIdChatTurnIntentClassifier, NyxIdChatTurnIntentClassifier>();
         services.TryAddSingleton(sp => new AgentTurnToolCatalogMaterializer(
             sp.GetRequiredService<IToolSetRegistry>(),
@@ -103,7 +106,9 @@ public static class ServiceCollectionExtensions
             sp.GetService<IExactRemoteSkillFetcher>(),
             sp.GetRequiredService<SkillFrontmatterParser>(),
             sp.GetService<ILogger<AgentTurnToolCatalogMaterializer>>(),
-            toolDiscoveryService: sp.GetRequiredService<IAgentToolDiscoveryService>()));
+            toolDiscoveryService: sp.GetRequiredService<IAgentToolDiscoveryService>(),
+            connectedOperationSelector:
+                sp.GetRequiredService<IAgentProfileConnectedOperationSelector>()));
         services.TryAddSingleton<IAgentProfileTurnToolCatalogPlanner>(sp =>
             sp.GetRequiredService<AgentTurnToolCatalogMaterializer>());
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();

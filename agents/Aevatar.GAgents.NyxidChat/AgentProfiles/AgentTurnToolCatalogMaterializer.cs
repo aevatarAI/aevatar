@@ -20,6 +20,7 @@ namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCatalogPlanner
 {
     private const string NyxIdRequireServiceToolName = "nyxid_require_service";
+    private const int DefaultConnectedOperationSelectorTimeoutMs = 15_000;
     internal const string ProfileTaskRouteIntentId = "nyxid_profile_task_route";
     internal const string ProfileTaskRouteRoutingDescription =
         "Perform an ordinary NyxID Assistant task, including invoking, reading from, or " +
@@ -54,6 +55,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
     private readonly IExactRemoteSkillFetcher? _exactRemoteSkillFetcher;
     private readonly SkillFrontmatterParser _frontmatterParser;
     private readonly IAgentToolDiscoveryService _toolDiscoveryService;
+    private readonly IAgentProfileConnectedOperationSelector? _connectedOperationSelector;
     private readonly ILogger<AgentTurnToolCatalogMaterializer> _logger;
     private readonly TimeProvider _timeProvider;
 
@@ -64,13 +66,15 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         SkillFrontmatterParser? frontmatterParser = null,
         ILogger<AgentTurnToolCatalogMaterializer>? logger = null,
         TimeProvider? timeProvider = null,
-        IAgentToolDiscoveryService? toolDiscoveryService = null)
+        IAgentToolDiscoveryService? toolDiscoveryService = null,
+        IAgentProfileConnectedOperationSelector? connectedOperationSelector = null)
     {
         _toolSetRegistry = toolSetRegistry ?? throw new ArgumentNullException(nameof(toolSetRegistry));
         _classifier = classifier ?? throw new ArgumentNullException(nameof(classifier));
         _exactRemoteSkillFetcher = exactRemoteSkillFetcher;
         _frontmatterParser = frontmatterParser ?? new SkillFrontmatterParser();
         _toolDiscoveryService = toolDiscoveryService ?? AgentToolDiscoveryService.Instance;
+        _connectedOperationSelector = connectedOperationSelector;
         _logger = logger ?? NullLogger<AgentTurnToolCatalogMaterializer>.Instance;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -180,7 +184,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             toolContext,
             diagnostics,
             ct,
-            enforceConnectedOperationLimits: true);
+            enforceConnectedOperationLimits: true,
+            eligibleToolNames: available);
         var recoveryNames = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
         if (routeTools.HadFailure || hadMergeFailure ||
@@ -257,7 +262,13 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             toolContext,
             diagnostics,
             ct,
-            enforceConnectedOperationLimits: true);
+            enforceConnectedOperationLimits: true,
+            eligibleToolNames: available,
+            selectionContext: new ConnectedOperationSelectionContext(
+                userMessage ?? string.Empty,
+                profile.ClassifierTimeoutMs,
+                llmControl,
+                $"{sessionId}:connected-operation-selector"));
         if (diagnostics.Any(static diagnostic =>
                 diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation))
         {
@@ -405,7 +416,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             toolContext,
             diagnostics,
             ct,
-            enforceConnectedOperationLimits: true);
+            enforceConnectedOperationLimits: true,
+            eligibleToolNames: eligible);
         var recoveryNames = new HashSet<string>(eligible, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
 
@@ -537,12 +549,27 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
     internal async Task<AgentTurnToolCatalog> MaterializeVerifiedAuthorizationContinuationAsync(
         AgentProfileSnapshot? profile,
         AgentProfileTurnAuthorityState? committedAuthority,
+        NyxIdChatVerifiedAuthorizationContinuation verifiedAuthorization,
+        string userMessage,
+        LLMControlContext? llmControl,
         AgentToolExecutionContext toolContext,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(verifiedAuthorization);
         ArgumentNullException.ThrowIfNull(toolContext);
         if ((profile is null) != (committedAuthority is null))
             return AgentTurnToolCatalogFactory.RestrictedEmpty();
+
+        var verifiedUserServiceId = verifiedAuthorization.VerifiedResource?.ResourceCase ==
+                                    NyxIdChatSafeResourceRef.ResourceOneofCase.UserService
+            ? verifiedAuthorization.VerifiedResource.UserService.UserServiceId?.Trim()
+            : null;
+        var verifiedServiceSlug = verifiedAuthorization.ServiceSlug?.Trim();
+        if (string.IsNullOrWhiteSpace(verifiedUserServiceId) ||
+            string.IsNullOrWhiteSpace(verifiedServiceSlug))
+        {
+            return AgentTurnToolCatalogFactory.RestrictedEmpty();
+        }
 
         var diagnostics = committedAuthority is null
             ? []
@@ -572,8 +599,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         if (routeTools.HadFailure)
             return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
 
-        var eligible = new HashSet<string>(routeTools.Names, StringComparer.OrdinalIgnoreCase);
-        eligible.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
+        var maximumEligible = new HashSet<string>(routeTools.Names, StringComparer.OrdinalIgnoreCase);
+        maximumEligible.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
         if (profile is not null)
         {
             var maximum = await ResolvePolicyAsync(
@@ -581,34 +608,223 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                 routeTools.Tools,
                 toolContext,
                 diagnostics,
-                ct,
-                enforceConnectedOperationLimits: true);
+                ct);
             if (maximum.HadFailure)
                 return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
 
-            ApplyMaximumPolicy(eligible, maximum.Names, routeTools.Tools, diagnostics);
+            ApplyMaximumPolicy(maximumEligible, maximum.Names, routeTools.Tools, diagnostics);
         }
 
+        var eligible = maximumEligible
+            .Where(name => routeTools.Tools.TryGetValue(name, out var tool) &&
+                           MatchesVerifiedUserService(
+                               tool,
+                               verifiedUserServiceId,
+                               verifiedServiceSlug))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var selectionContext = new ConnectedOperationSelectionContext(
+            userMessage ?? string.Empty,
+            profile?.ClassifierTimeoutMs ?? DefaultConnectedOperationSelectorTimeoutMs,
+            llmControl,
+            $"{verifiedAuthorization.OriginTurnId}:verified-authorization-connected-operation-selector");
+
+        if (profile is not null)
+        {
+            var committedCandidate = ResolveCommittedCandidate(profile, committedAuthority!);
+            if (committedAuthority!.SelectedExactSkillRef is not null && committedCandidate is null)
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch,
+                    "committed_candidate_mismatch"));
+                return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+            }
+
+            if (committedCandidate is not null)
+            {
+                var taskPolicy = await ResolvePolicyAsync(
+                    committedCandidate.TaskToolPolicy,
+                    routeTools.Tools,
+                    toolContext,
+                    diagnostics,
+                    ct,
+                    enforceConnectedOperationLimits: true,
+                    eligibleToolNames: eligible,
+                    selectionContext: selectionContext);
+                if (taskPolicy.HadFailure)
+                    return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+
+                if (diagnostics.Any(static diagnostic =>
+                        diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation))
+                {
+                    return CreateVerifiedAuthorizationClarificationCatalog(
+                        profile,
+                        committedAuthority,
+                        maximumEligible,
+                        routeTools.Tools,
+                        diagnostics);
+                }
+
+                eligible.IntersectWith(taskPolicy.Names);
+            }
+            else if (!await BoundVerifiedAuthorizationOperationsAsync(
+                         eligible,
+                         routeTools.Tools,
+                         selectionContext,
+                         diagnostics,
+                         ct))
+            {
+                return CreateVerifiedAuthorizationClarificationCatalog(
+                    profile,
+                    committedAuthority,
+                    maximumEligible,
+                    routeTools.Tools,
+                    diagnostics);
+            }
+        }
+        else if (!await BoundVerifiedAuthorizationOperationsAsync(
+                     eligible,
+                     routeTools.Tools,
+                     selectionContext,
+                     diagnostics,
+                     ct))
+        {
+            return CreateVerifiedAuthorizationClarificationCatalog(
+                profile: null,
+                committedAuthority: null,
+                maximumEligible,
+                routeTools.Tools,
+                diagnostics);
+        }
+
+        if (eligible.Count == 0)
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+
         var selectedTools = SelectTools(routeTools.Tools, eligible);
-        return profile is null
-            ? new AgentTurnToolCatalog(
-                eligible,
-                profilePromptLayer: null,
-                selectedSkillPromptLayer: null,
-                selectedIntentId: null,
-                candidateIntentId: null,
-                diagnostics,
-                selectedTools,
-                budget: AgentTurnToolCatalogBudget.ConnectedOperations)
-            : AgentTurnToolCatalogFactory.CreateForProfile(
-                profile,
-                eligible,
-                selectedIntentId: null,
-                candidateIntentId: committedAuthority!.CandidateRoute?.IntentId,
-                selectedSkillPromptLayer: null,
-                diagnostics,
-                selectedTools);
+        try
+        {
+            return profile is null
+                ? new AgentTurnToolCatalog(
+                    eligible,
+                    profilePromptLayer: null,
+                    selectedSkillPromptLayer: null,
+                    selectedIntentId: null,
+                    candidateIntentId: null,
+                    diagnostics,
+                    selectedTools,
+                    budget: AgentTurnToolCatalogBudget.ConnectedOperations)
+                : AgentTurnToolCatalogFactory.CreateForProfile(
+                    profile,
+                    eligible,
+                    selectedIntentId: null,
+                    candidateIntentId: committedAuthority!.CandidateRoute?.IntentId,
+                    selectedSkillPromptLayer: null,
+                    diagnostics,
+                    selectedTools);
+        }
+        catch (AgentTurnToolCatalogException exception)
+        {
+            diagnostics.Add(ToCatalogDiagnostic(exception.Failure));
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+        }
     }
+
+    private async Task<bool> BoundVerifiedAuthorizationOperationsAsync(
+        HashSet<string> eligible,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        ConnectedOperationSelectionContext selectionContext,
+        List<AgentProfileTurnDiagnostic> diagnostics,
+        CancellationToken ct)
+    {
+        if (!ConnectedOperationLimitExceeded(eligible, availableTools))
+            return true;
+
+        var counts = CountConnectedOperations(eligible, availableTools);
+        if (counts.WriteCount > 1)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_service_write_ambiguous"));
+            return false;
+        }
+
+        if (_connectedOperationSelector is null)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_service_selector_unavailable"));
+            return false;
+        }
+
+        var selected = await SelectConnectedOperationsAsync(
+            eligible,
+            availableTools,
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount,
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedWriteToolCount,
+            selectionContext,
+            diagnostics,
+            ct);
+        if (selected is null || selected.Any(name => !eligible.Contains(name)))
+            return false;
+
+        eligible.IntersectWith(selected);
+        return eligible.Count > 0 &&
+               !ConnectedOperationLimitExceeded(eligible, availableTools);
+    }
+
+    private static AgentTurnToolCatalog CreateVerifiedAuthorizationClarificationCatalog(
+        AgentProfileSnapshot? profile,
+        AgentProfileTurnAuthorityState? committedAuthority,
+        IReadOnlySet<string> maximumEligible,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        List<AgentProfileTurnDiagnostic> diagnostics)
+    {
+        if (!maximumEligible.Contains("ask_user") ||
+            !availableTools.TryGetValue("ask_user", out var askUserTool))
+        {
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+        }
+
+        try
+        {
+            return profile is null
+                ? new AgentTurnToolCatalog(
+                    ["ask_user"],
+                    profilePromptLayer: null,
+                    selectedSkillPromptLayer: null,
+                    selectedIntentId: null,
+                    candidateIntentId: null,
+                    diagnostics,
+                    [askUserTool],
+                    budget: AgentTurnToolCatalogBudget.ConnectedOperations)
+                : AgentTurnToolCatalogFactory.CreateForProfile(
+                    profile,
+                    ["ask_user"],
+                    selectedIntentId: null,
+                    candidateIntentId: committedAuthority?.CandidateRoute?.IntentId,
+                    selectedSkillPromptLayer: null,
+                    diagnostics,
+                    [askUserTool]);
+        }
+        catch (AgentTurnToolCatalogException exception)
+        {
+            diagnostics.Add(ToCatalogDiagnostic(exception.Failure));
+            return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
+        }
+    }
+
+    private static bool MatchesVerifiedUserService(
+        IAgentTool tool,
+        string verifiedUserServiceId,
+        string verifiedServiceSlug) =>
+        tool is IAgentToolOperationAdmissionOwner owner &&
+        string.Equals(
+            owner.OperationAdmission.ServiceInstanceId,
+            verifiedUserServiceId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            owner.OperationAdmission.ServiceSlug,
+            verifiedServiceSlug,
+            StringComparison.Ordinal);
 
     internal static AgentTurnToolCatalog NarrowToBuiltInIntent(
         NyxIdChatTurnIntent intent,
@@ -652,6 +868,15 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(continuation);
+
+        if (catalog.FinalAllowedToolNames.Count == 1 &&
+            catalog.FinalAllowedToolNames.Contains("ask_user") &&
+            catalog.ExactTools.ContainsKey("ask_user") &&
+            catalog.Diagnostics.Any(static diagnostic =>
+                diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation))
+        {
+            return catalog;
+        }
 
         var userServiceId = continuation.VerifiedResource?.ResourceCase ==
                             NyxIdChatSafeResourceRef.ResourceOneofCase.UserService
@@ -1018,7 +1243,9 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         AgentToolExecutionContext toolContext,
         List<AgentProfileTurnDiagnostic> diagnostics,
         CancellationToken ct,
-        bool enforceConnectedOperationLimits = false)
+        bool enforceConnectedOperationLimits = false,
+        IReadOnlySet<string>? eligibleToolNames = null,
+        ConnectedOperationSelectionContext? selectionContext = null)
     {
         if (policy is null)
             return new ToolPolicyResolution(
@@ -1043,7 +1270,9 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         }
 
         var selectorKeys = new HashSet<string>(StringComparer.Ordinal);
-        var connectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var exactConnectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var broadConnectedMatches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var connectionAmbiguous = false;
         foreach (var selector in policy.ConnectedServiceSelectors)
         {
             if (!IsValidConnectedServiceSelector(selector) ||
@@ -1059,38 +1288,157 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                 continue;
             }
 
-            var matches = availableTools
-                .Where(pair => toolContext.ToolVisibility.Allows(pair.Key))
+            var rawMatches = availableTools
                 .Where(pair => MatchesConnectedServiceSelector(pair.Value, selector))
                 .Select(static pair => pair.Key)
                 .ToArray();
-            names.UnionWith(matches);
-            connectedMatches.UnionWith(matches);
+            var matches = rawMatches
+                .Where(toolContext.ToolVisibility.Allows)
+                .Where(name => eligibleToolNames is null || eligibleToolNames.Contains(name))
+                .ToArray();
             if (matches.Length == 0)
             {
-                if (selector.Readiness is not null &&
+                if (rawMatches.Length == 0 &&
+                    selector.Readiness is not null &&
                     toolContext.ToolVisibility.Allows(NyxIdRequireServiceToolName) &&
                     availableTools.TryGetValue(NyxIdRequireServiceToolName, out var readinessTool) &&
                     readinessTool is INyxIdBuiltInTool)
                 {
                     names.Add(NyxIdRequireServiceToolName);
                 }
+
+                continue;
             }
+
+            if (enforceConnectedOperationLimits &&
+                matches
+                    .Select(name => ((IAgentToolOperationAdmissionOwner)availableTools[name])
+                        .OperationAdmission.ServiceInstanceId)
+                    .Distinct(StringComparer.Ordinal)
+                    .Skip(1)
+                    .Any())
+            {
+                connectionAmbiguous = true;
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(selector.EndpointId))
+                broadConnectedMatches.UnionWith(matches);
+            else
+                exactConnectedMatches.UnionWith(matches);
         }
 
-        if (enforceConnectedOperationLimits &&
-            ConnectedOperationLimitExceeded(connectedMatches, availableTools))
+        broadConnectedMatches.ExceptWith(exactConnectedMatches);
+        var connectedMatches = new HashSet<string>(exactConnectedMatches, StringComparer.OrdinalIgnoreCase);
+        connectedMatches.UnionWith(broadConnectedMatches);
+        if (!enforceConnectedOperationLimits)
         {
-            names.ExceptWith(connectedMatches);
+            names.UnionWith(connectedMatches);
+            return new ToolPolicyResolution(names, hadFailure);
+        }
+
+        if (connectionAmbiguous)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_service_connection_ambiguous"));
+            return new ToolPolicyResolution(names, hadFailure);
+        }
+
+        if (!ConnectedOperationLimitExceeded(connectedMatches, availableTools))
+        {
+            names.UnionWith(connectedMatches);
+            return new ToolPolicyResolution(names, hadFailure);
+        }
+
+        var exactCounts = CountConnectedOperations(exactConnectedMatches, availableTools);
+        var broadCounts = CountConnectedOperations(broadConnectedMatches, availableTools);
+        if (exactCounts.WriteCount == 0 && broadCounts.WriteCount > 1)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_service_write_ambiguous"));
+            return new ToolPolicyResolution(names, hadFailure);
+        }
+
+        if (ConnectedOperationLimitExceeded(exactConnectedMatches, availableTools) ||
+            broadConnectedMatches.Count == 0 ||
+            selectionContext is null ||
+            _connectedOperationSelector is null)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_service_selector_unavailable"));
+            return new ToolPolicyResolution(names, hadFailure);
+        }
+
+        var maximumReadSelections = Math.Max(
+            0,
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount -
+            exactCounts.ReadCount);
+        var maximumWriteSelections = Math.Max(
+            0,
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedWriteToolCount -
+            exactCounts.WriteCount);
+        var selectionNames = broadConnectedMatches
+            .Where(name => availableTools[name] is IAgentToolOperationAdmissionOwner owner &&
+                           (owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly &&
+                            maximumReadSelections > 0 ||
+                            owner.OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.Write &&
+                            maximumWriteSelections > 0))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var selectedConnectedNames = await SelectConnectedOperationsAsync(
+            selectionNames,
+            availableTools,
+            maximumReadSelections,
+            maximumWriteSelections,
+            selectionContext,
+            diagnostics,
+            ct);
+        if (selectedConnectedNames is null)
+            return new ToolPolicyResolution(names, hadFailure);
+
+        var revalidatedSelectedNames = selectedConnectedNames
+            .Where(name => broadConnectedMatches.Contains(name) &&
+                           availableTools.ContainsKey(name) &&
+                           toolContext.ToolVisibility.Allows(name) &&
+                           (eligibleToolNames is null || eligibleToolNames.Contains(name)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (revalidatedSelectedNames.Count != selectedConnectedNames.Count)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_operation_selector_authority_mismatch"));
+            return new ToolPolicyResolution(names, hadFailure);
+        }
+
+        connectedMatches.Clear();
+        connectedMatches.UnionWith(exactConnectedMatches);
+        connectedMatches.UnionWith(revalidatedSelectedNames);
+        if (ConnectedOperationLimitExceeded(connectedMatches, availableTools))
+        {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
                 "connected_service_selector_output_over_limit"));
+            return new ToolPolicyResolution(names, hadFailure);
         }
 
+        names.UnionWith(connectedMatches);
         return new ToolPolicyResolution(names, hadFailure);
     }
 
     private static bool ConnectedOperationLimitExceeded(
+        IReadOnlySet<string> names,
+        IReadOnlyDictionary<string, IAgentTool> availableTools)
+    {
+        var counts = CountConnectedOperations(names, availableTools);
+        return counts.ReadCount >
+               AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount ||
+               counts.WriteCount >
+               AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedWriteToolCount;
+    }
+
+    private static ConnectedOperationCounts CountConnectedOperations(
         IReadOnlySet<string> names,
         IReadOnlyDictionary<string, IAgentTool> availableTools)
     {
@@ -1115,8 +1463,233 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             }
         }
 
-        return readCount > AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount ||
-               writeCount > AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedWriteToolCount;
+        return new ConnectedOperationCounts(readCount, writeCount);
+    }
+
+    private async Task<IReadOnlySet<string>?> SelectConnectedOperationsAsync(
+        IReadOnlySet<string> names,
+        IReadOnlyDictionary<string, IAgentTool> availableTools,
+        int maximumReadSelections,
+        int maximumWriteSelections,
+        ConnectedOperationSelectionContext selectionContext,
+        List<AgentProfileTurnDiagnostic> diagnostics,
+        CancellationToken ct)
+    {
+        if (names.Count == 0 ||
+            maximumReadSelections == 0 && maximumWriteSelections == 0 ||
+            selectionContext.TimeoutMs <= 0)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_operation_selector_not_configured"));
+            return null;
+        }
+
+        var entries = new List<ConnectedOperationSelectionEntry>();
+        foreach (var name in names)
+        {
+            if (!availableTools.TryGetValue(name, out var tool) ||
+                !TryCreateConnectedOperationSelectionEntry(name, tool, out var entry))
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                    "connected_operation_presentation_mismatch"));
+                return null;
+            }
+
+            entries.Add(entry);
+        }
+
+        entries.Sort(static (left, right) =>
+        {
+            var byCatalog = string.CompareOrdinal(
+                left.Admission.CatalogServiceSlug,
+                right.Admission.CatalogServiceSlug);
+            if (byCatalog != 0)
+                return byCatalog;
+            var byService = string.CompareOrdinal(
+                left.Admission.ServiceInstanceId,
+                right.Admission.ServiceInstanceId);
+            if (byService != 0)
+                return byService;
+            var leftEndpoint = ((AgentToolOperationIdentity.PublishedEndpoint)left.Admission.Identity)
+                .EndpointId;
+            var rightEndpoint = ((AgentToolOperationIdentity.PublishedEndpoint)right.Admission.Identity)
+                .EndpointId;
+            var byEndpoint = string.CompareOrdinal(leftEndpoint, rightEndpoint);
+            return byEndpoint != 0
+                ? byEndpoint
+                : string.CompareOrdinal(left.ToolName, right.ToolName);
+        });
+
+        var candidates = entries
+            .Select((entry, index) => entry with
+            {
+                Candidate = entry.Candidate with
+                {
+                    CandidateId = $"operation-{index + 1:D3}",
+                },
+            })
+            .ToArray();
+        AgentProfileConnectedOperationSelectionResult result;
+        try
+        {
+            result = await _connectedOperationSelector!.SelectAsync(
+                new AgentProfileConnectedOperationSelectionRequest(
+                    selectionContext.UserMessage,
+                    candidates.Select(static entry => entry.Candidate).ToArray(),
+                    maximumReadSelections,
+                    maximumWriteSelections,
+                    TimeSpan.FromMilliseconds(selectionContext.TimeoutMs),
+                    selectionContext.LlmControl,
+                    selectionContext.RequestId),
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Connected-operation selection failed closed during turn catalog materialization");
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_operation_selector_failed"));
+            return null;
+        }
+
+        if (result.Status == AgentProfileConnectedOperationSelectionStatus.NoMatch)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_operation_selector_no_match"));
+            return null;
+        }
+        if (result.Status != AgentProfileConnectedOperationSelectionStatus.Selected ||
+            result.CandidateIds.Count == 0 ||
+            result.CandidateIds.Distinct(StringComparer.Ordinal).Count() != result.CandidateIds.Count)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_operation_selector_failed"));
+            return null;
+        }
+
+        var entriesByCandidate = candidates.ToDictionary(
+            static entry => entry.Candidate.CandidateId,
+            StringComparer.Ordinal);
+        if (result.CandidateIds.Any(id => !entriesByCandidate.ContainsKey(id)))
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_operation_selector_unknown_candidate"));
+            return null;
+        }
+
+        var selectedEntries = result.CandidateIds
+            .Select(id => entriesByCandidate[id])
+            .ToArray();
+        var selectedRisks = selectedEntries
+            .Select(static entry => entry.Admission.ExecutionPolicy.Risk)
+            .Distinct()
+            .ToArray();
+        var validSelection = selectedRisks.Length == 1 && selectedRisks[0] switch
+        {
+            AgentToolOperationRisk.ReadOnly =>
+                selectedEntries.Length <= maximumReadSelections,
+            AgentToolOperationRisk.Write =>
+                selectedEntries.Length == 1 && maximumWriteSelections == 1,
+            _ => false,
+        };
+        if (!validSelection)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "connected_operation_selector_output_invalid"));
+            return null;
+        }
+
+        return selectedEntries
+            .Select(static entry => entry.ToolName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool TryCreateConnectedOperationSelectionEntry(
+        string toolName,
+        IAgentTool tool,
+        out ConnectedOperationSelectionEntry entry)
+    {
+        entry = null!;
+        if (tool is not IAgentToolOperationAdmissionOwner owner ||
+            owner.OperationAdmission.Identity is not AgentToolOperationIdentity.PublishedEndpoint endpoint ||
+            owner.OperationAdmission.ExecutionPolicy.Risk is not (
+                AgentToolOperationRisk.ReadOnly or AgentToolOperationRisk.Write))
+        {
+            return false;
+        }
+
+        var admission = owner.OperationAdmission;
+        var presentation = tool.Presentation;
+        if (presentation is null ||
+            presentation.SourceRefCase != ToolPresentationDescriptor.SourceRefOneofCase.NyxIdOperation ||
+            !string.Equals(presentation.InvocationName, toolName, StringComparison.Ordinal) ||
+            !string.Equals(
+                presentation.NyxIdOperation.ConnectedServiceId,
+                admission.ServiceInstanceId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                presentation.NyxIdOperation.ServiceSlug,
+                admission.ServiceSlug,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                presentation.NyxIdOperation.CatalogServiceSlug,
+                admission.CatalogServiceSlug,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                presentation.NyxIdOperation.OperationId,
+                endpoint.EndpointId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                presentation.NyxIdOperation.HttpMethod,
+                admission.HttpMethod,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                presentation.NyxIdOperation.PathTemplate,
+                admission.PathTemplate,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        entry = new ConnectedOperationSelectionEntry(
+            toolName,
+            admission,
+            new AgentProfileConnectedOperationSelectionCandidate(
+                string.Empty,
+                admission.CatalogServiceSlug,
+                NormalizeSelectionText(presentation.NyxIdOperation.ConnectorDisplayName, 160),
+                NormalizeSelectionText(presentation.NyxIdOperation.ConnectionLabel, 160),
+                NormalizeSelectionText(presentation.DisplayName, 256),
+                NormalizeSelectionText(presentation.Description, 512),
+                admission.HttpMethod,
+                admission.PathTemplate,
+                admission.ExecutionPolicy.Risk));
+        return true;
+    }
+
+    private static string NormalizeSelectionText(string? value, int maximumLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var normalized = string.Join(
+            ' ',
+            value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized.Length <= maximumLength
+            ? normalized
+            : normalized[..maximumLength];
     }
 
     private static bool IsValidConnectedServiceSelector(
@@ -1157,7 +1730,6 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
         var unmatched = policy.ConnectedServiceSelectors
             .Where(selector => !availableTools.Any(pair =>
-                finalAllowedToolNames.Contains(pair.Key) &&
                 MatchesConnectedServiceSelector(pair.Value, selector)))
             .ToArray();
         if (unmatched.Length != policy.ConnectedServiceSelectors.Count)
@@ -1187,6 +1759,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         AgentProfileConnectedServiceSelector selector)
     {
         if (tool is not IAgentToolOperationAdmissionOwner owner ||
+            owner.OperationAdmission.Identity is not AgentToolOperationIdentity.PublishedEndpoint endpoint ||
             !string.Equals(
                 owner.OperationAdmission.CatalogServiceSlug,
                 selector.CatalogServiceSlug,
@@ -1196,8 +1769,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         }
 
         if (!string.IsNullOrEmpty(selector.EndpointId) &&
-            (owner.OperationAdmission.Identity is not AgentToolOperationIdentity.PublishedEndpoint endpoint ||
-             !string.Equals(endpoint.EndpointId, selector.EndpointId, StringComparison.Ordinal)))
+            !string.Equals(endpoint.EndpointId, selector.EndpointId, StringComparison.Ordinal))
         {
             return false;
         }
@@ -1531,14 +2103,19 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
     {
         var candidate = committedAuthority.CandidateRoute;
         var exactRef = committedAuthority.SelectedExactSkillRef;
-        if (candidate is null || exactRef is null)
+        if (candidate is null)
             return null;
 
         return profile.Members.SingleOrDefault(member =>
             string.Equals(member.IntentId, candidate.IntentId, StringComparison.Ordinal) &&
-            member.SkillRef is not null &&
-            string.Equals(member.SkillRef.Guid, exactRef.Guid, StringComparison.Ordinal) &&
-            string.Equals(member.SkillRef.LiteralVersion, exactRef.LiteralVersion, StringComparison.Ordinal));
+            (exactRef is null
+                ? member.SkillRef is null
+                : member.SkillRef is not null &&
+                  string.Equals(member.SkillRef.Guid, exactRef.Guid, StringComparison.Ordinal) &&
+                  string.Equals(
+                      member.SkillRef.LiteralVersion,
+                      exactRef.LiteralVersion,
+                      StringComparison.Ordinal)));
     }
 
     private static AgentProfileTurnAuthorityKind NarrowAuthority(
@@ -1705,6 +2282,19 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         (!char.IsLetterOrDigit(message[index]) && message[index] != '_');
 
     private sealed record ToolPolicyResolution(IReadOnlySet<string> Names, bool HadFailure);
+
+    private sealed record ConnectedOperationSelectionContext(
+        string UserMessage,
+        int TimeoutMs,
+        LLMControlContext? LlmControl,
+        string RequestId);
+
+    private sealed record ConnectedOperationSelectionEntry(
+        string ToolName,
+        AgentToolOperationAdmission Admission,
+        AgentProfileConnectedOperationSelectionCandidate Candidate);
+
+    private sealed record ConnectedOperationCounts(int ReadCount, int WriteCount);
 
     private sealed record ConnectedServiceReadinessResolution(
         bool HasUnresolvedSelectors,

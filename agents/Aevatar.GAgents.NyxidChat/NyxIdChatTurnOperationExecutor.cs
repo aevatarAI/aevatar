@@ -733,6 +733,9 @@ public sealed class NyxIdChatTurnOperationExecutor
                             .MaterializeVerifiedAuthorizationContinuationAsync(
                                 command.Llm.AgentProfile,
                                 command.Llm.AgentProfileTurnAuthority,
+                                verifiedAuthorization,
+                                request.Activity?.Content?.Text ?? string.Empty,
+                                LLMControlContextMapper.FromPayload(request.LlmControl),
                                 catalogToolContext,
                                 ct)
                             .ConfigureAwait(false);

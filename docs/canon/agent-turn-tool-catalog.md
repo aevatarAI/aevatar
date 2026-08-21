@@ -2,7 +2,7 @@
 title: "Agent Turn Tool Catalog"
 status: active
 owner: architecture
-last_updated: 2026-08-21
+last_updated: 2026-08-22
 ---
 
 # Agent Turn Tool Catalog
@@ -86,6 +86,12 @@ Direct Role、Lark/Telegram relay 和 NyxID Chat 都必须生成 typed proof。�
 Channel 的首个 profiled AgentRun 在模型调用前将 sealed profile snapshot、turn authority、catalog proof 和 policy version 持久化到 run actor。Run 的每个后续 LLM/tool/approval continuation 都从这些 typed facts 精确重物化并验 proof，不能重新读取当前 binding。终态 ready 或 CardKit completion 将 profile snapshot 回传给 Conversation actor；Conversation 以 `ConversationAgentProfilePinnedEvent` 固化首个快照，后续 run 从 actor state 注入同一快照。不同快照只能产生 `agent_profile_pin_mismatch` typed failure，不能热替换，也不能由进程内 conversation registry 兜底。
 
 NyxID 继续拥有 caller/service/credential/resource authorization。缺连接时复用 typed readiness/connection card，不输出 CLI fallback。普通 route 不暴露 raw proxy、admin/key/node、SSH/Codex execution。Unattended workflow/channel/schedule 保留 typed Agent Key；短时 delegation token 只做请求准入。
+
+Connected-service task policy 优先声明 exact `catalog_service_slug + endpoint_id + risk`；连接唯一时 exact selector 直接进入本轮 authority，不经过模型选择。只声明 `catalog_service_slug + risk` 且候选超过预算时，bounded operation selector 只能读取已经通过 route ceiling、Profile maximum、caller visibility 与 runtime availability 求交集后的 typed presentation index。该索引最多 64 项，只包含临时候选号、展示名、连接标签、HTTP method/path 和 typed risk；不包含 opaque tool name、endpoint identity、参数 schema、token 或 caller identity。模型必须从临时候选号中返回“最多 3 个 read”或“恰好 1 个 write”，不得混合；服务端随后映射回 exact published endpoint，并重新验证展示契约、连接身份、risk 和预算。
+
+选择结果以 exact opaque tool names 写入 actor-owned turn authority，最终 proof 同时固定 operation selector digest；后续 materialization、tool round、approval/resume 只按该 authority 重物化，不重新运行 selector。多个连接实例、超过 64 个候选、no-match、timeout、provider/tool-call 输出、未知或重复候选号、混合 risk、超量结果全部 fail closed。若 reviewed maximum 明确允许 `ask_user`，这些情况只暴露 `ask_user`；否则产生 restricted-empty，不能绕过 Profile ceiling 临时 union 澄清工具。
+
+缺连接完成授权后，continuation 必须先用回调中已验证的 typed `userServiceId + serviceSlug` 收窄当前 route/caller/runtime 候选，再在原 turn 固定的 Profile maximum 与 task policy 内选择 exact operation；禁止先对整个 connector maximum 应用 operation budget，再事后按 UserService 过滤。已存在但被 maximum、caller visibility 或 runtime authority 排除的 operation 不能伪装成“缺连接”并再次触发 readiness。需要再次澄清时仍只允许 reviewed maximum 中的 `ask_user`。
 
 ### Workflow
 
