@@ -3,7 +3,7 @@
 //
 // 统一管理所有子目录路径：
 // secrets.json / config.json / mcp.json /
-// agents/ / workflows/ / skills/ / tools/ / sessions/ / logs/
+// agents/ / workflows/ / workflow-templates/ / skills/ / tools/ / sessions/ / logs/
 // ─────────────────────────────────────────────────────────────
 
 namespace Aevatar.Configuration;
@@ -23,6 +23,8 @@ public static class AevatarPaths
     public const string SecretsPathEnv = "AEVATAR_SECRETS_PATH";
 
     // ─── 根目录 ───
+
+    public const string WorkflowTemplatesDirectoryName = "workflow-templates";
 
     /// <summary>
     /// 解析 Aevatar 配置根目录。
@@ -71,6 +73,9 @@ public static class AevatarPaths
     /// <summary>Workflow YAML 定义目录。</summary>
     public static string Workflows => Path.Combine(Root, "workflows");
 
+    /// <summary>Workflow YAML 模板目录。</summary>
+    public static string WorkflowTemplates => Path.Combine(Root, WorkflowTemplatesDirectoryName);
+
     /// <summary>Skills 文档目录（含 SKILL.md）。</summary>
     public static string Skills => Path.Combine(Root, "skills");
 
@@ -102,10 +107,14 @@ public static class AevatarPaths
     public static string PlaygroundGraphs => Path.Combine(Playground, "graphs");
 
     /// <summary>
-    /// 仓库根目录下的 workflows 路径（用于从 repo 根加载 YAML，用户无需拷贝到 ~/.aevatar）。
-    /// 解析方式：从当前目录或程序基目录向上查找含 aevatar.slnx、.git 或 Directory.Build.props 的目录，取其 workflows 子目录；未找到则用当前目录的 workflows。
+    /// 仓库根目录下的 workflows 路径。
     /// </summary>
     public static string RepoRootWorkflows => Path.Combine(RepoRoot, "workflows");
+
+    /// <summary>
+    /// 仓库根目录下的 workflow-templates 路径（用于启动时加载可公开索引的模板 YAML）。
+    /// </summary>
+    public static string RepoRootWorkflowTemplates => Path.Combine(RepoRoot, WorkflowTemplatesDirectoryName);
 
     /// <summary>
     /// 解析仓库根目录。向上查找包含 aevatar.slnx、.git 或 Directory.Build.props 的目录；未找到则返回当前目录。
@@ -148,6 +157,7 @@ public static class AevatarPaths
         Directory.CreateDirectory(Root);
         Directory.CreateDirectory(Agents);
         Directory.CreateDirectory(Workflows);
+        Directory.CreateDirectory(WorkflowTemplates);
         Directory.CreateDirectory(Skills);
         Directory.CreateDirectory(Tools);
         Directory.CreateDirectory(Sessions);

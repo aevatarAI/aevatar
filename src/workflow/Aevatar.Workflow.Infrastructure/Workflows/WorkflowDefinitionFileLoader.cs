@@ -80,16 +80,16 @@ public sealed class WorkflowDefinitionFileLoader
     private static string ResolveSourceKind(string directory)
     {
         var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
-        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Aevatar.Configuration.AevatarPaths.Workflows)), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Aevatar.Configuration.AevatarPaths.WorkflowTemplates)), StringComparison.OrdinalIgnoreCase))
             return "home";
 
-        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Aevatar.Configuration.AevatarPaths.RepoRootWorkflows)), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Aevatar.Configuration.AevatarPaths.RepoRootWorkflowTemplates)), StringComparison.OrdinalIgnoreCase))
             return "repo";
 
-        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "workflows"))), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), Aevatar.Configuration.AevatarPaths.WorkflowTemplatesDirectoryName))), StringComparison.OrdinalIgnoreCase))
             return "cwd";
 
-        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "workflows"))), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, Aevatar.Configuration.AevatarPaths.WorkflowTemplatesDirectoryName))), StringComparison.OrdinalIgnoreCase))
             return "app";
 
         if (normalized.EndsWith($"{Path.DirectorySeparatorChar}turing-completeness", StringComparison.OrdinalIgnoreCase))

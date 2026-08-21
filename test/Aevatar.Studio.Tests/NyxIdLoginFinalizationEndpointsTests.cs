@@ -454,6 +454,52 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     }
 
     [Fact]
+    public async Task Finalize_WithRequiredUserServiceIds_ShouldUseTargetedCatalogRefresh()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(
+            23,
+            services: [CatalogService("user-service-local-aevatar")]));
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest
+            {
+                Code = "auth-code",
+                CodeVerifier = "pkce-verifier",
+                RedirectUri = "http://localhost/auth/callback",
+                RequiredUserServiceIds = ["user-service-local-aevatar"],
+            },
+            new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+                "binding-alpha",
+                CreateIdToken(new { uid = "nyx-owner-alpha" }),
+                "bearer-alpha")),
+            new UsableCapabilityBroker(),
+            new FakeExternalIdentityBindingQueryPort(),
+            new RecordingBindingDispatch(),
+            new RecordingBindingReplaceDispatch(),
+            NullLoggerFactory.Instance,
+            catalogRefreshLifecycle: lifecycle,
+            catalogVisibilityPort: Visibility(catalog));
+
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        payload!.AuthorizationCatalogReady.Should().BeTrue();
+        lifecycle.Requests.Should().BeEmpty();
+        var targeted = lifecycle.TargetedRequests.Should().ContainSingle().Subject;
+        targeted.Owner.Should().BeEquivalentTo(new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = "nyx-owner-alpha",
+        });
+        targeted.BearerToken.Should().Be("bearer-alpha");
+        targeted.Request.RequiredServices.Should().ContainSingle()
+            .Which.UserServiceId.Should().Be("user-service-local-aevatar");
+        targeted.Request.LLMTarget.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Finalize_WhenCommittedCatalogVersionIsNotVisible_ShouldExposeProjectionPending()
     {
         var lifecycle = new RecordingCatalogRefreshLifecycle(
