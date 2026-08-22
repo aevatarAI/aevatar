@@ -6,12 +6,12 @@
     <meta name="color-scheme" content="only light" />
     <meta name="supported-color-schemes" content="light" />
     <title>Aevatar Studio</title>
-    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260820-m57-trajectory-persistence" />
-    <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260820-m57-trajectory-persistence"></script>
-    <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260820-m57-trajectory-persistence"></script>
-    <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260820-m57-trajectory-persistence"></script>
+    <link rel="stylesheet" href="/workflow/studio/assets/styles.css?v=20260822-m59-readable-run-activity" />
+    <script defer src="/workflow/studio/assets/vendor/lucide.min.js?v=20260822-m59-readable-run-activity"></script>
+    <script defer src="/workflow/studio/assets/vendor/marked.min.js?v=20260822-m59-readable-run-activity"></script>
+    <script defer src="/workflow/studio/assets/vendor/purify.min.js?v=20260822-m59-readable-run-activity"></script>
     <script>globalThis.__AEVATAR_ASSISTANT_CONFIG__ = __BACKEND_CONSOLE_CONFIG__;</script>
-    <script type="module" src="/workflow/studio/assets/app.js?v=20260820-m57-trajectory-persistence"></script>
+    <script type="module" src="/workflow/studio/assets/app.js?v=20260822-m59-readable-run-activity"></script>
   </head>
   <body>
     <div class="app-shell">
@@ -296,7 +296,7 @@
                 </button>
               </div>
             </form>
-            <div class="composer-status" id="composerStatus">生产环境 · 操作会影响真实数据，高风险操作需要确认</div>
+            <div class="composer-status" id="composerStatus" role="status" aria-live="polite" aria-atomic="true" aria-busy="false">生产环境 · 操作会影响真实数据，高风险操作需要确认</div>
           </div>
         </main>
 

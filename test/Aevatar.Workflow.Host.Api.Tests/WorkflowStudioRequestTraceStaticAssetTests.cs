@@ -44,6 +44,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               state: { activeConversation: null },
               dom,
               isActiveConversationContext: () => true,
+              setComposerStatus: (message) => { dom.composerStatus.textContent = message; },
             };
             vm.createContext(context);
             vm.runInContext(`
@@ -189,6 +190,11 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               ${functionSource('ensureRestoredRequestTrace')}
               ${functionSource('restoredOperationTimestamp')}
               ${functionSource('restoredOperationUsage')}
+              ${functionSource('normalizedToolText')}
+              ${functionSource('containsOpaqueToolInvocation')}
+              ${functionSource('readableToolInvocationName')}
+              ${functionSource('nyxIdToolPresentationSource')}
+              ${functionSource('describeToolOperation')}
               ${functionSource('applyRestoredOperation')}
               ${functionSource('restoreTrajectoryFromStoredOperations')}
             `, context);
@@ -369,7 +375,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             const facts = dom.trajectoryDetailsBody.children[0];
             const readFacts = () => facts.children.map(row => row.children.map(cell => cell.textContent));
             assert.deepEqual(readFacts().slice(0, 4), [
-              ['状态', 'done'], ['Operation', 'model-0'], ['开始', '22:13:20.000'], ['Duration', '100ms'],
+              ['状态', 'done'], ['内部 Operation', 'model-0'], ['开始', '22:13:20.000'], ['Duration', '100ms'],
             ]);
             assert.ok(readFacts().some(([term, value]) => term === 'Total tokens' && value === '12'));
 
@@ -491,18 +497,34 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               round: 1, model: 'deepseek-chat', sequence: 20, timestamp: 1700000000400,
             });
             apply(entry, run, {
-              type: 'tool_start', toolCallId: 'call-search', toolName: 'search',
+              type: 'tool_start', toolCallId: 'call-search',
+              toolName: 'nyxop_f9abd921a0cdeb24004a13c914d961dcee4bb6d2f8eff2dd',
+              presentation: {
+                invocationName: 'nyxop_f9abd921a0cdeb24004a13c914d961dcee4bb6d2f8eff2dd',
+                displayName: 'Search deployments', kind: 'nyxIdOperation',
+                sourceRef: {nyxIdOperation: {connectionLabel: 'Production GitHub'}},
+              },
               argumentsJson: '{"token":"raw-secret-must-not-leak"}',
               sequence: 12, timestamp: 1700000000800,
             });
             const tool = trace.recordIndex.get('tool:call-search');
             assert.ok(tool);
             assert.equal(tool.input, '', 'tool_start never exposes raw arguments');
+            assert.equal(tool.title, 'Production GitHub · Search deployments');
+            assert.equal(tool.invocationName,
+              'nyxop_f9abd921a0cdeb24004a13c914d961dcee4bb6d2f8eff2dd');
+            assert.equal(tool.presentation.displayName, 'Search deployments');
             assert.equal(tool.serverSequence, 12);
             assert.equal(context.traceOperationDurationMs(tool), null);
 
             apply(entry, run, {
-              type: 'tool_start', toolCallId: 'call-search', toolName: 'search',
+              type: 'tool_start', toolCallId: 'call-search',
+              toolName: 'nyxop_f9abd921a0cdeb24004a13c914d961dcee4bb6d2f8eff2dd',
+              presentation: {
+                invocationName: 'nyxop_f9abd921a0cdeb24004a13c914d961dcee4bb6d2f8eff2dd',
+                displayName: 'Search deployments', kind: 'nyxIdOperation',
+                sourceRef: {nyxIdOperation: {connectionLabel: 'Production GitHub'}},
+              },
               sequence: 12, timestamp: 1700000000800,
             });
             apply(entry, run, {
@@ -582,6 +604,102 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task WorkflowStudio_RunActivity_ShouldRenderTypedToolPresentationInsteadOfOpaqueInvocationNames()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+
+            function functionSource(name) {
+              const start = source.indexOf('function ' + name + '(');
+              assert.notEqual(start, -1, name + ' must exist in the served Studio app');
+              const end = source.indexOf('\n}\n', start);
+              assert.notEqual(end, -1, name + ' must close at column zero');
+              return source.slice(start, end + 3);
+            }
+
+            const context = {String};
+            vm.createContext(context);
+            vm.runInContext(`
+              ${functionSource('normalizedToolText')}
+              ${functionSource('containsOpaqueToolInvocation')}
+              ${functionSource('readableToolInvocationName')}
+              ${functionSource('nyxIdToolPresentationSource')}
+              ${functionSource('describeToolOperation')}
+              ${functionSource('toolActivityRunningCopy')}
+              ${functionSource('trajectoryPreview')}
+              ${functionSource('trajectoryRowTitle')}
+              ${functionSource('actorStepSourceLabel')}
+              ${functionSource('actorStepDisplayName')}
+            `, context);
+
+            const opaqueName = 'nyxop_f9abd921a0cdeb24004a13c914d961dcee4bb6d2f8eff2dd';
+            const presentation = {
+              invocationName: opaqueName,
+              displayName: 'Get repository',
+              description: "Read 'Get repository' from connected service 'GitHub'.",
+              kind: 'nyxIdOperation',
+              sourceRef: {
+                type: 'nyxIdOperation',
+                nyxIdOperation: {
+                  connectionLabel: 'Work GitHub',
+                  connectorDisplayName: 'GitHub',
+                  operationId: 'get_repository',
+                },
+              },
+            };
+            const tool = context.describeToolOperation({toolName: opaqueName, presentation});
+            assert.equal(tool.invocationName, opaqueName,
+              'the exact invocation identity remains available for dispatch and diagnostics');
+            assert.equal(tool.displayName, 'Get repository');
+            assert.equal(tool.serviceLabel, 'Work GitHub');
+            assert.equal(tool.title, 'Work GitHub · Get repository');
+            assert.equal(context.toolActivityRunningCopy(tool),
+              '正在通过 Work GitHub 执行 Get repository…');
+            assert.equal(context.readableToolInvocationName(opaqueName), '连接服务操作',
+              'an old event without presentation still cannot leak the opaque invocation name');
+
+            const record = {kind: 'tool', invocationName: opaqueName, title: opaqueName, presentation};
+            assert.equal(context.trajectoryRowTitle(record), 'Work GitHub · Get repository');
+            assert.equal(context.trajectoryRowTitle(record).includes('nyxop_'), false);
+
+            const step = {
+              kind: 'tool',
+              description: `Run authorized tool ${opaqueName}.`,
+              source: {tool: {toolName: opaqueName, presentation}},
+            };
+            assert.equal(context.actorStepDisplayName(step),
+              '通过 Work GitHub 执行 Get repository');
+            assert.equal(context.actorStepSourceLabel(step), 'Work GitHub · NyxID 连接服务');
+            assert.equal(context.actorStepDisplayName(step).includes('nyxop_'), false);
+
+            const directStatePresentation = {
+              ...presentation,
+              sourceRef: undefined,
+              nyxIdOperation: presentation.sourceRef.nyxIdOperation,
+            };
+            assert.equal(context.describeToolOperation({toolName: opaqueName,
+              presentation: directStatePresentation}).title, 'Work GitHub · Get repository',
+              'SSE and actor current-state presentation shapes render identically');
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("const label = el(\"span\", \"\", \"AI 执行\")");
+        app.Should().Contain("const presentation = describeToolOperation(event);");
+        app.Should().Contain("el(\"strong\", \"\", presentation.title)");
+        app.Should().Contain("toolActivityRunningCopy(presentation)");
+        var addToolStart = app.IndexOf("function addTool(event)", StringComparison.Ordinal);
+        var addToolEnd = app.IndexOf("\nfunction updateActivityProgress()", addToolStart, StringComparison.Ordinal);
+        addToolStart.Should().BeGreaterThanOrEqualTo(0);
+        addToolEnd.Should().BeGreaterThan(addToolStart);
+        app[addToolStart..addToolEnd].Should().NotContain("el(\"strong\", \"\", name)");
+    }
+
+    [Fact]
     public async Task WorkflowStudio_Protocol_ShouldPreserveTypedModelAndToolOperationFrames()
     {
         var protocol = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantProtocol);
@@ -628,10 +746,22 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
 
             const toolStart = context.normalizeFrame({
               type: 'TOOL_CALL_START', sequence: 12,
-              toolCallStart: {toolCallId: 'call-search', toolName: 'search'},
+              toolCallStart: {
+                toolCallId: 'call-search',
+                toolName: 'nyxop_f9abd921a0cdeb24004a13c914d961dcee4bb6d2f8eff2dd',
+                presentation: {
+                  invocationName: 'nyxop_f9abd921a0cdeb24004a13c914d961dcee4bb6d2f8eff2dd',
+                  displayName: 'Search deployments',
+                  kind: 'nyxIdOperation',
+                  sourceRef: {nyxIdOperation: {connectionLabel: 'Production GitHub'}},
+                },
+              },
             });
             assert.equal(toolStart.type, 'tool_start');
             assert.equal(toolStart.toolCallId, 'call-search');
+            assert.equal(toolStart.presentation.displayName, 'Search deployments');
+            assert.equal(toolStart.presentation.sourceRef.nyxIdOperation.connectionLabel,
+              'Production GitHub');
             assert.equal(toolStart.argumentsJson, undefined,
               'tool start does not carry raw arguments');
             assert.equal(toolStart.sequence, 12);

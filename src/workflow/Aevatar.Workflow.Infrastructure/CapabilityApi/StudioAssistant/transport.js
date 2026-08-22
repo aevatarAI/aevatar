@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260820-m57-trajectory-persistence";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260822-m59-readable-run-activity";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};
@@ -19,8 +19,15 @@ const TOKEN_KEY = `${config.storageKey}:token`;
 const SERVICE_ACCESS_REVIEW_TOKEN_KEY = `${config.storageKey}:service-access-review:token`;
 const PKCE_KEY = `${config.storageKey}:pkce`;
 const SERVICE_ACCESS_REVIEW_FLOW = "service-access-review";
+const SERVICE_ACCESS_REVIEW_MESSAGE_SOURCE = "aevatar-service-access-review-auth";
+const SERVICE_ACCESS_REVIEW_POPUP_PREFIX = "aevatar-nyxid-service-review-";
 const ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED_CODE =
   "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED";
+
+const serviceAccessReviewListeners = new Set();
+let serviceAccessReviewPopup = null;
+let serviceAccessReviewRequestId = "";
+let serviceAccessReviewPopupTimer = null;
 
 function trimBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
@@ -72,6 +79,85 @@ function setServiceAccessReviewToken(token) {
 function clearServiceAccessReviewToken() {
   localStorage.removeItem(SERVICE_ACCESS_REVIEW_TOKEN_KEY);
 }
+
+function emitServiceAccessReviewResult(result) {
+  for (const listener of serviceAccessReviewListeners) {
+    try {
+      listener(result);
+    } catch {
+      // One UI listener must not prevent the remaining subscribers from resuming.
+    }
+  }
+}
+
+function clearServiceAccessReviewPopupTracking() {
+  if (serviceAccessReviewPopupTimer !== null) {
+    clearInterval(serviceAccessReviewPopupTimer);
+    serviceAccessReviewPopupTimer = null;
+  }
+  serviceAccessReviewPopup = null;
+  serviceAccessReviewRequestId = "";
+}
+
+function trackServiceAccessReviewPopup(popup, requestId) {
+  if (serviceAccessReviewPopup && serviceAccessReviewPopup !== popup &&
+      !serviceAccessReviewPopup.closed) {
+    try {
+      serviceAccessReviewPopup.close();
+    } catch {
+      // The new review supersedes the previous transient window either way.
+    }
+  }
+  clearServiceAccessReviewPopupTracking();
+  serviceAccessReviewPopup = popup;
+  serviceAccessReviewRequestId = requestId;
+  serviceAccessReviewPopupTimer = setInterval(() => {
+    if (serviceAccessReviewPopup && !serviceAccessReviewPopup.closed) return;
+    const closedRequestId = serviceAccessReviewRequestId;
+    clearServiceAccessReviewPopupTracking();
+    notifyAdminShellAuth("service-access-review-finished", "", "", {
+      authRequestId: closedRequestId,
+    });
+    emitServiceAccessReviewResult({
+      status: "failed",
+      requestId: closedRequestId,
+      message: "NyxID 授权窗口已关闭；原 action 与会话仍然保留。",
+    });
+  }, 500);
+}
+
+function onServiceAccessReviewResult(listener) {
+  if (typeof listener !== "function") return () => {};
+  serviceAccessReviewListeners.add(listener);
+  return () => serviceAccessReviewListeners.delete(listener);
+}
+
+function handleServiceAccessReviewMessage(event) {
+  const message = event.data || {};
+  const trustedSource = event.source === serviceAccessReviewPopup ||
+    (isEmbeddedInAdmin() && event.source === window.parent);
+  if (event.origin !== location.origin ||
+      !trustedSource ||
+      message.source !== SERVICE_ACCESS_REVIEW_MESSAGE_SOURCE ||
+      message.type !== "service-access-review-result" ||
+      !serviceAccessReviewRequestId ||
+      message.requestId !== serviceAccessReviewRequestId) {
+    return;
+  }
+  const status = message.status === "succeeded" ? "succeeded" : "failed";
+  const requestId = serviceAccessReviewRequestId;
+  clearServiceAccessReviewPopupTracking();
+  notifyAdminShellAuth("service-access-review-finished", "", "", {
+    authRequestId: requestId,
+  });
+  emitServiceAccessReviewResult({
+    status,
+    requestId,
+    message: String(message.message || ""),
+  });
+}
+
+window.addEventListener("message", handleServiceAccessReviewMessage);
 
 function isEmbeddedInAdmin() {
   try {
@@ -250,7 +336,15 @@ async function beginLogin(options = {}) {
   const resources = authFlow
     ? uniqueStrings([...config.resources, ...(Array.isArray(options?.resources) ? options.resources : [])])
     : [];
-  if (notifyAdminShellAuth("login-request", "", "", authFlow ? { authFlow, resources } : {})) return;
+  const popupName = authFlow && typeof options?.popupName === "string"
+    ? options.popupName
+    : "";
+  const authRequestId = authFlow && typeof options?.authRequestId === "string"
+    ? options.authRequestId
+    : "";
+  if (notifyAdminShellAuth("login-request", "", "", authFlow
+    ? { authFlow, resources, popupName, authRequestId }
+    : {})) return;
   if (!config.authority || !config.clientId) {
     throw new Error("NyxID OIDC is not configured for this host.");
   }
@@ -260,13 +354,15 @@ async function beginLogin(options = {}) {
     "SHA-256",
     new TextEncoder().encode(verifier),
   ));
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({
+  const pending = {
     verifier,
     state,
     returnTo: "/workflow/studio",
     resources,
     authFlow,
-  }));
+    authRequestId,
+  };
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify(pending));
   // ADR-0018: ordinary session login never sends explicit `resource` parameters —
   // NyxID would narrow the grant to exactly that list (RFC 8707 intersection)
   // and the token could no longer reach other consented services such as the
@@ -284,11 +380,53 @@ async function beginLogin(options = {}) {
     resources.forEach((resource) => url.searchParams.append("resource", resource));
     url.searchParams.set("prompt", "consent");
   }
+  if (authFlow && popupName && serviceAccessReviewPopup && !serviceAccessReviewPopup.closed) {
+    try {
+      serviceAccessReviewPopup.sessionStorage.setItem(PKCE_KEY, JSON.stringify(pending));
+      serviceAccessReviewPopup.location.replace(url.toString());
+      serviceAccessReviewPopup.focus?.();
+      return;
+    } catch {
+      try {
+        serviceAccessReviewPopup.close();
+      } catch {
+        // Fall through to the full-page fallback when the popup cannot be navigated.
+      }
+      clearServiceAccessReviewPopupTracking();
+    }
+  }
   location.assign(url.toString());
 }
 
 async function beginServiceAccessReview(resources) {
-  return beginLogin({ authFlow: SERVICE_ACCESS_REVIEW_FLOW, resources });
+  const authRequestId = `${Date.now().toString(36)}-${randomString(16)}`;
+  const popupName = `${SERVICE_ACCESS_REVIEW_POPUP_PREFIX}${authRequestId}`;
+  let popup = null;
+  try {
+    popup = window.open(
+      "",
+      popupName,
+      "popup=yes,width=560,height=720,resizable=yes,scrollbars=yes",
+    );
+  } catch {
+    popup = null;
+  }
+  if (popup) {
+    trackServiceAccessReviewPopup(popup, authRequestId);
+    popup.focus?.();
+  }
+  try {
+    return await beginLogin({
+      authFlow: SERVICE_ACCESS_REVIEW_FLOW,
+      resources,
+      popupName: popup ? popupName : "",
+      authRequestId: popup ? authRequestId : "",
+    });
+  } catch (error) {
+    if (popup && !popup.closed) popup.close();
+    clearServiceAccessReviewPopupTracking();
+    throw error;
+  }
 }
 
 async function completeLoginIfCallback() {
@@ -716,6 +854,7 @@ globalThis.AevatarStudioAuth = Object.freeze({
   fetchServiceAccessReviewCatalog,
   getToken,
   notifyAdminShellAuth,
+  onServiceAccessReviewResult,
   serviceResourceUri: proxyResourceForSlug,
 });
 

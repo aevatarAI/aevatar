@@ -130,9 +130,40 @@
   var authFlow = rawAuthFlow === SERVICE_ACCESS_REVIEW_FLOW ? SERVICE_ACCESS_REVIEW_FLOW : "";
   if(authFlow && tokenPurpose){ show("登录状态包含冲突的授权用途，请返回重试。"); offerBack(returnTo); return; }
 
+  function finishServiceAccessReview(status, message){
+    if(authFlow !== SERVICE_ACCESS_REVIEW_FLOW ||
+       !pending || typeof pending.authRequestId !== "string" || !pending.authRequestId ||
+       !globalThis.opener || globalThis.opener.closed) return false;
+    try {
+      sessionStorage.removeItem(PKCE_KEY);
+      globalThis.opener.postMessage({
+        source:"aevatar-service-access-review-auth",
+        type:"service-access-review-result",
+        requestId:pending.authRequestId,
+        state:oauthState || "",
+        status:status === "succeeded" ? "succeeded" : "failed",
+        message:String(message || "")
+      }, location.origin);
+      stop();
+      show(message);
+      if(typeof globalThis.close === "function") globalThis.close();
+      return true;
+    } catch(e){ return false; }
+  }
+
+  function failServiceAccessReview(message){
+    if(finishServiceAccessReview("failed", message)) return;
+    show(message);
+    offerBack(returnTo);
+  }
+
   if(!selected){ show("登录状态校验失败，请返回重试。"); offerBack(returnTo); return; }
-  if(oauthError){ show("登录失败：" + oauthError); offerBack(returnTo); return; }
-  if(!code){ location.replace(returnTo); return; }
+  if(oauthError){ failServiceAccessReview("登录失败：" + oauthError); return; }
+  if(!code){
+    if(finishServiceAccessReview("failed", "NyxID 未返回授权码；原 action 与会话仍然保留。")) return;
+    location.replace(returnTo);
+    return;
+  }
 
   // Ordinary console login finalizes server-side. That is what commits the NyxID
   // ExternalIdentityBinding the Studio/Delivery publish path requires; a browser-side
@@ -157,13 +188,13 @@
   fetch(AUTHORITY + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() })
     .then(function(res){
       try { sessionStorage.removeItem(PKCE_KEY); } catch(e){}
-      if(!res.ok){ show("令牌交换失败（" + res.status + "），请返回重试。"); offerBack(returnTo); return null; }
+      if(!res.ok){ failServiceAccessReview("令牌交换失败（" + res.status + "），原 action 与会话仍然保留。"); return null; }
       return res.json();
     })
     .then(function(token){
       if(!token) return;
       if(requestedResources.length && !resourcesCover(tokenResponseResources(token), requestedResources)){
-        show("令牌未包含本次请求的服务授权，请返回重试。"); offerBack(returnTo); return;
+        failServiceAccessReview("令牌未包含本次请求的服务授权；原 action 与会话仍然保留。"); return;
       }
       token.obtained_at = Date.now();
       token.oauth_resources = requestedResources;
@@ -171,9 +202,10 @@
         ? SERVICE_ACCESS_REVIEW_TOKEN_KEY
         : tokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_KEY : TOKEN_KEY;
       localStorage.setItem(tokenKey, JSON.stringify(token));
+      if(finishServiceAccessReview("succeeded", "NyxID 授权已更新，正在恢复 Studio 中的原任务…")) return;
       location.replace(returnTo);
     })
-    .catch(function(e){ show("登录出错：" + (e && e.message ? e.message : e)); offerBack(returnTo); });
+    .catch(function(e){ failServiceAccessReview("登录出错：" + (e && e.message ? e.message : e)); });
 
   function pick(record, names){
     for(var i=0;i<names.length;i++){

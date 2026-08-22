@@ -21,9 +21,30 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         transport.Should().Contain("pending.authFlow === SERVICE_ACCESS_REVIEW_FLOW");
         transport.Should().Contain("setServiceAccessReviewToken(token)");
         transport.Should().Contain("clearServiceAccessReviewToken();");
+        transport.Should().Contain("function onServiceAccessReviewResult(listener)");
+        transport.Should().Contain("window.open(");
+        transport.Should().Contain("message.requestId !== serviceAccessReviewRequestId");
         transport.Should().Contain("authorizedFetch(\"/api/chat\"");
         transport.Should().NotContain("setToken(token);\n}",
             "the standalone OAuth callback must branch before storing a review token");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_RunningUi_ShouldExposeAPersistentAccessibleStatus()
+    {
+        var html = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetStudioPage);
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        var styles = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantStyles);
+
+        html.Should().Contain(
+            "id=\"composerStatus\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" aria-busy=\"false\"");
+        app.Should().Contain("function setComposerStatus(message, { working = false } = {})");
+        app.Should().Contain("dom.composerStatus.classList.toggle(\"working\", working)");
+        app.Should().Contain(
+            "setComposerStatus(\"Agent 正在执行当前任务；仍可输入 steering 指令\", { working: true })");
+        styles.Should().Contain(".composer-status.working::before");
+        styles.Should().Contain("animation: spin 720ms linear infinite");
+        styles.Should().Contain(".composer-status.working::before { animation: none; }");
     }
 
     [Fact]
@@ -306,7 +327,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
         var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
 
-        app.Should().Contain("import \"./transport.js?v=20260820-m57-trajectory-persistence\"");
+        app.Should().Contain("import \"./transport.js?v=20260822-m59-readable-run-activity\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -427,13 +448,13 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260820-m57-trajectory-persistence");
-        html.Should().Contain("styles.css?v=20260820-m57-trajectory-persistence");
-        app.Should().Contain("transport.js?v=20260820-m57-trajectory-persistence");
-        app.Should().Contain("readiness.js?v=20260820-m57-trajectory-persistence");
-        transport.Should().Contain("readiness.js?v=20260820-m57-trajectory-persistence");
-        actorState.Should().Contain("protocol.js?v=20260820-m57-trajectory-persistence");
-        blocks.Should().Contain("protocol.js?v=20260820-m57-trajectory-persistence");
+        html.Should().Contain("app.js?v=20260822-m59-readable-run-activity");
+        html.Should().Contain("styles.css?v=20260822-m59-readable-run-activity");
+        app.Should().Contain("transport.js?v=20260822-m59-readable-run-activity");
+        app.Should().Contain("readiness.js?v=20260822-m59-readable-run-activity");
+        transport.Should().Contain("readiness.js?v=20260822-m59-readable-run-activity");
+        actorState.Should().Contain("protocol.js?v=20260822-m59-readable-run-activity");
+        blocks.Should().Contain("protocol.js?v=20260822-m59-readable-run-activity");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
@@ -984,6 +1005,17 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               clientRequestId:'client-action-original',
               createdAt:pending.createdAt,
             });
+            assert.equal(
+              calls.some((call) => call.kind === 'consent'),
+              false,
+              'an async 401 cannot open a popup without a fresh user gesture');
+
+            const opened = await context.beginActionContinuationCredentialRefresh(
+              card,
+              'completed',
+              resource,
+            );
+            assert.equal(opened, true);
             assert.deepEqual(JSON.parse(JSON.stringify(
               calls.find((call) => call.kind === 'consent').resources,
             )), ['https://id.example.test/api/v1/proxy/s/api-github']);
@@ -1149,6 +1181,70 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
         app.Should().Contain("await resumePendingServiceAccessReview();");
+    }
+
+    [Fact]
+    public async Task WorkflowStudio_ServiceAccessReviewPopup_ShouldResumeInPlaceWithoutReloading()
+    {
+        var app = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantApp);
+        const string script = """
+            (async () => {
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const start = source.indexOf('function markServiceAccessReviewInterrupted(pending, message) {');
+            const end = source.indexOf('\nasync function submitConnectCredential(', start);
+            assert.notEqual(start, -1, 'popup result handler must exist');
+            assert.notEqual(end, -1, 'credential flow must follow popup result handler');
+
+            const calls = [];
+            let pending = {conversationId:'conversation-alpha'};
+            const context = {
+              SERVICE_ACCESS_REVIEW_KEY:'pending-service-review',
+              state:{activeController:null,auth:{authenticated:true}},
+              readJsonStorage:() => pending,
+              resumePendingServiceAccessReview:async () => {
+                calls.push({kind:'resume'});
+                pending = null;
+                return true;
+              },
+              loadServices:async () => calls.push({kind:'services'}),
+              setComposerStatus:(message, options = {}) => calls.push({
+                kind:'status', message, working:options.working === true,
+              }),
+              showToast:(message) => calls.push({kind:'toast',message}),
+              renderActorControlUi:() => calls.push({kind:'render-controls'}),
+              findConversationState:() => null,
+              actionEntryKey:() => '',
+              renderConnectCard:() => {},
+            };
+            vm.createContext(context);
+            vm.runInContext(`let serviceAccessReviewResumePromise = null;\n${source.slice(start, end)}`, context);
+
+            const resumed = await context.handleServiceAccessReviewResult({
+              status:'succeeded', requestId:'request-alpha',
+            });
+
+            assert.equal(resumed, true);
+            assert.equal(calls.filter((call) => call.kind === 'resume').length, 1);
+            assert.equal(calls.filter((call) => call.kind === 'services').length, 1);
+            assert.deepEqual(calls.filter((call) => call.kind === 'status').map((call) => ({
+              message:call.message, working:call.working,
+            })), [
+              {message:'NyxID 授权已更新，正在恢复原任务…',working:true},
+              {message:'生产环境 · 使用当前账户的 services，高风险操作需要确认',working:false},
+            ]);
+            assert.equal(calls.some((call) => call.kind === 'toast' && /原任务已继续/.test(call.message)), true);
+            assert.equal(calls.at(-1).kind, 'render-controls');
+            })().catch((error) => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, app);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("AevatarStudioAuth.onServiceAccessReviewResult");
+        app.Should().NotContain("location.reload()",
+            "the authorization completion handler must keep the mounted Studio session");
     }
 
     [Fact]

@@ -1875,9 +1875,13 @@ summary:focus-visible {
 }
 
 .activity-header span:last-child {
+  min-width: 0;
   margin-left: auto;
+  overflow: hidden;
   color: var(--muted);
+  text-overflow: ellipsis;
   text-transform: none;
+  white-space: nowrap;
 }
 
 .tool-row {
@@ -1935,9 +1939,9 @@ summary:focus-visible {
   display: block;
   overflow: hidden;
   color: var(--text-soft);
-  font-family: var(--mono);
-  font-size: 10.5px;
-  font-weight: 500;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4767,9 +4771,29 @@ body:has(.settings-dialog[open]) #servicesButton,
 }
 
 .composer-status {
+  display: flex;
   height: 22px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding-top: 7px;
   font-size: 11px;
+}
+
+.composer-status.working {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.composer-status.working::before {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 720ms linear infinite;
+  content: "";
 }
 
 .attachment-chip {
@@ -6309,4 +6333,5 @@ body:has(.settings-dialog[open]) #servicesButton,
 
 @media (prefers-reduced-motion: reduce) {
   .trajectory-span[data-status="running"] { animation: none; }
+  .composer-status.working::before { animation: none; }
 }

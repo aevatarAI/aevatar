@@ -513,8 +513,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             html.Should().Contain("class=\"site-header\"");
             html.Should().Contain("id=\"composerForm\"");
             html.Should().Contain("生产环境 · 操作会影响真实数据，高风险操作需要确认");
-            html.Should().Contain("app.js?v=20260820-m57-trajectory-persistence");
-            html.Should().Contain("styles.css?v=20260820-m57-trajectory-persistence");
+            html.Should().Contain("app.js?v=20260822-m59-readable-run-activity");
+            html.Should().Contain("styles.css?v=20260822-m59-readable-run-activity");
             html.Should().Contain("id=\"traceViewButton\"");
             html.Should().Contain("id=\"requestTracePanel\"");
             html.Should().Contain("class=\"trajectory-toolbar\"");
@@ -817,6 +817,16 @@ public sealed class BackendConsoleStaticAssetEndpointTests
 
             const assignments = [];
             const pending = [];
+            const popupPending = [];
+            const popupNavigations = [];
+            const popup = {
+              closed:false,
+              sessionStorage:{setItem:(key,value) => popupPending.push({key,value:JSON.parse(value)})},
+              location:{replace:(value) => popupNavigations.push(value)},
+              focus:() => {},
+              close:() => { popup.closed = true; },
+            };
+            const requester = {postMessage:() => {}};
             const context = {
               OIDC:{
                 authority:'https://id.example.test', clientId:'client-example',
@@ -828,12 +838,22 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               },
               VOICE_TOKEN_PURPOSE:'voice-realtime',
               SERVICE_ACCESS_REVIEW_FLOW:'service-access-review',
+              SERVICE_ACCESS_REVIEW_POPUP_PREFIX:'aevatar-nyxid-service-review-',
+              SERVICE_ACCESS_REVIEW_POPUP:null,
               PKCE_KEY:'console:pkce',
-              sessionStorage:{setItem:(key,value) => pending.push({key,value:JSON.parse(value)})},
+              sessionStorage:{
+                setItem:(key,value) => pending.push({key,value:JSON.parse(value)}),
+                getItem:() => null,
+                removeItem:() => {},
+              },
               location:{
                 pathname:'/admin', hash:'#/studio',
                 assign:(value) => assignments.push(value),
               },
+              window:{open:(_url,name) => {
+                assert.equal(name, 'aevatar-nyxid-service-review-request-alpha');
+                return popup;
+              }},
               crypto:{getRandomValues:(bytes) => bytes.fill(7),subtle:{}},
               TextEncoder,
               URL,
@@ -855,8 +875,9 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             await context.beginLogin([
               'https://id.example.test/api/v1/proxy/s/llm-openai',
               'https://id.example.test/api/v1/proxy/s/api-github',
-            ], '', 'service-access-review');
-            const review = new URL(assignments[1]);
+            ], '', 'service-access-review',
+              'aevatar-nyxid-service-review-request-alpha', 'request-alpha', requester);
+            const review = new URL(popupNavigations[0]);
             assert.deepEqual(review.searchParams.getAll('resource'), [
               'https://id.example.test/api/v1/proxy/s/aevatar',
               'https://id.example.test/api/v1/proxy/s/ornn-api',
@@ -865,7 +886,22 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             ]);
             assert.equal(review.searchParams.get('prompt'), 'consent');
             assert.equal(pending[1].value.authFlow, 'service-access-review');
+            assert.equal(pending[1].value.authRequestId, 'request-alpha');
             assert.deepEqual(pending[1].value.resources, review.searchParams.getAll('resource'));
+            assert.deepEqual(popupPending[0], pending[1]);
+            assert.equal(assignments.length, 1, 'service review must not replace the Admin page');
+            assert.equal(context.SERVICE_ACCESS_REVIEW_POPUP.popup, popup);
+            assert.equal(context.SERVICE_ACCESS_REVIEW_POPUP.requester, requester);
+
+            context.window.open = () => null;
+            await context.beginLogin([
+              'https://id.example.test/api/v1/proxy/s/api-github',
+            ], '', 'service-access-review',
+              'aevatar-nyxid-service-review-request-beta', 'request-beta', requester);
+            const blockedPopupFallback = new URL(assignments[1]);
+            assert.equal(blockedPopupFallback.searchParams.get('prompt'), 'consent');
+            assert.equal(pending[2].value.authRequestId, 'request-beta');
+            assert.equal(assignments.length, 2, 'a blocked popup must retain the full-page fallback');
             })().catch((error) => { console.error(error); process.exitCode = 1; });
             """;
 
@@ -895,8 +931,9 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             const pending = {
               verifier:'verifier-alpha', state:'state-alpha', returnTo:'/admin#/studio',
               resources:['https://api.example.test/api/v1/proxy/s/api-github'],
-              tokenPurpose:'', authFlow:'service-access-review',
+              tokenPurpose:'', authFlow:'service-access-review', authRequestId:'request-alpha',
             };
+            const posted = [];
             const elements = new Map();
             const context = {
               URL,
@@ -913,6 +950,11 @@ public sealed class BackendConsoleStaticAssetEndpointTests
                 search:'?code=code-alpha&state=state-alpha',
                 replace:(value) => { context.replaced = value; },
               },
+              opener:{
+                closed:false,
+                postMessage:(message,targetOrigin) => posted.push({message,targetOrigin}),
+              },
+              close:() => { context.closed = true; },
               sessionStorage:{
                 getItem:(key) => key === 'console:test:pkce' ? JSON.stringify(pending) : null,
                 removeItem:() => {},
@@ -945,7 +987,19 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             assert.equal(
               JSON.parse(records.get('console:test:service-access-review:token')).access_token,
               'review-bearer');
-            assert.equal(context.replaced, '/admin#/studio');
+            assert.equal(context.replaced, undefined, 'the Studio page must stay mounted');
+            assert.equal(context.closed, true);
+            assert.deepEqual(JSON.parse(JSON.stringify(posted)), [{
+              message:{
+                source:'aevatar-service-access-review-auth',
+                type:'service-access-review-result',
+                requestId:'request-alpha',
+                state:'state-alpha',
+                status:'succeeded',
+                message:'NyxID 授权已更新，正在恢复 Studio 中的原任务…',
+              },
+              targetOrigin:'http://127.0.0.1:5080',
+            }]);
             })().catch((error) => { console.error(error); process.exitCode = 1; });
             """;
 

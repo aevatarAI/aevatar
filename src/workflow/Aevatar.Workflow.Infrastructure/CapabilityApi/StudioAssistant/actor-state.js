@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260820-m57-trajectory-persistence";
+import { validateActionRequest } from "./protocol.js?v=20260822-m59-readable-run-activity";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",

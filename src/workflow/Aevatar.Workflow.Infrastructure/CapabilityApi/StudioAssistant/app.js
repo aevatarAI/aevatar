@@ -1,4 +1,4 @@
-import "./transport.js?v=20260820-m57-trajectory-persistence";
+import "./transport.js?v=20260822-m59-readable-run-activity";
 import {
   consumeSse,
   mergeUsage,
@@ -9,26 +9,28 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260820-m57-trajectory-persistence";
+} from "./protocol.js?v=20260822-m59-readable-run-activity";
 import {
   buildConnectCardBlock,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260820-m57-trajectory-persistence";
+} from "./blocks.js?v=20260822-m59-readable-run-activity";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260820-m57-trajectory-persistence";
-import { describeReadinessFailure } from "./readiness.js?v=20260820-m57-trajectory-persistence";
+} from "./actor-state.js?v=20260822-m59-readable-run-activity";
+import { describeReadinessFailure } from "./readiness.js?v=20260822-m59-readable-run-activity";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const SERVICE_ACCESS_REVIEW_KEY = "aevatar-studio:pending-service-access-review:v1";
 const ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED_CODE =
   "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED";
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+let serviceAccessReviewResumePromise = null;
 
 const surfaceLabels = {
   workflow: "Workflow API",
@@ -436,6 +438,9 @@ function upsertTraceOperation(trace, patch) {
       id: String(patch.id || key.slice(key.indexOf(":") + 1)),
       kind: String(patch.kind).toLowerCase(),
       title: "Operation",
+      invocationName: "",
+      description: "",
+      presentation: null,
       status: "running",
       input: "",
       output: "",
@@ -462,10 +467,13 @@ function upsertTraceOperation(trace, patch) {
   }
 
   for (const field of [
-    "title", "status", "input", "output", "reasoning", "model", "provider", "round",
-    "sessionId", "finishReason", "error",
+    "title", "invocationName", "description", "status", "input", "output", "reasoning",
+    "model", "provider", "round", "sessionId", "finishReason", "error",
   ]) {
     if (patch[field] !== undefined && patch[field] !== null) record[field] = patch[field];
+  }
+  if (patch.presentation && typeof patch.presentation === "object") {
+    record.presentation = patch.presentation;
   }
   if (Array.isArray(patch.tools)) record.tools = [...patch.tools];
   const serverSequence = Number(patch.serverSequence);
@@ -567,11 +575,20 @@ function restoredOperationUsage(operation) {
 
 function applyRestoredOperation(trace, operation, { kind, id, title }) {
   const key = traceOperationKey(kind, id);
+  const tool = kind === "tool"
+    ? describeToolOperation({
+      toolName: operation?.toolName || title,
+      presentation: operation?.presentation,
+    })
+    : null;
   const record = upsertTraceOperation(trace, {
     key,
     id,
     kind,
-    title: title || traceOperationKindLabel(kind),
+    title: tool?.title || title || traceOperationKindLabel(kind),
+    invocationName: tool?.invocationName || "",
+    description: tool?.description || "",
+    presentation: tool?.presentation || null,
     status: String(operation?.status || "closed").toLowerCase(),
     input: operation?.inputPreview || operation?.argumentsPreview || "",
     // Tool result bodies are never archived, so a restored tool record reports
@@ -679,6 +696,8 @@ function restoreTrajectoryFromActorProjection(entry, projection) {
     applyRestoredOperation(trace, {
       status: step.status,
       title: step.kind === "tool" ? step.source?.tool?.toolName : step.source?.llm?.model,
+      toolName: step.source?.tool?.toolName || "",
+      presentation: step.source?.tool?.presentation || null,
       model: step.source?.llm?.model || "",
       startedAt: step.operation.requestedAt,
       completedAt: step.operation.completedAt,
@@ -773,6 +792,68 @@ function traceOperationRound(value, fallback) {
   return Number.isSafeInteger(round) ? round : fallback;
 }
 
+function normalizedToolText(value, limit = 180) {
+  return typeof value === "string"
+    ? value.replace(/\s+/g, " ").trim().slice(0, limit)
+    : "";
+}
+
+function containsOpaqueToolInvocation(value) {
+  return /\bnyxop_[0-9a-f]{24,}\b/i.test(String(value || ""));
+}
+
+function readableToolInvocationName(value) {
+  const name = normalizedToolText(value);
+  if (!name || containsOpaqueToolInvocation(name)) return "连接服务操作";
+  return name.replace(/[_./:-]+/g, " ").replace(/\s+/g, " ").trim() || "工具操作";
+}
+
+function nyxIdToolPresentationSource(presentation) {
+  if (!presentation || typeof presentation !== "object") return null;
+  const direct = presentation.nyxIdOperation;
+  if (direct && typeof direct === "object") return direct;
+  const sourceRef = presentation.sourceRef;
+  return sourceRef?.nyxIdOperation && typeof sourceRef.nyxIdOperation === "object"
+    ? sourceRef.nyxIdOperation
+    : null;
+}
+
+function describeToolOperation(value = {}) {
+  const presentation = value?.presentation && typeof value.presentation === "object"
+    ? value.presentation
+    : null;
+  const source = nyxIdToolPresentationSource(presentation);
+  const invocationName = normalizedToolText(
+    presentation?.invocationName || value?.invocationName || value?.toolName,
+  );
+  const presentedName = normalizedToolText(presentation?.displayName);
+  const displayName = presentedName && !containsOpaqueToolInvocation(presentedName)
+    ? presentedName
+    : readableToolInvocationName(invocationName);
+  const serviceLabel = normalizedToolText(
+    source?.connectionLabel || source?.connectorDisplayName ||
+    source?.catalogServiceSlug || source?.serviceSlug,
+  );
+  const title = serviceLabel && !displayName.toLocaleLowerCase().includes(serviceLabel.toLocaleLowerCase())
+    ? `${serviceLabel} · ${displayName}`
+    : displayName;
+  return {
+    invocationName,
+    displayName,
+    serviceLabel,
+    title,
+    description: normalizedToolText(presentation?.description, 320),
+    kind: normalizedToolText(presentation?.kind),
+    presentation,
+  };
+}
+
+function toolActivityRunningCopy(tool) {
+  return tool.serviceLabel
+    ? `正在通过 ${tool.serviceLabel} 执行 ${tool.displayName}…`
+    : `正在执行 ${tool.displayName}…`;
+}
+
 function traceToolOperation(trace, event, { create = false } = {}) {
   ensureTraceOperationState(trace);
   if (!trace) return null;
@@ -781,11 +862,15 @@ function traceToolOperation(trace, event, { create = false } = {}) {
   const existing = key ? trace.recordIndex.get(key) : null;
   if (existing || !create) return existing;
   const resolvedId = id || createId("tool-call");
+  const presentation = describeToolOperation(event);
   return upsertTraceOperation(trace, {
     key: traceOperationKey("tool", resolvedId),
     id: resolvedId,
     kind: "tool",
-    title: event?.toolName || "tool",
+    title: presentation.title,
+    invocationName: presentation.invocationName,
+    description: presentation.description,
+    presentation: presentation.presentation,
     status: "running",
   });
 }
@@ -826,9 +911,14 @@ function applyRoleChatTraceSnapshot(trace, event) {
     const tool = traceToolOperation(trace, {
       toolCallId: call.callId,
       toolName: call.toolName,
+      presentation: call.presentation,
     }, { create: true });
     if (!tool) continue;
-    tool.title = call.toolName || tool.title;
+    const presentation = describeToolOperation(call);
+    tool.title = presentation.title || tool.title;
+    tool.invocationName = presentation.invocationName || tool.invocationName;
+    tool.description = presentation.description || tool.description;
+    tool.presentation = presentation.presentation || tool.presentation;
     if (!tool.input && call.argumentsJson) tool.input = String(call.argumentsJson);
     if (!tool.output && receipt?.resultJson) tool.output = String(receipt.resultJson);
     if (receipt) tool.status = traceTerminalOperationStatus(receipt);
@@ -837,9 +927,14 @@ function applyRoleChatTraceSnapshot(trace, event) {
     const tool = traceToolOperation(trace, {
       toolCallId: receipt.callId,
       toolName: receipt.toolName,
+      presentation: receipt.presentation,
     }, { create: true });
     if (!tool) continue;
-    tool.title = receipt.toolName || tool.title;
+    const presentation = describeToolOperation(receipt);
+    tool.title = presentation.title || tool.title;
+    tool.invocationName = presentation.invocationName || tool.invocationName;
+    tool.description = presentation.description || tool.description;
+    tool.presentation = presentation.presentation || tool.presentation;
     if (!tool.output && receipt.resultJson) tool.output = String(receipt.resultJson);
     tool.status = traceTerminalOperationStatus(receipt);
   }
@@ -922,10 +1017,14 @@ function applyRequestTraceEvent(entry, run, event) {
     case "tool_start": {
       const tool = traceToolOperation(trace, event, { create: true });
       if (!tool) break;
-      tool.title = event.toolName || tool.title;
+      const presentation = describeToolOperation(event);
       upsertTraceOperation(trace, {
         key: tool.key,
         kind: "tool",
+        title: presentation.title,
+        invocationName: presentation.invocationName,
+        description: presentation.description,
+        presentation: presentation.presentation,
         sessionId: event.sessionId || tool.sessionId,
         serverSequence: event.sequence,
       });
@@ -936,7 +1035,13 @@ function applyRequestTraceEvent(entry, run, event) {
     case "tool_end": {
       const tool = traceToolOperation(trace, event, { create: true });
       if (!tool) break;
-      tool.title = event.toolName || tool.title;
+      if (event.presentation || event.toolName) {
+        const presentation = describeToolOperation(event);
+        tool.title = presentation.title || tool.title;
+        tool.invocationName = presentation.invocationName || tool.invocationName;
+        tool.description = presentation.description || tool.description;
+        tool.presentation = presentation.presentation || tool.presentation;
+      }
       if (event.argumentsJson) tool.input = String(event.argumentsJson);
       if (event.result !== undefined && event.result !== null) tool.output = String(event.result);
       else if (event.error) tool.output = String(event.error);
@@ -1090,15 +1195,28 @@ function trajectoryPreview(value, limit = 220) {
 function trajectoryRowTitle(record) {
   if (record.kind === "input") return trajectoryPreview(record.input) || "空请求";
   if (record.kind === "model") return record.model || record.title || "LLM response";
-  return record.title || "tool";
+  return describeToolOperation({
+    toolName: record.invocationName || record.title,
+    presentation: record.presentation,
+  }).title;
 }
 
 function trajectoryRowResult(record) {
   if (record.kind === "input") return null;
   const output = trajectoryPreview(record.error || record.output || record.reasoning);
   if (output) return { text: output, error: Boolean(record.error) || record.status === "error" };
+  if (record.status === "running" && record.kind === "tool") {
+    return {
+      text: toolActivityRunningCopy(describeToolOperation({
+        toolName: record.invocationName || record.title,
+        presentation: record.presentation,
+      })),
+      pending: true,
+    };
+  }
   if (record.status === "running") return { text: "等待结果", pending: true };
-  return { text: "未上报内容", pending: true };
+  if (record.status === "error") return { text: "执行失败", error: true };
+  return { text: "已完成", pending: false };
 }
 
 function trajectoryRequestSummary(records) {
@@ -1112,7 +1230,7 @@ function trajectoryRequestSummary(records) {
 
 function trajectoryCollapsedCallsSummary(tools) {
   const failed = tools.filter((tool) => tool.status === "error").length;
-  const names = [...new Set(tools.map((tool) => tool.title).filter(Boolean))].slice(0, 3).join(", ");
+  const names = [...new Set(tools.map(trajectoryRowTitle).filter(Boolean))].slice(0, 3).join(", ");
   const summary = `${tools.length} 次工具调用${names ? ` · ${names}` : ""}`;
   return failed ? `${summary} · ${failed} 失败` : summary;
 }
@@ -1770,9 +1888,19 @@ function renderTrajectoryDetailBody(record, trace) {
       ["时钟", record.timingClock === "server" ? "服务端上报" : record.timingClock === "client" ? "浏览器发起" : "不可用"],
     ]);
   }
+  const tool = record.kind === "tool"
+    ? describeToolOperation({
+      toolName: record.invocationName || record.title,
+      presentation: record.presentation,
+    })
+    : null;
   return trajectoryFactList([
     ["状态", traceOperationStatusLabel(record.status)],
-    ["Operation", record.id || record.key, true],
+    ["动作", tool?.displayName || null],
+    ["连接", tool?.serviceLabel || null],
+    ["说明", tool?.description || null],
+    ["内部 Operation", record.id || record.key, true],
+    ["内部 Tool", record.kind === "tool" ? record.invocationName || null : null, true],
     ["开始", traceOperationStartedAt(record)],
     ["Duration", traceOperationDuration(record)],
     ["模型", record.kind === "model" ? record.model || "未上报" : null],
@@ -2333,6 +2461,9 @@ async function init() {
 }
 
 function bindEvents() {
+  globalThis.AevatarStudioAuth.onServiceAccessReviewResult?.((result) => {
+    void handleServiceAccessReviewResult(result);
+  });
   dom.conversationViewButton.addEventListener("click", () => switchWorkspaceView("conversation"));
   dom.traceViewButton.addEventListener("click", () => switchWorkspaceView("traces"));
   dom.conversationViewButton.addEventListener("keydown", moveWorkspaceView);
@@ -3149,7 +3280,12 @@ function actionContinuationCredentialRefreshParams(card, resource) {
   return { userServiceId, serviceSlug, resourceUri };
 }
 
-async function beginActionContinuationCredentialRefresh(card, disposition, resource) {
+async function beginActionContinuationCredentialRefresh(
+  card,
+  disposition,
+  resource,
+  { openAuthorization = true } = {},
+) {
   try {
     const params = actionContinuationCredentialRefreshParams(card, resource);
     const conversationId = String(card?.conversation?.actorId || "").trim();
@@ -3190,8 +3326,11 @@ async function beginActionContinuationCredentialRefresh(card, disposition, resou
     card.busy = false;
     card.status = "reauthorizing";
     card.error = "";
-    card.note = `当前 NyxID 登录仍有效；正在更新 NyxID 服务授权以继续 ${card.block.service_name} action。`;
+    card.note = openAuthorization
+      ? `当前 NyxID 登录仍有效；正在打开 NyxID 服务授权以继续 ${card.block.service_name} action。`
+      : `当前 NyxID 登录仍有效；需要更新 NyxID 服务授权才能继续 ${card.block.service_name} action。请点击下方按钮。`;
     renderConnectCard(card);
+    if (!openAuthorization) return true;
     await globalThis.AevatarStudioAuth.beginServiceAccessReview([params.resourceUri]);
     return true;
   } catch (error) {
@@ -3313,10 +3452,65 @@ async function resumePendingServiceAccessReview() {
       card.busy = false;
       card.status = "reauthorizing";
       card.error = error?.message || "恢复 NyxID browser action 失败。";
-      card.note = "原卡片、会话和 clientRequestId 已保留；刷新页面后会重试。";
+      card.note = "原卡片、会话和 clientRequestId 已保留；可直接重试授权，无需刷新页面。";
       renderConnectCard(card);
     }
     return false;
+  }
+}
+
+function markServiceAccessReviewInterrupted(pending, message) {
+  const entry = findConversationState(pending?.conversationId);
+  const card = entry?.run?.cardElements?.get(
+    actionEntryKey(pending?.actorId, pending?.actionRequestId),
+  );
+  if (!card) return;
+  card.busy = false;
+  card.status = "reauthorizing";
+  card.error = message || "NyxID 服务授权未完成。";
+  card.note = "原 action、会话和 clientRequestId 已保留；可直接重新打开授权窗口。";
+  renderConnectCard(card);
+}
+
+async function handleServiceAccessReviewResult(result = {}) {
+  const pending = readJsonStorage(SERVICE_ACCESS_REVIEW_KEY);
+  if (result.status !== "succeeded") {
+    markServiceAccessReviewInterrupted(pending, result.message);
+    showToast(result.message || "NyxID 服务授权未完成；原任务仍然保留。");
+    return false;
+  }
+  if (!pending) {
+    showToast("NyxID 服务授权已更新。");
+    void loadServices();
+    return true;
+  }
+  if (serviceAccessReviewResumePromise) return serviceAccessReviewResumePromise;
+
+  setComposerStatus("NyxID 授权已更新，正在恢复原任务…", { working: true });
+  serviceAccessReviewResumePromise = (async () => {
+    const resumed = await resumePendingServiceAccessReview();
+    await loadServices().catch(() => {});
+    if (resumed) {
+      showToast("NyxID 授权已更新，原任务已继续。");
+    } else if (readJsonStorage(SERVICE_ACCESS_REVIEW_KEY)) {
+      showToast("NyxID 授权已更新；原任务已恢复，正在等待 Actor 确认。");
+    } else {
+      showToast("NyxID 授权已更新。");
+    }
+    return resumed;
+  })();
+  try {
+    return await serviceAccessReviewResumePromise;
+  } finally {
+    serviceAccessReviewResumePromise = null;
+    setComposerStatus(state.activeController
+      ? "正在接收生产 Agent 输出 · 停止接收不会撤销已提交操作"
+      : state.auth.authenticated
+        ? "生产环境 · 使用当前账户的 services，高风险操作需要确认"
+        : "登录后使用当前账户已配置的 services", {
+      working: Boolean(state.activeController),
+    });
+    renderActorControlUi();
   }
 }
 
@@ -3524,6 +3718,7 @@ async function submitActionContinuation(card, disposition, resource = null, opti
         card,
         disposition,
         resource,
+        { openAuthorization: false },
       );
       return {
         verified: false,
@@ -3909,7 +4104,7 @@ function renderAuthUi() {
     setConnectionStatus("idle", "登录 NyxID");
     setRouteState(dom.routeUpstreamState, "waiting");
     setRouteState(dom.routeOrnnState, "waiting");
-    dom.composerStatus.textContent = "登录后使用当前账户已配置的 services";
+    setComposerStatus("登录后使用当前账户已配置的 services");
     state.conversations = [];
     state.historyError = null;
     state.historyLoading = false;
@@ -4119,9 +4314,9 @@ function updateConfigUi() {
   dom.commandFactRow.classList.toggle("hidden", isNyxIdChat);
   dom.stopButton.setAttribute("aria-label", "停止接收");
   dom.stopButton.title = "停止接收（不会撤销已提交的生产操作）";
-  dom.composerStatus.textContent = state.auth.authenticated
+  setComposerStatus(state.auth.authenticated
     ? "生产环境 · 使用当前账户的 services，高风险操作需要确认"
-    : "登录后使用当前账户已配置的 services";
+    : "登录后使用当前账户已配置的 services");
   renderHistoryList();
 }
 
@@ -4643,8 +4838,14 @@ function actorStepSourceLabel(step) {
   const source = step?.source || {};
   if (source.llm) return source.llm.model ? `LLM · ${source.llm.model}` : "LLM";
   if (source.tool) {
-    return [source.tool.serviceSlug || source.tool.serviceId, source.tool.toolName]
-      .filter(Boolean).join(" · ") || "工具";
+    const tool = describeToolOperation(source.tool);
+    const kind = {
+      nyxIdOperation: "NyxID 连接服务",
+      builtIn: "内置工具",
+      mcp: "MCP 工具",
+      skill: "Skill",
+    }[tool.kind] || "工具";
+    return [tool.serviceLabel, kind].filter(Boolean).join(" · ");
   }
   if (source.browserAction) return `NyxID Action · ${source.browserAction.action || "browser"}`;
   if (source.postcondition) {
@@ -4654,6 +4855,30 @@ function actorStepSourceLabel(step) {
   if (source.approval) return "审批";
   if (source.web) return "Web";
   return step?.kind || "步骤";
+}
+
+function actorStepDisplayName(step) {
+  const source = step?.source || {};
+  if (source.tool) {
+    const tool = describeToolOperation(source.tool);
+    return tool.serviceLabel
+      ? `通过 ${tool.serviceLabel} 执行 ${tool.displayName}`
+      : `执行 ${tool.displayName}`;
+  }
+  const description = normalizedToolText(step?.description, 400);
+  if (description && !containsOpaqueToolInvocation(description)) return description;
+  return {
+    llm: "生成 AI 回复",
+    input: "等待用户输入",
+    approval: "等待用户确认",
+    browser_action: "执行浏览器操作",
+    postcondition: "验证执行结果",
+    web: "访问 Web 内容",
+  }[String(step?.kind || "").toLowerCase()] || "执行计划步骤";
+}
+
+function actorStepEffectLabel(step) {
+  return actorEffectCopy[String(step?.externalEffect || "").toLowerCase()]?.label || "外部影响未上报";
 }
 
 function actorAddedByLabel(addedBy) {
@@ -4687,7 +4912,7 @@ function renderActorRecovery(projection) {
     group.append(el("strong", "actor-recovery-label", label));
     for (const step of facts) {
       const item = el("div", "actor-recovery-item");
-      item.append(el("span", "", step.description || step.stepId || "Actor step"));
+      item.append(el("span", "", actorStepDisplayName(step)));
       const detail = actorStepEvidenceDetail(step);
       if (detail) item.append(el("small", "", detail));
       group.append(item);
@@ -5269,7 +5494,7 @@ function renderActorProjection(entry, actorId = entry?.actorId) {
     title.append(el(
       "small",
       "actor-task-current",
-      `${actorStatusCopy(currentStep.status)} · ${currentStep.description || currentStep.stepId}`,
+      `${actorStatusCopy(currentStep.status)} · ${actorStepDisplayName(currentStep)}`,
     ));
   }
   const summary = el("div", "actor-task-summary");
@@ -5331,7 +5556,7 @@ function renderActorProjection(entry, actorId = entry?.actorId) {
       row.dataset.stepKind = step.kind || "";
       const copy = el("div", "actor-step-copy");
       copy.append(
-        el("strong", "", step.description || step.stepId || "Actor step"),
+        el("strong", "", actorStepDisplayName(step)),
         el("small", "actor-step-source", `${actorStatusCopy(stepStatus)} · ${actorStepSourceLabel(step)}`),
       );
       const annotations = el("div", "actor-step-annotations");
@@ -5785,7 +6010,7 @@ async function sendPrompt(overridePrompt, options = {}) {
       attachment: attachment == null ? null : structuredClone(attachment),
       clientRequestId: createId("client-text"),
     };
-    dom.composerStatus.textContent = "完成必需的运行准备后，将继续这条请求。";
+    setComposerStatus("完成必需的运行准备后，将继续这条请求。");
     dom.readinessPanel.scrollIntoView?.({ block: "nearest" });
     return;
   }
@@ -6205,8 +6430,8 @@ function ensureActivityCard() {
   disclosure.classList.add("activity-disclosure");
   const icon = document.createElement("i");
   icon.dataset.lucide = "workflow";
-  const label = el("span", "", "Run");
-  const status = el("span", "", "Running");
+  const label = el("span", "", "AI 执行");
+  const status = el("span", "", "正在准备");
   header.append(disclosure, icon, label, status);
   header.addEventListener("click", () => {
     const collapsed = card.classList.toggle("collapsed");
@@ -6290,7 +6515,7 @@ function removeRunProgress() {
 function addTool(event) {
   const id = event.toolCallId || createId("tool");
   if (state.run.tools.has(id)) return;
-  const name = event.toolName || "tool";
+  const presentation = describeToolOperation(event);
   const card = ensureActivityCard();
   const row = el("div", "tool-row");
   row.dataset.toolCallId = id;
@@ -6299,22 +6524,27 @@ function addTool(event) {
   icon.dataset.lucide = "loader-circle";
   stateIcon.append(icon);
   const copy = el("div", "tool-copy");
-  copy.append(el("strong", "", name), el("small", "", "Running"));
+  copy.append(
+    el("strong", "", presentation.title),
+    el("small", "", toolActivityRunningCopy(presentation)),
+  );
   const duration = el("span", "tool-duration", "…");
   row.append(stateIcon, copy, duration);
   card.append(row);
   state.run.tools.set(id, {
     id,
-    name,
+    name: presentation.title,
+    invocationName: presentation.invocationName,
+    presentation: presentation.presentation,
     status: "running",
     startedAt: Date.now(),
     row,
     copy: copy.querySelector("small"),
     duration,
   });
-  startStep(name, "tool", id);
+  startStep(presentation.title, "tool", id);
   updateActivityProgress();
-  if (/ornn_search_skills|use_skill/i.test(name)) {
+  if (/ornn_search_skills|use_skill/i.test(presentation.invocationName)) {
     dom.routeOrnnState.textContent = "active";
     dom.routeOrnnState.className = "route-state active";
   }
@@ -6327,8 +6557,11 @@ function updateActivityProgress() {
   const tools = Array.from(state.run.tools.values());
   if (!tools.length) return;
   const done = tools.filter((tool) => tool.status !== "running").length;
-  state.run.activityStatus.textContent =
-    `${done} / ${tools.length} steps${done === tools.length ? " · complete" : ""}`;
+  const active = tools.filter((tool) => tool.status === "running").at(-1);
+  state.run.activityStatus.textContent = active
+    ? `正在执行 · ${active.name}`
+    : `已完成 ${done} 项`;
+  state.run.activityStatus.title = active?.name || `已完成 ${done} 项操作`;
 }
 
 function finishTool(event) {
@@ -6346,7 +6579,9 @@ function finishTool(event) {
   resolved.row.classList.remove("done", "error");
   resolved.row.classList.add(resolved.status);
   resolved.row.querySelector(".tool-state-icon").replaceChildren(iconNode(succeeded ? "check" : "x"));
-  resolved.copy.textContent = summarizeToolResult(event.result || event.error);
+  const result = summarizeToolResult(event.result || event.error);
+  const hasResult = result && !/^completed$/i.test(result);
+  resolved.copy.textContent = `${succeeded ? "已完成" : "执行失败"}${hasResult ? ` · ${result}` : ""}`;
   const authorizationFailure = findServiceAuthorizationFailure(event.result || event.error);
   if (authorizationFailure && !state.run.authorizationPrompted) {
     state.run.authorizationPrompted = true;
@@ -6361,7 +6596,7 @@ function finishTool(event) {
   resolved.duration.textContent = formatDuration(resolved.completedAt - resolved.startedAt);
   updateActivityProgress();
   finishStep(resolved.name, "tool", resolved.status, resolved.id);
-  if (/ornn_search_skills|use_skill/i.test(resolved.name)) {
+  if (/ornn_search_skills|use_skill/i.test(resolved.invocationName)) {
     applyHealthRouteState();
   }
   refreshIcons(resolved.row);
@@ -6421,7 +6656,7 @@ function finalizeRunningExecution(status, detail) {
   }
   if (state.run.activityStatus) {
     if (state.run.tools.size) updateActivityProgress();
-    else state.run.activityStatus.textContent = status === "done" ? "Complete" : "Ended";
+    else state.run.activityStatus.textContent = status === "done" ? "已完成" : "已结束";
   }
   applyHealthRouteState();
 }
@@ -6437,11 +6672,13 @@ function applyRoleChatCompletion(event) {
     addTool({
       toolCallId: call.callId,
       toolName: call.toolName,
+      presentation: call.presentation,
       argumentsJson: call.argumentsJson,
     });
     finishTool({
       toolCallId: call.callId,
       toolName: call.toolName,
+      presentation: call.presentation,
       result: receipt?.resultJson,
       error: receipt?.errorMessage || receipt?.errorCode,
       status: receipt?.status,
@@ -6451,10 +6688,15 @@ function applyRoleChatCompletion(event) {
 
   for (const receipt of receipts) {
     if (calls.some((call) => call.callId === receipt.callId)) continue;
-    addTool({ toolCallId: receipt.callId, toolName: receipt.toolName });
+    addTool({
+      toolCallId: receipt.callId,
+      toolName: receipt.toolName,
+      presentation: receipt.presentation,
+    });
     finishTool({
       toolCallId: receipt.callId,
       toolName: receipt.toolName,
+      presentation: receipt.presentation,
       result: receipt.resultJson,
       error: receipt.errorMessage || receipt.errorCode,
       status: receipt.status,
@@ -6572,7 +6814,7 @@ function renderApproval(event) {
   const card = el("section", "approval-card");
   const header = el("div", "approval-header");
   header.append(iconNode("shield-alert"), el("span", "", "需要确认"));
-  const toolName = event.toolName || "workflow continuation";
+  const toolName = readableToolInvocationName(event.toolName || "workflow continuation");
   const description = event.prompt || `Agent 请求执行 ${toolName}`;
   const paragraph = el("p", "", description);
   const args = event.argumentsJson ? parseArguments(event.argumentsJson) : null;
@@ -7016,7 +7258,7 @@ function renderActorControlUi() {
     dom.promptInput.disabled = true;
     dom.attachButton.disabled = true;
     dom.composerServicesButton.disabled = true;
-    dom.composerStatus.textContent = "正在查看历史轨迹；返回当前轨迹后可继续操作";
+    setComposerStatus("正在查看历史轨迹；返回当前轨迹后可继续操作");
     return;
   }
   const projection = entryActorProjection(state.activeConversation);
@@ -7044,11 +7286,11 @@ function renderActorControlUi() {
     dom.attachButton.disabled = true;
     dom.composerServicesButton.disabled = true;
     dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
-    dom.composerStatus.textContent = locked
+    setComposerStatus(locked
       ? submission.message || "回答已受理，等待 Actor 确认。"
       : reliableVersion > 0
         ? "一次回答全部缺口；提交后 Actor 将继续当前任务"
-        : "正在同步 Actor 状态…";
+        : "正在同步 Actor 状态…", { working: locked || reliableVersion <= 0 });
     return;
   }
 
@@ -7067,7 +7309,13 @@ function renderActorControlUi() {
   dom.sendButton.setAttribute("aria-label", "发送");
   dom.sendButton.title = "发送";
   if (actorActive) {
-    dom.composerStatus.textContent = "当前任务执行中；输入内容将作为 steering 指令提交";
+    setComposerStatus("Agent 正在执行当前任务；仍可输入 steering 指令", { working: true });
+  } else if (state.activeController) {
+    setComposerStatus("正在接收生产 Agent 输出 · 停止接收不会撤销已提交操作", { working: true });
+  } else {
+    setComposerStatus(state.auth.authenticated
+      ? "生产环境 · 使用当前账户的 services，高风险操作需要确认"
+      : "登录后使用当前账户已配置的 services");
   }
   dom.observationDisconnectButton.classList.toggle("hidden", !state.activeController);
 }
@@ -7110,9 +7358,15 @@ function renderSteps(run = inspectorRunState(), { trace = null, allowActorProjec
     const row = el("div", `inspector-step ${step.status}`);
     const dot = el("span", "step-dot");
     dot.append(iconNode(step.status === "done" ? "check" : step.status === "error" ? "x" : "loader-circle"));
-    const name = el("strong", "", step.description || step.name || step.stepId || "Actor step");
+    const name = el("strong", "", actorSteps
+      ? actorStepDisplayName(step)
+      : step.description || step.name || "执行步骤");
     if (actorSteps) {
-      row.append(dot, name, el("small", "", `${step.status || "unknown"} · ${step.externalEffect || "no effect fact"}`));
+      row.append(dot, name, el(
+        "small",
+        "",
+        `${actorStatusCopy(step.status)} · ${actorStepSourceLabel(step)} · ${actorStepEffectLabel(step)}`,
+      ));
     } else {
       const elapsed = step.completedAt
         ? step.completedAt - step.startedAt
@@ -7194,6 +7448,12 @@ function setRunStatus(status, label) {
   paintRunStatus(status, label);
 }
 
+function setComposerStatus(message, { working = false } = {}) {
+  dom.composerStatus.textContent = message;
+  dom.composerStatus.classList.toggle("working", working);
+  dom.composerStatus.setAttribute("aria-busy", String(working));
+}
+
 function setRunningUi(running) {
   if (!isActiveConversationContext()) return;
   const canCompose = state.auth.authenticated && !running;
@@ -7210,11 +7470,11 @@ function setRunningUi(running) {
   dom.servicesButton.disabled = false;
   dom.connectionButton.disabled = false;
   if (!running) dom.stopButton.disabled = false;
-  dom.composerStatus.textContent = running
+  setComposerStatus(running
     ? "正在接收生产 Agent 输出 · 停止接收不会撤销已提交操作"
     : state.auth.authenticated
       ? "生产环境 · 使用当前账户的 services，高风险操作需要确认"
-      : "登录后使用当前账户已配置的 services";
+      : "登录后使用当前账户已配置的 services", { working: running });
   renderActorControlUi();
 }
 
@@ -7222,7 +7482,7 @@ function cancelRun() {
   if (isReviewingHistoricalTrace()) return;
   if (!state.activeController) return;
   dom.stopButton.disabled = true;
-  dom.composerStatus.textContent = "正在停止当前页面接收…";
+  setComposerStatus("正在停止当前页面接收…", { working: true });
   abortConversationRun(state.activeConversation);
 }
 
@@ -7230,7 +7490,7 @@ function cancelObservation() {
   if (isReviewingHistoricalTrace()) return;
   if (!state.activeController) return;
   dom.observationDisconnectButton.disabled = true;
-  dom.composerStatus.textContent = "正在停止当前页面观察…";
+  setComposerStatus("正在停止当前页面观察…", { working: true });
   abortConversationRun(state.activeConversation);
 }
 
