@@ -77,6 +77,7 @@ using Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Integration.AI;
@@ -86,6 +87,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Google.Protobuf.WellKnownTypes;
 
@@ -453,6 +455,7 @@ public static class MainnetHostBuilderExtensions
                 "Aevatar:NyxId:ManagedWorkflowAdmissionMode",
                 o.ManagedWorkflowAdmissionMode);
         });
+        ReplaceMainnetWorkflowAgentToolSourceAdapter(builder.Services);
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, NyxIdWorkflowAdmissionEnforcementStartupGuard>());
         builder.Services.Replace(ServiceDescriptor.Singleton<
@@ -647,6 +650,27 @@ public static class MainnetHostBuilderExtensions
         builder.Services.Replace(
             ServiceDescriptor.Singleton<INyxIdChatAgentProfileResolver,
                 MainnetNyxIdChatAgentProfileResolver>());
+    }
+
+    private static void ReplaceMainnetWorkflowAgentToolSourceAdapter(IServiceCollection services)
+    {
+        var defaultAdapter = services.SingleOrDefault(static descriptor =>
+            descriptor.ServiceType == typeof(IWorkflowToolSource) &&
+            descriptor.ImplementationType == typeof(AgentWorkflowToolSourceAdapter));
+        if (defaultAdapter is null)
+        {
+            throw new InvalidOperationException(
+                "The default workflow agent tool source adapter registration is missing.");
+        }
+
+        services.Remove(defaultAdapter);
+        services.AddSingleton<IWorkflowToolSource>(serviceProvider =>
+            new AgentWorkflowToolSourceAdapter(
+                serviceProvider.GetServices<IAgentToolSource>()
+                    .Append(serviceProvider.GetRequiredService<NyxIdExecutionAgentToolSource>())
+                    .ToArray(),
+                serviceProvider.GetRequiredService<IAgentToolExecutionPort>(),
+                serviceProvider.GetRequiredService<ILogger<AgentWorkflowToolSourceAdapter>>()));
     }
 
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)

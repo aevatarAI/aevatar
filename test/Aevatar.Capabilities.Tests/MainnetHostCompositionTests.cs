@@ -854,6 +854,9 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetServices<IAgentToolSource>()
             .Should()
             .NotContain(source => source is WorkflowExternalCapabilityAuthoringToolSource);
+        app.Services.GetServices<IAgentToolSource>()
+            .Should()
+            .NotContain(source => source is NyxIdExecutionAgentToolSource);
         app.Services.GetRequiredService<NyxIdConnectedServiceInventoryToolSource>()
             .Should()
             .NotBeNull();
@@ -950,6 +953,7 @@ public sealed class MainnetHostCompositionTests
             workflowTools.AddRange(tools);
         }
         var workflowToolNames = workflowTools.Select(static tool => tool.Name).ToArray();
+        workflowToolNames.Should().ContainSingle(name => name == "code_execute");
         workflowToolNames.Should().ContainSingle(name => name == "workflow_connected_service_resource_fetch");
         workflowToolNames.Should().NotContain(StudioLocalWorkflowToolNames);
         var agentWorkflowSource = workflowToolSources
