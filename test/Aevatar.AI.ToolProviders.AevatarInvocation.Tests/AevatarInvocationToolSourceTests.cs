@@ -3684,6 +3684,9 @@ public sealed class AevatarInvocationToolSourceTests
             SubjectId = "agent-key-workflow",
             SourceKind = sourceKind,
             SecretReference = descriptor,
+            ProviderCredentialId = sourceKind == DurableCallerCredentialSourceKind.WebhookBinding
+                ? "provider-key-workflow"
+                : string.Empty,
         };
 
         using var _ = PushContext(
