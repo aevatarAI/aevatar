@@ -12,6 +12,7 @@ public sealed class OrnnExactAgentProfileSkillResolverTests
 {
     private const string SkillGuid = "2d05bf2e-88ee-4f76-9998-728ba2f9db10";
     private const string LiteralVersion = "1.4";
+    private const string SkillMarkdown = "---\nname: skill-alpha\n---\nbody";
     private const string HashHex = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
     private static readonly ByteString HashBytes =
         ByteString.CopyFrom(Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray());
@@ -34,6 +35,7 @@ public sealed class OrnnExactAgentProfileSkillResolverTests
             CanonicalName = "skill-alpha",
             PublisherId = "publisher-alpha",
             SkillSha256 = HashBytes,
+            SkillMarkdownUtf8Bytes = System.Text.Encoding.UTF8.GetByteCount(SkillMarkdown),
             DeclaredToolNames = ["lookup", "search"],
         });
         handler.Requests.Select(request => request.RequestUri!.AbsoluteUri).Should().Equal(

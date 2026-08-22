@@ -129,6 +129,39 @@ public sealed class AgentProfileSkillSealerTests
     }
 
     [Theory]
+    [InlineData(AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes, true)]
+    [InlineData(AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes + 1, false)]
+    public async Task ResolveAndSealAsync_ShouldEnforceSelectedSkillBodyBudget(
+        int skillMarkdownUtf8Bytes,
+        bool expectedSuccess)
+    {
+        var resolver = new RecordingResolver(Package() with
+        {
+            SkillMarkdownUtf8Bytes = skillMarkdownUtf8Bytes,
+        });
+
+        var result = await NewSealer(resolver).ResolveAndSealAsync(Identity(), Draft(), Context());
+
+        result.IsSuccess.Should().Be(expectedSuccess);
+        if (expectedSuccess)
+        {
+            result.Diagnostics.Should().BeEmpty();
+        }
+        else
+        {
+            result.Diagnostics.Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "ORNN_SKILL_BODY_TOO_LARGE" &&
+                diagnostic.Field.EndsWith(".skillRef", StringComparison.Ordinal) &&
+                diagnostic.Message.Contains(
+                    $"{AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes + 1}",
+                    StringComparison.Ordinal) &&
+                diagnostic.Message.Contains(
+                    $"{AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes}",
+                    StringComparison.Ordinal));
+        }
+    }
+
+    [Theory]
     [InlineData("task-name")]
     [InlineData("task-ref")]
     [InlineData("task-selector-risk")]
@@ -457,7 +490,7 @@ public sealed class AgentProfileSkillSealerTests
             HandoffTtlSeconds = 900,
             ClassifierTimeoutMs = 15_000,
             ExactSkillFetchTimeoutMs = 15_000,
-            MaxSelectedSkillBytes = 24_576,
+            MaxSelectedSkillBytes = AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes,
             MaxOwnedToolCount = 8,
             MaxSchemaBytes = 48 * 1024,
             MaximumToolPolicy = new AgentProfileToolPolicy
@@ -512,6 +545,7 @@ public sealed class AgentProfileSkillSealerTests
         SkillSha256 = mismatch == "hash"
             ? ByteString.CopyFrom(Enumerable.Repeat((byte)0xff, 32).ToArray())
             : SkillSha256,
+        SkillMarkdownUtf8Bytes = 1_024,
         DeclaredToolNames = mismatch == "tools" ? ["admin"] : ["lookup", "search"],
     };
 

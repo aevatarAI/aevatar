@@ -871,8 +871,10 @@ public sealed class MainnetHostCompositionTests
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
+            typeof(WorkflowAuthoringCapabilityReadAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(OrnnSearchAgentToolSource),
+            typeof(OrnnPublishAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
             typeof(ReadWorkflowRunArtifactToolSource));
@@ -969,8 +971,10 @@ public sealed class MainnetHostCompositionTests
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
+            typeof(WorkflowAuthoringCapabilityReadAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(OrnnSearchAgentToolSource),
+            typeof(OrnnPublishAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
             typeof(ReadWorkflowRunArtifactToolSource));
@@ -981,6 +985,7 @@ public sealed class MainnetHostCompositionTests
             source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source => source is WebAgentToolSource);
+        nyxIdChatProfile.Sources.Should().NotContain(source => source is BindingAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source => source is OrnnAuthoringAgentToolSource);
         var nyxIdChatWebTools = await nyxIdChatProfile.Sources
             .OfType<WebSearchAgentToolSource>()
@@ -1009,6 +1014,38 @@ public sealed class MainnetHostCompositionTests
         nyxIdChatOrnnTools.Should().NotContain(tool =>
             tool.Name == "ornn_publish_skill" ||
             tool.Name == "ornn_update_skill");
+        var workflowAuthoringReadTools = await nyxIdChatProfile.Sources
+            .OfType<WorkflowAuthoringCapabilityReadAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        workflowAuthoringReadTools.Select(static tool => tool.Name).Should().Equal(
+            "list_external_workflow_capabilities",
+            "inspect_external_workflow_capability_readiness");
+        workflowAuthoringReadTools.Should().OnlyContain(static tool => tool.IsReadOnly);
+        var ornnPublishTools = await nyxIdChatProfile.Sources
+            .OfType<OrnnPublishAgentToolSource>()
+            .Single()
+            .DiscoverToolsAsync();
+        ornnPublishTools.Select(static tool => tool.Name)
+            .Should().ContainSingle().Which.Should().Be("ornn_publish_skill");
+        ornnPublishTools.Should().NotContain(tool => tool.Name == "ornn_update_skill");
+        var workflowAuthoringRouteTools = new List<IAgentTool>();
+        workflowAuthoringRouteTools.AddRange(await nyxIdChatProfile.Sources
+            .OfType<NyxIdAssistantToolSource>()
+            .Single()
+            .DiscoverToolsAsync());
+        workflowAuthoringRouteTools.AddRange(workflowAuthoringReadTools);
+        workflowAuthoringRouteTools.AddRange(ornnPublishTools);
+        workflowAuthoringRouteTools.AddRange(await nyxIdChatProfile.Sources
+            .OfType<StartWorkflowToolSource>()
+            .Single()
+            .DiscoverToolsAsync());
+        workflowAuthoringRouteTools.Select(static tool => tool.Name).Should().Contain(
+            "nyxid_services",
+            "list_external_workflow_capabilities",
+            "inspect_external_workflow_capability_readiness",
+            "aevatar_start_workflow",
+            "ornn_publish_skill");
 
         var voice = registry.Resolve("voice.realtime");
         voice.IsSuccess.Should().BeFalse();

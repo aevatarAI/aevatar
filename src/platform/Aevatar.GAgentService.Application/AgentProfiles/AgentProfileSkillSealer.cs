@@ -137,6 +137,22 @@ public sealed class AgentProfileSkillSealer : IAgentProfileSkillSealer
                     "The resolved Ornn skill digest does not match the reviewed digest."));
             }
 
+            if (package.SkillMarkdownUtf8Bytes <= 0)
+            {
+                diagnostics.Add(new AgentProfileSealingDiagnostic(
+                    "ORNN_SKILL_BODY_INVALID",
+                    $"runtimeProfile.members[{member.IntentId}].skillRef",
+                    "The resolved Ornn skill body must have a positive UTF-8 byte count."));
+            }
+            else if (package.SkillMarkdownUtf8Bytes > normalizedDraft.RuntimeProfile.MaxSelectedSkillBytes)
+            {
+                diagnostics.Add(new AgentProfileSealingDiagnostic(
+                    "ORNN_SKILL_BODY_TOO_LARGE",
+                    $"runtimeProfile.members[{member.IntentId}].skillRef",
+                    $"The resolved Ornn skill body is {package.SkillMarkdownUtf8Bytes} UTF-8 bytes; " +
+                    $"the Profile limit is {normalizedDraft.RuntimeProfile.MaxSelectedSkillBytes} bytes."));
+            }
+
             var declaredTools = package.DeclaredToolNames;
             if (declaredTools.Any(static name => string.IsNullOrWhiteSpace(name) || name != name.Trim()) ||
                 declaredTools.Distinct(StringComparer.Ordinal).Count() != declaredTools.Count)

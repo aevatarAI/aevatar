@@ -708,6 +708,23 @@ public class BindingToolsTests
         tools.Should().ContainSingle(tool => tool is InspectExternalWorkflowCapabilityReadinessTool);
     }
 
+    [Fact]
+    public async Task WorkflowAuthoringCapabilityReadAgentToolSource_ShouldExposeOnlyReadTools()
+    {
+        var source = new WorkflowAuthoringCapabilityReadAgentToolSource(
+            new StubExternalWorkflowCapabilityListPort(
+                new ExternalWorkflowCapabilityDiscoveryResult()),
+            new StubExternalWorkflowCapabilityReadinessPort(),
+            new BindingToolOptions());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().Equal(
+            "list_external_workflow_capabilities",
+            "inspect_external_workflow_capability_readiness");
+        tools.Should().OnlyContain(static tool => tool.IsReadOnly);
+    }
+
     #endregion
 
     #region BindingStatusTool

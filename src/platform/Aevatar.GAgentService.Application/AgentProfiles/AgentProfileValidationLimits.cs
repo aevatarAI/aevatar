@@ -10,7 +10,7 @@ public sealed class AgentProfileValidationLimits
     public const int RequiredHandoffTtlSeconds = 900;
     public const int RequiredClassifierTimeoutMs = 15_000;
     public const int RequiredExactSkillFetchTimeoutMs = 15_000;
-    public const int RequiredMaxSelectedSkillBytes = 24_576;
+    public const int RequiredMaxSelectedSkillBytes = 64 * 1024;
     public const int MaximumOwnedToolCount = 8;
     public const int MaximumSchemaBytes = 48 * 1024;
     public const int MaximumMembers = 32;

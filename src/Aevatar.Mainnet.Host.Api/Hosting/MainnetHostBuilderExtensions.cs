@@ -8,6 +8,7 @@ using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
+using Aevatar.AI.ToolProviders.Binding;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
@@ -617,13 +618,15 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<ConditionEvaluateAgentToolSource>,
+                    CreateToolSource<WorkflowAuthoringCapabilityReadAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
                     CreateToolSource<OrnnSearchAgentToolSource>,
+                    CreateToolSource<OrnnPublishAgentToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                 ],
-                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, web and Ornn skill search, readiness, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
+                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, workflow capability discovery and readiness, web and Ornn skill search, private skill publishing, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
         });
 
         return builder;

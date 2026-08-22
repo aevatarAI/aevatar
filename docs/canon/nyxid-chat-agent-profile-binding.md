@@ -54,7 +54,9 @@ Published Profile 的 classifier 与 exact-skill fetch budget 都固定为 `1500
 streaming LLM provider；`600ms` 小于已观测的正常分类调用时延，会把已发现且已授权的 request-local
 operation 错误收窄成 empty recovery，因此不再是可发布配置。Exact Ornn skill 读取同样保留
 `15000ms` 的边界预算；超时仍 fail closed，不得跳过 exact identity/hash 校验，也不得回退到
-unprofiled tool surface。修改预算必须形成新的 published revision，并由新 Conversation 固化；旧
+unprofiled tool surface。Selected skill body 的固定 ceiling 是 `65536` UTF-8 bytes；Profile
+validate/publish 必须从 exact Ornn package 校验唯一 `SKILL.md` 的实际大小，禁止发布运行时必然
+降级的超限 snapshot。修改预算必须形成新的 published revision，并由新 Conversation 固化；旧
 Conversation 不会热更新。
 
 每层 Profile tool policy 内的 literal tool name、tool-set ref 与 connected-service selector 是并集，maximum、recovery 与选中的 task policy 仍按既有规则取交集。connected-service selector 只包含 canonical `catalog_service_slug` 与非空 `READ_ONLY/WRITE` risk 集；它只能匹配 route discovery 已经得到的工具，并读取 server-sealed `AgentToolOperationAdmission.catalog_service_slug` 与 `execution_policy.risk`。它不得读取展示 descriptor、opaque tool name、`service_instance_id`、HTTP method 或 path 来猜测安全语义，也不得触发额外 discovery 或扩大 route ceiling。相同 catalog service 的多个 exact connection 会各自保留 exact admission 并同时匹配；未匹配 selector 只贡献空集。
@@ -91,10 +93,14 @@ route-owned tools。生产 `web_search` 通过 `tavily-search` NyxID service bin
 route ceiling，但其 typed REST adapter 可以由显式管理 surface 复用。无论是否绑定 Profile，
 mutation schema、secret-bearing 参数与新注册但未列入 ceiling 的工具都保持不可调用。
 
-Ornn workflow skill 的加载与执行是同一条受限能力链。ceiling 显式提供 `use_skill`，并且只提供
-`aevatar_start_workflow`、`aevatar_observe_run` 与 `aevatar_read_workflow_run_artifact` 三个
-workflow 工具，使 Assistant 可以启动已挂载或显式 inline fallback 的定义，并以 committed
-read model 与 typed artifact 判定结果。workflow 自身的 capability admission、scope authority、
-tool approval 和外部副作用策略仍逐层生效；这组工具不会引入通用 GAgent/team/member invoke、
-schedule provisioning 或 raw proxy。新增其他 workflow/control 工具仍必须通过单独的 route
-ceiling 审查，不能因注册了 `IAgentToolSource` 而自动暴露。
+Ornn workflow skill 的发现、发布、加载与执行是同一条受限能力链。ceiling 显式提供
+`list_external_workflow_capabilities`、`inspect_external_workflow_capability_readiness`、
+`ornn_publish_skill` 与 `use_skill`，并且只提供 `aevatar_start_workflow`、
+`aevatar_observe_run` 与 `aevatar_read_workflow_run_artifact` 三个 workflow 执行工具。前两个
+capability 工具来自只读窄 source；Ornn authoring 只挂载 private publish，不暴露
+`ornn_update_skill` 或完整 authoring source。这样 Assistant 可以按 exact descriptor 检查
+readiness、发布私有 skill、启动已挂载或显式 inline fallback 的定义，并以 committed read model
+与 typed artifact 判定结果。workflow 自身的 capability admission、scope authority、tool approval
+和外部副作用策略仍逐层生效；这组工具不会引入通用 GAgent/team/member invoke、schedule
+provisioning 或 raw proxy。新增其他 workflow/control 工具仍必须通过单独的 route ceiling 审查，
+不能因注册了 `IAgentToolSource` 而自动暴露。

@@ -19,6 +19,22 @@ namespace Aevatar.Capabilities.Tests;
 public sealed class BackendConsoleStaticAssetEndpointTests
 {
     [Fact]
+    public async Task AgentProfileEditors_ShouldUseThePublishedSkillBodyBudget()
+    {
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+
+        var adminHtml = await client.GetStringAsync("/admin");
+        var aiHtml = await client.GetStringAsync("/ai");
+
+        adminHtml.Should().Contain("maxSelectedSkillBytes!==65536");
+        adminHtml.Should().Contain("当前必须为 65536");
+        adminHtml.Should().NotContain("maxSelectedSkillBytes||24576");
+        aiHtml.Should().Contain("runtimeValue(\"maxSelectedSkillBytes\", 65536)");
+        aiHtml.Should().NotContain("runtimeValue(\"maxSelectedSkillBytes\", 262144)");
+    }
+
+    [Fact]
     public async Task AIPage_ShouldSupportHeadWithoutReturningTheDocumentBody()
     {
         await using var app = await CreateAppAsync();

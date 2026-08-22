@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
+using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Foundation.Abstractions;
@@ -247,7 +248,7 @@ public sealed class AgentProfileGAgentTests
             HandoffTtlSeconds = 900,
             ClassifierTimeoutMs = 15_000,
             ExactSkillFetchTimeoutMs = 15_000,
-            MaxSelectedSkillBytes = 24576,
+            MaxSelectedSkillBytes = AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes,
             MaxOwnedToolCount = 8,
             MaxSchemaBytes = 48 * 1024,
             MaximumToolPolicy = new AgentProfileToolPolicy(),

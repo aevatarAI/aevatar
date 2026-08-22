@@ -80,6 +80,7 @@ public sealed class ServiceCollectionExtensionsTests
         });
 
         provider.GetRequiredService<OrnnAuthoringAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnPublishAgentToolSource>().Should().NotBeNull();
         provider.GetRequiredService<OrnnSearchAgentToolSource>().Should().NotBeNull();
     }
 
@@ -99,6 +100,7 @@ public sealed class ServiceCollectionExtensionsTests
 
         provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be("https://nyx.example");
         provider.GetRequiredService<OrnnAuthoringAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnPublishAgentToolSource>().Should().NotBeNull();
         provider.GetRequiredService<OrnnSearchAgentToolSource>().Should().NotBeNull();
     }
 
@@ -116,6 +118,8 @@ public sealed class ServiceCollectionExtensionsTests
             .DiscoverToolsAsync();
         var authoringTools = await provider.GetRequiredService<OrnnAuthoringAgentToolSource>()
             .DiscoverToolsAsync();
+        var publishTools = await provider.GetRequiredService<OrnnPublishAgentToolSource>()
+            .DiscoverToolsAsync();
 
         var tool = searchTools.Should().ContainSingle().Which;
         tool.Name.Should().Be("ornn_search_skills");
@@ -126,6 +130,8 @@ public sealed class ServiceCollectionExtensionsTests
         authoringTools.Select(static candidate => candidate.Name).Should().Equal(
             "ornn_publish_skill",
             "ornn_update_skill");
+        publishTools.Select(static candidate => candidate.Name)
+            .Should().ContainSingle().Which.Should().Be("ornn_publish_skill");
     }
 
     [Fact]

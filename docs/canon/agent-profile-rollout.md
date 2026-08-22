@@ -95,8 +95,10 @@ Task/recovery selector 必须按 catalog slug 被 maximum selector 的 risk 集�
 streaming LLM classification 的正常网络/首 token 时延，后者覆盖经 NyxID proxy 的 exact Ornn
 读取；两者超时都继续 fail closed。不得用亚秒 classifier budget 发布 Profile，因为 timeout 会在
 request-local connected-service tools 已成功发现后把 authority 降为 empty recovery，看起来像“连接
-存在但没有工具”。预算调整属于 immutable Profile 内容变更，必须重新 validate/publish，并用新
-Conversation 验证。
+存在但没有工具”。Selected skill body 固定为 `65536` UTF-8 bytes ceiling；validate/publish 必须用
+exact Ornn package 中唯一 `SKILL.md` 的实际字节数校验，超限 Profile 不得发布，不能把错误延迟到
+turn-time materialization。预算调整属于 immutable Profile 内容变更，必须重新 validate/publish，
+并用新 Conversation 验证。
 
 ROUTED member 的 `explicitTriggerAliases` 是 classifier 之前的确定性触发项。每个 alias 按
 case-insensitive、完整 token/phrase boundary 在整条用户消息中匹配，而不是只检查消息前缀；因此

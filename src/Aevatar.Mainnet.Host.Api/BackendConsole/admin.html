@@ -3384,11 +3384,11 @@ function agentProfileDraftFromFields(fields){
     recoveryToolPolicy:{toolNames:csv(fields.recoveryTools),toolSetRefs:csv(fields.recoveryToolSets)},
     maxPlanSteps:Number(fields.maxPlanSteps||4),handoffTtlSeconds:Number(fields.handoffTtlSeconds||900),
     classifierTimeoutMs:Number(fields.classifierTimeoutMs||15000),exactSkillFetchTimeoutMs:Number(fields.exactSkillFetchTimeoutMs||15000),
-    maxSelectedSkillBytes:Number(fields.maxSelectedSkillBytes||24576),members:memberFields.map(member)}};
+    maxSelectedSkillBytes:Number(fields.maxSelectedSkillBytes||65536),members:memberFields.map(member)}};
 }
 function agentProfileEmptyDraft(){
   return agentProfileDraftFromFields({activationMode:'SHADOW',maxPlanSteps:4,handoffTtlSeconds:900,classifierTimeoutMs:15000,
-    exactSkillFetchTimeoutMs:15000,maxSelectedSkillBytes:24576,sideEffectClass:'READ_ONLY',members:[]});
+    exactSkillFetchTimeoutMs:15000,maxSelectedSkillBytes:65536,sideEffectClass:'READ_ONLY',members:[]});
 }
 function agentProfileSlugFromName(value){
   return String(value||'').normalize('NFKD').toLowerCase().replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').replace(/-+/g,'-');
@@ -3724,7 +3724,7 @@ function agentProfileCreateHtml(){
       agentProfileHiddenValue('maximumTools',tools.join(', '))+agentProfileHiddenValue('maximumToolSets',((rt.maximumToolPolicy||{}).toolSetRefs||[]).join(', '))+
       agentProfileHiddenValue('recoveryTools',((rt.recoveryToolPolicy||{}).toolNames||[]).join(', '))+agentProfileHiddenValue('recoveryToolSets',((rt.recoveryToolPolicy||{}).toolSetRefs||[]).join(', '))+
       agentProfileHiddenValue('maxPlanSteps',rt.maxPlanSteps||4)+agentProfileHiddenValue('handoffTtlSeconds',rt.handoffTtlSeconds||900)+agentProfileHiddenValue('classifierTimeoutMs',rt.classifierTimeoutMs||15000)+
-      agentProfileHiddenValue('exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||15000)+agentProfileHiddenValue('maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576)+'</div></section>'+
+      agentProfileHiddenValue('exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||15000)+agentProfileHiddenValue('maxSelectedSkillBytes',rt.maxSelectedSkillBytes||65536)+'</div></section>'+
     '<section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">02</span><div><h3>选择能力</h3><p>每个 intent 固定一个 exact Ornn skill，并审阅发布方、版本与工具。</p></div></div>'+agentProfileSkillsSectionHtml(members,pending)+'</section>'+
     '<section class="ap-step"><div class="ap-step-head"><span class="ap-step-number">03</span><div><h3>检查并创建</h3><p>创建资源和保存草稿是两个可观察步骤；不会自动发布或设为默认。</p></div></div>'+
       '<div class="ap-review"><div class="ap-review-grid"><div class="ap-review-item"><small>Owner / slug</small>'+esc(owner+(flow.slug||'待填写'))+'</div>'+
@@ -3761,7 +3761,7 @@ function agentProfileEditorHtml(){
       agentProfileField('Handoff TTL (s)','handoffTtlSeconds',rt.handoffTtlSeconds||900,{type:'number',readonly:true,disabled:dis})+
       agentProfileField('Classifier timeout (ms)','classifierTimeoutMs',rt.classifierTimeoutMs||15000,{type:'number',readonly:true,disabled:dis})+
       agentProfileField('Exact fetch timeout (ms)','exactSkillFetchTimeoutMs',rt.exactSkillFetchTimeoutMs||15000,{type:'number',readonly:true,disabled:dis})+
-      agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||24576,{type:'number',readonly:true,disabled:dis})+'</div><div class="ap-disclosure-body"><span class="ap-help">当前 nyxid.chat runtime 固定参数；由服务端 editor options 定义。</span></div></details></section>'+agentProfileDiagnosticsHtml()+'</form>'+
+      agentProfileField('Max selected skill bytes','maxSelectedSkillBytes',rt.maxSelectedSkillBytes||65536,{type:'number',readonly:true,disabled:dis})+'</div><div class="ap-disclosure-body"><span class="ap-help">当前 nyxid.chat runtime 固定参数；由服务端 editor options 定义。</span></div></details></section>'+agentProfileDiagnosticsHtml()+'</form>'+
     ((d.ownerKind==='system'&&ACCOUNT&&ACCOUNT.admin)?'<section class="ap-section"><h3>System default rollout</h3><div class="ap-rollout">'+
       agentProfileSelect('Enabled','rolloutEnabled',String(rollout.enabled),[{value:'true',label:'启用'},{value:'false',label:'停用'}],actionDisabled)+
       agentProfileSelect('Rollout cohort','cohortBasisPoints',String(rollout.cohortBasisPoints),[
@@ -3790,7 +3790,7 @@ function agentProfileLocalDiagnostics(draft){
   if(rt.handoffTtlSeconds!==900)out.push({code:'PROFILE_HANDOFF_TTL_INVALID',field:'handoffTtlSeconds',message:'当前必须为 900'});
   if(rt.classifierTimeoutMs!==15000)out.push({code:'PROFILE_CLASSIFIER_TIMEOUT_INVALID',field:'classifierTimeoutMs',message:'当前必须为 15000'});
   if(rt.exactSkillFetchTimeoutMs!==15000)out.push({code:'PROFILE_EXACT_SKILL_TIMEOUT_INVALID',field:'exactSkillFetchTimeoutMs',message:'当前必须为 15000'});
-  if(rt.maxSelectedSkillBytes!==24576)out.push({code:'PROFILE_SELECTED_SKILL_BYTES_INVALID',field:'maxSelectedSkillBytes',message:'当前必须为 24576'});
+  if(rt.maxSelectedSkillBytes!==65536)out.push({code:'PROFILE_SELECTED_SKILL_BYTES_INVALID',field:'maxSelectedSkillBytes',message:'当前必须为 65536'});
   return out;
 }
 async function agentProfileMutation(path,method,body,etag){
