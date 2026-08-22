@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260822-m60-tool-load-trace";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260823-m61-visual-delight";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};

@@ -3967,9 +3967,10 @@ summary:focus-visible {
   --conversation-max-width: 760px;
   --conversation-inline-gutter: 40px;
   --topbar-h: 56px;
-  --radius: 8px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
+  --radius: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --shadow-soft: 0 1px 2px rgba(14, 21, 38, 0.05), 0 10px 28px -14px rgba(14, 21, 38, 0.16);
 }
 
 body {
@@ -6351,4 +6352,258 @@ body:has(.settings-dialog[open]) #servicesButton,
 @media (prefers-reduced-motion: reduce) {
   .trajectory-span[data-status="running"] { animation: none; }
   .composer-status.working::before { animation: none; }
+}
+
+/* ── Delight pass ─────────────────────────────────────────────────────────
+   Presentation-only refinement on top of the Admin scale above: optically
+   centered welcome composition, lifted composer and primary actions, calmer
+   scrollbars, and softer focus affordances. No markup, class, or behavior
+   contract changes. */
+
+body {
+  background:
+    radial-gradient(1100px 520px at 50% -140px, #f3f6fc 0%, rgba(243, 246, 252, 0) 62%),
+    var(--bg);
+}
+
+/* Welcome composition: the empty transcript is the landing surface, so it
+   sits at the optical center instead of hugging the top edge. */
+.empty-state {
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0 11vh;
+  text-align: center;
+}
+
+.empty-state::before {
+  position: absolute;
+  top: 44%;
+  left: 50%;
+  width: 520px;
+  height: 340px;
+  background: radial-gradient(closest-side, rgba(77, 124, 255, 0.09), transparent);
+  content: "";
+  pointer-events: none;
+  transform: translate(-50%, -55%);
+}
+
+.empty-state > * {
+  position: relative;
+}
+
+.assistant-emblem {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  box-shadow:
+    0 12px 26px -8px rgba(47, 92, 246, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 0 0 7px rgba(47, 92, 246, 0.07);
+}
+
+.assistant-emblem svg {
+  width: 25px;
+  height: 25px;
+}
+
+.empty-state h1 {
+  margin: 24px 0 8px;
+  font-size: 30px;
+  letter-spacing: -0.015em;
+}
+
+.empty-state p {
+  font-size: 15px;
+}
+
+.auth-gate {
+  margin-top: 30px;
+}
+
+.auth-login-button {
+  min-height: 44px;
+  border-color: transparent;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #3f6dff, #2c4fe6);
+  box-shadow:
+    0 3px 10px -2px rgba(47, 92, 246, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  color: #fff;
+  padding: 0 22px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: filter 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.auth-login-button:hover {
+  filter: brightness(1.06);
+  box-shadow:
+    0 7px 18px -3px rgba(47, 92, 246, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
+}
+
+.auth-login-button:active {
+  transform: translateY(0);
+}
+
+.quick-actions {
+  margin-top: 40px;
+}
+
+.quick-actions button {
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.quick-actions button:hover svg:last-child {
+  color: var(--accent);
+  transform: translate(1px, -1px);
+}
+
+.quick-actions button svg:last-child {
+  transition: transform 140ms ease, color 140ms ease;
+}
+
+/* Floating conversation switch: lift it off the transcript plane. */
+.content-view-switch {
+  box-shadow: var(--shadow-soft);
+}
+
+/* Composer: a touch more air and a calmer, deeper rest shadow. */
+.composer {
+  box-shadow: var(--shadow-soft);
+}
+
+.composer:focus-within {
+  box-shadow: var(--shadow-soft), 0 0 0 3px var(--accent-soft);
+}
+
+.composer-icon,
+.send-button,
+.stop-button,
+.steer-button {
+  transition: background 150ms ease, color 150ms ease, filter 150ms ease,
+    box-shadow 150ms ease, transform 150ms ease;
+}
+
+.composer-icon:hover {
+  transform: translateY(-1px);
+}
+
+/* Trajectory toolbar: quiet chips with a real pressed state. */
+.trajectory-toggle,
+.trajectory-action {
+  height: 22px;
+  border-radius: 6px;
+  transition: background 130ms ease, color 130ms ease;
+}
+
+.trajectory-toggle[aria-pressed="true"],
+.trajectory-action[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.trajectory-search {
+  border-radius: 7px;
+  transition: border-color 130ms ease, background 130ms ease;
+}
+
+/* Scrollbars: drop the boxed track so the rail reads as a floating thumb. */
+.thread,
+.recent-session-list,
+.composer-service-list,
+.inspector-body,
+.dialog-body,
+.service-access-list {
+  scrollbar-color: color-mix(in srgb, var(--tertiary) 72%, transparent) transparent;
+}
+
+.thread::-webkit-scrollbar-track,
+.recent-session-list::-webkit-scrollbar-track,
+.composer-service-list::-webkit-scrollbar-track,
+.inspector-body::-webkit-scrollbar-track,
+.dialog-body::-webkit-scrollbar-track,
+.service-access-list::-webkit-scrollbar-track {
+  border-left: 0;
+  background: transparent;
+}
+
+.thread::-webkit-scrollbar-thumb,
+.recent-session-list::-webkit-scrollbar-thumb,
+.composer-service-list::-webkit-scrollbar-thumb,
+.inspector-body::-webkit-scrollbar-thumb,
+.dialog-body::-webkit-scrollbar-thumb,
+.service-access-list::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  background: color-mix(in srgb, var(--tertiary) 68%, transparent);
+  background-clip: padding-box;
+}
+
+.thread::-webkit-scrollbar-thumb:hover,
+.recent-session-list::-webkit-scrollbar-thumb:hover,
+.composer-service-list::-webkit-scrollbar-thumb:hover,
+.inspector-body::-webkit-scrollbar-thumb:hover,
+.dialog-body::-webkit-scrollbar-thumb:hover,
+.service-access-list::-webkit-scrollbar-thumb:hover {
+  border: 3px solid transparent;
+  background: var(--muted);
+  background-clip: padding-box;
+}
+
+/* Softer, still unmissable focus affordance. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--panel),
+    0 0 0 4px color-mix(in srgb, var(--accent) 52%, transparent);
+}
+
+/* Dialogs and toast carry the deepest elevation in the surface stack. */
+.settings-dialog {
+  box-shadow: 0 28px 72px -16px rgba(14, 21, 38, 0.32);
+}
+
+.toast {
+  box-shadow: 0 14px 36px -10px rgba(14, 21, 38, 0.28);
+}
+
+/* Inspector drawer: deeper separation from the dimmed transcript. */
+.inspector {
+  box-shadow: -18px 0 48px -12px rgba(14, 21, 38, 0.22);
+}
+
+@media (max-width: 620px) {
+  .empty-state {
+    padding: 24px 0 9vh;
+  }
+
+  .empty-state::before {
+    width: 100%;
+    height: 300px;
+  }
+
+  .assistant-emblem {
+    width: 50px;
+    height: 50px;
+    border-radius: 16px;
+  }
+
+  .empty-state h1 {
+    font-size: 26px;
+  }
+
+  /* The route label that normally spaces the composer toolbar is hidden at
+     this width; keep the primary action flush right without it. */
+  .composer-toolbar .send-button {
+    margin-left: auto;
+  }
+
+  .composer-toolbar .send-button.hidden ~ .steer-button {
+    margin-left: auto;
+  }
 }

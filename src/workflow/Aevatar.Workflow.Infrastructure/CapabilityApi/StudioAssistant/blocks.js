@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260822-m60-tool-load-trace";
+import { validateActionRequest } from "./protocol.js?v=20260823-m61-visual-delight";
 
 // Assistant prose is always Markdown text. Executable cards are built only
 // from actor-authored, schema-v4 action requests.

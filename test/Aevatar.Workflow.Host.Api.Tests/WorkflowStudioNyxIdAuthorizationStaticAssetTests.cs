@@ -327,7 +327,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         var marked = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantMarked);
         var purify = await GetStudioAssetAsync(WorkflowStudioEndpoints.GetAssistantPurify);
 
-        app.Should().Contain("import \"./transport.js?v=20260822-m60-tool-load-trace\"");
+        app.Should().Contain("import \"./transport.js?v=20260823-m61-visual-delight\"");
         app.Should().Contain("async function sendPrompt(");
         app.Should().Contain("async function loadConversations(");
         app.Should().Contain("async function refreshActorState(");
@@ -448,13 +448,13 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         app.Should().NotContain("freeText.className = \"needs-you-free-text\"");
         styles.Should().Contain("@media (max-width:");
         html.Should().Contain("<meta name=\"color-scheme\" content=\"only light\"");
-        html.Should().Contain("app.js?v=20260822-m60-tool-load-trace");
-        html.Should().Contain("styles.css?v=20260822-m60-tool-load-trace");
-        app.Should().Contain("transport.js?v=20260822-m60-tool-load-trace");
-        app.Should().Contain("readiness.js?v=20260822-m60-tool-load-trace");
-        transport.Should().Contain("readiness.js?v=20260822-m60-tool-load-trace");
-        actorState.Should().Contain("protocol.js?v=20260822-m60-tool-load-trace");
-        blocks.Should().Contain("protocol.js?v=20260822-m60-tool-load-trace");
+        html.Should().Contain("app.js?v=20260823-m61-visual-delight");
+        html.Should().Contain("styles.css?v=20260823-m61-visual-delight");
+        app.Should().Contain("transport.js?v=20260823-m61-visual-delight");
+        app.Should().Contain("readiness.js?v=20260823-m61-visual-delight");
+        transport.Should().Contain("readiness.js?v=20260823-m61-visual-delight");
+        actorState.Should().Contain("protocol.js?v=20260823-m61-visual-delight");
+        blocks.Should().Contain("protocol.js?v=20260823-m61-visual-delight");
         html.Should().Contain("<span class=\"brand-name\">Aevatar Studio</span>");
         html.Should().NotContain("class=\"brand-mark\"");
         styles.Should().Contain("color-scheme: only light");
