@@ -181,6 +181,14 @@ viewport; toolbar controls switch recorded-duration against equal-width projecti
 fold a model record's tool calls, and search the loaded ledger. Selecting an older container changes
 only inspection; Actor controls remain scoped to the current task.
 
+NyxID chat publishes typed `MODEL_CALL_START` / `MODEL_CALL_END` SSE frames for each provider
+invocation. `MODEL_CALL_START.availableToolNames` is copied from the server-authorized request catalog
+actually supplied to that model round; it is not inferred from tools the model later chose to call.
+The Model row shows a compact loaded-tool summary, search includes those names, and the Input detail tab
+lists the complete captured set. A round with an empty catalog remains an honest zero-tools invocation.
+The durable `toolCatalogCaptured` fact distinguishes that exact empty catalog from a legacy operation
+whose model-visible catalog was never recorded; the latter remains `未上报` after reload.
+
 The trajectory survives a reload from two committed sources, and neither infers a record it did not
 read. A terminal turn appends its Model/Tool operation ledger together with its chat history turn, so
 `GET /api/chat/conversations/{id}` returns those operations beside the stored messages; the in-flight
@@ -192,7 +200,9 @@ presented as the complete payload. Tool result bodies are deliberately not archi
 external text must not be retained by a conversation actor whose state is re-read when rebuilding model
 input; a restored Tool record therefore carries identity, status and timing but reports its output as
 uncaptured. The Input record has no independent start/completion pair. Missing operation timing remains
-unavailable rather than being calculated from browser receipt time.
+unavailable rather than being calculated from browser receipt time. The terminal operation ledger also
+persists each model round's `availableToolNames`, so reopening the conversation restores the same loaded
+tool set shown by the live SSE path, together with whether that catalog was captured.
 
 Fleet links carry exact `scope + run`, and schedule links carry `schedule` while clearing an unrelated selected
 run. The embedded page writes canonical route changes back to the parent hash without reloading its iframe.

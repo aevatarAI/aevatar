@@ -65,7 +65,13 @@ The page is a quiet operational transcript with confident workspace scale. A sub
   operation ledger creates one selectable record for the input, each model
   response, and each tool call. Live typed Model/Tool start/end frames upsert
   those operations by their own identity; even a model response whose only
-  output is tool calls remains a Model record. Steering, approval, and
+  output is tool calls remains a Model record. A typed `MODEL_CALL_START` frame
+  carries the exact server-authorized tool names actually loaded for that model
+  round. The ledger row summarizes them, search indexes them, and the operation
+  inspector exposes the full list without inferring it from later calls. The
+  persisted `toolCatalogCaptured` fact distinguishes an exact zero-tool round
+  from an older operation that never recorded this catalog.
+  Steering, approval, and
   continuation commands advance the owning task instead of inventing unrelated
   top-level containers.
 - Trajectory overview: a compact, shared time domain above the ledger with
@@ -115,7 +121,9 @@ The page is a quiet operational transcript with confident workspace scale. A sub
   the complete payload. Tool result bodies are deliberately not archived: they
   are untrusted external text, and conversation actor state is re-read when
   rebuilding model input, so a restored Tool record carries its identity, status
-  and timing but reports its output as uncaptured.
+  and timing but reports its output as uncaptured. A Model record's loaded tool
+  names are copied into the terminal operation ledger, so the live SSE and
+  reload paths render the same captured catalog.
 
 ## Content Style
 
@@ -134,7 +142,8 @@ The page is a quiet operational transcript with confident workspace scale. A sub
 - Keep Input/Model/Tool operations inside their owning trace container, with a
   stable operation identity shared by the three-lane overview, ledger row, and
   inspector. Do not use the container ID as every operation ID.
-- Treat timing, model/provider, usage, tool payload/result, and tool schema as
+- Treat timing, model/provider, usage, the model-visible loaded tool catalog,
+  tool payload/result, and tool schema as
   recorded facts. Render unavailable when absent; do not infer them from event
   arrival time, adjacent records, display text, or mutable conversation state.
 - Do not assign an independent Input duration until the protocol provides a

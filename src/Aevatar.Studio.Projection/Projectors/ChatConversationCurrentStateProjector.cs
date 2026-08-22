@@ -114,6 +114,8 @@ public sealed class ChatConversationCurrentStateProjector
             ArgumentsPreview = operation.ArgumentsPreview,
             PreviewsTruncated = operation.PreviewsTruncated,
             SafeMessage = operation.SafeMessage,
+            AvailableToolNames = { operation.AvailableToolNames },
+            ToolCatalogCaptured = operation.ToolCatalogCaptured,
         };
 
     private static string ToOperationKindName(ChatTurnOperationKind kind) =>

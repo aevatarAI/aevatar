@@ -418,6 +418,8 @@ message ChatConversationTurnOperationDocument {
   string arguments_preview = 16;
   bool previews_truncated = 18;
   string safe_message = 19;
+  repeated string available_tool_names = 20;
+  bool tool_catalog_captured = 21;
 }
 
 message ChatConversationCurrentStateDocument {

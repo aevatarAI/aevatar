@@ -107,7 +107,9 @@ public sealed record ChatHistoryTurnOperation(
     string? OutputPreview = null,
     string? ArgumentsPreview = null,
     bool PreviewsTruncated = false,
-    string? SafeMessage = null);
+    string? SafeMessage = null,
+    IReadOnlyList<string>? AvailableToolNames = null,
+    bool ToolCatalogCaptured = false);
 
 public enum ChatHistoryDeleteResultStatus
 {

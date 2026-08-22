@@ -103,6 +103,13 @@ internal static class NyxIdChatOperationLedger
         facts.FinishReason = WorkflowAuditTextSanitizer.SanitizeForDisplay(llm.FinishReason, 64);
         if (llm.Usage is not null)
             facts.Usage = llm.Usage.Clone();
+        facts.ToolCatalogCaptured = llm.ToolCatalogCaptured;
+        facts.AvailableToolNames.Clear();
+        facts.AvailableToolNames.AddRange(llm.AvailableToolNames
+            .Select(static name => name?.Trim() ?? string.Empty)
+            .Where(static name => name.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static name => name, StringComparer.Ordinal));
         var model = step.Source?.Llm?.Model;
         if (!string.IsNullOrWhiteSpace(model))
             facts.Model = model;

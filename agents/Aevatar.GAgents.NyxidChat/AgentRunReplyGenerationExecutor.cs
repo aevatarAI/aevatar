@@ -263,6 +263,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         List<LLMStreamChunk>? deferredLlmChunks = deferSkillRecoveryText || deferPotentialToolCallText
             ? []
             : null;
+        LLMStreamChunk? deferredModelCompletion = null;
 
         async Task DeliverLlmChunkAsync(LLMStreamChunk chunk, CancellationToken token)
         {
@@ -303,6 +304,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     ct)
                 .ConfigureAwait(false);
         ChatRuntimeStepLlmResult llmResult;
+        var modelInvocationStarted = false;
         if (requiredToolCall is not null)
         {
             llmResult = BuildSkillRecoveryLlmResult(requiredToolCall);
@@ -320,6 +322,29 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                         llmRequest,
                         async (chunk, token) =>
                         {
+                            if (chunk.LLMInvocationStarted is not null)
+                                modelInvocationStarted = true;
+
+                            // The start is committed even while potential tool-call prose stays
+                            // hidden. A successful end waits for the round shape so a normal reply
+                            // remains ordered START -> visible deltas -> END.
+                            if (chunk.LLMInvocationStarted is not null)
+                            {
+                                await DeliverLlmChunkAsync(chunk, token).ConfigureAwait(false);
+                                return;
+                            }
+                            if (chunk.LLMInvocationCompleted is { Success: true } &&
+                                deferredLlmChunks is not null)
+                            {
+                                deferredModelCompletion = chunk;
+                                return;
+                            }
+                            if (chunk.LLMInvocationCompleted is not null)
+                            {
+                                await DeliverLlmChunkAsync(chunk, token).ConfigureAwait(false);
+                                return;
+                            }
+
                             if (deferredLlmChunks is not null)
                             {
                                 deferredLlmChunks.Add(chunk);
@@ -382,6 +407,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             foreach (var chunk in deferredLlmChunks)
                 await DeliverLlmChunkAsync(chunk, ct).ConfigureAwait(false);
         }
+        if (deferredModelCompletion is not null)
+            await DeliverLlmChunkAsync(deferredModelCompletion, ct).ConfigureAwait(false);
         if (streamingState is not null && !approvalRequired && !hasToolCalls)
             await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
 
@@ -400,6 +427,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             result.Usage = usage;
         if (effectiveToolCalls is { Count: > 0 })
             result.ToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
+        if (modelInvocationStarted)
+        {
+            result.ToolCatalogCaptured = true;
+            result.AvailableToolNames.AddRange(llmResult.AuthorizedTools
+                .Select(static tool => tool.Name?.Trim() ?? string.Empty)
+                .Where(static name => name.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(static name => name, StringComparer.Ordinal));
+        }
 
         if (TryTakeOutboundIntent(generator) is { } outboundIntent)
             result.OutboundIntent = outboundIntent.Clone();

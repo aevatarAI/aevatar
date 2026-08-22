@@ -88,6 +88,35 @@ internal static class NyxIdChatConversationAguiFrameBuilder
                         progressed.Progress.ToolStarted.ToolName),
                 },
             },
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.ModelStarted => new AGUIEvent
+            {
+                ModelCallStart = new ModelCallStartEvent
+                {
+                    OperationId = progressed.Progress.ModelStarted.OperationId,
+                    SessionId = turnId,
+                    Round = progressed.Progress.ModelStarted.Round,
+                    Model = progressed.Progress.ModelStarted.Model,
+                    Provider = progressed.Progress.ModelStarted.Provider,
+                    InputSummary = progressed.Progress.ModelStarted.InputSummary,
+                    AvailableToolNames = { progressed.Progress.ModelStarted.AvailableToolNames },
+                },
+            },
+            NyxIdChatOperationProgressSignal.ProgressOneofCase.ModelCompleted => new AGUIEvent
+            {
+                ModelCallEnd = new ModelCallEndEvent
+                {
+                    OperationId = progressed.Progress.ModelCompleted.OperationId,
+                    SessionId = turnId,
+                    Round = progressed.Progress.ModelCompleted.Round,
+                    Model = progressed.Progress.ModelCompleted.Model,
+                    Content = progressed.Progress.ModelCompleted.Content,
+                    ReasoningContent = progressed.Progress.ModelCompleted.ReasoningContent,
+                    Usage = BuildModelUsage(progressed.Progress.ModelCompleted),
+                    FinishReason = progressed.Progress.ModelCompleted.FinishReason,
+                    Success = progressed.Progress.ModelCompleted.Success,
+                    Error = progressed.Progress.ModelCompleted.Error,
+                },
+            },
             NyxIdChatOperationProgressSignal.ProgressOneofCase.Phase => null,
             NyxIdChatOperationProgressSignal.ProgressOneofCase.StreamingBatch => null,
             _ => null,
@@ -148,6 +177,18 @@ internal static class NyxIdChatConversationAguiFrameBuilder
             },
             _ => throw new InvalidOperationException("Streaming progress contains an empty segment."),
         };
+
+    private static UsageEvent? BuildModelUsage(NyxIdChatModelCompletedProgress completed) =>
+        completed.Usage is null
+            ? null
+            : new UsageEvent
+            {
+                Available = true,
+                PromptTokens = completed.Usage.PromptTokens,
+                CompletionTokens = completed.Usage.CompletionTokens,
+                TotalTokens = completed.Usage.TotalTokens,
+                Model = string.IsNullOrWhiteSpace(completed.Model) ? null : completed.Model,
+            };
 
     public static IReadOnlyList<AGUIEvent> BuildProgressCadence(
         NyxIdChatOperationStepChangedCommittedEvent committed)

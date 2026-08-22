@@ -152,7 +152,9 @@ internal sealed class ActorBackedChatHistoryStore :
                 OutputPreview: NullIfEmpty(operation.OutputPreview),
                 ArgumentsPreview: NullIfEmpty(operation.ArgumentsPreview),
                 PreviewsTruncated: operation.PreviewsTruncated,
-                SafeMessage: NullIfEmpty(operation.SafeMessage)));
+                SafeMessage: NullIfEmpty(operation.SafeMessage),
+                AvailableToolNames: operation.AvailableToolNames.ToList().AsReadOnly(),
+                ToolCatalogCaptured: operation.ToolCatalogCaptured));
 
     private static DateTimeOffset? ToInstant(long unixMs) =>
         unixMs > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(unixMs) : null;
@@ -278,6 +280,9 @@ internal sealed class ActorBackedChatHistoryStore :
             mapped.StartedAt = Timestamp.FromDateTimeOffset(startedAt);
         if (operation.CompletedAt is { } completedAt)
             mapped.CompletedAt = Timestamp.FromDateTimeOffset(completedAt);
+        if (operation.AvailableToolNames is { Count: > 0 } availableToolNames)
+            mapped.AvailableToolNames.AddRange(availableToolNames);
+        mapped.ToolCatalogCaptured = operation.ToolCatalogCaptured;
         return mapped;
     }
 

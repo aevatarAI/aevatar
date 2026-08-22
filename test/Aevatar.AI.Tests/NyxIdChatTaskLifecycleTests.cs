@@ -1311,6 +1311,13 @@ public sealed class NyxIdChatTaskLifecycleTests
                     CompletionTokens = 30,
                     TotalTokens = 150,
                 },
+                AvailableToolNames =
+                {
+                    "nyxid.require_service",
+                    "github.get_issue",
+                    "github.get_issue",
+                },
+                ToolCatalogCaptured = true,
             },
         };
 
@@ -1322,6 +1329,8 @@ public sealed class NyxIdChatTaskLifecycleTests
         facts!.Usage.TotalTokens.Should().Be(150);
         facts.FinishReason.Should().Be("stop");
         facts.Model.Should().Be("deepseek-v4-pro");
+        facts.ToolCatalogCaptured.Should().BeTrue();
+        facts.AvailableToolNames.Should().Equal("github.get_issue", "nyxid.require_service");
         facts.OutputPreview.Should().NotContain("super-secret-token");
 
         var snapshot = NyxIdChatOperationLedger.SnapshotTurn(decision.State, "turn-alpha");
@@ -1330,6 +1339,8 @@ public sealed class NyxIdChatTaskLifecycleTests
         snapshot[0].Kind.Should().Be(NyxIdChatStepKind.Llm);
         snapshot[0].Title.Should().Be("deepseek-v4-pro");
         snapshot[0].LedgerFacts.Usage.TotalTokens.Should().Be(150);
+        snapshot[0].LedgerFacts.AvailableToolNames.Should()
+            .Equal("github.get_issue", "nyxid.require_service");
     }
 
     [Fact]

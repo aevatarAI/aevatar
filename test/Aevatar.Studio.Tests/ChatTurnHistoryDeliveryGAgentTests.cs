@@ -272,6 +272,8 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
             TotalTokens = 512,
             OutputPreview = "plan",
             PreviewsTruncated = true,
+            AvailableToolNames = { "github.get_issue", "nyxid.require_service" },
+            ToolCatalogCaptured = true,
         });
         terminal.Operations.Add(new ChatTurnOperation
         {
@@ -291,6 +293,9 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
             .Should().Equal("op-model-1", "op-tool-1");
         append.Turn.Operations[0].PreviewsTruncated.Should().BeTrue();
         append.Turn.Operations[0].TotalTokens.Should().Be(512);
+        append.Turn.Operations[0].AvailableToolNames.Should()
+            .Equal("github.get_issue", "nyxid.require_service");
+        append.Turn.Operations[0].ToolCatalogCaptured.Should().BeTrue();
     }
 
     [Fact]

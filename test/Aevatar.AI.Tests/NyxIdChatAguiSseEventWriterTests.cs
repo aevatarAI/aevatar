@@ -37,6 +37,62 @@ public class NyxIdChatAguiSseEventWriterTests
     }
 
     [Fact]
+    public async Task WriteAsync_ShouldMapModelLifecycleAndAvailableTools()
+    {
+        var sink = new SseFrameSink();
+
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Sequence = 41,
+            ModelCallStart = new ModelCallStartEvent
+            {
+                OperationId = "model-round-0",
+                SessionId = "session-1",
+                Round = 0,
+                Model = "model-a",
+                Provider = "provider-a",
+                InputSummary = "safe input",
+                AvailableToolNames = { "github.get_issue", "nyxid.require_service" },
+            },
+        }, "message-1");
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Sequence = 42,
+            ModelCallEnd = new ModelCallEndEvent
+            {
+                OperationId = "model-round-0",
+                SessionId = "session-1",
+                Round = 0,
+                Model = "model-a",
+                Content = "done",
+                Usage = new UsageEvent
+                {
+                    Available = true,
+                    PromptTokens = 3,
+                    CompletionTokens = 2,
+                    TotalTokens = 5,
+                    Model = "model-a",
+                },
+                FinishReason = "stop",
+                Success = true,
+            },
+        }, "message-1");
+
+        var frames = sink.ReadFrames();
+        frames.Should().HaveCount(2);
+        frames[0].GetProperty("type").GetString().Should().Be("MODEL_CALL_START");
+        frames[0].GetProperty("sequence").GetInt64().Should().Be(41);
+        var started = frames[0].GetProperty("modelCallStart");
+        started.GetProperty("operationId").GetString().Should().Be("model-round-0");
+        started.GetProperty("availableToolNames").EnumerateArray()
+            .Select(value => value.GetString()).Should()
+            .Equal("github.get_issue", "nyxid.require_service");
+        frames[1].GetProperty("type").GetString().Should().Be("MODEL_CALL_END");
+        frames[1].GetProperty("modelCallEnd").GetProperty("usage")
+            .GetProperty("totalTokens").GetInt32().Should().Be(5);
+    }
+
+    [Fact]
     public async Task WriteAsync_ShouldMapToolCallFrames()
     {
         var sink = new SseFrameSink();

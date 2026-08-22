@@ -331,6 +331,8 @@ public sealed class ChatConversationCurrentStateProjectorTests
             TotalTokens = 4397,
             OutputPreview = "planning the reconnect",
             PreviewsTruncated = true,
+            AvailableToolNames = { "github.get_issue", "nyxid.require_service" },
+            ToolCatalogCaptured = true,
         });
         turn.Operations.Add(new ChatTurnOperation
         {
@@ -372,6 +374,8 @@ public sealed class ChatConversationCurrentStateProjectorTests
         model.TotalTokens.Should().Be(4397);
         model.OutputPreview.Should().Be("planning the reconnect");
         model.PreviewsTruncated.Should().BeTrue();
+        model.AvailableToolNames.Should().Equal("github.get_issue", "nyxid.require_service");
+        model.ToolCatalogCaptured.Should().BeTrue();
         model.StartedAtMs.Should().Be(
             DateTimeOffset.Parse("2026-08-20T08:00:00Z").ToUnixTimeMilliseconds());
         model.CompletedAtMs.Should().Be(

@@ -2714,7 +2714,9 @@ public sealed class NyxIdChatConversationGAgent
                 {
                     FinishReason = signal.Llm.FinishReason,
                     Usage = signal.Llm.Usage?.Clone(),
+                    ToolCatalogCaptured = signal.Llm.ToolCatalogCaptured,
                 };
+                durable.Llm.AvailableToolNames.AddRange(signal.Llm.AvailableToolNames);
                 durable.Llm.ToolCalls.AddRange(signal.Llm.ToolCalls.Select(static call =>
                     new NyxIdChatToolCall
                     {
@@ -4423,7 +4425,9 @@ public sealed class NyxIdChatConversationGAgent
             ArgumentsPreview: NormalizeOptional(facts?.ArgumentsPreview),
             PreviewsTruncated: facts?.PreviewsTruncated ?? false,
             SafeMessage: NormalizeOptional(snapshot.SafeMessage) ??
-                         NormalizeOptional(snapshot.TerminalCode));
+                         NormalizeOptional(snapshot.TerminalCode),
+            AvailableToolNames: facts?.AvailableToolNames.ToArray() ?? [],
+            ToolCatalogCaptured: facts?.ToolCatalogCaptured ?? false);
     }
 
     private static string ToHistoryOperationStatus(NyxIdChatStepStatus status) => status switch

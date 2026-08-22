@@ -224,6 +224,19 @@ public sealed class ActorBackedChatHistoryStoreTests
                     UserText = "hi",
                     AssistantText = "Hello.",
                     TerminalStatus = "complete",
+                    Operations =
+                    {
+                        new ChatConversationTurnOperationDocument
+                        {
+                            OperationId = "model-round-0",
+                            Order = 1,
+                            Kind = "model",
+                            Title = "model-a",
+                            Status = "done",
+                            AvailableToolNames = { "github.get_issue", "nyxid.require_service" },
+                            ToolCatalogCaptured = true,
+                        },
+                    },
                 },
             },
         };
@@ -236,6 +249,9 @@ public sealed class ActorBackedChatHistoryStoreTests
         current.Messages.Select(static message => (message.Role, message.Content))
             .Should()
             .Equal(("user", "hi"), ("assistant", "Hello."));
+        current.Operations.Should().ContainSingle().Which.AvailableToolNames.Should()
+            .Equal("github.get_issue", "nyxid.require_service");
+        current.Operations[0].ToolCatalogCaptured.Should().BeTrue();
     }
 
     [Fact]

@@ -376,6 +376,12 @@ message AgentRunLlmStepResult {
   // initial step context predates BuildLlmStepRequest and therefore cannot
   // supply this value to a later approval continuation on its own.
   string tool_request_id = 11;
+  // Exact server-authorized catalog supplied to the provider for this model
+  // invocation. Empty also truthfully represents a no-tools model round.
+  repeated string available_tool_names = 12;
+  // Distinguishes an exact empty catalog from legacy evidence that did not
+  // capture the model-visible catalog at all.
+  bool tool_catalog_captured = 13;
 }
 
 // Typed tool IO facts returned after the run actor has reconciled and persisted

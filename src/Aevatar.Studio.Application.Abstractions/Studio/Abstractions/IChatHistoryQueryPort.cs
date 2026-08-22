@@ -115,7 +115,9 @@ public sealed record StoredChatTurnOperation(
     string? OutputPreview = null,
     string? ArgumentsPreview = null,
     bool PreviewsTruncated = false,
-    string? SafeMessage = null);
+    string? SafeMessage = null,
+    IReadOnlyList<string>? AvailableToolNames = null,
+    bool ToolCatalogCaptured = false);
 
 public enum ChatHistoryCreateRecoveryStatus
 {

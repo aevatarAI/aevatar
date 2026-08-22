@@ -52,6 +52,77 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task Projector_ShouldMapCommittedModelLifecycleWithExactAvailableTools()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "session-1",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionProgressedEvent
+                {
+                    SessionId = context.SessionId,
+                    Sequence = 8,
+                    ModelStarted = new RoleChatModelStartedProgress
+                    {
+                        OperationId = "model-round-0",
+                        Round = 0,
+                        Model = "model-a",
+                        Provider = "provider-a",
+                        InputSummary = "safe input",
+                        AvailableToolNames = { "github.get_issue", "nyxid.require_service" },
+                    },
+                }),
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionProgressedEvent
+                {
+                    SessionId = context.SessionId,
+                    Sequence = 9,
+                    ModelCompleted = new RoleChatModelCompletedProgress
+                    {
+                        OperationId = "model-round-0",
+                        Round = 0,
+                        Model = "model-a",
+                        Content = "done",
+                        Usage = new TokenUsagePayload
+                        {
+                            PromptTokens = 3,
+                            CompletionTokens = 2,
+                            TotalTokens = 5,
+                        },
+                        FinishReason = "stop",
+                        Success = true,
+                    },
+                }),
+            CancellationToken.None);
+
+        hub.Published.Select(entry => entry.Event.EventCase).Should().Equal(
+            AGUIEvent.EventOneofCase.ModelCallStart,
+            AGUIEvent.EventOneofCase.ModelCallEnd);
+        hub.Published.Select(entry => entry.Event.Sequence).Should().Equal(8, 9);
+        var started = hub.Published[0].Event.ModelCallStart;
+        started.OperationId.Should().Be("model-round-0");
+        started.SessionId.Should().Be(context.SessionId);
+        started.AvailableToolNames.Should().Equal("github.get_issue", "nyxid.require_service");
+        var completed = hub.Published[1].Event.ModelCallEnd;
+        completed.OperationId.Should().Be(started.OperationId);
+        completed.Usage.TotalTokens.Should().Be(5);
+        completed.Success.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Projector_ShouldNotExpandNormalCommittedCompletion()
     {
         var hub = new RecordingSessionEventHub();

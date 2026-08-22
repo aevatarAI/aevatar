@@ -50,7 +50,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         state.ToolCatalogProof.Should().Be(fixture.Catalog.Proof.ToPayload());
         fixture.Generator.ReceivedCatalog.Should().BeSameAs(fixture.Catalog);
 
-        await fixture.Executor.BuildLlmStepExecutionAsync(
+        var execution = await fixture.Executor.BuildLlmStepExecutionAsync(
             new AgentRunReplyStepExecutionRequest(
                 "run-1",
                 "channel-agent-run:run-1",
@@ -62,6 +62,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         var providerRequest = fixture.Provider.Requests.Should().ContainSingle().Subject;
         providerRequest.Tools.Should().ContainSingle().Which.Should().BeSameAs(fixture.Tool);
+        execution.Continuation.LlmStepResult!.ToolCatalogCaptured.Should().BeTrue();
+        execution.Continuation.LlmStepResult.AvailableToolNames.Should().Equal(fixture.Tool.Name);
         providerRequest.ToolCatalogProof.Should().NotBeNull();
         providerRequest.ToolCatalogProof!.ToPayload().Should().Be(state.ToolCatalogProof);
         await fixture.ProfilePlanner.Received(2).MaterializeCommittedAsync(
@@ -184,9 +186,33 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var call = execution.Continuation.LlmStepResult!.ToolCalls.Should().ContainSingle().Subject;
         call.Name.Should().Be(tool.Name);
         call.ArgumentsJson.Should().Be(invocation.ArgumentsJson);
+        execution.Continuation.LlmStepResult.AvailableToolNames.Should().BeEmpty(
+            "the server-authored required call bypassed the provider and was not loaded into a model round");
+        execution.Continuation.LlmStepResult.ToolCatalogCaptured.Should().BeFalse();
         execution.AuthorizedToolStep.Should().NotBeNull();
         execution.AuthorizedToolCallSafeties.Should().ContainSingle()
             .Which.ToolName.Should().Be(tool.Name);
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenMiddlewareShortCircuits_ShouldNotClaimModelLoadedTools()
+    {
+        var provider = new RecordingProvider("must-not-be-used");
+        var tool = new CountingTool("cached_lookup");
+        var executor = CreateToolEnabledExecutor(
+            tool,
+            provider,
+            [new ShortCircuitLlmMiddleware()]);
+
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            BuildToolEnabledWorkItem(),
+            CancellationToken.None);
+
+        provider.Requests.Should().BeEmpty();
+        execution.Continuation.LlmStepResult!.Content.Should().Be("middleware-answer");
+        execution.Continuation.LlmStepResult.AvailableToolNames.Should().BeEmpty(
+            "no provider model invocation started");
+        execution.Continuation.LlmStepResult.ToolCatalogCaptured.Should().BeFalse();
     }
 
     [Fact]
@@ -318,6 +344,42 @@ public sealed class AgentRunReplyGenerationExecutorTests
             .Which.Name.Should().Be(tool.Name);
         execution.Continuation.LlmStepResult.Content.Should()
             .Be("""Starting workflow with prompt `{"submit":false}`.""");
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenToolCallTextIsDeferred_ShouldStillReportModelLifecycle()
+    {
+        var tool = new CountingTool("scope_workflows_get");
+        var provider = new TextThenToolCallProvider(tool.Name, "Hidden tool preamble.");
+        var executor = CreateToolEnabledExecutor(tool, provider);
+        var chunks = new List<LLMStreamChunk>();
+        var workItem = BuildToolEnabledWorkItem() with
+        {
+            ReportChunkAsync = (chunk, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                chunks.Add(chunk);
+                return Task.CompletedTask;
+            },
+        };
+
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            workItem,
+            CancellationToken.None);
+
+        chunks.Should().NotContain(chunk => chunk.DeltaContent == "Hidden tool preamble.");
+        var started = chunks.Should().ContainSingle(chunk => chunk.LLMInvocationStarted != null)
+            .Which.LLMInvocationStarted!;
+        started.Provider.Should().Be(provider.Name);
+        started.AvailableToolNames.Should().Equal(tool.Name);
+        var completed = chunks.Should().ContainSingle(chunk => chunk.LLMInvocationCompleted != null)
+            .Which.LLMInvocationCompleted!;
+        completed.OperationId.Should().Be(started.OperationId);
+        completed.Success.Should().BeTrue();
+        chunks.Select(chunk => chunk.LLMInvocationStarted != null ? "start" : "end")
+            .Should().Equal("start", "end");
+        execution.Continuation.LlmStepResult!.ToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be(tool.Name);
     }
 
     [Fact]
@@ -673,7 +735,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         provider.Requests.Should().ContainSingle();
-        publishedChunks.Should().BeEmpty();
+        publishedChunks.Should().OnlyContain(chunk =>
+            chunk.LLMInvocationStarted != null || chunk.LLMInvocationCompleted != null);
+        publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationStarted != null);
+        publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationCompleted != null);
         execution.Continuation.LlmStepResult.AccumulatedText.Should().BeEmpty();
         execution.Continuation.LlmStepResult.Content.Should().BeEmpty();
         execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
@@ -741,6 +806,13 @@ public sealed class AgentRunReplyGenerationExecutorTests
         publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationStarted != null);
         publishedChunks.Should().ContainSingle(chunk => chunk.DeltaContent == "workflow completed");
         publishedChunks.Should().ContainSingle(chunk => chunk.LLMInvocationCompleted != null);
+        publishedChunks.Select(chunk =>
+                chunk.LLMInvocationStarted != null
+                    ? "start"
+                    : chunk.LLMInvocationCompleted != null
+                        ? "end"
+                        : "content")
+            .Should().Equal("start", "content", "end");
         execution.Continuation.LlmStepResult.AccumulatedText.Should().Be("workflow completed");
         execution.Continuation.LlmStepResult.Content.Should().Be("workflow completed");
         execution.Continuation.LlmStepResult.ToolCalls.Should().BeEmpty();
@@ -901,11 +973,41 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ReportProgressAsync,
             CancellationToken.None);
         var call = llmExecution.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+        llmExecution.Result.Llm.ToolCatalogCaptured.Should().BeTrue();
         call.Presentation.Kind.Should().Be(ToolPresentationKind.Skill);
         call.Presentation.Skill.SkillName.Should().Be(skillName);
         progress.Should().NotContain(signal =>
             signal.ProgressCase == NyxIdChatOperationProgressSignal.ProgressOneofCase.Text &&
             signal.Text.Delta.Contains(preamble, StringComparison.Ordinal));
+        var modelStartedSignal = progress.Should().ContainSingle(signal =>
+                signal.ProgressCase ==
+                NyxIdChatOperationProgressSignal.ProgressOneofCase.ModelStarted)
+            .Which;
+        modelStartedSignal.ModelStarted.AvailableToolNames.Should().Equal(useSkill.Name);
+        var modelCompletedSignal = progress.Should().ContainSingle(signal =>
+                signal.ProgressCase ==
+                NyxIdChatOperationProgressSignal.ProgressOneofCase.ModelCompleted)
+            .Which;
+        modelCompletedSignal.ModelCompleted.OperationId.Should()
+            .Be(modelStartedSignal.ModelStarted.OperationId);
+        var modelStartFrame = NyxIdChatConversationAguiFrameBuilder.BuildProgressed(
+                "turn-1",
+                new NyxIdChatOperationProgressedEvent
+                {
+                    Progress = modelStartedSignal.Clone(),
+                    ProgressSequence = modelStartedSignal.Sequence,
+                })
+            .Should().ContainSingle().Which;
+        modelStartFrame.ModelCallStart.AvailableToolNames.Should().Equal(useSkill.Name);
+        var modelEndFrame = NyxIdChatConversationAguiFrameBuilder.BuildProgressed(
+                "turn-1",
+                new NyxIdChatOperationProgressedEvent
+                {
+                    Progress = modelCompletedSignal.Clone(),
+                    ProgressSequence = modelCompletedSignal.Sequence,
+                })
+            .Should().ContainSingle().Which;
+        modelEndFrame.ModelCallEnd.OperationId.Should().Be(modelStartFrame.ModelCallStart.OperationId);
 
         await executor.ExecuteAsync(
             new NyxIdChatOperationDispatchCommand
@@ -2334,6 +2436,17 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 ResponseFormat = request.ResponseFormat,
             };
             return next();
+        }
+    }
+
+    private sealed class ShortCircuitLlmMiddleware : ILLMCallMiddleware
+    {
+        public Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            _ = next;
+            context.Response = new LLMResponse { Content = "middleware-answer" };
+            context.Terminate = true;
+            return Task.CompletedTask;
         }
     }
 

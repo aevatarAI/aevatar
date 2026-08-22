@@ -560,6 +560,8 @@ message NyxIdChatOperationLedgerFacts {
   string model = 7;
   string provider = 8;
   string finish_reason = 9;
+  repeated string available_tool_names = 10;
+  bool tool_catalog_captured = 11;
 }
 
 // One operation of a terminal turn, snapshotted from the owning task's steps so
@@ -1618,6 +1620,8 @@ message NyxIdChatLLMOperationResult {
   repeated NyxIdChatToolCall tool_calls = 4;
   aevatar.ai.TokenUsagePayload usage = 5;
   string finish_reason = 6;
+  repeated string available_tool_names = 7;
+  bool tool_catalog_captured = 8;
 }
 
 message NyxIdChatToolOperationResult {
@@ -1738,6 +1742,27 @@ message NyxIdChatToolProgress {
   aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
 }
 
+message NyxIdChatModelStartedProgress {
+  string operation_id = 1;
+  int32 round = 2;
+  string model = 3;
+  string provider = 4;
+  string input_summary = 5;
+  repeated string available_tool_names = 6;
+}
+
+message NyxIdChatModelCompletedProgress {
+  string operation_id = 1;
+  int32 round = 2;
+  string model = 3;
+  string content = 4;
+  string reasoning_content = 5;
+  aevatar.ai.TokenUsagePayload usage = 6;
+  string finish_reason = 7;
+  bool success = 8;
+  string error = 9;
+}
+
 // Presentation-only phase evidence authored by the executor. A phase cannot
 // carry an operation key, effect evidence, actions, or another nested phase;
 // those authoritative facts remain on the owning task step and operation.
@@ -1756,6 +1781,8 @@ message NyxIdChatOperationProgressSignal {
     NyxIdChatToolProgress tool_started = 12;
     NyxIdChatOperationPhaseProgress phase = 13;
     NyxIdChatStreamingProgressBatch streaming_batch = 14;
+    NyxIdChatModelStartedProgress model_started = 15;
+    NyxIdChatModelCompletedProgress model_completed = 16;
   }
 }
 

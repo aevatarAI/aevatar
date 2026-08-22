@@ -6049,6 +6049,23 @@ body:has(.settings-dialog[open]) #servicesButton,
   font-size: 11px;
 }
 
+.trajectory-content-tools {
+  flex: 0 1 auto;
+  max-width: min(42%, 420px);
+  overflow: hidden;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, #16856b 25%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, #16856b 8%, var(--panel));
+  color: #106953;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trajectory-content-tools[hidden] { display: none; }
+
 .trajectory-content-arrow {
   flex: none;
   color: var(--tertiary);

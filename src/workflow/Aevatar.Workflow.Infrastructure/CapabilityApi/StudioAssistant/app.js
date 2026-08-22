@@ -1,4 +1,4 @@
-import "./transport.js?v=20260822-m59-readable-run-activity";
+import "./transport.js?v=20260822-m60-tool-load-trace";
 import {
   consumeSse,
   mergeUsage,
@@ -9,20 +9,20 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260822-m59-readable-run-activity";
+} from "./protocol.js?v=20260822-m60-tool-load-trace";
 import {
   buildConnectCardBlock,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260822-m59-readable-run-activity";
+} from "./blocks.js?v=20260822-m60-tool-load-trace";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260822-m59-readable-run-activity";
-import { describeReadinessFailure } from "./readiness.js?v=20260822-m59-readable-run-activity";
+} from "./actor-state.js?v=20260822-m60-tool-load-trace";
+import { describeReadinessFailure } from "./readiness.js?v=20260822-m60-tool-load-trace";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const SERVICE_ACCESS_REVIEW_KEY = "aevatar-studio:pending-service-access-review:v1";
@@ -448,6 +448,7 @@ function upsertTraceOperation(trace, patch) {
       model: "",
       provider: "",
       tools: [],
+      toolCatalogCaptured: false,
       round: null,
       sessionId: "",
       finishReason: "",
@@ -476,6 +477,9 @@ function upsertTraceOperation(trace, patch) {
     record.presentation = patch.presentation;
   }
   if (Array.isArray(patch.tools)) record.tools = [...patch.tools];
+  if (typeof patch.toolCatalogCaptured === "boolean") {
+    record.toolCatalogCaptured = patch.toolCatalogCaptured;
+  }
   const serverSequence = Number(patch.serverSequence);
   if (Number.isSafeInteger(serverSequence) && serverSequence > 0) {
     record.serverSequence = Number.isSafeInteger(record.serverSequence)
@@ -596,6 +600,8 @@ function applyRestoredOperation(trace, operation, { kind, id, title }) {
     output: operation?.outputPreview || "",
     model: operation?.model || "",
     provider: operation?.provider || "",
+    tools: Array.isArray(operation?.availableToolNames) ? operation.availableToolNames : [],
+    toolCatalogCaptured: operation?.toolCatalogCaptured === true,
     finishReason: operation?.finishReason || "",
     error: operation?.status === "error" ? operation?.safeMessage || "" : "",
     usage: restoredOperationUsage(operation),
@@ -958,6 +964,7 @@ function applyRequestTraceEvent(entry, run, event) {
         provider: event.provider || model.provider,
         input: event.inputSummary || model.input,
         tools: Array.isArray(event.availableToolNames) ? event.availableToolNames : model.tools,
+        toolCatalogCaptured: Array.isArray(event.availableToolNames) || model.toolCatalogCaptured,
         round,
         sessionId: event.sessionId || model.sessionId,
         serverSequence: event.sequence,
@@ -1219,6 +1226,14 @@ function trajectoryRowResult(record) {
   return { text: "已完成", pending: false };
 }
 
+function trajectoryLoadedToolsSummary(record, limit = 3) {
+  if (record.kind !== "model" || !record.toolCatalogCaptured) return null;
+  if (!Array.isArray(record.tools) || !record.tools.length) return "已加载 0";
+  const names = record.tools.slice(0, limit).join(", ");
+  const remaining = Math.max(0, record.tools.length - limit);
+  return `已加载 ${record.tools.length} · ${names}${remaining ? ` +${remaining}` : ""}`;
+}
+
 function trajectoryRequestSummary(records) {
   const models = records.filter((record) => record.kind === "model").length;
   const tools = records.filter((record) => record.kind === "tool").length;
@@ -1249,6 +1264,7 @@ function trajectorySearchText(row) {
     record.output,
     record.reasoning,
     record.error,
+    ...(record.tools || []),
   ].filter(Boolean).join(" ").toLowerCase();
 }
 
@@ -1460,15 +1476,16 @@ function createTrajectoryOperationRow(entry, row) {
   const time = el("span", "trajectory-row-time");
   const text = el("span", "trajectory-content-text");
   const title = el("span", "trajectory-content-title");
+  const tools = el("span", "trajectory-content-tools");
   const arrow = el("span", "trajectory-content-arrow", "→");
   const result = el("span", "trajectory-content-result");
-  text.append(title, arrow, result);
+  text.append(title, tools, arrow, result);
   inner.append(text, time);
   content.append(inner);
 
   element.append(event, content);
   record.element = element;
-  record.fields = { requestRail, selectionRail, requestLabel, kindTag, title, arrow, result, time };
+  record.fields = { requestRail, selectionRail, requestLabel, kindTag, title, tools, arrow, result, time };
   element.addEventListener("click", () => {
     selectTraceOperation(entry, row.trace, record.key);
   });
@@ -1516,6 +1533,10 @@ function updateTrajectoryOperationRow(entry, row, searchQuery) {
   const collapsed = row.collapsedCalls.length > 0;
   fields.title.textContent = trajectoryRowTitle(record);
   fields.title.classList.toggle("mono", record.kind === "tool");
+  const loadedTools = trajectoryLoadedToolsSummary(record);
+  fields.tools.hidden = loadedTools === null;
+  fields.tools.textContent = loadedTools || "";
+  fields.tools.title = loadedTools === null ? "" : record.tools.join("\n");
   const result = collapsed
     ? { text: trajectoryCollapsedCallsSummary(row.collapsedCalls), pending: false }
     : trajectoryRowResult(record);
@@ -1830,7 +1851,9 @@ function bindTrajectoryOverview() {
 
 function trajectoryDetailTabs(record) {
   const tabs = [{ id: "overview", label: "概览" }];
-  if (record.input) tabs.push({ id: "input", label: "输入" });
+  if (record.input || (record.kind === "model" && record.toolCatalogCaptured)) {
+    tabs.push({ id: "input", label: "输入" });
+  }
   if (record.output || record.reasoning || record.error) tabs.push({ id: "output", label: "输出" });
   if (Number.isFinite(record.startedAt)) tabs.push({ id: "timing", label: "计时" });
   return tabs;
@@ -1864,8 +1887,8 @@ function renderTrajectoryDetailBody(record, trace) {
   if (tab === "input") {
     const body = el("div");
     if (record.input) body.append(trajectoryPayloadGroup("Input", record.input, { truncated }));
-    if (record.kind === "model" && record.tools?.length) {
-      body.append(trajectoryPayloadGroup("Available tools", record.tools.join("\n")));
+    if (record.kind === "model" && record.toolCatalogCaptured) {
+      body.append(trajectoryPayloadGroup("本轮加载工具", record.tools?.length ? record.tools.join("\n") : "无"));
     }
     if (!body.childElementCount) body.append(el("p", "trajectory-payload-empty", "未捕获输入"));
     return body;
@@ -1905,6 +1928,9 @@ function renderTrajectoryDetailBody(record, trace) {
     ["Duration", traceOperationDuration(record)],
     ["模型", record.kind === "model" ? record.model || "未上报" : null],
     ["Provider", record.kind === "model" ? record.provider || "未上报" : null],
+    ["加载工具", record.kind === "model"
+      ? record.toolCatalogCaptured ? record.tools?.length || 0 : "未上报"
+      : null],
     ["Round", record.round == null ? null : String(record.round)],
     ["Finish reason", record.finishReason || null],
     ["Input tokens", record.usage?.promptTokens ?? null],

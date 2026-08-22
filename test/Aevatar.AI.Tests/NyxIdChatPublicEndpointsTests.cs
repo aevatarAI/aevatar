@@ -700,7 +700,18 @@ public sealed class NyxIdChatPublicEndpointsTests
         {
             MessagesResult = ChatHistoryConversationMessagesResult.Found(
                 [new StoredChatMessage("message-alpha", "assistant", "done", 1, "completed")],
-                9),
+                9,
+                [new StoredChatTurnOperation(
+                    TurnId: "turn-alpha",
+                    OperationId: "model-round-0",
+                    Order: 1,
+                    Kind: "model",
+                    Title: "model-a",
+                    Status: "done",
+                    StartedAt: null,
+                    CompletedAt: null,
+                    AvailableToolNames: ["github.get_issue", "nyxid.require_service"],
+                    ToolCatalogCaptured: true)]),
         };
         var admission = new RecordingAdmissionPort();
         var context = CreateContext("scope-alpha", services => services
@@ -719,6 +730,11 @@ public sealed class NyxIdChatPublicEndpointsTests
         using var body = JsonDocument.Parse(response.Body);
         body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(9);
         body.RootElement.GetProperty("projectionStatus").GetString().Should().Be("current");
+        body.RootElement.GetProperty("operations")[0].GetProperty("availableToolNames")
+            .EnumerateArray().Select(value => value.GetString()).Should()
+            .Equal("github.get_issue", "nyxid.require_service");
+        body.RootElement.GetProperty("operations")[0].GetProperty("toolCatalogCaptured")
+            .GetBoolean().Should().BeTrue();
     }
 
     [Fact]

@@ -204,7 +204,9 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               { turnId: 'turn-a', operationId: 'op-1', order: 1, kind: 'model',
                 title: 'deepseek-v4-pro', status: 'done', model: 'deepseek-v4-pro',
                 startedAt: '2026-08-20T08:00:00.000Z', completedAt: '2026-08-20T08:00:02.000Z',
-                totalTokens: 4397, outputPreview: 'plan', previewsTruncated: true },
+                totalTokens: 4397, outputPreview: 'plan', previewsTruncated: true,
+                availableToolNames: ['github.get_issue', 'nyxid.require_service'],
+                toolCatalogCaptured: true },
               { turnId: 'turn-a', operationId: 'op-2', order: 2, kind: 'tool',
                 title: 'service.reconnect', status: 'error',
                 startedAt: '2026-08-20T08:00:03.000Z', completedAt: null,
@@ -232,6 +234,8 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(records[0].input, 'reconnect the service');
             assert.equal(records[1].previewsTruncated, true);
             assert.equal(records[1].usage.totalTokens, 4397);
+            assert.equal(records[1].tools.join('|'), 'github.get_issue|nyxid.require_service');
+            assert.equal(records[1].toolCatalogCaptured, true);
             assert.equal(context.traceOperationDurationMs(records[1]), 2000);
             assert.equal(records[2].error, 'NYXID_REFRESH_REQUIRED');
             assert.equal(records[2].completedAt, null);
@@ -308,6 +312,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               status: 'done', model: 'deepseek-chat', provider: 'deepseek', round: 0,
               sessionId: 'session-alpha', finishReason: 'stop', usage: { totalTokens: 12 },
               input: 'Prompt', output: 'Answer', reasoning: '', error: '', tools: ['search'],
+              toolCatalogCaptured: true,
               startedAt: 1700000000000, completedAt: 1700000000100,
             };
             const trace = { key: 'client-request-one', clientRequestId: 'client-request-one', selected: record };
@@ -384,7 +389,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             const input = dom.trajectoryDetailsBody.children[0];
             assert.deepEqual(
               input.children.map(group => group.children[0].textContent),
-              ['Input', 'Available tools']);
+              ['Input', '本轮加载工具']);
 
             trajectory.detailsTab = 'output';
             context.renderTrajectoryDetails(entry);
@@ -392,7 +397,8 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               dom.trajectoryDetailsBody.children[0].children.map(group => group.children[1].textContent),
               ['Answer']);
 
-            const bare = { ...record, input: '', output: '', reasoning: '', error: '', startedAt: null };
+            const bare = { ...record, input: '', output: '', reasoning: '', error: '', tools: [],
+              toolCatalogCaptured: false, startedAt: null };
             trace.selected = bare;
             trajectory.detailsTab = null;
             context.renderTrajectoryDetails(entry);
@@ -416,7 +422,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             const vm = require('node:vm');
             const source = require('node:fs').readFileSync(0, 'utf8');
             const start = source.indexOf('function ensureTraceOperationState(');
-            const end = source.indexOf('\nfunction traceOperationDuration(', start);
+            const end = source.indexOf('\nfunction trajectoryRequestSummary(', start);
             assert.notEqual(start, -1, 'the operation ledger reducer must exist');
             assert.notEqual(end, -1, 'the operation ledger reducer must have a stable boundary');
 
@@ -456,6 +462,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             apply(entry, run, {
               type: 'model_start', operationId: 'model-round-0', sessionId: 'session-shared',
               round: 0, model: 'deepseek-chat', provider: 'deepseek', sequence: 10,
+              availableToolNames: ['github.get_issue', 'nyxid.require_service'],
               timestamp: 1700000000100,
             });
             const firstModel = trace.recordIndex.get('model:model-round-0');
@@ -463,9 +470,19 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(firstModel.output, '');
             assert.equal(firstModel.model, 'deepseek-chat');
             assert.equal(firstModel.provider, 'deepseek');
+            assert.equal(firstModel.tools.join('|'), 'github.get_issue|nyxid.require_service');
+            assert.equal(firstModel.toolCatalogCaptured, true);
             assert.equal(firstModel.round, 0);
             assert.equal(firstModel.serverSequence, 10);
             assert.equal(context.traceOperationDurationMs(firstModel), null);
+            assert.equal(context.trajectoryLoadedToolsSummary(firstModel),
+              '已加载 2 · github.get_issue, nyxid.require_service');
+            assert.equal(context.trajectoryLoadedToolsSummary({
+              kind: 'model', tools: [], toolCatalogCaptured: true,
+            }), '已加载 0');
+            assert.equal(context.trajectoryLoadedToolsSummary({
+              kind: 'model', tools: [], toolCatalogCaptured: false,
+            }), null, 'legacy records must not guess that an uncaptured catalog was empty');
 
             apply(entry, run, {
               type: 'model_start', operationId: 'model-round-0', sessionId: 'session-shared',
@@ -601,6 +618,9 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
         var result = await RunNodeAsync(script, app);
 
         result.ExitCode.Should().Be(0, result.Error + result.Output);
+        app.Should().Contain("function trajectoryLoadedToolsSummary(record, limit = 3)");
+        app.Should().Contain("const tools = el(\"span\", \"trajectory-content-tools\")");
+        app.Should().Contain("fields.tools.title = loadedTools === null ? \"\" : record.tools.join(\"\\n\");");
     }
 
     [Fact]
@@ -716,6 +736,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
               modelCallStart: {
                 operationId: 'model-round-0', sessionId: 'session-shared',
                 round: 0, model: 'deepseek-chat',
+                availableToolNames: ['github.get_issue', 'nyxid.require_service'],
               },
             });
             assert.equal(modelStart.type, 'model_start');
@@ -723,6 +744,7 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
             assert.equal(modelStart.sessionId, 'session-shared');
             assert.equal(modelStart.round, 0);
             assert.equal(modelStart.model, 'deepseek-chat');
+            assert.equal(modelStart.availableToolNames.join('|'), 'github.get_issue|nyxid.require_service');
             assert.equal(modelStart.sequence, 10);
             assert.equal(modelStart.raw.timestamp, 1700000000100);
 

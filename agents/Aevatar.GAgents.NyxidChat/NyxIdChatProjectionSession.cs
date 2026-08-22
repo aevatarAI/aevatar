@@ -756,6 +756,43 @@ public sealed class NyxIdChatSessionEventProjector
                         },
                     },
                 ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ModelStarted:
+                return
+                [
+                    new AGUIEvent
+                    {
+                        ModelCallStart = new ModelCallStartEvent
+                        {
+                            OperationId = progress.ModelStarted.OperationId,
+                            SessionId = progress.SessionId,
+                            Round = progress.ModelStarted.Round,
+                            Model = progress.ModelStarted.Model,
+                            Provider = progress.ModelStarted.Provider,
+                            InputSummary = progress.ModelStarted.InputSummary,
+                            AvailableToolNames = { progress.ModelStarted.AvailableToolNames },
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ModelCompleted:
+                return
+                [
+                    new AGUIEvent
+                    {
+                        ModelCallEnd = new ModelCallEndEvent
+                        {
+                            OperationId = progress.ModelCompleted.OperationId,
+                            SessionId = progress.SessionId,
+                            Round = progress.ModelCompleted.Round,
+                            Model = progress.ModelCompleted.Model,
+                            Content = progress.ModelCompleted.Content,
+                            ReasoningContent = progress.ModelCompleted.ReasoningContent,
+                            Usage = ToUsage(progress.ModelCompleted.Usage, progress.ModelCompleted.Model),
+                            FinishReason = progress.ModelCompleted.FinishReason,
+                            Success = progress.ModelCompleted.Success,
+                            Error = progress.ModelCompleted.Error,
+                        },
+                    },
+                ];
             case RoleChatSessionProgressedEvent.PayloadOneofCase.AuthorizationRequired:
                 if (progress.AuthorizationRequired.AuthorizationRequired == null)
                     return Array.Empty<AGUIEvent>();
@@ -785,6 +822,21 @@ public sealed class NyxIdChatSessionEventProjector
             default:
                 return Array.Empty<AGUIEvent>();
         }
+    }
+
+    private static UsageEvent? ToUsage(TokenUsagePayload? usage, string? model)
+    {
+        if (usage is null)
+            return null;
+
+        return new UsageEvent
+        {
+            Available = true,
+            PromptTokens = usage.PromptTokens,
+            CompletionTokens = usage.CompletionTokens,
+            TotalTokens = usage.TotalTokens,
+            Model = string.IsNullOrWhiteSpace(model) ? null : model,
+        };
     }
 
     private static AGUIEvent BuildTerminalFrame(

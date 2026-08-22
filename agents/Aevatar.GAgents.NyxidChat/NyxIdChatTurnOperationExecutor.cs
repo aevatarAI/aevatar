@@ -887,6 +887,8 @@ public sealed class NyxIdChatTurnOperationExecutor
         result.ContentParts.AddRange(outputParts.Select(static part => part.Clone()));
         result.ToolCalls.AddRange(facts.ToolCalls.Select(call =>
             BuildToolCall(call, execution.AuthorizedToolCallSafeties)));
+        result.ToolCatalogCaptured = facts.ToolCatalogCaptured;
+        result.AvailableToolNames.AddRange(facts.AvailableToolNames);
         if (facts.Usage is not null)
         {
             result.Usage = new TokenUsagePayload
@@ -2737,6 +2739,19 @@ public sealed class NyxIdChatTurnOperationExecutor
         Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
         CancellationToken ct)
     {
+        if (chunk.LLMInvocationStarted is { } modelStarted)
+        {
+            await FlushStreamingProgressAsync(key, session, reportProgressAsync, ct)
+                .ConfigureAwait(false);
+            await ReportModelStartedAsync(
+                    key,
+                    modelStarted,
+                    session,
+                    reportProgressAsync,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
         if (!string.IsNullOrEmpty(chunk.DeltaContent))
         {
             await QueueStreamingProgressAsync(
@@ -2780,6 +2795,19 @@ public sealed class NyxIdChatTurnOperationExecutor
                     ct)
                 .ConfigureAwait(false);
         }
+
+        if (chunk.LLMInvocationCompleted is { } modelCompleted)
+        {
+            await FlushStreamingProgressAsync(key, session, reportProgressAsync, ct)
+                .ConfigureAwait(false);
+            await ReportModelCompletedAsync(
+                    key,
+                    modelCompleted,
+                    session,
+                    reportProgressAsync,
+                    ct)
+                .ConfigureAwait(false);
+        }
     }
 
     private async Task QueueStreamingProgressAsync(
@@ -2818,6 +2846,66 @@ public sealed class NyxIdChatTurnOperationExecutor
         session.TryMarkToolStartPublished(progress.CallId)
             ? ReportProgressAsync(key, progress, session, reportProgressAsync, ct)
             : Task.CompletedTask;
+
+    private static Task ReportModelStartedAsync(
+        NyxIdChatOperationKey key,
+        LLMInvocationStartedChunk started,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct)
+    {
+        var progress = new NyxIdChatModelStartedProgress
+        {
+            OperationId = started.OperationId,
+            Round = started.Round,
+            Model = started.Model,
+            Provider = started.Provider,
+            InputSummary = started.InputSummary,
+        };
+        progress.AvailableToolNames.AddRange(started.AvailableToolNames);
+        return reportProgressAsync(new NyxIdChatOperationProgressSignal
+        {
+            Key = key.Clone(),
+            Sequence = ++session.ProgressSequence,
+            ModelStarted = progress,
+        }, ct);
+    }
+
+    private static Task ReportModelCompletedAsync(
+        NyxIdChatOperationKey key,
+        LLMInvocationCompletedChunk completed,
+        NyxIdChatTransientExecutionSession session,
+        Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+        CancellationToken ct)
+    {
+        var progress = new NyxIdChatModelCompletedProgress
+        {
+            OperationId = completed.OperationId,
+            Round = completed.Round,
+            Model = completed.Model,
+            Content = completed.Content,
+            ReasoningContent = completed.ReasoningContent,
+            FinishReason = completed.FinishReason,
+            Success = completed.Success,
+            Error = completed.Error,
+        };
+        if (completed.Usage is { } usage)
+        {
+            progress.Usage = new TokenUsagePayload
+            {
+                PromptTokens = usage.PromptTokens,
+                CompletionTokens = usage.CompletionTokens,
+                TotalTokens = usage.TotalTokens,
+            };
+        }
+
+        return reportProgressAsync(new NyxIdChatOperationProgressSignal
+        {
+            Key = key.Clone(),
+            Sequence = ++session.ProgressSequence,
+            ModelCompleted = progress,
+        }, ct);
+    }
 
     private static Task ReportProgressAsync(
         NyxIdChatOperationKey key,
