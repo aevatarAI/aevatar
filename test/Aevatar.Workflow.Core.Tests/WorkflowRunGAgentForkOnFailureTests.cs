@@ -541,6 +541,81 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
+    public async Task TerminalReconciliation_WithMissingKernel_ShouldPersistIntentBeforeFailingRun()
+    {
+        var runId = "run-reconcile-missing-kernel-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        await harness.Agent.ClearExecutionStateAsync(WorkflowExecutionKernel.ModuleStateKey);
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 1466));
+
+        harness.Agent.State.Status.Should().Be("failed");
+        harness.Agent.State.FinalError.Should().Be(WorkflowRunGAgent.OrphanedExecutionTerminalError);
+        var storedEvents = await harness.EventStore.GetEventsAsync(runId);
+        var pendingIntent = storedEvents.Single(stored =>
+            stored.EventData is { } eventData &&
+            eventData.Is(WorkflowExecutionStateUpsertedEvent.Descriptor) &&
+            eventData.Unpack<WorkflowExecutionStateUpsertedEvent>().State
+                .Unpack<WorkflowExecutionKernelState>().PendingWorkflowCompletion != null);
+        var completion = storedEvents.Single(stored =>
+            stored.EventData is { } eventData &&
+            eventData.Is(WorkflowCompletedEvent.Descriptor));
+        pendingIntent.Version.Should().BeLessThan(completion.Version);
+    }
+
+    [Fact]
+    public async Task TerminalReconciliation_WithPendingStartAndMissingKernel_ShouldPreserveStartRecovery()
+    {
+        var runId = "run-reconcile-pending-start-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        await harness.Agent.ClearExecutionStateAsync(WorkflowExecutionKernel.ModuleStateKey);
+        harness.Agent.State.PendingStartWorkflow = new StartWorkflowEvent
+        {
+            RunId = runId,
+            WorkflowName = harness.Agent.State.WorkflowName,
+        };
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 1467));
+
+        harness.Agent.State.Status.Should().Be("running");
+        (await harness.EventStore.GetEventsAsync(runId))
+            .Any(static stored =>
+                stored.EventData is { } eventData &&
+                eventData.Is(WorkflowCompletedEvent.Descriptor))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TerminalReconciliation_WithPendingLlmCall_ShouldRequestCommittedChildCompletionRedelivery()
+    {
+        var runId = "run-reconcile-llm-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var llmState = new LLMCallModuleState();
+        llmState.PendingBySessionId["session-reconcile"] = new PendingLlmCallState
+        {
+            RunId = runId,
+            StepId = "failed-step",
+            ExecutionId = harness.StepExecutionId,
+            TargetRole = "assistant",
+            RequestDispatched = true,
+        };
+        await harness.Agent.UpsertExecutionStateAsync("llm_call", Any.Pack(llmState));
+        harness.Publisher.Sent.Clear();
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 1468));
+
+        harness.Agent.State.Status.Should().Be("running");
+        var sent = harness.Publisher.Sent.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should().Be($"{runId}:assistant");
+        var reconcile = sent.Event.Should().BeOfType<ReconcileWorkflowLlmCompletionCommand>().Subject;
+        reconcile.RunId.Should().Be(runId);
+        reconcile.StepId.Should().Be("failed-step");
+        reconcile.SessionId.Should().Be("session-reconcile");
+        reconcile.ExecutionId.Should().Be(harness.StepExecutionId);
+        reconcile.ObservedParentStateVersion.Should().Be(1468);
+    }
+
+    [Fact]
     public async Task TerminalReconciliation_WithActiveKernel_ShouldPreserveLegitimateWait()
     {
         var runId = "run-reconcile-active-" + Guid.NewGuid().ToString("N");
@@ -1205,6 +1280,8 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
 
         public List<(IMessage Event, TopologyAudience Audience, EventEnvelopePublishOptions? Options)> PublishAttempts { get; } = [];
 
+        public List<(string TargetActorId, IMessage Event)> Sent { get; } = [];
+
         public Func<IMessage, bool>? FailPublish { get; set; }
 
         public async Task PublishAsync<T>(
@@ -1237,8 +1314,12 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
             CancellationToken ct,
             EventEnvelope? sourceEnvelope,
             EventEnvelopePublishOptions? options)
-            where T : IMessage =>
-            Task.CompletedTask;
+            where T : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            Sent.Add((targetActorId, evt.Descriptor.Parser.ParseFrom(evt.ToByteArray())));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingCommittedStatePublicationHook : ICommittedStatePublicationHook

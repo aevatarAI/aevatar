@@ -724,7 +724,19 @@ public sealed partial class WorkflowRunGAgent
 
         var packed = State.ExecutionStates.GetValueOrDefault(WorkflowExecutionKernel.ModuleStateKey);
         if (packed == null || !packed.Is(WorkflowExecutionKernelState.Descriptor))
+        {
+            if (State.PendingStartWorkflow != null ||
+                State.PendingDefinitionBindingContinuation != null)
+            {
+                return;
+            }
+
+            await ReconcileOrphanedExecutionAsFailedAsync(
+                new WorkflowExecutionKernelState(),
+                currentRunId,
+                command.ObservedStateVersion);
             return;
+        }
 
         var kernelState = packed.Unpack<WorkflowExecutionKernelState>();
         if (kernelState.PendingWorkflowCompletion != null)
@@ -738,14 +750,33 @@ public sealed partial class WorkflowRunGAgent
 
         if (kernelState.Active || !string.IsNullOrWhiteSpace(kernelState.RunId))
         {
+            if (await TryRequestPendingLlmCompletionRedeliveryAsync(
+                    kernelState,
+                    currentRunId,
+                    command.ObservedStateVersion))
+            {
+                return;
+            }
+
             await TryRecoverFailedForEachParentAsync(kernelState, currentRunId, command.ObservedStateVersion);
             return;
         }
 
+        await ReconcileOrphanedExecutionAsFailedAsync(
+            kernelState,
+            currentRunId,
+            command.ObservedStateVersion);
+    }
+
+    private async Task ReconcileOrphanedExecutionAsFailedAsync(
+        WorkflowExecutionKernelState kernelState,
+        string runId,
+        long observedStateVersion)
+    {
         var completion = new WorkflowCompletedEvent
         {
             WorkflowName = State.WorkflowName ?? string.Empty,
-            RunId = currentRunId,
+            RunId = runId,
             Success = false,
             Error = OrphanedExecutionTerminalError,
         };
@@ -754,13 +785,93 @@ public sealed partial class WorkflowRunGAgent
         Logger.LogWarning(
             "Reconcile orphaned workflow execution as failed. actor={ActorId} run={RunId} observedStateVersion={ObservedStateVersion}",
             Id,
-            currentRunId,
-            command.ObservedStateVersion);
+            runId,
+            observedStateVersion);
         await UpsertExecutionStateAsync(
             WorkflowExecutionKernel.ModuleStateKey,
             Any.Pack(kernelState),
             CancellationToken.None);
         await RecoverPendingWorkflowCompletionAsync(CancellationToken.None);
+    }
+
+    private async Task<bool> TryRequestPendingLlmCompletionRedeliveryAsync(
+        WorkflowExecutionKernelState kernelState,
+        string runId,
+        long observedStateVersion)
+    {
+        if (!kernelState.Active ||
+            !string.Equals(
+                WorkflowRunIdNormalizer.Normalize(kernelState.RunId),
+                runId,
+                StringComparison.Ordinal) ||
+            kernelState.CurrentStepDispatchPending ||
+            string.IsNullOrWhiteSpace(kernelState.CurrentStepId) ||
+            !kernelState.ExecutionIdsByStepId.TryGetValue(
+                kernelState.CurrentStepId,
+                out var currentExecutionId) ||
+            string.IsNullOrWhiteSpace(currentExecutionId))
+        {
+            return false;
+        }
+
+        var packed = State.ExecutionStates.GetValueOrDefault(LLMCallModule.ModuleStateKey);
+        if (packed?.Is(LLMCallModuleState.Descriptor) != true)
+            return false;
+
+        var llmState = packed.Unpack<LLMCallModuleState>();
+        var matches = llmState.PendingBySessionId
+            .Where(entry =>
+                entry.Value.RequestDispatched &&
+                string.Equals(
+                    WorkflowRunIdNormalizer.Normalize(entry.Value.RunId),
+                    runId,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    entry.Value.StepId,
+                    kernelState.CurrentStepId,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    entry.Value.ExecutionId,
+                    currentExecutionId,
+                    StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(entry.Value.TargetRole))
+            .Take(2)
+            .ToArray();
+        if (matches.Length != 1)
+            return false;
+
+        var (sessionId, pending) = matches[0];
+        var targetActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(
+            Id,
+            pending.TargetRole);
+        var reconcile = new ReconcileWorkflowLlmCompletionCommand
+        {
+            RunId = runId,
+            StepId = kernelState.CurrentStepId,
+            SessionId = sessionId,
+            ExecutionId = currentExecutionId,
+            ObservedParentStateVersion = observedStateVersion,
+        };
+
+        Logger.LogWarning(
+            "Request committed workflow LLM completion redelivery. actor={ActorId} run={RunId} step={StepId} session={SessionId} target={TargetActorId} observedStateVersion={ObservedStateVersion}",
+            Id,
+            runId,
+            kernelState.CurrentStepId,
+            sessionId,
+            targetActorId,
+            observedStateVersion);
+        await SendToAsync(
+            targetActorId,
+            reconcile,
+            CancellationToken.None,
+            BuildDeliveryOptions(BuildStableIdentity(
+                "workflow-llm-terminal-reconcile",
+                runId,
+                kernelState.CurrentStepId,
+                sessionId,
+                currentExecutionId)));
+        return true;
     }
 
     private async Task<bool> TryRecoverFailedForEachParentAsync(

@@ -506,6 +506,43 @@ public class WorkflowRoleGAgent(
             retry.Attempt);
     }
 
+    [EventHandler]
+    public async Task HandleReconcileWorkflowLlmCompletion(
+        ReconcileWorkflowLlmCompletionCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (string.IsNullOrWhiteSpace(command.SessionId) ||
+            !State.Sessions.TryGetValue(command.SessionId, out var session) ||
+            !session.Completed ||
+            session.WorkflowLlmCompletionDeliveryContext is not { } context ||
+            !string.Equals(context.RunId, command.RunId, StringComparison.Ordinal) ||
+            !string.Equals(context.StepId, command.StepId, StringComparison.Ordinal) ||
+            !string.Equals(context.SessionId, command.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var alreadyDispatched = session.WorkflowLlmCompletionDeliveryStatus ==
+                                WorkflowLlmCompletionDeliveryStatus.Dispatched;
+        if (!alreadyDispatched && !IsWorkflowLlmCompletionDeliveryPending(session))
+            return;
+
+        Logger.LogWarning(
+            "Redeliver committed workflow LLM completion after parent reconciliation. actor={ActorId} run={RunId} step={StepId} session={SessionId} execution={ExecutionId} observedParentStateVersion={ObservedParentStateVersion} alreadyDispatched={AlreadyDispatched}",
+            Id,
+            command.RunId,
+            command.StepId,
+            command.SessionId,
+            command.ExecutionId,
+            command.ObservedParentStateVersion,
+            alreadyDispatched);
+        await DeliverWorkflowCompletionAsync(
+            command.SessionId,
+            session.Clone(),
+            CancellationToken.None,
+            allowCommittedRedelivery: alreadyDispatched);
+    }
+
     private async Task DeliverPendingWorkflowCompletionsAsync(CancellationToken ct)
     {
         var pending = State.Sessions
@@ -525,12 +562,16 @@ public class WorkflowRoleGAgent(
         string roleSessionId,
         RoleChatSessionState session,
         CancellationToken ct,
-        int? deliveryAttempt = null)
+        int? deliveryAttempt = null,
+        bool allowCommittedRedelivery = false)
     {
         var context = session.WorkflowLlmCompletionDeliveryContext?.Clone();
         if (!session.Completed ||
             context is null ||
-            !IsWorkflowLlmCompletionDeliveryPending(session))
+            (!IsWorkflowLlmCompletionDeliveryPending(session) &&
+             !(allowCommittedRedelivery &&
+               session.WorkflowLlmCompletionDeliveryStatus ==
+               WorkflowLlmCompletionDeliveryStatus.Dispatched)))
         {
             return;
         }
@@ -569,6 +610,17 @@ public class WorkflowRoleGAgent(
         catch (OperationCanceledException ex) when (
             deliveryDeadlineCts.IsCancellationRequested || ct.IsCancellationRequested)
         {
+            if (allowCommittedRedelivery)
+            {
+                Logger.LogWarning(
+                    ex,
+                    "Reconciled workflow LLM completion redelivery exceeded its deadline; parent reconciliation will retry. actor={ActorId} session={SessionId} delivery={DeliveryId}",
+                    Id,
+                    roleSessionId,
+                    deliveryId);
+                return;
+            }
+
             Logger.LogWarning(
                 ex,
                 "Workflow LLM completion delivery exceeded its deadline; scheduling durable retry. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}",
@@ -585,6 +637,17 @@ public class WorkflowRoleGAgent(
         }
         catch (Exception ex)
         {
+            if (allowCommittedRedelivery)
+            {
+                Logger.LogWarning(
+                    ex,
+                    "Reconciled workflow LLM completion redelivery failed; parent reconciliation will retry. actor={ActorId} session={SessionId} delivery={DeliveryId}",
+                    Id,
+                    roleSessionId,
+                    deliveryId);
+                return;
+            }
+
             Logger.LogWarning(
                 ex,
                 "Workflow LLM completion delivery failed; scheduling durable retry. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}",
@@ -597,6 +660,12 @@ public class WorkflowRoleGAgent(
                 deliveryId,
                 attempt,
                 CancellationToken.None);
+            return;
+        }
+
+        if (session.WorkflowLlmCompletionDeliveryStatus ==
+            WorkflowLlmCompletionDeliveryStatus.Dispatched)
+        {
             return;
         }
 

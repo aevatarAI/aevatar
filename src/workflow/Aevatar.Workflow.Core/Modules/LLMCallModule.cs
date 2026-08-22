@@ -22,7 +22,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
     private const string LlmWatchdogCallbackPrefix = "llm-watchdog";
-    private const string ModuleStateKey = "llm_call";
+    internal const string ModuleStateKey = "llm_call";
 
     private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
     private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;

@@ -794,6 +794,17 @@ message ReconcileWorkflowTerminalStateCommand {
   int64 observed_state_version = 2;
 }
 
+// Requests a workflow role actor to redeliver the terminal LLM completion
+// already committed for one exact parent run/step/session. This is a recovery
+// signal only; it must never create or infer a new LLM outcome.
+message ReconcileWorkflowLlmCompletionCommand {
+  string run_id = 1;
+  string step_id = 2;
+  string session_id = 3;
+  string execution_id = 4;
+  int64 observed_parent_state_version = 5;
+}
+
 message WorkflowRunTerminalTimingRecordedEvent {
   string run_id = 1;
   google.protobuf.Timestamp completed_at_utc = 2;
