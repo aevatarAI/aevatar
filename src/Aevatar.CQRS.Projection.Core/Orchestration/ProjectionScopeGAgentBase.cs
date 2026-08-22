@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Aevatar.CQRS.Projection.Core.Observability;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -449,10 +451,12 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             ProjectionProcessingMetrics.RecordReceived(State.ProjectionKind, eventKind);
         }
 
+        var admission = DurableSourceAdmission.Admitted;
         if (durableSource != null)
         {
-            var admission = AdmitDurableSource(durableSource);
-            if (admission == DurableSourceAdmission.ExactDuplicate)
+            admission = AdmitDurableSource(durableSource);
+            if (admission is DurableSourceAdmission.ExactDuplicate or
+                DurableSourceAdmission.FencedStale)
             {
                 if (origin != ProjectionObservationDispatchOrigin.FailureReplay)
                     await _failureTracker!.ResolveMatchingAsync(State, durableSource);
@@ -477,7 +481,9 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         });
         ProjectionProcessingMetrics.RecordAttempted(State.ProjectionKind, eventKind);
 
-        if (durableSource != null && State.InFlightObservation?.Source == null)
+        if (durableSource != null &&
+            (State.InFlightObservation?.Source == null ||
+             admission == DurableSourceAdmission.MaintenanceSupersession))
         {
             await PersistDomainEventAsync(new ProjectionScopeObservationStagedEvent
             {
@@ -528,24 +534,48 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
 
     private DurableSourceAdmission AdmitDurableSource(ProjectionSourceCoordinate received)
     {
-        if (State.LastSuccessfulSourceCoordinatesByActor.TryGetValue(received.ActorId, out var committed) &&
-            committed.StateVersion == received.StateVersion)
+        if (State.LastSuccessfulSourceCoordinatesByActor.TryGetValue(received.ActorId, out var committed))
         {
-            if (!string.Equals(committed.EventId, received.EventId, StringComparison.Ordinal))
-                throw new ProjectionSourceCoordinateConflictException(committed, received);
+            if (received.StateVersion < committed.StateVersion)
+                return DurableSourceAdmission.FencedStale;
 
-            return DurableSourceAdmission.ExactDuplicate;
+            if (committed.StateVersion == received.StateVersion)
+            {
+                if (string.Equals(committed.EventId, received.EventId, StringComparison.Ordinal))
+                    return DurableSourceAdmission.ExactDuplicate;
+
+                var precedence = ProjectionWriteResultEvaluator
+                    .EvaluateSameVersionMaintenancePrecedence(committed.EventId, received.EventId);
+                if (precedence?.Disposition == ProjectionWriteDisposition.Stale)
+                    return DurableSourceAdmission.FencedStale;
+                if (precedence?.Disposition != ProjectionWriteDisposition.Applied)
+                    throw new ProjectionSourceCoordinateConflictException(committed, received);
+
+                return DurableSourceAdmission.MaintenanceSupersession;
+            }
         }
 
         var pending = State.InFlightObservation?.Source;
         if (pending == null)
             return DurableSourceAdmission.Admitted;
 
-        if (!HasSameSource(pending, received))
-            throw new ProjectionScopeInFlightObservationPendingException(pending, received);
+        if (HasSameSource(pending, received))
+            return DurableSourceAdmission.InFlightResume;
 
-        return DurableSourceAdmission.InFlightResume;
+        if (CanMaintenanceSupersede(pending, received))
+            return DurableSourceAdmission.MaintenanceSupersession;
+
+        throw new ProjectionScopeInFlightObservationPendingException(pending, received);
     }
+
+    private static bool CanMaintenanceSupersede(
+        ProjectionSourceCoordinate pending,
+        ProjectionSourceCoordinate received) =>
+        string.Equals(pending.ActorId, received.ActorId, StringComparison.Ordinal) &&
+        received.StateVersion >= pending.StateVersion &&
+        CommittedStateRepublish.IsRepublishEventId(received.EventId) &&
+        (received.StateVersion > pending.StateVersion ||
+         !CommittedStateRepublish.IsRepublishEventId(pending.EventId));
 
     private static ProjectionSourceCoordinate BuildRequiredSourceCoordinate(
         string sourceActorId,
@@ -705,6 +735,8 @@ internal enum DurableSourceAdmission
     Admitted = 0,
     InFlightResume = 1,
     ExactDuplicate = 2,
+    MaintenanceSupersession = 3,
+    FencedStale = 4,
 }
 
 public readonly record struct ProjectionScopeDispatchResult(

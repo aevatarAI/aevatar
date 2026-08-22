@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
@@ -392,6 +393,51 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         afterRecovery.Source.StateVersion.Should().Be(3);
         afterRecovery.Nodes.Select(static node => node.NodeId).Should().Contain("step:actor-1:cmd-2:step-2");
         afterRecovery.Nodes.Select(static node => node.NodeId).Should().NotContain("step:actor-1:cmd-1:step-1");
+    }
+
+    [Fact]
+    public async Task Projector_WhenMaintenanceRepublishMatchesCurrentVersion_ShouldRepairReportAndOwnerGraph()
+    {
+        var reportStore = new RecordingDocumentStore();
+        var graphStore = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var projector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            new RecordingGraphWriter(),
+            graphStore,
+            materializer);
+        var context = Context();
+        var route = materializer.ResolveStoreRoute(
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            "actor-1",
+            IncrementalRoute());
+
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            1,
+            "evt-1",
+            new StepRequestEvent { RunId = "run-1", StepId = "step-1", StepType = "tool_call" }));
+        var maintenanceEventId = CommittedStateRepublish.BuildEventId("actor-1", 1);
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            1,
+            maintenanceEventId,
+            new WorkflowCompletedEvent { RunId = "run-1", Success = true },
+            status: "completed"));
+
+        reportStore.Document!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
+        reportStore.Document.LastEventId.Should().Be(maintenanceEventId);
+        var repaired = await graphStore.ReadOwnerSnapshotAsync(route);
+        repaired.Snapshot.Source.EventId.Should().Be(maintenanceEventId);
+        repaired.Snapshot.Source.StateVersion.Should().Be(1);
+
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            1,
+            "evt-delayed",
+            new StepRequestEvent { RunId = "run-1", StepId = "step-late", StepType = "tool_call" }));
+
+        reportStore.Document!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
+        reportStore.Document.LastEventId.Should().Be(maintenanceEventId);
+        (await graphStore.ReadOwnerSnapshotAsync(route)).Snapshot.Should()
+            .BeEquivalentTo(repaired.Snapshot);
     }
 
     [Fact]
@@ -857,7 +903,8 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         long version,
         string eventId,
         IMessage payload,
-        string commandId = "cmd-1")
+        string commandId = "cmd-1",
+        string status = "running")
     {
         var timestamp = DateTimeOffset.Parse("2026-08-18T08:00:00Z");
         return new EventEnvelope
@@ -879,7 +926,7 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
                     RunId = "run-1",
                     WorkflowName = "workflow",
                     LastCommandId = commandId,
-                    Status = "running",
+                    Status = status,
                 }),
             }),
         };

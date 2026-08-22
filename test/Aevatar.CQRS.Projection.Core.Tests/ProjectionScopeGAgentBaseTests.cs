@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
@@ -302,6 +303,92 @@ public sealed class ProjectionScopeGAgentBaseTests
 
         await act.Should().ThrowAsync<ProjectionScopeInFlightObservationPendingException>();
         processed.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(7L)]
+    [InlineData(17L)]
+    public async Task HandleObservedEnvelopeAsync_WhenMaintenanceRepublishTargetsPendingActor_ShouldSupersedeInFlight(
+        long maintenanceVersion)
+    {
+        const long pendingVersion = 7;
+        var maintenanceEventId = CommittedStateRepublish.BuildEventId("publisher-actor", maintenanceVersion);
+        var processed = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-maintenance-supersession",
+            onProcess: envelope =>
+            {
+                processed++;
+                CommittedStateEventEnvelope.TryUnpack(envelope, out var published).Should().BeTrue();
+                published!.StateEvent.EventId.Should().Be(maintenanceEventId);
+                return ProjectionScopeDispatchResult.Success(maintenanceVersion, "event-type");
+            },
+            enableDurableObservationRecovery: true);
+        await InitializeFailureTrackerAsync(agent);
+        agent.State.LastSuccessfulSourceCoordinatesByActor["publisher-actor"] =
+            new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = pendingVersion - 1,
+                EventId = "evt-committed",
+            };
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = pendingVersion,
+                EventId = "evt-stuck",
+            },
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-maintenance-supersession",
+                pendingVersion,
+                eventId: "evt-stuck"),
+        };
+
+        await agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-maintenance-supersession",
+            maintenanceVersion,
+            maintenanceEventId));
+
+        processed.Should().Be(1);
+        agent.State.InFlightObservation.Should().BeNull();
+        agent.State.LastSuccessfulSourceCoordinatesByActor["publisher-actor"]
+            .EventId.Should().Be(maintenanceEventId);
+        agent.State.LastSuccessfulSourceCoordinatesByActor["publisher-actor"]
+            .StateVersion.Should().Be(maintenanceVersion);
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_WhenOrdinaryEventFollowsCommittedMaintenance_ShouldFenceIt()
+    {
+        const long version = 7;
+        var processed = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-maintenance-fence",
+            onProcess: _ =>
+            {
+                processed++;
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            enableDurableObservationRecovery: true);
+        await InitializeFailureTrackerAsync(agent);
+        agent.State.LastSuccessfulSourceCoordinatesByActor["publisher-actor"] =
+            new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = version,
+                EventId = CommittedStateRepublish.BuildEventId("publisher-actor", version),
+            };
+
+        await agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-maintenance-fence",
+            version,
+            eventId: "evt-delayed"));
+
+        processed.Should().Be(0);
+        agent.State.LastSuccessfulSourceCoordinatesByActor["publisher-actor"]
+            .EventId.Should().StartWith(CommittedStateRepublish.EventIdPrefix);
     }
 
     [Fact]

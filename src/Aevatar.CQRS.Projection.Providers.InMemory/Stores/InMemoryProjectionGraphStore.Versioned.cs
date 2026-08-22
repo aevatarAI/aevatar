@@ -166,10 +166,30 @@ public sealed partial class InMemoryProjectionGraphStore
 
         if (state != null && delta.Source.StateVersion == state.Source.StateVersion)
         {
-            return Result(
-                ProjectionGraphDeltaApplyDisposition.SameVersionConflict,
-                "The graph delta conflicts with the committed payload at the same source version.",
-                state.Source);
+            var maintenancePrecedence = ProjectionWriteResultEvaluator
+                .EvaluateSameVersionMaintenancePrecedence(
+                    state.Source.EventId,
+                    delta.Source.EventId);
+            if (maintenancePrecedence?.Disposition == ProjectionWriteDisposition.Stale)
+            {
+                return Result(
+                    ProjectionGraphDeltaApplyDisposition.Stale,
+                    "A committed maintenance replacement fences the ordinary graph delta at this version.",
+                    state.Source);
+            }
+
+            if (maintenancePrecedence?.Disposition == ProjectionWriteDisposition.Applied &&
+                delta.Mode == ProjectionGraphDeltaMode.RepairOrCutover)
+            {
+                // Continue into the bounded full-replacement path below.
+            }
+            else
+            {
+                return Result(
+                    ProjectionGraphDeltaApplyDisposition.SameVersionConflict,
+                    "The graph delta conflicts with the committed payload at the same source version.",
+                    state.Source);
+            }
         }
 
         var currentVersion = state?.Source.StateVersion ?? 0;
