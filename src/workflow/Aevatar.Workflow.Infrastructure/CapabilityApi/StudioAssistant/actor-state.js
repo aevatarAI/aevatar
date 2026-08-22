@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260822-m60-tool-load-trace";
+import { validateActionRequest } from "./protocol.js?v=20260823-m61-visual-delight";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",

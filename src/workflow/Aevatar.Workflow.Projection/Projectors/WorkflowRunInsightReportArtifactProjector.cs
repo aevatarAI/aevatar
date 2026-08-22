@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Core;
 
@@ -74,6 +75,14 @@ public sealed class WorkflowRunInsightReportArtifactProjector
         if (readModel.StateVersion != stateEvent.Version ||
             !string.Equals(readModel.LastEventId, stateEvent.EventId ?? string.Empty, StringComparison.Ordinal))
         {
+            var maintenancePrecedence = readModel.StateVersion == stateEvent.Version
+                ? ProjectionWriteResultEvaluator.EvaluateSameVersionMaintenancePrecedence(
+                    readModel.LastEventId,
+                    stateEvent.EventId)
+                : null;
+            if (maintenancePrecedence?.Disposition == ProjectionWriteDisposition.Stale)
+                return;
+
             throw new InvalidOperationException(
                 $"Workflow report version {stateEvent.Version} was not committed for event '{stateEvent.EventId}'.");
         }
@@ -122,13 +131,20 @@ public sealed class WorkflowRunInsightReportArtifactProjector
             return existing;
         if (existing != null && existing.StateVersion == stateEvent.Version)
         {
-            if (!string.Equals(existing.LastEventId, stateEvent.EventId ?? string.Empty, StringComparison.Ordinal))
+            var maintenancePrecedence = ProjectionWriteResultEvaluator
+                .EvaluateSameVersionMaintenancePrecedence(existing.LastEventId, stateEvent.EventId);
+            if (maintenancePrecedence?.Disposition == ProjectionWriteDisposition.Stale)
+                return existing;
+            if (maintenancePrecedence?.Disposition != ProjectionWriteDisposition.Applied)
             {
-                throw new InvalidOperationException(
-                    $"Workflow report version {stateEvent.Version} is already bound to event '{existing.LastEventId}'.");
-            }
+                if (!string.Equals(existing.LastEventId, stateEvent.EventId ?? string.Empty, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Workflow report version {stateEvent.Version} is already bound to event '{existing.LastEventId}'.");
+                }
 
-            return existing;
+                return existing;
+            }
         }
 
         var readModel = existing?.Clone() ??

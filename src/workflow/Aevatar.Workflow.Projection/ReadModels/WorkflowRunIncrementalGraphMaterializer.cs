@@ -2,6 +2,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Projection.Projectors;
 
@@ -183,7 +184,8 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
     public static bool RequiresOwnerGraphReplacement(StateEvent stateEvent)
     {
         ArgumentNullException.ThrowIfNull(stateEvent);
-        return stateEvent.EventData?.Is(WorkflowCommandObservedEvent.Descriptor) == true;
+        return CommittedStateRepublish.IsRepublishEventId(stateEvent.EventId) ||
+               stateEvent.EventData?.Is(WorkflowCommandObservedEvent.Descriptor) == true;
     }
 
     public static bool IsIncrementalRoute(ProjectionMaterializationRouteFingerprint? route) =>

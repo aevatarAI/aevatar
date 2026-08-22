@@ -405,10 +405,26 @@ public sealed partial class Neo4jProjectionGraphStore
 
         if (state != null && delta.Source.StateVersion == state.Source.StateVersion)
         {
-            return DeltaResult(
-                ProjectionGraphDeltaApplyDisposition.SameVersionConflict,
-                "The graph delta conflicts with the committed payload at the same source version.",
-                state.Source);
+            var maintenancePrecedence = ProjectionWriteResultEvaluator
+                .EvaluateSameVersionMaintenancePrecedence(
+                    state.Source.EventId,
+                    delta.Source.EventId);
+            if (maintenancePrecedence?.Disposition == ProjectionWriteDisposition.Stale)
+            {
+                return DeltaResult(
+                    ProjectionGraphDeltaApplyDisposition.Stale,
+                    "A committed maintenance replacement fences the ordinary graph delta at this version.",
+                    state.Source);
+            }
+
+            if (maintenancePrecedence?.Disposition != ProjectionWriteDisposition.Applied ||
+                delta.Mode != ProjectionGraphDeltaMode.RepairOrCutover)
+            {
+                return DeltaResult(
+                    ProjectionGraphDeltaApplyDisposition.SameVersionConflict,
+                    "The graph delta conflicts with the committed payload at the same source version.",
+                    state.Source);
+            }
         }
 
         var currentVersion = state?.Source.StateVersion ?? 0;

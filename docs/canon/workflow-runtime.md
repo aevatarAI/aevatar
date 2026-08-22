@@ -557,6 +557,8 @@ run actor 会把触发补偿的原始失败 step 持久化为 `compensation_orig
 
 `workflow_call` child run 失败时先由 child run 自己完成补偿，再向 parent actor 发送 `SubWorkflowInvocationCompletedEvent(success=false, compensated=true)`。`compensated` 只表达 child compensation outcome；parent 侧仍把该 child failure 转成普通 `StepCompletedEvent(success=false)` 推进本 run，是否补偿 parent 的 `workflow_call` step 由 parent 自己的 ledger 决定。
 
+维护重投的恢复语义覆盖 durable scope 和图物化：同一 actor 的 `rebuild:` 可以替换旧的普通 in-flight observation，并以 bounded full graph replacement 跨过缺失的增量图水位；普通事件不能反向覆盖该维护水位。
+
 Saga 状态由强类型枚举 `WorkflowSagaStatus`（`workflow_execution_messages.proto`）表达，生命周期为：
 
 ```text

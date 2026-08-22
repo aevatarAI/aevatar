@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Providers.Neo4j.Configuration;
 using Aevatar.CQRS.Projection.Providers.Neo4j.Stores;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using FluentAssertions;
 using Neo4j.Driver;
 
@@ -131,11 +132,45 @@ public sealed class VersionedProjectionGraphStoreConformanceTests
         await AssertRoutesAndOwnerCollisionsAsync(store, $"{namespacePrefix}-routes");
         await AssertPendingPromotionAndRewireAsync(store, $"{namespacePrefix}-pending");
         await AssertRepairJumpAsync(store, $"{namespacePrefix}-repair");
+        await AssertSameVersionMaintenanceReplacementAsync(store, $"{namespacePrefix}-maintenance");
         await AssertRepairReplacementAsync(store, $"{namespacePrefix}-replace");
         await AssertRepairReplacementKeepsNodeAndEdgeIdentitySpacesApartAsync(
             store,
             $"{namespacePrefix}-identity-spaces");
         await AssertRepairReplacementMutationBoundAsync(store, $"{namespacePrefix}-bound");
+    }
+
+    private static async Task AssertSameVersionMaintenanceReplacementAsync(
+        IVersionedProjectionGraphStore store,
+        string physicalNamespace)
+    {
+        var route = Route(physicalNamespace);
+        var ordinary = Delta(route, 1, "event-1");
+        ordinary.UpsertNodes.Add(Node("stale-running"));
+        (await store.ApplyDeltaAsync(ordinary)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+
+        var maintenance = RepairDelta(
+            route,
+            1,
+            CommittedStateRepublish.BuildEventId("actor-1", 1));
+        maintenance.UpsertNodes.Add(Node("authoritative-terminal"));
+        (await store.ApplyDeltaAsync(maintenance)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Applied);
+
+        var repaired = await store.ReadOwnerSnapshotAsync(route);
+        repaired.Snapshot.Source.Should().BeEquivalentTo(maintenance.Source);
+        repaired.Snapshot.Nodes.Select(static node => node.NodeId)
+            .Should().Equal("authoritative-terminal");
+        (await store.ApplyDeltaAsync(maintenance.Clone())).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.ExactDuplicate);
+
+        var delayedOrdinary = Delta(route, 1, "event-delayed");
+        delayedOrdinary.UpsertNodes.Add(Node("stale-running"));
+        (await store.ApplyDeltaAsync(delayedOrdinary)).Disposition.Should()
+            .Be(ProjectionGraphDeltaApplyDisposition.Stale);
+        (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Should()
+            .BeEquivalentTo(repaired.Snapshot);
     }
 
     /// <summary>

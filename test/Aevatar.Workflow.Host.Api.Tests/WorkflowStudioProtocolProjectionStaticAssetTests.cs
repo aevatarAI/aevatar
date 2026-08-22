@@ -820,10 +820,10 @@ public sealed partial class WorkflowConsoleStaticAssetEndpointTests
 
         entryVersions.Should().NotBeEmpty();
         entryVersions.Should().OnlyContain(static version =>
-            version == "20260822-m60-tool-load-trace");
+            version == "20260823-m61-visual-delight");
         transitiveVersions.Should().NotBeEmpty();
         transitiveVersions.Should().OnlyContain(static version =>
-            version == "20260822-m60-tool-load-trace");
+            version == "20260823-m61-visual-delight");
         html.Should().Contain("styles.css?v=");
         html.Should().Contain("app.js?v=");
         app.Should().Contain("transport.js?v=");
