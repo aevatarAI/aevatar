@@ -308,13 +308,15 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().NotContain("workflow_create_def");
         role.SystemPrompt.Should().NotContain("aevatar_start_workflow");
 
-        // Static tools are restricted empty. The compatibility wrapper opts into one bounded,
-        // named Studio set instead of combining every historical capability in one model turn.
+        // Static tools are restricted empty. The compatibility wrapper opts into bounded Studio
+        // and workflow-authoring sets instead of combining every historical capability in one model turn.
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
         role.AgentToolScope.RestrictAllowedToolNames.Should().BeTrue();
         allowed.Should().BeEmpty();
-        role.AgentToolScope.ToolSetRefs.Should().Equal("studio.local");
+        role.AgentToolScope.ToolSetRefs.Should().Equal(
+            "studio.local",
+            "workflow.external-capability-authoring");
 
         // The single llm_call step runs under the studio role.
         var step = workflow.Steps.Should().ContainSingle().Subject;
@@ -390,7 +392,9 @@ public class WorkflowDefinitionCatalogTests
         role.AgentToolScope.Should().NotBeNull();
         role.AgentToolScope!.RestrictAllowedToolNames.Should().BeTrue();
         role.AgentToolScope.AllowedToolNames.Should().BeEmpty();
-        role.AgentToolScope.ToolSetRefs.Should().Equal("studio.local");
+        role.AgentToolScope.ToolSetRefs.Should().Equal(
+            "studio.local",
+            "workflow.external-capability-authoring");
     }
 
     [Fact]

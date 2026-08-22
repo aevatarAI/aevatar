@@ -93,15 +93,13 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
-    public void ComposedPrompt_ShouldRequireTypedReadinessBeforeWorkflowWrites()
+    public void ComposedPrompt_ShouldNotAdvertiseWorkflowAuthoringToolsOnOrdinaryTurns()
     {
         var prompt = ComposedAgentPrompt();
 
-        prompt.Should().Contain("`list_external_workflow_capabilities`");
-        prompt.Should().Contain("`inspect_external_workflow_capability_readiness`");
-        prompt.Should().Contain("typed readiness status is `READY`");
-        prompt.Should().Contain("`user_service_id` is the NyxID capability identity");
-        prompt.Should().Contain("`service_slug_snapshot` is only a display and routing snapshot");
+        prompt.Should().NotContain("`list_external_workflow_capabilities`");
+        prompt.Should().NotContain("`inspect_external_workflow_capability_readiness`");
+        prompt.Should().NotContain("typed readiness status is `READY`");
         prompt.Should().Contain("`required_nyx_services`");
         prompt.Should().NotContain("`required_service_slugs`");
         prompt.Should().NotContain("Omit slug → discover all proxyable services");

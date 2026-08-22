@@ -59,7 +59,8 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         request.Candidates.Select(static candidate => candidate.IntentId).Should().Equal(
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
-            NyxIdChatTurnIntentClassifier.KeyRotateIntentId);
+            NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId);
         request.Candidates.Single(candidate =>
                 candidate.IntentId == NyxIdChatTurnIntentClassifier.ServiceConnectIntentId)
             .RoutingDescription.Should()
@@ -106,6 +107,27 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         inner.LastRequest!.Candidates.Should().Contain(candidate =>
             candidate.IntentId == NyxIdChatTurnIntentClassifier.KeyRotateIntentId &&
             candidate.SideEffectClass == AgentProfileSideEffectClass.ExternalHandoff);
+    }
+
+    [Fact]
+    public async Task TurnIntentClassifier_WorkflowAuthoringPrompt_ShouldReturnReadOnlyTypedIntent()
+    {
+        var inner = new RecordingClassifier(
+            AgentProfileTurnClassificationResult.Matched(
+                NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId));
+        var classifier = new NyxIdChatTurnIntentClassifier(inner);
+
+        var intent = await classifier.ClassifyAsync(
+            "turn-workflow-authoring",
+            "Create a workflow draft that calls my GitHub service",
+            llmControl: null,
+            CancellationToken.None);
+
+        intent.Should().Be(NyxIdChatTurnIntent.WorkflowAuthoring);
+        inner.LastRequest!.Candidates.Should().Contain(candidate =>
+            candidate.IntentId == NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId &&
+            candidate.SideEffectClass == AgentProfileSideEffectClass.ReadOnly &&
+            candidate.RoutingDescription.Contains("Workflow YAML"));
     }
 
     [Fact]
@@ -257,6 +279,39 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeBuiltInIntentAsync_WorkflowAuthoring_ShouldExposeOnlyDedicatedReadTools()
+    {
+        IAgentTool[] tools =
+        [
+            new ReadOnlyTestTool("list_external_workflow_capabilities"),
+            new ReadOnlyTestTool("inspect_external_workflow_capability_readiness"),
+            new ReadOnlyTestTool("preview_workflow_explicit_requests"),
+        ];
+        var registry = new RecordingToolSetRegistry();
+        registry.Add(
+            ToolSetNames.WorkflowExternalCapabilityAuthoring,
+            new StaticToolSource(tools));
+        var materializer = NewMaterializer(
+            registry,
+            new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+            fetcher: null);
+
+        var catalog = await materializer.MaterializeBuiltInIntentAsync(
+            NyxIdChatTurnIntent.WorkflowAuthoring,
+            ToolContext("request-token"),
+            CancellationToken.None);
+
+        registry.ResolveCalls.Should().Equal(ToolSetNames.WorkflowExternalCapabilityAuthoring);
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(
+            "list_external_workflow_capabilities",
+            "inspect_external_workflow_capability_readiness",
+            "preview_workflow_explicit_requests");
+        catalog.ExactTools.Values.Should().OnlyContain(static tool => tool.IsReadOnly);
+        catalog.SelectedIntentId.Should().Be(
+            NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId);
+    }
+
+    [Fact]
     public async Task MaterializeBuiltInIntentAsync_WhenAdmissionToolIsMissing_ShouldFailClosed()
     {
         var registry = new RecordingToolSetRegistry();
@@ -304,6 +359,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId,
             AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         classifier.Requests[1].Candidates.Should().ContainSingle().Which.IntentId.Should()
             .Be("intent-alpha");
@@ -482,7 +538,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
 
         preparation.Authority.CandidateRoute!.IntentId.Should().Be("intent-31");
         classifier.Requests.Should().HaveCount(2);
-        classifier.Requests[0].Candidates.Should().HaveCount(4);
+        classifier.Requests[0].Candidates.Should().HaveCount(5);
         classifier.Requests[1].Candidates.Should()
             .HaveCount(StreamingAgentProfileTurnClassifier.MaximumCandidates);
         classifier.Requests[1].Candidates.Select(static candidate => candidate.IntentId)
@@ -3266,6 +3322,7 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         public string Name => name;
         public string Description => name;
         public string ParametersSchema => "{}";
+        public virtual bool IsReadOnly => false;
         public virtual ToolPresentationDescriptor Presentation =>
             ToolPresentationDescriptors.Generic(name, name);
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
@@ -3273,6 +3330,11 @@ public sealed class AgentTurnToolCatalogMaterializerTests
     }
 
     private sealed class NyxIdBuiltInTestTool(string name) : TestTool(name), INyxIdBuiltInTool;
+
+    private sealed class ReadOnlyTestTool(string name) : TestTool(name)
+    {
+        public override bool IsReadOnly => true;
+    }
 
     private sealed class AdmittedTestTool(
         string name,

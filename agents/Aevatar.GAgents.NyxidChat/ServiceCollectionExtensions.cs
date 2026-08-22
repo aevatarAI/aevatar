@@ -313,7 +313,7 @@ public static class ServiceCollectionExtensions
     {
         var result = serviceProvider
             .GetRequiredService<IToolSetRegistry>()
-            .Resolve(AgentProfilePolicies.NyxIdChatRouteToolSet);
+            .Resolve(ToolSetNames.NyxIdChatDefault);
         return result.IsSuccess ? result.Sources : [];
     }
 

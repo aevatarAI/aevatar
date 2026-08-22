@@ -2007,6 +2007,7 @@ public sealed partial class NyxIdChatTurnGAgentTests
     [InlineData(NyxIdChatTurnIntent.ServiceConnect)]
     [InlineData(NyxIdChatTurnIntent.KeyCreate)]
     [InlineData(NyxIdChatTurnIntent.KeyRotate)]
+    [InlineData(NyxIdChatTurnIntent.WorkflowAuthoring)]
     public async Task OperationExecutor_UnprofiledBuiltInIntent_ShouldMaterializeOnlyAdmissionTools(
         NyxIdChatTurnIntent intent)
     {
@@ -2018,6 +2019,9 @@ public sealed partial class NyxIdChatTurnGAgentTests
             new NamedProfileTool("nyxid_request_key_create"),
             new NamedProfileTool("nyxid_api_keys"),
             new NamedProfileTool("nyxid_request_key_rotate"),
+            new NamedProfileTool("list_external_workflow_capabilities", isReadOnly: true),
+            new NamedProfileTool("inspect_external_workflow_capability_readiness", isReadOnly: true),
+            new NamedProfileTool("preview_workflow_explicit_requests", isReadOnly: true),
             new NamedProfileTool("github_get_current_user"),
         ];
         var registry = new BuiltInIntentToolSetRegistry(tools);
@@ -2044,7 +2048,8 @@ public sealed partial class NyxIdChatTurnGAgentTests
                                 "Connect GitHub and verify the connection",
                             NyxIdChatTurnIntent.KeyCreate =>
                                 "Create a least-scope key for one exact service",
-                            _ => "Rotate one exact key",
+                            NyxIdChatTurnIntent.KeyRotate => "Rotate one exact key",
+                            _ => "Draft a workflow that calls an external service",
                         },
                         SessionId = "turn-alpha",
                     },
@@ -2054,7 +2059,10 @@ public sealed partial class NyxIdChatTurnGAgentTests
             static (_, _) => Task.CompletedTask,
             CancellationToken.None);
 
-        registry.RequestedNames.Should().Equal(ToolSetNames.NyxIdAssistantAdmission);
+        registry.RequestedNames.Should().Equal(
+            intent == NyxIdChatTurnIntent.WorkflowAuthoring
+                ? ToolSetNames.WorkflowExternalCapabilityAuthoring
+                : ToolSetNames.NyxIdAssistantAdmission);
         generationExecutor.LastTurnCatalog.Should().NotBeNull();
         string[] expected = intent switch
         {
@@ -2062,7 +2070,13 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 ["nyxid_catalog", "nyxid_require_service"],
             NyxIdChatTurnIntent.KeyCreate =>
                 ["nyxid_services", "nyxid_request_key_create"],
-            _ => ["nyxid_api_keys", "nyxid_request_key_rotate"],
+            NyxIdChatTurnIntent.KeyRotate => ["nyxid_api_keys", "nyxid_request_key_rotate"],
+            _ =>
+            [
+                "list_external_workflow_capabilities",
+                "inspect_external_workflow_capability_readiness",
+                "preview_workflow_explicit_requests",
+            ],
         };
         generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should()
             .BeEquivalentTo(expected);
@@ -2080,6 +2094,9 @@ public sealed partial class NyxIdChatTurnGAgentTests
     [InlineData(
         NyxIdChatTurnIntent.KeyCreate,
         NyxIdChatTurnIntentClassifier.KeyCreateIntentId)]
+    [InlineData(
+        NyxIdChatTurnIntent.WorkflowAuthoring,
+        NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId)]
     public async Task OperationExecutor_ProfiledBuiltInIntent_ShouldNarrowToIntentTools(
         NyxIdChatTurnIntent intent,
         string candidateIntentId)
@@ -2091,7 +2108,9 @@ public sealed partial class NyxIdChatTurnGAgentTests
             new NamedProfileTool("nyxid_request_key_create"),
             new NamedProfileTool("nyxid_catalog"),
             new NamedProfileTool("nyxid_require_service"),
-            new NamedProfileTool("github_get_current_user"),
+            new NamedProfileTool("list_external_workflow_capabilities", isReadOnly: true),
+            new NamedProfileTool("inspect_external_workflow_capability_readiness", isReadOnly: true),
+            new NamedProfileTool("preview_workflow_explicit_requests", isReadOnly: true),
         ];
         var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
         {
@@ -2109,7 +2128,9 @@ public sealed partial class NyxIdChatTurnGAgentTests
                     "nyxid_request_key_create",
                     "nyxid_catalog",
                     "nyxid_require_service",
-                    "github_get_current_user",
+                    "list_external_workflow_capabilities",
+                    "inspect_external_workflow_capability_readiness",
+                    "preview_workflow_explicit_requests",
                 },
             },
             ActivationMode = AgentProfileActivationMode.Enforced,
@@ -2150,9 +2171,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
                     AgentProfileTurnAuthority = authority,
                     Request = new ChatRequestEvent
                     {
-                        Prompt = intent == NyxIdChatTurnIntent.ServiceConnect
-                            ? "Connect GitHub and verify the connection"
-                            : "Create a least-scope key for one exact service",
+                        Prompt = intent switch
+                        {
+                            NyxIdChatTurnIntent.ServiceConnect =>
+                                "Connect GitHub and verify the connection",
+                            NyxIdChatTurnIntent.WorkflowAuthoring =>
+                                "Draft a workflow that calls an external service",
+                            _ => "Create a least-scope key for one exact service",
+                        },
                         SessionId = "turn-alpha",
                     },
                 },
@@ -2162,9 +2188,18 @@ public sealed partial class NyxIdChatTurnGAgentTests
             CancellationToken.None);
 
         generationExecutor.LastTurnCatalog.Should().NotBeNull();
-        var expected = intent == NyxIdChatTurnIntent.ServiceConnect
-            ? new[] { "nyxid_catalog", "nyxid_require_service" }
-            : ["nyxid_services", "nyxid_request_key_create"];
+        string[] expected = intent switch
+        {
+            NyxIdChatTurnIntent.ServiceConnect =>
+                ["nyxid_catalog", "nyxid_require_service"],
+            NyxIdChatTurnIntent.WorkflowAuthoring =>
+            [
+                "list_external_workflow_capabilities",
+                "inspect_external_workflow_capability_readiness",
+                "preview_workflow_explicit_requests",
+            ],
+            _ => ["nyxid_services", "nyxid_request_key_create"],
+        };
         generationExecutor.LastTurnCatalog!.FinalAllowedToolNames.Should()
             .BeEquivalentTo(expected);
         generationExecutor.LastTurnCatalog.ExactTools.Keys.Should()
@@ -2173,13 +2208,19 @@ public sealed partial class NyxIdChatTurnGAgentTests
             ["use_skill", "github_get_current_user"]);
     }
 
-    [Fact]
-    public async Task OperationExecutor_ProfiledServiceConnectOverrideWithoutRequireAuthority_ShouldFailClosed()
+    [Theory]
+    [InlineData(NyxIdChatTurnIntent.ServiceConnect)]
+    [InlineData(NyxIdChatTurnIntent.WorkflowAuthoring)]
+    public async Task OperationExecutor_ProfiledBuiltInOverrideWithIncompleteAuthority_ShouldFailClosed(
+        NyxIdChatTurnIntent intent)
     {
         IAgentTool[] tools =
         [
             new NamedProfileTool("nyxid_catalog"),
             new NamedProfileTool("nyxid_require_service"),
+            new NamedProfileTool("list_external_workflow_capabilities", isReadOnly: true),
+            new NamedProfileTool("inspect_external_workflow_capability_readiness", isReadOnly: true),
+            new NamedProfileTool("preview_workflow_explicit_requests", isReadOnly: true),
         ];
         var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
         {
@@ -2200,8 +2241,10 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 IntentId = "general_nyxid_assistant",
             },
             AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
-            AuthorityCeilingToolNames = { "nyxid_catalog" },
         };
+        authority.AuthorityCeilingToolNames.Add(intent == NyxIdChatTurnIntent.ServiceConnect
+            ? "nyxid_catalog"
+            : "list_external_workflow_capabilities");
         var generationExecutor = new CapabilityGeneratingReplyExecutor();
         var executor = new NyxIdChatTurnOperationExecutor(
             generationExecutor,
@@ -2216,12 +2259,14 @@ public sealed partial class NyxIdChatTurnGAgentTests
                 Key = CreateKey(),
                 Llm = new NyxIdChatLLMOperationInput
                 {
-                    Intent = NyxIdChatTurnIntent.ServiceConnect,
+                    Intent = intent,
                     AgentProfile = profile,
                     AgentProfileTurnAuthority = authority,
                     Request = new ChatRequestEvent
                     {
-                        Prompt = "Connect GitHub and verify the connection",
+                        Prompt = intent == NyxIdChatTurnIntent.ServiceConnect
+                            ? "Connect GitHub and verify the connection"
+                            : "Draft a workflow that calls an external service",
                         SessionId = "turn-alpha",
                     },
                 },
@@ -5326,7 +5371,11 @@ public sealed partial class NyxIdChatTurnGAgentTests
         public List<string> RequestedNames { get; } = [];
 
         public IReadOnlyList<string> GetRegisteredNames() =>
-            [AgentProfilePolicies.NyxIdChatRouteToolSet, ToolSetNames.NyxIdAssistantAdmission];
+        [
+            AgentProfilePolicies.NyxIdChatRouteToolSet,
+            ToolSetNames.NyxIdAssistantAdmission,
+            ToolSetNames.WorkflowExternalCapabilityAuthoring,
+        ];
 
         public ToolSetResolveResult Resolve(string? name)
         {
@@ -5367,11 +5416,12 @@ public sealed partial class NyxIdChatTurnGAgentTests
             Task.FromResult("{}");
     }
 
-    private sealed class NamedProfileTool(string name) : IAgentTool
+    private sealed class NamedProfileTool(string name, bool isReadOnly = false) : IAgentTool
     {
         public string Name => name;
         public string Description => Name;
         public string ParametersSchema => "{}";
+        public bool IsReadOnly => isReadOnly;
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
     }

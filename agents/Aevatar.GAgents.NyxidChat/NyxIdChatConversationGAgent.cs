@@ -3100,6 +3100,8 @@ public sealed class NyxIdChatConversationGAgent
                     NyxIdChatTurnIntent.KeyCreate,
                 NyxIdChatTurnIntentClassifier.KeyRotateIntentId =>
                     NyxIdChatTurnIntent.KeyRotate,
+                NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId =>
+                    NyxIdChatTurnIntent.WorkflowAuthoring,
                 _ => NyxIdChatTurnIntent.Unspecified,
             };
         }

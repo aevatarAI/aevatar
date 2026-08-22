@@ -2549,7 +2549,8 @@ public sealed class NyxIdChatTurnOperationExecutor
     private static bool IsBuiltInIntent(NyxIdChatTurnIntent intent) =>
         intent is NyxIdChatTurnIntent.ServiceConnect or
             NyxIdChatTurnIntent.KeyCreate or
-            NyxIdChatTurnIntent.KeyRotate;
+            NyxIdChatTurnIntent.KeyRotate or
+            NyxIdChatTurnIntent.WorkflowAuthoring;
 
     private static AgentToolExecutionContext ResolveCatalogToolContext(
         NeedsLlmReplyEvent request)
@@ -2584,6 +2585,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntent.KeyRotate =>
                 NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntent.WorkflowAuthoring =>
+                NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId,
             _ => null,
         };
         return intentId is not null && string.Equals(

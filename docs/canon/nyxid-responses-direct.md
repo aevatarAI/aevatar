@@ -155,6 +155,13 @@ Responses、Messages 和 Chat Completions 三条直连入口都把模型调用�
 - Aevatar exact tools：由本轮 frozen catalog 选择并由服务端执行。
 - forwarded tools：保留给客户端或上游模型继续处理。
 
+Workflow external-capability authoring 使用独立的
+`workflow.external-capability-authoring` tool set，只包含 discovery、readiness 与
+explicit-request preview 三个只读工具。它不进入 `workspace.default` 或普通
+`nyxid.chat.default`；内置 Studio workflow 必须显式选择它，NyxID Chat 则只在 typed
+`WORKFLOW_AUTHORING` 回合意图下从 Agent Profile route ceiling 物化该集合。完整 binding
+source 不会随这个窄集合进入任何 surface。
+
 前两类是 server-owned tools，最终参数在 caller-owned trusted prefill/hook 完成后冻结，并统一进入 `IAgentToolExecutionPort`。同一 proof/digest 约束 model schema 与 off-grain executor 的重新物化；端口内只做一次 safety classification，再执行 credential policy、actor-owned grant、start-once admission ledger 和 `WAITING_APPROVAL/RUNNING/TERMINAL` audit observation。只有 ledger 返回 `Started` 可以进入唯一 raw terminal `AdmittedAgentToolExecutor`。audit append status 不授予执行，terminal 已调用后的 audit failure 保留实际结果且不可重试。统一 catalog 契约见 [agent-turn-tool-catalog.md](agent-turn-tool-catalog.md)。
 
 Responses ingress 边界的 substitute compatibility 包括：
@@ -177,6 +184,9 @@ Skill 能力按 profile/intent 分层：
 | `use_skill` | 按名称加载本地或 Ornn 远程 skill，并把 skill 指令返回给模型执行 |
 | `ornn_search_skills` | 通过 NyxID proxy 搜索调用者在 Ornn 上可见的 skill |
 | `ornn_publish_skill` / `ornn_update_skill` | 仅 `skill.authoring` profile 可选择的私有 skill 写能力 |
+| `list_external_workflow_capabilities` | 列出当前调用者可见的 exact workflow external-capability descriptors |
+| `inspect_external_workflow_capability_readiness` | 对一个 exact typed selector 做只读 readiness 检查 |
+| `preview_workflow_explicit_requests` | 只读预览 authored request 在 bind 前需要确认的 typed grants |
 
 这些工具使用当前 `/v1/*` 请求的 bearer token，经 NyxID proxy 访问调用者可见的 Ornn capability，而不是服务端全局 skill 库。普通 skill intent 只允许 `ornn_search_skills` + `use_skill`；publish/update 必须显式进入 `skill.authoring` profile。`ornn_publish_skill` v1 只发布 private skill，并先做 workflow/script/package-format 校验。受限 NyxID API key 的 `--allowed-services` 需要覆盖 `aevatar`、目标 LLM service 与 Ornn API service（默认 slug `ornn-api`）。
 

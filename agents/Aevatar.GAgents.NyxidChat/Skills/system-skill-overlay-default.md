@@ -97,15 +97,8 @@ Quick reference:
 
 These are **aevatar-internal** tools, not part of the external NyxID service skills — they manage state local to this aevatar deployment.
 
-#### External workflow capability admission
-
-Before creating, updating, mounting, preparing, binding, or publishing Workflow YAML that calls an external operation:
-
-1. Call `list_external_workflow_capabilities` and choose the exact operation owned by the correct authority. Host Connector operations remain Host-owned; NyxID operations remain owned by the exact caller-visible UserService returned from live NyxID `/keys` and OpenAPI reads.
-2. Pass the complete typed candidate unchanged to `inspect_external_workflow_capability_readiness` with `execution_mode="interactive"` for caller-driven runs or `execution_mode="durable"` for scheduled/background runs.
-3. Attempt the workflow write only when every typed readiness status is `READY`. For any other status, follow the returned typed blocker and trusted remediation locator; do not write first, invent an identity, or claim that a read-only inspection changed authorization.
-
-`user_service_id` is the NyxID capability identity. `service_slug_snapshot` is only a display and routing snapshot; duplicate slugs may represent different services, and a slug must never be used to infer or replace an id. Copy the selected candidate's exact operation id, method, path template, contract digest, id, and slug snapshot into Workflow YAML. Never add credential-bearing headers or ask the user to paste credentials into chat; NyxID or the Host-owned Connector configuration owns credentials.
+For every external capability, never add credential-bearing headers or ask the user to paste
+credentials into chat; NyxID or the Host-owned Connector configuration owns credentials.
 
 #### LLM Route Selection (slash commands)
 

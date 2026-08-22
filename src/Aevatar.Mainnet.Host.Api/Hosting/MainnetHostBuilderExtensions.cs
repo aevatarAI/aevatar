@@ -599,6 +599,9 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
                 ],
                 "Studio-owned local provisioning, member, binding, schedule, and query tools.");
+            options.AddToolSet<WorkflowExternalCapabilityAuthoringToolSource>(
+                ToolSetNames.WorkflowExternalCapabilityAuthoring,
+                "Read-only external workflow capability discovery, readiness, and explicit-request preview.");
             // Opt-in only: connected-service tools carry per-user NyxID surfaces, so this set
             // is referenced by route policy (not folded into workspace.default) to avoid
             // injecting every caller's connected services by default.
@@ -611,14 +614,13 @@ public static class MainnetHostBuilderExtensions
                 [CreateToolSource<NyxIdAssistantToolSource>],
                 "Pinned local NyxID Assistant tools used by built-in admission intents without external discovery dependencies.");
             options.AddToolSet(
-                AgentProfilePolicies.NyxIdChatRouteToolSet,
+                ToolSetNames.NyxIdChatDefault,
                 [
                     CreateToolSource<NyxIdAssistantToolSource>,
                     CreateToolSource<NyxIdConnectedServiceToolSource>,
                     CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<ConditionEvaluateAgentToolSource>,
-                    CreateToolSource<WorkflowAuthoringCapabilityReadAgentToolSource>,
                     CreateToolSource<SkillsAgentToolSource>,
                     CreateToolSource<OrnnSearchAgentToolSource>,
                     CreateToolSource<OrnnPublishAgentToolSource>,
@@ -626,7 +628,15 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                 ],
-                "Pinned NyxID Assistant route: safe management reads, admitted request-local connected-service operations, workflow capability discovery and readiness, web and Ornn skill search, private skill publishing, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
+                "Ordinary NyxID Assistant turn surface: safe management reads, admitted request-local connected-service operations, web and Ornn skill search, readiness, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
+            options.AddToolSet(
+                AgentProfilePolicies.NyxIdChatRouteToolSet,
+                [
+                    ToolSetNames.NyxIdChatDefault,
+                    ToolSetNames.WorkflowExternalCapabilityAuthoring,
+                ],
+                [],
+                "NyxID Agent Profile authority route. Per-turn intent policy attenuates this superset before schemas reach the model.");
         });
 
         return builder;
@@ -799,6 +809,7 @@ public static class MainnetHostBuilderExtensions
     private static void ConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
     {
         options.EnableBindingTools = true;
+        options.EnableWorkflowExternalCapabilityAuthoringTools = true;
 
         if (!options.VoicePresence.Module.DirectExternalEventTypeUrls.Contains(
                 DeviceInboundDirectExternalEventTypeUrl,

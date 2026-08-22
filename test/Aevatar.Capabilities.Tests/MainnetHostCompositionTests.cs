@@ -134,6 +134,13 @@ public sealed class MainnetHostCompositionTests
         "aevatar_schedule_member_workflow",
     ];
 
+    private static readonly string[] WorkflowExternalCapabilityAuthoringToolNames =
+    [
+        "list_external_workflow_capabilities",
+        "inspect_external_workflow_capability_readiness",
+        "preview_workflow_explicit_requests",
+    ];
+
     [Fact]
     public void AddAevatarMainnetHost_ShouldExportProjectionAndKafkaTelemetry()
     {
@@ -759,6 +766,7 @@ public sealed class MainnetHostCompositionTests
             ToolSetNames.ChatCore,
             ToolSetNames.LarkSelfNotify,
             ToolSetNames.NyxIdAssistantAdmission,
+            ToolSetNames.NyxIdChatDefault,
             ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.NyxIdExecution,
             ToolSetNames.NyxIdPrivileged,
@@ -769,6 +777,7 @@ public sealed class MainnetHostCompositionTests
             ToolSetNames.StorageWrite,
             ToolSetNames.StudioLocal,
             ToolSetNames.WebRuntime,
+            ToolSetNames.WorkflowExternalCapabilityAuthoring,
             ToolSetNames.WorkspaceDefault);
 
         var workspace = registry.Resolve(ToolSetNames.WorkspaceDefault);
@@ -785,6 +794,8 @@ public sealed class MainnetHostCompositionTests
             typeof(WorkflowCatalogAgentToolSource),
             typeof(ObserveRunToolSource),
             typeof(ReadWorkflowRunArtifactToolSource));
+        workspace.Sources.Should().NotContain(source =>
+            source is WorkflowExternalCapabilityAuthoringToolSource);
         workspace.Sources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         workspace.Sources.Should().NotContain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
         workspace.Sources.Should().NotContain(source => source is ChannelInteractiveReplyToolSource);
@@ -840,6 +851,9 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetServices<IAgentToolSource>()
             .Should()
             .NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
+        app.Services.GetServices<IAgentToolSource>()
+            .Should()
+            .NotContain(source => source is WorkflowExternalCapabilityAuthoringToolSource);
         app.Services.GetRequiredService<NyxIdConnectedServiceInventoryToolSource>()
             .Should()
             .NotBeNull();
@@ -859,6 +873,8 @@ public sealed class MainnetHostCompositionTests
                 source is ChannelNyxIdConnectedServiceInventoryToolSource)
             .Which.Should()
             .BeSameAs(channelInventorySource);
+        channelToolSources.Should().NotContain(source =>
+            source is WorkflowExternalCapabilityAuthoringToolSource);
         channelToolSources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
         var nyxIdChatToolSources = replyGenerator.GetType()
             .GetField("_nyxIdChatToolSources", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -872,7 +888,6 @@ public sealed class MainnetHostCompositionTests
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
-            typeof(WorkflowAuthoringCapabilityReadAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(OrnnSearchAgentToolSource),
             typeof(OrnnPublishAgentToolSource),
@@ -987,6 +1002,27 @@ public sealed class MainnetHostCompositionTests
         }
         studioLocalToolNames.Should().Contain(StudioLocalWorkflowToolNames);
 
+        var workflowExternalCapabilityAuthoring = registry.Resolve(
+            ToolSetNames.WorkflowExternalCapabilityAuthoring);
+        workflowExternalCapabilityAuthoring.IsSuccess.Should()
+            .BeTrue(workflowExternalCapabilityAuthoring.Error?.Message);
+        var workflowExternalCapabilitySource = workflowExternalCapabilityAuthoring.Sources
+            .Should()
+            .ContainSingle(source => source is WorkflowExternalCapabilityAuthoringToolSource)
+            .Which;
+        var workflowExternalCapabilityTools = await workflowExternalCapabilitySource
+            .DiscoverToolsAsync();
+        workflowExternalCapabilityTools.Select(static tool => tool.Name).Should()
+            .Equal(WorkflowExternalCapabilityAuthoringToolNames);
+        workflowExternalCapabilityTools.Should().OnlyContain(static tool => tool.IsReadOnly);
+
+        var nyxIdChatDefault = registry.Resolve(ToolSetNames.NyxIdChatDefault);
+        nyxIdChatDefault.IsSuccess.Should().BeTrue(nyxIdChatDefault.Error?.Message);
+        nyxIdChatDefault.Sources.Select(static source => source.GetType()).Should()
+            .Equal(nyxIdChatToolSources.Select(static source => source.GetType()));
+        nyxIdChatDefault.Sources.Should().NotContain(source =>
+            source is WorkflowExternalCapabilityAuthoringToolSource);
+
         var nyxIdConnectedServices = registry.Resolve(ToolSetNames.NyxIdConnectedServices);
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
         nyxIdConnectedServices.Sources.Should().ContainSingle(source => source is NyxIdConnectedServiceToolSource);
@@ -1006,19 +1042,27 @@ public sealed class MainnetHostCompositionTests
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
-            typeof(WorkflowAuthoringCapabilityReadAgentToolSource),
             typeof(SkillsAgentToolSource),
             typeof(OrnnSearchAgentToolSource),
             typeof(OrnnPublishAgentToolSource),
             typeof(StartWorkflowToolSource),
             typeof(ObserveRunToolSource),
-            typeof(ReadWorkflowRunArtifactToolSource));
+            typeof(ReadWorkflowRunArtifactToolSource),
+            typeof(WorkflowExternalCapabilityAuthoringToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source =>
             source is NyxIdConnectedServiceToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source =>
             source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
+        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
+                source is WorkflowExternalCapabilityAuthoringToolSource)
+            .Which.Should().BeSameAs(workflowExternalCapabilitySource);
+        var builtInPromptFloor = app.Services.GetRequiredService<IBuiltInPromptFloorProvider>()
+            .GetFloor()
+            .Content;
+        foreach (var requiredToolName in WorkflowExternalCapabilityAuthoringToolNames.Take(2))
+            builtInPromptFloor.Should().NotContain($"`{requiredToolName}`");
         nyxIdChatProfile.Sources.Should().NotContain(source => source is WebAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source => source is BindingAgentToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source => source is OrnnAuthoringAgentToolSource);
@@ -1049,14 +1093,6 @@ public sealed class MainnetHostCompositionTests
         nyxIdChatOrnnTools.Should().NotContain(tool =>
             tool.Name == "ornn_publish_skill" ||
             tool.Name == "ornn_update_skill");
-        var workflowAuthoringReadTools = await nyxIdChatProfile.Sources
-            .OfType<WorkflowAuthoringCapabilityReadAgentToolSource>()
-            .Single()
-            .DiscoverToolsAsync();
-        workflowAuthoringReadTools.Select(static tool => tool.Name).Should().Equal(
-            "list_external_workflow_capabilities",
-            "inspect_external_workflow_capability_readiness");
-        workflowAuthoringReadTools.Should().OnlyContain(static tool => tool.IsReadOnly);
         var ornnPublishTools = await nyxIdChatProfile.Sources
             .OfType<OrnnPublishAgentToolSource>()
             .Single()
@@ -1069,7 +1105,7 @@ public sealed class MainnetHostCompositionTests
             .OfType<NyxIdAssistantToolSource>()
             .Single()
             .DiscoverToolsAsync());
-        workflowAuthoringRouteTools.AddRange(workflowAuthoringReadTools);
+        workflowAuthoringRouteTools.AddRange(workflowExternalCapabilityTools);
         workflowAuthoringRouteTools.AddRange(ornnPublishTools);
         workflowAuthoringRouteTools.AddRange(await nyxIdChatProfile.Sources
             .OfType<StartWorkflowToolSource>()

@@ -29,6 +29,11 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
     internal const string KeyRotateIntentId = "key_rotate";
     internal const string KeyRotateRoutingDescription =
         "Rotate one exact caller-visible NyxID API key through the browser-owned secure journey.";
+    internal const string WorkflowAuthoringIntentId = "workflow_authoring";
+    internal const string WorkflowAuthoringRoutingDescription =
+        "Discover or inspect exact external capabilities while drafting, revising, mounting, " +
+        "binding, or publishing Workflow YAML. Do not select this intent for invoking an existing " +
+        "workflow, calling an already-connected service directly, or connecting a missing service.";
     private static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(15);
     internal static AgentProfileTurnClassificationCandidate ServiceConnectCandidate { get; } =
         new(
@@ -45,11 +50,17 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
             KeyRotateIntentId,
             KeyRotateRoutingDescription,
             AgentProfileSideEffectClass.ExternalHandoff);
+    internal static AgentProfileTurnClassificationCandidate WorkflowAuthoringCandidate { get; } =
+        new(
+            WorkflowAuthoringIntentId,
+            WorkflowAuthoringRoutingDescription,
+            AgentProfileSideEffectClass.ReadOnly);
     private static readonly AgentProfileTurnClassificationCandidate[] Candidates =
     [
         ServiceConnectCandidate,
         KeyCreateCandidate,
         KeyRotateCandidate,
+        WorkflowAuthoringCandidate,
     ];
 
     private readonly IAgentProfileTurnClassifier _classifier;
@@ -84,6 +95,7 @@ public sealed class NyxIdChatTurnIntentClassifier : INyxIdChatTurnIntentClassifi
                 ServiceConnectIntentId => NyxIdChatTurnIntent.ServiceConnect,
                 KeyCreateIntentId => NyxIdChatTurnIntent.KeyCreate,
                 KeyRotateIntentId => NyxIdChatTurnIntent.KeyRotate,
+                WorkflowAuthoringIntentId => NyxIdChatTurnIntent.WorkflowAuthoring,
                 _ => NyxIdChatTurnIntent.Unspecified,
             }
             : NyxIdChatTurnIntent.Unspecified;

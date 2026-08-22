@@ -25,6 +25,20 @@ public static class ToolSetNames
     public const string LarkSelfNotify = "lark.self_notify";
 
     /// <summary>
+    /// Baseline NyxID Assistant tools exposed on ordinary, unprofiled chat turns. Intent-only
+    /// tool sets are composed into the Agent Profile authority route separately and are never
+    /// folded into this default turn surface.
+    /// </summary>
+    public const string NyxIdChatDefault = "nyxid.chat.default";
+
+    /// <summary>
+    /// Read-only external capability discovery, readiness, and explicit-request preview used by
+    /// workflow authoring surfaces.
+    /// </summary>
+    public const string WorkflowExternalCapabilityAuthoring =
+        "workflow.external-capability-authoring";
+
+    /// <summary>
     /// Studio-owned provisioning, member, binding, schedule, and query tools. This set is
     /// opt-in and must not be included by public/default route tool sets.
     /// </summary>

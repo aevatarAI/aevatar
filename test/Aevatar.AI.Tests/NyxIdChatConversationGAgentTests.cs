@@ -930,6 +930,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId,
             AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         phaseOneInput.RootElement.GetProperty("intents")[0]
             .GetProperty("routing_description").GetString().Should()
@@ -1096,6 +1097,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+            NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId,
             AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         serverClassifier.UserMessages.Should().BeEmpty();
         agent.State.ActiveTurn.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should()
@@ -1377,6 +1379,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
                 NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
                 NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
                 NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
+                NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId,
                 AgentTurnToolCatalogMaterializer.ProfileTaskRouteIntentId);
         intents[0]
             .GetProperty("side_effect_class").GetString().Should().Be("external_handoff");

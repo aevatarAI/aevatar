@@ -49,6 +49,13 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             "nyxid_api_keys",
             "nyxid_request_key_rotate",
         };
+    private static readonly IReadOnlySet<string> WorkflowAuthoringToolNames =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "list_external_workflow_capabilities",
+            "inspect_external_workflow_capability_readiness",
+            "preview_workflow_explicit_requests",
+        };
 
     private readonly IToolSetRegistry _toolSetRegistry;
     private readonly IAgentProfileTurnClassifier _classifier;
@@ -92,7 +99,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             userMessage,
             registeredTools,
             toolContext,
-            includeBuiltInServiceConnectIntent: false,
+            includeBuiltInNyxIdIntents: false,
             llmControl: null,
             ct);
 
@@ -110,7 +117,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             userMessage,
             registeredTools,
             toolContext,
-            includeBuiltInServiceConnectIntent: true,
+            includeBuiltInNyxIdIntents: true,
             llmControl,
             ct);
 
@@ -120,7 +127,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         string userMessage,
         IReadOnlyList<IAgentTool> registeredTools,
         AgentToolExecutionContext toolContext,
-        bool includeBuiltInServiceConnectIntent,
+        bool includeBuiltInNyxIdIntents,
         LLMControlContext? llmControl,
         CancellationToken ct)
     {
@@ -206,7 +213,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             profile,
             userMessage,
             diagnostics,
-            includeBuiltInServiceConnectIntent,
+            includeBuiltInNyxIdIntents,
             llmControl,
             ct);
         if (candidate is null)
@@ -517,7 +524,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
         var diagnostics = new List<AgentProfileTurnDiagnostic>();
         var routeTools = await DiscoverToolSetAsync(
-            ToolSetNames.NyxIdAssistantAdmission,
+            builtIn.ToolSetName,
             toolContext,
             AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
             diagnostics,
@@ -530,7 +537,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                            toolContext.ToolVisibility.Allows(pair.Key))
             .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.OrdinalIgnoreCase);
         if (selectedTools.Count != builtIn.ToolNames.Count ||
-            !builtIn.ToolNames.All(selectedTools.ContainsKey))
+            !builtIn.ToolNames.All(selectedTools.ContainsKey) ||
+            (builtIn.RequiresReadOnly && selectedTools.Values.Any(static tool => !tool.IsReadOnly)))
         {
             return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
         }
@@ -846,7 +854,8 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         if (allowed.Count != builtIn.ToolNames.Count ||
             selectedTools.Count != builtIn.ToolNames.Count ||
             !builtIn.ToolNames.All(name =>
-                allowed.Contains(name) && selectedTools.ContainsKey(name)))
+                allowed.Contains(name) && selectedTools.ContainsKey(name)) ||
+            (builtIn.RequiresReadOnly && selectedTools.Values.Any(static tool => !tool.IsReadOnly)))
         {
             return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: catalog.Diagnostics);
         }
@@ -923,7 +932,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         AgentProfileSnapshot profile,
         string userMessage,
         List<AgentProfileTurnDiagnostic> diagnostics,
-        bool includeBuiltInServiceConnectIntent,
+        bool includeBuiltInNyxIdIntents,
         LLMControlContext? llmControl,
         CancellationToken ct)
     {
@@ -945,7 +954,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             return null;
         }
 
-        if (includeBuiltInServiceConnectIntent)
+        if (includeBuiltInNyxIdIntents)
         {
             var builtInMembers = new[]
             {
@@ -961,6 +970,10 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                     member.IntentId,
                     NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
                     StringComparison.Ordinal)) ?? CreateBuiltInKeyRotateMember(),
+                profile.Members.FirstOrDefault(member => string.Equals(
+                    member.IntentId,
+                    NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId,
+                    StringComparison.Ordinal)) ?? CreateBuiltInWorkflowAuthoringMember(),
             };
             var builtInResult = await ClassifyAsync(
                 userMessage,
@@ -968,6 +981,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                     NyxIdChatTurnIntentClassifier.ServiceConnectCandidate,
                     NyxIdChatTurnIntentClassifier.KeyCreateCandidate,
                     NyxIdChatTurnIntentClassifier.KeyRotateCandidate,
+                    NyxIdChatTurnIntentClassifier.WorkflowAuthoringCandidate,
                     ProfileTaskRouteCandidate,
                 ],
                 profile.ClassifierTimeoutMs,
@@ -1124,21 +1138,48 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             SideEffectClass = AgentProfileSideEffectClass.ExternalHandoff,
         };
 
+    private static AgentProfileSkillMember CreateBuiltInWorkflowAuthoringMember() =>
+        new()
+        {
+            IntentId = NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId,
+            RoutingDescription = NyxIdChatTurnIntentClassifier.WorkflowAuthoringRoutingDescription,
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                ToolSetRefs = { ToolSetNames.WorkflowExternalCapabilityAuthoring },
+            },
+            SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
+        };
+
     private static BuiltInIntent? ResolveBuiltInIntent(NyxIdChatTurnIntent intent) => intent switch
     {
         NyxIdChatTurnIntent.ServiceConnect => new BuiltInIntent(
             NyxIdChatTurnIntentClassifier.ServiceConnectIntentId,
-            ServiceConnectToolNames),
+            ToolSetNames.NyxIdAssistantAdmission,
+            ServiceConnectToolNames,
+            RequiresReadOnly: false),
         NyxIdChatTurnIntent.KeyCreate => new BuiltInIntent(
             NyxIdChatTurnIntentClassifier.KeyCreateIntentId,
-            KeyCreateToolNames),
+            ToolSetNames.NyxIdAssistantAdmission,
+            KeyCreateToolNames,
+            RequiresReadOnly: false),
         NyxIdChatTurnIntent.KeyRotate => new BuiltInIntent(
             NyxIdChatTurnIntentClassifier.KeyRotateIntentId,
-            KeyRotateToolNames),
+            ToolSetNames.NyxIdAssistantAdmission,
+            KeyRotateToolNames,
+            RequiresReadOnly: false),
+        NyxIdChatTurnIntent.WorkflowAuthoring => new BuiltInIntent(
+            NyxIdChatTurnIntentClassifier.WorkflowAuthoringIntentId,
+            ToolSetNames.WorkflowExternalCapabilityAuthoring,
+            WorkflowAuthoringToolNames,
+            RequiresReadOnly: true),
         _ => null,
     };
 
-    private sealed record BuiltInIntent(string IntentId, IReadOnlySet<string> ToolNames);
+    private sealed record BuiltInIntent(
+        string IntentId,
+        string ToolSetName,
+        IReadOnlySet<string> ToolNames,
+        bool RequiresReadOnly);
 
     private async Task<string?> FetchSelectedSkillAsync(
         AgentProfileSnapshot profile,

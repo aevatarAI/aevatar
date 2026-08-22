@@ -23,4 +23,19 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, BindingAgentToolSource>());
         return services;
     }
+
+    /// <summary>
+    /// Registers the explicit, read-only workflow external-capability authoring source. The source
+    /// is intentionally concrete-only so hosts must opt into it through a named tool set.
+    /// </summary>
+    public static IServiceCollection AddWorkflowExternalCapabilityAuthoringTools(
+        this IServiceCollection services,
+        Action<WorkflowExternalCapabilityToolOptions>? configure = null)
+    {
+        var options = new WorkflowExternalCapabilityToolOptions();
+        configure?.Invoke(options);
+        services.TryAddSingleton(options);
+        services.TryAddSingleton<WorkflowExternalCapabilityAuthoringToolSource>();
+        return services;
+    }
 }

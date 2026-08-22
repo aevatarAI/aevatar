@@ -80,9 +80,10 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// </para>
     ///
     /// <para>
-    /// The compatibility role declares an explicit empty static <c>allowed_tools</c> scope and opts into only the
-    /// bounded <c>studio.local</c> tool set. That set remains below the workflow per-turn budget and excludes Lark,
-    /// unmanaged workflow starts, loose-definition tools, NyxID privileged/execution, storage writes, and skill authoring.
+    /// The compatibility role declares an explicit empty static <c>allowed_tools</c> scope and opts into the
+    /// bounded <c>studio.local</c> and <c>workflow.external-capability-authoring</c> tool sets. Those sets remain
+    /// below the workflow per-turn budget and exclude Lark, unmanaged workflow starts, loose-definition tools,
+    /// NyxID privileged/execution, storage writes, and skill authoring.
     /// New product Studio chat uses server-owned profiles outside this compatibility wrapper.
     /// </para>
     /// </summary>
@@ -419,6 +420,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             allowed_tools: []
             tool_sets:
               - studio.local
+              - workflow.external-capability-authoring
         steps:
           - id: reply
             type: llm_call

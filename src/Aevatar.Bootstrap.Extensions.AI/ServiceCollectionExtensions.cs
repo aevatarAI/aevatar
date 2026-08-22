@@ -119,6 +119,7 @@ public sealed class AevatarAIFeatureOptions
     public bool EnableWorkflowTools { get; set; }
     public bool EnableScriptingTools { get; set; }
     public bool EnableBindingTools { get; set; }
+    public bool EnableWorkflowExternalCapabilityAuthoringTools { get; set; }
     public VoicePresenceFeatureOptions VoicePresence { get; } = new();
 }
 
@@ -209,6 +210,9 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableBindingTools)
             RegisterBindingTools(services);
+
+        if (options.EnableWorkflowExternalCapabilityAuthoringTools)
+            RegisterWorkflowExternalCapabilityAuthoringTools(services);
 
         RegisterVoicePresenceModules(services, configuration, options);
 
@@ -1297,6 +1301,11 @@ public static class ServiceCollectionExtensions
     private static void RegisterBindingTools(IServiceCollection services)
     {
         services.AddBindingTools();
+    }
+
+    private static void RegisterWorkflowExternalCapabilityAuthoringTools(IServiceCollection services)
+    {
+        services.AddWorkflowExternalCapabilityAuthoringTools();
     }
 
     private sealed class ServiceProviderAgentToolExecutionPort(IServiceProvider serviceProvider) : IAgentToolExecutionPort

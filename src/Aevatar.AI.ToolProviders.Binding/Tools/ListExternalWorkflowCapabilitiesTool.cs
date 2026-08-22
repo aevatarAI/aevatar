@@ -10,14 +10,14 @@ namespace Aevatar.AI.ToolProviders.Binding.Tools;
 public sealed class ListExternalWorkflowCapabilitiesTool : ExternalWorkflowCapabilityReadOnlyTool
 {
     private readonly IExternalWorkflowCapabilityListPort _listPort;
-    private readonly BindingToolOptions _options;
+    private readonly WorkflowExternalCapabilityToolOptions _options;
 
     public ListExternalWorkflowCapabilitiesTool(
         IExternalWorkflowCapabilityListPort listPort,
-        BindingToolOptions? options = null)
+        WorkflowExternalCapabilityToolOptions? options = null)
     {
         _listPort = listPort;
-        _options = options ?? new BindingToolOptions();
+        _options = options ?? new WorkflowExternalCapabilityToolOptions();
     }
 
     public override string Name => "list_external_workflow_capabilities";

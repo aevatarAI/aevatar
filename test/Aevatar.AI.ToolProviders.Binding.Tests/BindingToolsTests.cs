@@ -693,35 +693,21 @@ public class BindingToolsTests
     }
 
     [Fact]
-    public async Task BindingAgentToolSource_RegistersExternalCapabilityToolsConditionally()
+    public async Task WorkflowExternalCapabilityAuthoringToolSource_RegistersOnlyAuthoringReadTools()
     {
-        var source = new BindingAgentToolSource(
-            new BindingToolOptions(),
-            externalCapabilityListPort: new StubExternalWorkflowCapabilityListPort(
-                new ExternalWorkflowCapabilityDiscoveryResult()),
-            externalCapabilityReadinessPort: new StubExternalWorkflowCapabilityReadinessPort());
-
-        var tools = await source.DiscoverToolsAsync();
-
-        tools.Should().HaveCount(2);
-        tools.Should().ContainSingle(tool => tool is ListExternalWorkflowCapabilitiesTool);
-        tools.Should().ContainSingle(tool => tool is InspectExternalWorkflowCapabilityReadinessTool);
-    }
-
-    [Fact]
-    public async Task WorkflowAuthoringCapabilityReadAgentToolSource_ShouldExposeOnlyReadTools()
-    {
-        var source = new WorkflowAuthoringCapabilityReadAgentToolSource(
+        var source = new WorkflowExternalCapabilityAuthoringToolSource(
+            new WorkflowExternalCapabilityToolOptions(),
             new StubExternalWorkflowCapabilityListPort(
                 new ExternalWorkflowCapabilityDiscoveryResult()),
             new StubExternalWorkflowCapabilityReadinessPort(),
-            new BindingToolOptions());
+            new StubWorkflowExplicitRequestPreviewService());
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Select(static tool => tool.Name).Should().Equal(
-            "list_external_workflow_capabilities",
-            "inspect_external_workflow_capability_readiness");
+        tools.Should().HaveCount(3);
+        tools.Should().ContainSingle(tool => tool is ListExternalWorkflowCapabilitiesTool);
+        tools.Should().ContainSingle(tool => tool is InspectExternalWorkflowCapabilityReadinessTool);
+        tools.Should().ContainSingle(tool => tool is PreviewWorkflowExplicitRequestsTool);
         tools.Should().OnlyContain(static tool => tool.IsReadOnly);
     }
 
@@ -1580,6 +1566,17 @@ public class BindingToolsTests
             };
             return Task.FromResult(readiness);
         }
+    }
+
+    private sealed class StubWorkflowExplicitRequestPreviewService : IWorkflowExplicitRequestPreviewService
+    {
+        public Task<WorkflowExplicitRequestPreviewResult> PreviewAsync(
+            WorkflowExplicitRequestPreviewRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WorkflowExplicitRequestPreviewResult(
+                request.WorkflowId ?? string.Empty,
+                request.RevisionId ?? string.Empty,
+                []));
     }
 
     private static ExternalWorkflowCapabilityDescriptor Descriptor(
