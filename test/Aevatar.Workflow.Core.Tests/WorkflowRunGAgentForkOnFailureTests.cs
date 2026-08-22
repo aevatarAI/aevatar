@@ -616,6 +616,80 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
+    public async Task TerminalReconciliation_WithLegacyPendingLlmCall_ShouldUseCurrentExecutionIdentityForRedelivery()
+    {
+        var runId = "run-reconcile-legacy-llm-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var llmState = new LLMCallModuleState();
+        llmState.PendingBySessionId["session-reconcile-legacy"] = new PendingLlmCallState
+        {
+            RunId = runId,
+            StepId = "failed-step",
+            ExecutionId = string.Empty,
+            TargetRole = "assistant",
+            RequestDispatched = true,
+        };
+        await harness.Agent.UpsertExecutionStateAsync("llm_call", Any.Pack(llmState));
+        harness.Publisher.Sent.Clear();
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 1469));
+
+        var sent = harness.Publisher.Sent.Should().ContainSingle().Subject;
+        var reconcile = sent.Event.Should().BeOfType<ReconcileWorkflowLlmCompletionCommand>().Subject;
+        reconcile.SessionId.Should().Be("session-reconcile-legacy");
+        reconcile.ExecutionId.Should().Be(harness.StepExecutionId);
+    }
+
+    [Fact]
+    public async Task TerminalReconciliation_WithUnconfirmedLlmDispatch_ShouldRearmExactStepDispatch()
+    {
+        var runId = "run-reconcile-unconfirmed-llm-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        var llmState = new LLMCallModuleState();
+        llmState.PendingBySessionId["session-reconcile-unconfirmed"] = new PendingLlmCallState
+        {
+            RunId = runId,
+            StepId = "failed-step",
+            ExecutionId = harness.StepExecutionId,
+            TargetRole = "assistant",
+            RequestDispatched = false,
+        };
+        await harness.Agent.UpsertExecutionStateAsync("llm_call", Any.Pack(llmState));
+        harness.Publisher.Published.Clear();
+        harness.Publisher.HandleSelfPublications = false;
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 1470));
+
+        KernelState(harness.Agent).CurrentStepDispatchPending.Should().BeTrue();
+        harness.Publisher.Published
+            .Should()
+            .ContainSingle(item => item.Event is WorkflowExecutionRecoveryRequestedEvent)
+            .Which.Event.Should().BeOfType<WorkflowExecutionRecoveryRequestedEvent>()
+            .Which.RunId.Should().Be(runId);
+    }
+
+    [Fact]
+    public async Task TerminalReconciliation_WithTerminalAuthoritativeState_ShouldRepublishCurrentStateWithoutNewCommit()
+    {
+        var runId = "run-reconcile-terminal-replica-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, WorkflowYaml(onFailure: false));
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            runId,
+            SuccessfulStepCompletion(harness, "terminal-output")));
+        harness.Agent.State.Status.Should().Be("completed");
+        var committedCount = (await harness.EventStore.GetEventsAsync(runId)).Count;
+        harness.CommittedPublisher.Events.Clear();
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 9));
+
+        (await harness.EventStore.GetEventsAsync(runId)).Should().HaveCount(committedCount);
+        var republished = harness.CommittedPublisher.Events.Should().ContainSingle().Subject;
+        CommittedStateRepublish.IsRepublishEventId(republished.StateEvent.EventId).Should().BeTrue();
+        republished.StateEvent.EventData.Is(WorkflowCompletedEvent.Descriptor).Should().BeTrue();
+        republished.StateRoot.Unpack<WorkflowRunState>().Status.Should().Be("completed");
+    }
+
+    [Fact]
     public async Task TerminalReconciliation_WithActiveKernel_ShouldPreserveLegitimateWait()
     {
         var runId = "run-reconcile-active-" + Guid.NewGuid().ToString("N");
@@ -1284,6 +1358,8 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
 
         public Func<IMessage, bool>? FailPublish { get; set; }
 
+        public bool HandleSelfPublications { get; set; } = true;
+
         public async Task PublishAsync<T>(
             T evt,
             TopologyAudience audience,
@@ -1302,7 +1378,7 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
 
             Published.Add((evt, audience));
 
-            if (audience == TopologyAudience.Self)
+            if (audience == TopologyAudience.Self && HandleSelfPublications)
                 await Agent.HandleEventAsync(SelfEnvelope(runId, evt), ct);
         }
 
