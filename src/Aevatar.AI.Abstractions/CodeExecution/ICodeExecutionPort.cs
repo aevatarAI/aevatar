@@ -37,12 +37,20 @@ public interface IDurableCodeExecutionPort
 public static class CodeExecutionContract
 {
     public const string ServiceSlug = "chrono-sandbox";
+    public const string PersonalServiceSlug = "chrono-sandbox-aevatar";
     public const int MinimumTimeoutSeconds = 1;
     public const int DefaultTimeoutSeconds = 180;
     public const int MaximumTimeoutSeconds = 600;
 
     public static bool IsValidTimeoutSeconds(int timeoutSeconds) =>
         timeoutSeconds is >= MinimumTimeoutSeconds and <= MaximumTimeoutSeconds;
+
+    public static bool IsValidServiceSlug(string? serviceSlug) =>
+        Aevatar.AI.Abstractions.LLMProviders.NyxIdServiceSlugPolicy.IsCanonical(serviceSlug);
+
+    public static bool IsSupportedServiceSlug(string? serviceSlug) =>
+        string.Equals(serviceSlug, ServiceSlug, StringComparison.Ordinal) ||
+        string.Equals(serviceSlug, PersonalServiceSlug, StringComparison.Ordinal);
 }
 
 public sealed record CodeExecutionRequest(

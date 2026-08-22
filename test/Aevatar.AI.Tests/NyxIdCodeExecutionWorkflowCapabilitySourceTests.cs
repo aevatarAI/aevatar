@@ -265,9 +265,46 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
             ExternalCapabilityExecutionMode.Interactive);
 
         readiness.Status.Should().Be(
-            ExternalCapabilityReadinessStatus.CredentialConnectionRequired);
+            ExternalCapabilityReadinessStatus.ServiceRegistrationRequired);
         readiness.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("CODE_EXECUTION_ROUTE_NOT_READY");
+            .Be("CODE_EXECUTION_ROUTE_MISSING");
+    }
+
+    [Fact]
+    public async Task InspectAsync_UnsupportedAliasForSandboxCatalogCannotBecomePlatformRoute()
+    {
+        var routeInventory = Inventory(Service(
+            "us-code-alias",
+            "personal",
+            allowed: true,
+            slug: "arbitrary-shadow"));
+        var handler = new InventoryHandler(
+            routeInventory,
+            """
+            {
+              "keys": [{
+                "id": "us-code-alias",
+                "slug": "arbitrary-shadow",
+                "catalog_service_id": "catalog-chrono-sandbox",
+                "catalog_service_slug": "chrono-sandbox",
+                "is_active": true,
+                "status": "active",
+                "connected": true,
+                "credential_source": { "type": "personal" }
+              }]
+            }
+            """);
+        var source = CreateSource(handler);
+
+        var readiness = await source.InspectAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        readiness.Status.Should().Be(
+            ExternalCapabilityReadinessStatus.ServiceRegistrationRequired);
+        readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("CODE_EXECUTION_ROUTE_MISSING");
     }
 
     [Fact]
@@ -322,7 +359,8 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
         bool injectDelegationToken = true,
         string scope = "proxy:* sandbox:execute",
         bool isActive = true,
-        bool forwardAccessToken = true)
+        bool forwardAccessToken = true,
+        string slug = "chrono-sandbox")
     {
         var credentialSource = credentialSourceType == "personal"
             ? (object)new { type = "personal" }
@@ -337,7 +375,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySourceTests
         return new
         {
             id,
-            slug = "chrono-sandbox",
+            slug,
             catalog_service_id = catalogServiceId,
             is_active = isActive,
             forward_access_token = forwardAccessToken,

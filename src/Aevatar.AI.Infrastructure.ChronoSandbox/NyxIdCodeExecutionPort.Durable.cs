@@ -308,13 +308,10 @@ internal sealed partial class NyxIdCodeExecutionPort
         string localDiagnosticId,
         CancellationToken ct)
     {
-        if (TryResolveExactAdmittedRoute(request.Route, out var admittedUserServiceId))
+        if (TryResolveExactAdmittedRoute(request.Route, out _))
         {
             return new DurableRouteResolution(
-                new CodeExecutionRouteIdentity(
-                    RequiredServiceSlug,
-                    admittedUserServiceId,
-                    CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+                request.Route,
                 null);
         }
 
@@ -808,16 +805,16 @@ internal sealed partial class NyxIdCodeExecutionPort
         CodeExecutionContract.IsValidTimeoutSeconds(request.TimeoutSeconds) &&
         request.Route is not null &&
         IsValidExecutionCredentialKind(request.Caller?.ExecutionCredentialKind) &&
-        string.Equals(request.Route.ServiceSlug, RequiredServiceSlug, StringComparison.Ordinal);
+        IsValidRequestedRoute(request.Route);
 
     private static bool IsValidResolvedRoute(CodeExecutionRouteIdentity? route) =>
         route is not null &&
-        string.Equals(route.ServiceSlug, RequiredServiceSlug, StringComparison.Ordinal) &&
+        CodeExecutionContract.IsSupportedServiceSlug(route.ServiceSlug) &&
         !string.IsNullOrWhiteSpace(route.UserServiceId) &&
         string.Equals(route.UserServiceId, route.UserServiceId.Trim(), StringComparison.Ordinal) &&
         !route.UserServiceId.Any(char.IsControl) &&
-        (route.Source is CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog or
-            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
+        route.Source is CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog or
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission;
 
     private static bool IsValidIdempotencyKey(string? value) =>
         value is { Length: > 0 and <= 128 } &&

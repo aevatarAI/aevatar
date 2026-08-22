@@ -2910,14 +2910,14 @@ public sealed class ToolCallModuleContextTests
     }
 
     [Fact]
-    public async Task ToolCallModule_WhenV4SubmissionUncertainRecoversCatalogRoute_ShouldRefinePendingReceipt()
+    public async Task ToolCallModule_WhenV4SubmissionUncertainRecoversPersonalCatalogRoute_ShouldRefinePendingReceipt()
     {
         var now = new DateTimeOffset(2026, 8, 17, 0, 0, 0, TimeSpan.Zero);
         var providerReceipt = DurableOperation(
             status: WorkflowToolPendingOperationStatus.Running,
             etag: "etag-catalog") with
         {
-            ServiceSlug = CodeExecutionContract.ServiceSlug,
+            ServiceSlug = "chrono-sandbox-aevatar",
             UserServiceId = "catalog-service",
             RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog,
             ExpiresAtUnixMs = now.AddMinutes(10).ToUnixTimeMilliseconds(),
@@ -2930,6 +2930,7 @@ public sealed class ToolCallModuleContextTests
             CancelPath = string.Empty,
             Status = WorkflowToolPendingOperationStatus.SubmissionUncertain,
             ETag = null,
+            ServiceSlug = CodeExecutionContract.ServiceSlug,
             UserServiceId = null,
             RouteIdentitySource = WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract,
             ExpiresAtUnixMs = now.AddMinutes(12).ToUnixTimeMilliseconds(),
@@ -2964,7 +2965,7 @@ public sealed class ToolCallModuleContextTests
         var pending = ctx.LoadState<ToolCallModuleState>(ToolCallModule.ModuleStateKey)
             .PendingOperations.Should().ContainSingle().Subject.Value;
         pending.ProviderOperationId.Should().Be(providerReceipt.ProviderOperationId);
-        pending.ServiceSlug.Should().Be(CodeExecutionContract.ServiceSlug);
+        pending.ServiceSlug.Should().Be("chrono-sandbox-aevatar");
         pending.UserServiceId.Should().Be("catalog-service");
         pending.RouteIdentitySource.Should()
             .Be(WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog);

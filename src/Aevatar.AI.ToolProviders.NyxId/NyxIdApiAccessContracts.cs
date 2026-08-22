@@ -71,7 +71,8 @@ public sealed record NyxIdUserService(
     string? CatalogServiceId = null,
     bool? ForwardAccessToken = null,
     bool? InjectDelegationToken = null,
-    string? DelegationTokenScope = null);
+    string? DelegationTokenScope = null,
+    bool AutoConnected = false);
 
 public sealed record NyxIdUserServices(IReadOnlyList<NyxIdUserService> Services);
 
@@ -388,7 +389,9 @@ public static class NyxIdApiAccessResponseParser
                     : null,
                 includeCodeExecutionRouteFields
                     ? ReadOptionalNormalizedString(serviceElement, "delegation_token_scope")
-                    : null));
+                    : null,
+                includeCodeExecutionRouteFields &&
+                ReadOptionalBoolean(serviceElement, "auto_connected") == true));
         }
 
         return new NyxIdUserServices(services);

@@ -855,7 +855,7 @@ public sealed class NyxIdCodeExecuteTool(
                     "A typed NyxID execution credential is required for code execution."));
         }
 
-        if (!TryResolveAdmittedRoute(out var admittedUserServiceId))
+        if (!TryResolveAdmittedRoute(out var admittedServiceSlug, out var admittedUserServiceId))
         {
             return CodeExecutionPreparation.Failed(new CodeExecutionFailure(
                     CodeExecutionFailureKind.AdmissionDenied,
@@ -877,7 +877,7 @@ public sealed class NyxIdCodeExecuteTool(
             source,
             timeoutSeconds,
             new CodeExecutionRouteIdentity(
-                CodeExecutionContract.ServiceSlug,
+                admittedServiceSlug,
                 admittedUserServiceId,
                 admittedUserServiceId is null
                     ? CodeExecutionRouteIdentitySource.CodeExecutionContract
@@ -1009,10 +1009,7 @@ public sealed class NyxIdCodeExecuteTool(
             pending.ServiceSlug,
             pending.UserServiceId,
             pending.RouteIdentitySource);
-        if (!string.Equals(
-                route.ServiceSlug,
-                CodeExecutionContract.ServiceSlug,
-                StringComparison.Ordinal) ||
+        if (!CodeExecutionContract.IsValidServiceSlug(route.ServiceSlug) ||
             route.Source == CodeExecutionRouteIdentitySource.Unspecified ||
             !Enum.IsDefined(route.Source))
         {
@@ -1020,7 +1017,20 @@ public sealed class NyxIdCodeExecuteTool(
         }
 
         if (route.UserServiceId is null)
-            return route.Source == CodeExecutionRouteIdentitySource.CodeExecutionContract;
+        {
+            return route.Source == CodeExecutionRouteIdentitySource.CodeExecutionContract &&
+                   string.Equals(
+                       route.ServiceSlug,
+                       CodeExecutionContract.ServiceSlug,
+                       StringComparison.Ordinal);
+        }
+
+        if ((route.Source is CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog or
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission) &&
+            !CodeExecutionContract.IsSupportedServiceSlug(route.ServiceSlug))
+        {
+            return false;
+        }
 
         return !string.IsNullOrWhiteSpace(route.UserServiceId) &&
                string.Equals(route.UserServiceId, route.UserServiceId.Trim(), StringComparison.Ordinal);
@@ -1039,10 +1049,7 @@ public sealed class NyxIdCodeExecuteTool(
                preparedRoute.UserServiceId is null &&
                pendingRoute.Source == CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog &&
                !string.IsNullOrWhiteSpace(pendingRoute.UserServiceId) &&
-               string.Equals(
-                   pendingRoute.ServiceSlug,
-                   preparedRoute.ServiceSlug,
-                   StringComparison.Ordinal);
+               CodeExecutionContract.IsSupportedServiceSlug(pendingRoute.ServiceSlug);
     }
 
     private static long RetryAfterMilliseconds(TimeSpan? value, TimeSpan fallback)
@@ -1108,8 +1115,11 @@ public sealed class NyxIdCodeExecuteTool(
             failure.DiagnosticId,
             failure.ProviderPhase);
 
-    private static bool TryResolveAdmittedRoute(out string? userServiceId)
+    private static bool TryResolveAdmittedRoute(
+        out string serviceSlug,
+        out string? userServiceId)
     {
+        serviceSlug = CodeExecutionContract.ServiceSlug;
         userServiceId = null;
         var admission = AgentToolRequestContext.Current?.OperationAdmission;
         if (admission is null)
@@ -1120,10 +1130,7 @@ public sealed class NyxIdCodeExecuteTool(
                 admission.ServiceInstanceId,
                 admission.ServiceInstanceId.Trim(),
                 StringComparison.Ordinal) ||
-            !string.Equals(
-                admission.ServiceSlug,
-                CodeExecutionContract.ServiceSlug,
-                StringComparison.Ordinal) ||
+            !CodeExecutionContract.IsSupportedServiceSlug(admission.ServiceSlug) ||
             admission.Identity is not AgentToolOperationIdentity.PlatformBuiltIn
             {
                 CapabilityId: "code_execute",
@@ -1136,6 +1143,7 @@ public sealed class NyxIdCodeExecuteTool(
             return false;
         }
 
+        serviceSlug = admission.ServiceSlug;
         userServiceId = admission.ServiceInstanceId;
         return true;
     }

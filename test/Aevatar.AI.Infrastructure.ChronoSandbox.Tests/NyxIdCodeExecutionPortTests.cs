@@ -110,6 +110,42 @@ public sealed class NyxIdCodeExecutionPortTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ScheduledPersonalRouteUsesItsAdmittedSlug()
+    {
+        var handler = new SequenceHandler(JsonResponse(
+            """
+            {
+              "success": true,
+              "output": {
+                "stdout": "scheduled-ok",
+                "stderr": "",
+                "exit_code": 0
+              }
+            }
+            """));
+        var port = CreatePort(handler);
+        var request = Request(
+            "us-code-aevatar",
+            executionCredential: "scheduled-agent-key",
+            sourceReadableBearerToken: null,
+            executionCredentialKind: CodeExecutionNyxIdCredentialKind.AgentKey) with
+        {
+            Route = new CodeExecutionRouteIdentity(
+                "chrono-sandbox-aevatar",
+                "us-code-aevatar",
+                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission),
+        };
+
+        var outcome = await port.ExecuteAsync(request);
+
+        outcome.Failure.Should().BeNull();
+        outcome.ResolvedRoute.Should().Be(request.Route);
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].PathAndQuery.Should().Be(
+            "/api/v1/proxy/s/chrono-sandbox-aevatar/execute?_nyxid_via=us-code-aevatar");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenUserServicesSourceCredentialExpiresAfterExactAdmission_UsesAdmittedRoute()
     {
         var handler = new SequenceHandler(

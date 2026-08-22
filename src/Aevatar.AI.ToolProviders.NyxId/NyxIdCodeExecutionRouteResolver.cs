@@ -86,12 +86,28 @@ public static class NyxIdCodeExecutionRouteResolver
                 inventory.Failure);
         }
 
+        if (executionInventory is not null && !executionInventory.Succeeded)
+        {
+            var denied = executionInventory.Failure?.Kind is
+                NyxIdApiAccessFailureKind.Unauthorized or NyxIdApiAccessFailureKind.Forbidden;
+            return new NyxIdCodeExecutionRouteResolution(
+                denied
+                    ? NyxIdCodeExecutionRouteResolutionKind.AccessDenied
+                    : NyxIdCodeExecutionRouteResolutionKind.SourceUnavailable,
+                null,
+                0,
+                0,
+                0,
+                0,
+                executionInventory.Failure);
+        }
+
         var requestedId = NormalizeOptional(exactUserServiceId);
         var canonical = inventory.Value!.Services
             .Where(service =>
-                string.Equals(service.Slug, CodeExecutionContract.ServiceSlug, StringComparison.Ordinal) &&
                 !string.IsNullOrWhiteSpace(service.CatalogServiceId) &&
-                (requestedId is null || string.Equals(service.Id, requestedId, StringComparison.Ordinal)))
+                (requestedId is null || string.Equals(service.Id, requestedId, StringComparison.Ordinal)) &&
+                IsCanonicalCodeExecutionRoute(inventory, executionInventory, service))
             .ToArray();
         if (canonical.Length == 0)
             return Result(NyxIdCodeExecutionRouteResolutionKind.Missing, canonical, [], [], []);
@@ -113,22 +129,6 @@ public static class NyxIdCodeExecutionRouteResolver
                 accessible,
                 active,
                 []);
-
-        if (executionInventory is not null && !executionInventory.Succeeded)
-        {
-            var denied = executionInventory.Failure?.Kind is
-                NyxIdApiAccessFailureKind.Unauthorized or NyxIdApiAccessFailureKind.Forbidden;
-            return new NyxIdCodeExecutionRouteResolution(
-                denied
-                    ? NyxIdCodeExecutionRouteResolutionKind.AccessDenied
-                    : NyxIdCodeExecutionRouteResolutionKind.SourceUnavailable,
-                null,
-                canonical.Length,
-                accessible.Length,
-                active.Length,
-                0,
-                executionInventory.Failure);
-        }
 
         var executionReady = executionInventory is null
             ? active
@@ -232,6 +232,33 @@ public static class NyxIdCodeExecutionRouteResolver
         out NyxIdUserServiceAuthority? authority) =>
         new NyxIdUserServiceAuthoritySnapshot(routes, executionInventory)
             .TryGetExact(userServiceId, out authority);
+
+    private static bool IsCanonicalCodeExecutionRoute(
+        NyxIdApiAccessResult<NyxIdUserServices> routes,
+        NyxIdApiAccessResult<NyxIdUserServiceKeys>? executionInventory,
+        NyxIdUserService service)
+    {
+        if (executionInventory is null)
+        {
+            return string.Equals(
+                service.Slug,
+                CodeExecutionContract.ServiceSlug,
+                StringComparison.Ordinal);
+        }
+
+        return executionInventory.Succeeded &&
+               CodeExecutionContract.IsSupportedServiceSlug(service.Slug) &&
+               TryResolveExecutionAuthority(
+                   routes,
+                   executionInventory,
+                   service.Id,
+                   out var authority) &&
+               authority is not null &&
+               string.Equals(
+                   authority.Execution.CatalogServiceSlug,
+                   CodeExecutionContract.ServiceSlug,
+                   StringComparison.Ordinal);
+    }
 
     private static NyxIdCodeExecutionRouteResolution Result(
         NyxIdCodeExecutionRouteResolutionKind kind,

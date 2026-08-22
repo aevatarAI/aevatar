@@ -2474,7 +2474,7 @@ public sealed partial class ToolCallModule :
         string.IsNullOrWhiteSpace(pending.UserServiceId) &&
         pending.RouteIdentitySource == WorkflowToolPendingOperationRouteIdentitySource.CodeExecutionContract &&
         HasProviderReceipt(operation) &&
-        string.Equals(operation.ServiceSlug, CodeExecutionContract.ServiceSlug, StringComparison.Ordinal) &&
+        CodeExecutionContract.IsSupportedServiceSlug(operation.ServiceSlug) &&
         operation.RouteIdentitySource == WorkflowToolPendingOperationRouteIdentitySource.NyxIdUserServiceCatalog &&
         !string.IsNullOrWhiteSpace(operation.UserServiceId);
 
