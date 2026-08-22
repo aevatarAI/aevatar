@@ -168,6 +168,7 @@ public sealed class NyxIdCodeExecutionWorkflowCapabilitySource(
                 service.ForwardAccessToken?.ToString(CultureInfo.InvariantCulture),
                 service.InjectDelegationToken?.ToString(CultureInfo.InvariantCulture),
                 service.DelegationTokenScope,
+                service.AutoConnected.ToString(CultureInfo.InvariantCulture),
             });
         var executionComponents = authority.ExecutionInventory.Value!.Services
             .OrderBy(static service => service.Id, StringComparer.Ordinal)

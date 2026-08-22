@@ -1247,6 +1247,34 @@ public sealed class NyxIdCodeExecuteToolTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteWithOutcomeAsync_WorkflowAdmissionPreservesPersonalExecutionRouteSlug()
+    {
+        var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(
+            new CodeExecutionResult("ok", string.Empty, 0),
+            ResolvedRoute));
+        var tool = new NyxIdCodeExecuteTool(port);
+        SetAgentKey("scheduled-agent-key");
+        AgentToolRequestContext.Current = AgentToolRequestContext.Current! with
+        {
+            OperationAdmission = CodeExecutionAdmission("us-code-aevatar") with
+            {
+                ServiceSlug = "chrono-sandbox-aevatar",
+            },
+        };
+
+        await tool.ExecuteWithOutcomeAsync(
+            "call-managed-admitted",
+            tool.Name,
+            """{"language":"javascript","code":"console.log('ok')"}""");
+
+        port.Request.Should().NotBeNull();
+        port.Request!.Route.Should().Be(new CodeExecutionRouteIdentity(
+            "chrono-sandbox-aevatar",
+            "us-code-aevatar",
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission));
+    }
+
+    [Fact]
     public async Task ExecuteWithOutcomeAsync_AgentKeyUsesExactAdmissionWithoutSourceReadableCredential()
     {
         var port = new StubCodeExecutionPort(CodeExecutionOutcome.Succeeded(

@@ -172,14 +172,15 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
         await observer.WaitForDeleteAsync(actorId, TestTimeout);
 
-        observer.Snapshot(actorId)
+        var observations = observer.Snapshot(actorId);
+        observations
+            .Where(static observation => observation.Operation == nameof(BindingWriteObservation.Upsert))
             .Should()
-            .Equal(
-            [
-                BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1),
-                BindingWriteObservation.Delete(actorId)
-            ],
-                "the revoke delete is an ordered barrier after the duplicate commit turn");
+            .OnlyContain(
+                observation => observation == BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1),
+                "at-least-once projection replay may repeat the first write but must never project the duplicate binding");
+        observations.Should().Contain(BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1));
+        observations.Should().Contain(BindingWriteObservation.Delete(actorId));
 
         var queryPort = host.Services.GetRequiredService<IExternalIdentityBindingQueryPort>();
         var resolved = await queryPort.ResolveAsync(subject);

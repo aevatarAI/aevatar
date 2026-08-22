@@ -75,7 +75,9 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
             ["upsert-edge-identities"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildUpsertEdgeIdentitiesCypher("EdgeIdentity"),
             ["delete-rewire"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildDeleteRelationshipsForRewireCypher("REL"),
             ["create-live-edges"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCreateLiveEdgesCypher("Node", "REL"),
-            ["select-promotable"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesCypher("EdgeIdentity"),
+            ["select-promotable-by-id"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesByIdCypher("EdgeIdentity"),
+            ["select-promotable-by-from"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesByFromNodeCypher("EdgeIdentity"),
+            ["select-promotable-by-to"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesByToNodeCypher("EdgeIdentity"),
             ["promote-pending"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildPromotePendingEdgesCypher("Node", "REL", "EdgeIdentity"),
             ["commit-watermark"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildCommitWatermarkCypher("OwnerState", "OwnerEvent"),
             ["read-snapshot"] = Neo4jProjectionGraphStoreVersionedCypherSupport.BuildReadOwnerSnapshotCypher("OwnerState", "Node", "REL", "EdgeIdentity"),
@@ -133,15 +135,23 @@ public sealed class Neo4jVersionedProjectionGraphCypherTests
         edgeIdentities.Should().Contain("identity.status = item.status");
         edgeIdentities.Should().Contain("identity.mutationPayload = item.mutationPayload");
         edgeIdentities.Should().Contain("identity.projectionGraphVersion = item.projectionGraphVersion");
-        var select = Neo4jProjectionGraphStoreVersionedCypherSupport
-            .BuildSelectPromotablePendingEdgesCypher("EdgeIdentity");
-        select.Should().Contain("status: 'pending'");
-        select.Should().Contain("identity.edgeId IN $promotableEdgeIds");
-        select.Should().Contain("identity.fromNodeId IN $promotableNodeIds");
-        select.Should().Contain("identity.toNodeId IN $promotableNodeIds");
-        select.Should().NotContain("MERGE");
-        // The MERGE statement is UNWIND-driven and carries no disjunction: the selection above is
-        // the only place the OR predicate lives, so the planner never sees it next to the MERGE.
+        var selectById = Neo4jProjectionGraphStoreVersionedCypherSupport
+            .BuildSelectPromotablePendingEdgesByIdCypher("EdgeIdentity");
+        var selectByFrom = Neo4jProjectionGraphStoreVersionedCypherSupport
+            .BuildSelectPromotablePendingEdgesByFromNodeCypher("EdgeIdentity");
+        var selectByTo = Neo4jProjectionGraphStoreVersionedCypherSupport
+            .BuildSelectPromotablePendingEdgesByToNodeCypher("EdgeIdentity");
+        selectById.Should().StartWith("UNWIND $promotableEdgeIds AS edgeId ");
+        selectById.Should().Contain("edgeId: edgeId");
+        selectByFrom.Should().StartWith("UNWIND $promotableNodeIds AS nodeId ");
+        selectByFrom.Should().Contain("status: 'pending', fromNodeId: nodeId");
+        selectByTo.Should().StartWith("UNWIND $promotableNodeIds AS nodeId ");
+        selectByTo.Should().Contain("status: 'pending', toNodeId: nodeId");
+        new[] { selectById, selectByFrom, selectByTo }.Should().OnlyContain(
+            statement => !statement.Contains(" OR ", StringComparison.Ordinal) &&
+                         !statement.Contains("MERGE", StringComparison.Ordinal));
+        // Selection and MERGE stay in separate statements, and every statement is UNWIND-driven
+        // with no disjunction for the Neo4j planner to expand across a large id batch.
         promote.Should().StartWith("UNWIND $promotable AS item ");
         promote.Should().NotContain(" OR ");
         promote.Should().Contain("identity.status = 'pending'");

@@ -18,7 +18,8 @@ public sealed class VoiceRealtimeOAuthStaticAssetTests
         await using var app = await CreateAppAsync();
         var html = await app.GetTestClient().GetStringAsync("/admin");
 
-        html.Should().Contain("beginLogin(msg.resources,msg.tokenPurpose,msg.authFlow)");
+        html.Should().Contain(
+            "beginLogin(msg.resources,msg.tokenPurpose,msg.authFlow,msg.popupName,msg.authRequestId,ev.source)");
         html.Should().Contain(":voice-realtime:token",
             "global logout must clear the feature-scoped Voice token too");
     }

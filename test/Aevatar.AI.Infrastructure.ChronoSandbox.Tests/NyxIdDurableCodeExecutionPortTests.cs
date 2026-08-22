@@ -97,6 +97,37 @@ public sealed class NyxIdDurableCodeExecutionPortTests
     }
 
     [Fact]
+    public async Task SubmitAsync_PersonalExecutionRouteUsesItsAdmittedSlug()
+    {
+        var handler = new SequenceHandler(_ => Response(
+            HttpStatusCode.Accepted,
+            $$"""
+              {
+                "operation_id":"{{OperationId}}",
+                "status":"queued",
+                "created_at":"2026-08-14T10:00:00Z",
+                "expires_at":"2026-08-15T10:00:00Z"
+              }
+              """));
+        var port = CreatePort(handler);
+        var route = new CodeExecutionRouteIdentity(
+            "chrono-sandbox-aevatar",
+            "us-code-aevatar",
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
+        var execution = ExecutionRequest() with { Route = route };
+
+        var outcome = await port.SubmitAsync(new DurableCodeExecutionSubmitRequest(
+            execution,
+            IdempotencyKey));
+
+        outcome.Failure.Should().BeNull();
+        outcome.Receipt!.ResolvedRoute.Should().Be(route);
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Uri.Should().Be(
+            "https://nyx-public.example/api/v1/proxy/s/chrono-sandbox-aevatar/executions?_nyxid_via=us-code-aevatar");
+    }
+
+    [Fact]
     public async Task GetStatusAsync_NotModifiedPreservesEtagAndRetryAfter()
     {
         var handler = new SequenceHandler(_ => Response(

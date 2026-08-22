@@ -216,7 +216,7 @@ public sealed record NyxIdUserServiceAuthority(
             : Execution.NodeStatus == NyxIdUserServiceNodeStatus.Online);
 
     public bool CanManageRoute =>
-        IsExecutionReady && Route.CredentialSource.Kind switch
+        !Route.AutoConnected && IsExecutionReady && Route.CredentialSource.Kind switch
         {
             NyxIdUserServiceCredentialSourceKind.Personal => true,
             NyxIdUserServiceCredentialSourceKind.Organization =>
@@ -240,6 +240,7 @@ public sealed record NyxIdUserServiceAuthority(
             Execution.CatalogServiceSlug,
             other.Execution.CatalogServiceSlug,
             StringComparison.Ordinal) &&
+        Route.AutoConnected == other.Route.AutoConnected &&
         SameAuthority(Execution.CredentialSource, other.Execution.CredentialSource);
 
     private static bool SameAuthority(

@@ -47,7 +47,7 @@ internal sealed partial class NyxIdCodeExecutionPort(
             !CodeExecutionContract.IsValidTimeoutSeconds(request.TimeoutSeconds) ||
             request.Route is null ||
             !IsValidExecutionCredentialKind(request.Caller?.ExecutionCredentialKind) ||
-            !string.Equals(request.Route.ServiceSlug, RequiredServiceSlug, StringComparison.Ordinal))
+            !IsValidRequestedRoute(request.Route))
         {
             return Failed(
                 CodeExecutionFailureKind.AdmissionDenied,
@@ -70,7 +70,7 @@ internal sealed partial class NyxIdCodeExecutionPort(
         CodeExecutionRouteIdentity route;
         if (sourceReadableBearerToken is null)
         {
-            if (!TryResolveExactAdmittedRoute(request.Route, out var admittedUserServiceId))
+            if (!TryResolveExactAdmittedRoute(request.Route, out _))
             {
                 return Failed(
                     CodeExecutionFailureKind.AdmissionDenied,
@@ -79,10 +79,7 @@ internal sealed partial class NyxIdCodeExecutionPort(
                     localDiagnosticId);
             }
 
-            route = new CodeExecutionRouteIdentity(
-                RequiredServiceSlug,
-                admittedUserServiceId,
-                CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
+            route = request.Route;
         }
         else
         {
@@ -116,15 +113,12 @@ internal sealed partial class NyxIdCodeExecutionPort(
             if (!resolution.IsReady)
             {
                 if (resolution.SourceFailure?.Kind == NyxIdApiAccessFailureKind.Unauthorized &&
-                    TryResolveExactAdmittedRoute(request.Route, out var admittedUserServiceId))
+                    TryResolveExactAdmittedRoute(request.Route, out _))
                 {
                     _logger.LogWarning(
                         "Code execution source revalidation was unauthorized; using the exact workflow admission and deferring final access control to NyxID. diagnosticId={DiagnosticId} failureKind=source_unauthorized_exact_admission",
                         localDiagnosticId);
-                    route = new CodeExecutionRouteIdentity(
-                        RequiredServiceSlug,
-                        admittedUserServiceId,
-                        CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission);
+                    route = request.Route;
                 }
                 else
                 {
@@ -212,6 +206,32 @@ internal sealed partial class NyxIdCodeExecutionPort(
                !string.IsNullOrWhiteSpace(userServiceId) &&
                string.Equals(userServiceId, userServiceId.Trim(), StringComparison.Ordinal);
     }
+
+    private static bool IsValidRequestedRoute(CodeExecutionRouteIdentity route) =>
+        CodeExecutionContract.IsValidServiceSlug(route.ServiceSlug) &&
+        route.Source switch
+        {
+            CodeExecutionRouteIdentitySource.CodeExecutionContract =>
+                string.Equals(
+                    route.ServiceSlug,
+                    RequiredServiceSlug,
+                    StringComparison.Ordinal) &&
+                IsValidOptionalUserServiceId(route.UserServiceId),
+            CodeExecutionRouteIdentitySource.NyxIdUserServiceCatalog =>
+                IsValidExactUserServiceId(route.UserServiceId),
+            CodeExecutionRouteIdentitySource.WorkflowCapabilityAdmission =>
+                CodeExecutionContract.IsSupportedServiceSlug(route.ServiceSlug) &&
+                IsValidExactUserServiceId(route.UserServiceId),
+            _ => false,
+        };
+
+    private static bool IsValidOptionalUserServiceId(string? userServiceId) =>
+        userServiceId is null || IsValidExactUserServiceId(userServiceId);
+
+    private static bool IsValidExactUserServiceId(string? userServiceId) =>
+        !string.IsNullOrWhiteSpace(userServiceId) &&
+        string.Equals(userServiceId, userServiceId.Trim(), StringComparison.Ordinal) &&
+        !userServiceId.Any(char.IsControl);
 
     private static string? NormalizeCredential(string? token)
     {

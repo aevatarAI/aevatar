@@ -598,15 +598,38 @@ public sealed partial class Neo4jProjectionGraphStore
         if (promotableNodeIds.Length > 0 || promotableEdgeIds.Length > 0)
         {
             parameters.Remove("edges");
-            parameters["promotableNodeIds"] = promotableNodeIds;
-            parameters["promotableEdgeIds"] = promotableEdgeIds;
-            var promotableRows = await RunRowsAsync(
-                transaction,
-                Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesCypher(
-                    _versionedEdgeIdentityLabel),
-                parameters,
-                ct);
+            var promotableRows = new List<IReadOnlyDictionary<string, object>>();
+            if (promotableEdgeIds.Length > 0)
+            {
+                parameters["promotableEdgeIds"] = promotableEdgeIds;
+                promotableRows.AddRange(await RunRowsAsync(
+                    transaction,
+                    Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesByIdCypher(
+                        _versionedEdgeIdentityLabel),
+                    parameters,
+                    ct));
+            }
+
+            if (promotableNodeIds.Length > 0)
+            {
+                parameters["promotableNodeIds"] = promotableNodeIds;
+                promotableRows.AddRange(await RunRowsAsync(
+                    transaction,
+                    Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesByFromNodeCypher(
+                        _versionedEdgeIdentityLabel),
+                    parameters,
+                    ct));
+                promotableRows.AddRange(await RunRowsAsync(
+                    transaction,
+                    Neo4jProjectionGraphStoreVersionedCypherSupport.BuildSelectPromotablePendingEdgesByToNodeCypher(
+                        _versionedEdgeIdentityLabel),
+                    parameters,
+                    ct));
+            }
+
             var promotable = promotableRows
+                .GroupBy(row => ReadString(row, "edgeId"), StringComparer.Ordinal)
+                .Select(static group => group.First())
                 .Select(row => new Dictionary<string, object?>
                 {
                     ["edgeId"] = ReadString(row, "edgeId"),

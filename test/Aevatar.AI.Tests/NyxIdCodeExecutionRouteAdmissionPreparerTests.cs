@@ -14,6 +14,83 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
 {
     [Fact]
+    public async Task AdmitAsync_AutoConnectedPlatformRoute_CreatesPersonalRouteAndCommitsItsExactProof()
+    {
+        const string yaml = "name: code-workflow\nsteps: []\n";
+        var handler = new SequenceHandler(
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory(),
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory(),
+            """{"error":true,"status":409,"body":"concurrent create"}""",
+            PersonalExecutionInventory(),
+            PersonalExecutionKeysInventory(),
+            PersonalExecutionInventory(),
+            PersonalExecutionKeysInventory());
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var client = new NyxIdApiClient(options, new HttpClient(handler));
+        var factory = new TestClientFactory(client);
+        var source = new NyxIdCodeExecutionWorkflowCapabilitySource(
+            factory,
+            options,
+            logger: NullLogger<NyxIdCodeExecutionWorkflowCapabilitySource>.Instance);
+        var preparer = new NyxIdCodeExecutionRouteAdmissionPreparer(
+            new NyxIdCodeExecutionRoutePolicyReconciler(factory),
+            options,
+            NullLogger<NyxIdCodeExecutionRouteAdmissionPreparer>.Instance);
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "code-workflow/run-code",
+            ToolName = "code_execute",
+            Selector = Selector(),
+        });
+        var admission = new WorkflowExternalCapabilityAdmissionService(
+            new StaticParser(WorkflowYamlParseResult.Success("code-workflow", dependencies)),
+            new ExternalWorkflowCapabilityReadinessService([source]),
+            preparers: [preparer]);
+
+        var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
+            Access(),
+            yaml,
+            new Dictionary<string, string>(),
+            "test",
+            ExternalCapabilityExecutionMode.Interactive,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha"));
+
+        handler.Requests.Select(static request => request.Method)
+            .Should().Equal(
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Post,
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Get,
+                HttpMethod.Get);
+        handler.Requests.Should().NotContain(static request => request.Method == HttpMethod.Put);
+        handler.Requests[4].Uri.Should().Be("https://nyx.example/api/v1/keys");
+        using (var body = JsonDocument.Parse(handler.Requests[4].Body!))
+        {
+            body.RootElement.GetProperty("service_slug").GetString().Should().Be("chrono-sandbox");
+            body.RootElement.GetProperty("slug").GetString().Should().Be("chrono-sandbox-aevatar");
+            body.RootElement.GetProperty("forward_access_token").GetBoolean().Should().BeTrue();
+            body.RootElement.GetProperty("inject_delegation_token").GetBoolean().Should().BeTrue();
+            body.RootElement.GetProperty("delegation_token_scope").GetString().Should()
+                .Be("proxy:* sandbox:execute");
+        }
+        var proof = plan.InvocationAdmissions.Should().ContainSingle().Which.Capability.CodeExecution;
+        proof.UserServiceId.Should().Be("us-code-aevatar");
+        proof.ServiceSlugSnapshot.Should().Be("chrono-sandbox-aevatar");
+        proof.CatalogServiceId.Should().Be("catalog-chrono-sandbox");
+    }
+
+    [Fact]
     public async Task AdmitAsync_LegacyPersonalRoute_RepairsThenCommitsVerifiedExactProof()
     {
         const string yaml = "name: code-workflow\nsteps: []\n";
@@ -581,6 +658,107 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             },
         });
     }
+
+    private static string AutoConnectedInventory() =>
+        JsonSerializer.Serialize(new
+        {
+            services = new[]
+            {
+                new
+                {
+                    id = "us-code-platform",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    is_active = true,
+                    auto_connected = true,
+                    forward_access_token = true,
+                    inject_delegation_token = true,
+                    delegation_token_scope = "proxy:*",
+                    credential_source = new { type = "personal" },
+                },
+            },
+        });
+
+    private static string AutoConnectedKeysInventory() =>
+        JsonSerializer.Serialize(new
+        {
+            keys = new[]
+            {
+                new
+                {
+                    id = "us-code-platform",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    catalog_service_slug = "chrono-sandbox",
+                    is_active = true,
+                    status = "active",
+                    connected = true,
+                    credential_source = new { type = "personal" },
+                },
+            },
+        });
+
+    private static string PersonalExecutionInventory() =>
+        JsonSerializer.Serialize(new
+        {
+            services = new object[]
+            {
+                new
+                {
+                    id = "us-code-platform",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    is_active = true,
+                    auto_connected = true,
+                    forward_access_token = true,
+                    inject_delegation_token = true,
+                    delegation_token_scope = "proxy:*",
+                    credential_source = new { type = "personal" },
+                },
+                new
+                {
+                    id = "us-code-aevatar",
+                    slug = "chrono-sandbox-aevatar",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    is_active = true,
+                    auto_connected = false,
+                    forward_access_token = true,
+                    inject_delegation_token = true,
+                    delegation_token_scope = "proxy:* sandbox:execute",
+                    credential_source = new { type = "personal" },
+                },
+            },
+        });
+
+    private static string PersonalExecutionKeysInventory() =>
+        JsonSerializer.Serialize(new
+        {
+            keys = new object[]
+            {
+                new
+                {
+                    id = "us-code-platform",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    catalog_service_slug = "chrono-sandbox",
+                    is_active = true,
+                    status = "active",
+                    connected = true,
+                    credential_source = new { type = "personal" },
+                },
+                new
+                {
+                    id = "us-code-aevatar",
+                    slug = "chrono-sandbox-aevatar",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    catalog_service_slug = "chrono-sandbox",
+                    is_active = true,
+                    status = "active",
+                    connected = true,
+                    credential_source = new { type = "personal" },
+                },
+            },
+        });
 
     private static string MixedInventory(
         string personalScope,
