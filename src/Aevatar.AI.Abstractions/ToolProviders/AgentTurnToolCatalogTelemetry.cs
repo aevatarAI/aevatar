@@ -115,7 +115,7 @@ public static class AgentTurnToolCatalogTelemetry
     {
         ArgumentNullException.ThrowIfNull(proof);
         ArgumentNullException.ThrowIfNull(diagnostics);
-        var turnClass = ResolveTurnClass(proof.Budget);
+        var turnClass = ResolveTurnClass(proof);
         var tags = StageTags("final", turnClass, "accepted");
         Authority.Add(Math.Max(0, authorityToolCount), tags);
         Final.Add(proof.ToolCount, tags);
@@ -167,7 +167,7 @@ public static class AgentTurnToolCatalogTelemetry
     public static void RecordRestrictedEmptyProof(AgentTurnToolCatalogProof proof)
     {
         ArgumentNullException.ThrowIfNull(proof);
-        var turnClass = ResolveTurnClass(proof.Budget);
+        var turnClass = ResolveTurnClass(proof);
         var tags = StageTags("final", turnClass, "accepted");
         RestrictedEmpty.Add(1, tags);
         using var activity = ActivitySource.StartActivity(
@@ -211,7 +211,7 @@ public static class AgentTurnToolCatalogTelemetry
         string? intentIdentity)
     {
         ArgumentNullException.ThrowIfNull(proof);
-        var turnClass = ResolveTurnClass(proof.Budget);
+        var turnClass = ResolveTurnClass(proof);
         var tags = StageTags("shadow", turnClass, "accepted");
         Authority.Add(proof.ToolCount, tags);
         SchemaBytes.Add(
@@ -251,7 +251,7 @@ public static class AgentTurnToolCatalogTelemetry
 
     public static void RecordToolRound(AgentTurnToolCatalogProof? proof, int round)
     {
-        var turnClass = ResolveTurnClass(proof?.Budget);
+        var turnClass = ResolveTurnClass(proof);
         ToolRound.Add(1, StageTags("model_round", turnClass, "started"));
         Activity.Current?.SetTag("aevatar.agent_turn_tool_catalog.tool_round", Math.Max(0, round));
     }
@@ -260,7 +260,7 @@ public static class AgentTurnToolCatalogTelemetry
         AgentTurnToolCatalogProof? proof,
         TimeSpan elapsed)
     {
-        var turnClass = ResolveTurnClass(proof?.Budget);
+        var turnClass = ResolveTurnClass(proof);
         TimeToFirstOutput.Record(
             Math.Max(0, elapsed.TotalMilliseconds),
             StageTags("model_round", turnClass, "first_output"));
@@ -269,7 +269,7 @@ public static class AgentTurnToolCatalogTelemetry
     public static void RecordOutcome(AgentTurnToolCatalogProof? proof, string outcome)
     {
         var normalizedOutcome = NormalizeOutcome(outcome);
-        var turnClass = ResolveTurnClass(proof?.Budget);
+        var turnClass = ResolveTurnClass(proof);
         Outcome.Add(1, StageTags("model_round", turnClass, normalizedOutcome));
         Activity.Current?.SetTag(
             "aevatar.agent_turn_tool_catalog.task_outcome",
@@ -281,8 +281,15 @@ public static class AgentTurnToolCatalogTelemetry
             not AgentProfileTurnDiagnosticCode.ClassifierMatched and
             not AgentProfileTurnDiagnosticCode.ShadowCandidate;
 
-    private static string ResolveTurnClass(AgentTurnToolCatalogBudget? budget)
+    /// <remarks>
+    /// The connected class is decided by what the turn actually injected, not by the budget shape.
+    /// Every sealed profile budget carries the connected read/write caps as defence in depth, so a
+    /// budget-shape test would report ordinary profiled chat as connected and make the two
+    /// indistinguishable in the very dimension the rollout comparison needs.
+    /// </remarks>
+    private static string ResolveTurnClass(AgentTurnToolCatalogProof? proof)
     {
+        var budget = proof?.Budget;
         if (budget is null)
             return "unrestricted_legacy";
         if (budget == AgentTurnToolCatalogBudget.Voice)
@@ -291,11 +298,8 @@ public static class AgentTurnToolCatalogTelemetry
             return "workflow_or_admin";
         if (budget == AgentTurnToolCatalogBudget.Coding)
             return "coding";
-        if (budget.MaximumConnectedReadToolCount != int.MaxValue ||
-            budget.MaximumConnectedWriteToolCount != int.MaxValue)
-        {
+        if (proof!.ConnectedReadToolCount > 0 || proof.ConnectedWriteToolCount > 0)
             return "connected";
-        }
 
         return "ordinary";
     }

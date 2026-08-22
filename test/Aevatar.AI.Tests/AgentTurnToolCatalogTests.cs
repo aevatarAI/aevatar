@@ -287,6 +287,118 @@ public sealed class AgentTurnToolCatalogTests
             .Contain(catalog.Proof.CatalogDigest);
     }
 
+    [Fact]
+    public void BindFinalExactTools_ShouldKeepCatalogObject_WhenRuntimeRediscoveredTheSameName()
+    {
+        // Tool sources allocate a new tool object per discovery pass, so the agent's registered
+        // tools and the turn catalog's tools are never the same instance for a shared name.
+        var catalogTool = new TestTool("web_search", "Search", "{\"type\":\"object\"}");
+        var rediscoveredTool = new TestTool("web_search", "Search", "{\"type\":\"object\"}");
+        var catalog = NewCatalog([catalogTool], AgentTurnToolCatalogBudget.Ordinary);
+
+        var bound = catalog.BindFinalExactTools([rediscoveredTool]);
+
+        bound.ExactTools.Should().ContainSingle();
+        bound.ExactTools["web_search"].Should().BeSameAs(catalogTool);
+        bound.Proof.CatalogDigest.Should().Be(catalog.Proof.CatalogDigest);
+    }
+
+    [Fact]
+    public void BindFinalExactTools_ShouldBindAllowedName_WhenCatalogHasNoExactObjectYet()
+    {
+        var catalog = new AgentTurnToolCatalog(
+            ["web_search"],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            diagnostics: null,
+            exactTools: []);
+        var runtimeTool = new TestTool("web_search", "Search", "{\"type\":\"object\"}");
+
+        var bound = catalog.BindFinalExactTools([runtimeTool]);
+
+        bound.ExactTools["web_search"].Should().BeSameAs(runtimeTool);
+    }
+
+    [Fact]
+    public void CatalogTelemetry_ShouldCountOneObservationPerTurn_WhenCatalogIsReboundAndNarrowed()
+    {
+        var finalCounts = new ConcurrentBag<long>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (string.Equals(
+                    instrument.Meter.Name,
+                    AgentTurnToolCatalogTelemetry.MeterName,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    instrument.Name,
+                    AgentTurnToolCatalogTelemetry.FinalCounterName,
+                    StringComparison.Ordinal))
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((_, measurement, _, _) => finalCounts.Add(measurement));
+        meterListener.Start();
+
+        var tool = new TestTool("web_search", "Search", "{\"type\":\"object\"}");
+        var catalog = NewCatalog([tool], AgentTurnToolCatalogBudget.Ordinary);
+        var bound = catalog.BindFinalExactTools([tool]);
+        _ = bound.NarrowToAllowedToolNames(bound.FinalAllowedToolNames);
+
+        meterListener.Dispose();
+        finalCounts.Should().ContainSingle("re-binding and narrowing re-express one materialized turn catalog");
+    }
+
+    [Theory]
+    [InlineData(false, "ordinary")]
+    [InlineData(true, "connected")]
+    public void CatalogTelemetry_ShouldClassifyTurnByInjectedConnectedOperations(
+        bool injectConnectedOperation,
+        string expectedTurnClass)
+    {
+        var observedTurnClasses = new ConcurrentBag<string>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (string.Equals(
+                    instrument.Name,
+                    AgentTurnToolCatalogTelemetry.FinalCounterName,
+                    StringComparison.Ordinal))
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "aevatar.agent_turn_tool_catalog.turn_class")
+                    observedTurnClasses.Add(tag.Value?.ToString() ?? string.Empty);
+            }
+        });
+        meterListener.Start();
+
+        // Every sealed profile budget carries the connected caps, so the budget shape alone must
+        // not decide the class.
+        var profileBudget = new AgentTurnToolCatalogBudget(
+            AgentTurnToolCatalogBudget.Ordinary.MaximumToolCount,
+            AgentTurnToolCatalogBudget.Ordinary.MaximumSchemaBytes,
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedReadToolCount,
+            AgentTurnToolCatalogBudget.ConnectedOperations.MaximumConnectedWriteToolCount);
+        _ = NewCatalog(
+            [new TestTool("lookup", "Lookup", "{\"type\":\"object\"}", isReadOnly: true)],
+            profileBudget,
+            injectConnectedOperation
+                ? AgentTurnToolOrigin.ConnectedService
+                : AgentTurnToolOrigin.RouteToolSet);
+
+        meterListener.Dispose();
+        observedTurnClasses.Should().Contain(expectedTurnClass);
+    }
+
     private static AgentTurnToolCatalog NewCatalog(
         IReadOnlyCollection<IAgentTool> tools,
         AgentTurnToolCatalogBudget budget,

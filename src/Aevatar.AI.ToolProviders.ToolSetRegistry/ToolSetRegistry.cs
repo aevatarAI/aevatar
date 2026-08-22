@@ -59,7 +59,8 @@ public sealed class ToolSetRegistry : IToolSetRegistry
 
         var sources = new List<IAgentToolSource>(registration.Sources.Count);
         var resolutionStack = new HashSet<string>(StringComparer.Ordinal);
-        AddSources(registration, sources, resolutionStack);
+        var materializedToolSets = new HashSet<string>(StringComparer.Ordinal);
+        AddSources(registration, sources, resolutionStack, materializedToolSets);
 
         return ToolSetResolveResult.Success(registration.Name, sources);
     }
@@ -67,7 +68,8 @@ public sealed class ToolSetRegistry : IToolSetRegistry
     private void AddSources(
         ToolSetRegistration registration,
         List<IAgentToolSource> sources,
-        HashSet<string> resolutionStack)
+        HashSet<string> resolutionStack,
+        HashSet<string> materializedToolSets)
     {
         if (!resolutionStack.Add(registration.Name))
         {
@@ -83,7 +85,13 @@ public sealed class ToolSetRegistry : IToolSetRegistry
                     $"Tool set '{registration.Name}' includes unknown tool set '{includeName}'.");
             }
 
-            AddSources(includedRegistration, sources, resolutionStack);
+            // A tool set reachable through more than one include path contributes its sources
+            // once. Materializing it twice would hand discovery two distinct source instances
+            // producing the same tool names, which fails closed as a name collision.
+            if (!materializedToolSets.Add(includeName))
+                continue;
+
+            AddSources(includedRegistration, sources, resolutionStack, materializedToolSets);
         }
 
         foreach (var sourceRegistration in registration.Sources)

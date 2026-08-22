@@ -13,6 +13,12 @@ public static class ToolSetNames
     public const string NyxIdExecution = "nyxid.execution";
     public const string StorageRead = "storage.read";
     public const string StorageWrite = "storage.write";
+    /// <summary>
+    /// Channel-agnostic reply, registration, and delivery-target tools shared by every channel
+    /// set. Kept as its own set so a route naming more than one channel materializes them once.
+    /// </summary>
+    public const string ChannelCore = "channel.core";
+
     public const string ChannelLark = "channel.lark";
     public const string ChannelTelegram = "channel.telegram";
     public const string WorkspaceDefault = "workspace.default";

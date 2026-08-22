@@ -843,7 +843,10 @@ public sealed class LlmRunCoreTests
             selectedIntentId: "web",
             candidateIntentId: "web",
             diagnostics: null,
-            exactTools: [ingressTool]);
+            exactTools: [ingressTool],
+            // The planner always builds profiled catalogs on the sealed profile's budget, and the
+            // run executor re-derives that budget rather than trusting the persisted proof.
+            budget: AgentTurnToolCatalogFactory.ResolveProfileBudget(profile));
         return ResponsesRuntimeToolSelectionFactory.Create(
             new ResponsesToolClassification(
                 [],

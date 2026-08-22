@@ -753,6 +753,7 @@ public sealed class MainnetHostCompositionTests
             ToolSetNames.AevatarInvoke,
             ToolSetNames.AevatarObserve,
             AgentProfilePolicies.NyxIdChatRouteToolSet,
+            ToolSetNames.ChannelCore,
             ToolSetNames.ChannelLark,
             ToolSetNames.ChannelTelegram,
             ToolSetNames.ChatCore,
@@ -884,6 +885,40 @@ public sealed class MainnetHostCompositionTests
         nyxIdChatToolSources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source => StudioLocalToolSourceTypes.Contains(source.GetType()));
+        // Every registered set must survive discovery, and repeating the pass must reproduce the
+        // same digest. Sources allocate fresh tool objects per pass, so a set whose tool names
+        // collide, or a tool whose description or schema is built from live state, only fails at
+        // request time otherwise.
+        foreach (var toolSetName in registry.GetRegisteredNames())
+        {
+            var resolved = registry.Resolve(toolSetName);
+            resolved.IsSuccess.Should().BeTrue($"tool set '{toolSetName}' must resolve");
+
+            var digests = new List<string>();
+            for (var pass = 0; pass < 2; pass++)
+            {
+                var discovery = await AgentToolDiscoveryService.Instance.DiscoverAsync(
+                    registry.Resolve(toolSetName).Sources,
+                    AgentToolExecutionContext.Empty);
+                discovery.IsSuccess.Should().BeTrue(
+                    $"tool set '{toolSetName}' must discover without collisions: {discovery.Failure?.Detail}");
+                digests.Add(new AgentTurnToolCatalog(
+                        discovery.Tools.Select(static tool => tool.Name),
+                        profilePromptLayer: null,
+                        selectedSkillPromptLayer: null,
+                        selectedIntentId: null,
+                        candidateIntentId: null,
+                        diagnostics: null,
+                        exactTools: discovery.Tools,
+                        budget: new AgentTurnToolCatalogBudget(128, int.MaxValue))
+                    .Proof.CatalogDigest);
+            }
+
+            digests[1].Should().Be(
+                digests[0],
+                $"tool set '{toolSetName}' must produce a stable catalog digest across discovery passes");
+        }
+
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
         scheduleQueries.Should().BeSameAs(scheduleMutations);

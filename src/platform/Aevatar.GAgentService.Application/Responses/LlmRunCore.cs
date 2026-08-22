@@ -320,6 +320,14 @@ public sealed class LlmRunCore(
             throw CatalogProofMismatch(
                 "The pinned profile snapshot does not match the persisted route tool set.");
         }
+
+        // The persisted proof carries its own budget, so re-derive the authoritative one from the
+        // sealed profile instead of trusting what the payload asserts about itself.
+        if (proof.Budget != AgentTurnToolCatalogFactory.ResolveProfileBudget(profile))
+        {
+            throw CatalogProofMismatch(
+                "The persisted catalog budget does not match the sealed profile budget.");
+        }
     }
 
     private async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverSubstituteToolsStrictAsync(

@@ -126,6 +126,27 @@ public sealed class ToolSetRegistryTests
         result.Error.RegisteredNames.Should().Equal("known.set");
     }
 
+    [Fact]
+    public void Resolve_ShouldMaterializeSharedToolSetOnce_WhenReachedThroughSeveralIncludes()
+    {
+        var services = new ServiceCollection();
+        services.AddToolSetRegistry(options =>
+        {
+            options.AddToolSet("channel.core", [static _ => new FirstSource()]);
+            options.AddToolSet("channel.lark", ["channel.core"], [static _ => new SecondSource()]);
+            options.AddToolSet("channel.telegram", ["channel.core"], [static _ => new SecondSource()]);
+            options.AddToolSet("route.both", ["channel.lark", "channel.telegram"], []);
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var result = provider.GetRequiredService<IToolSetRegistry>().Resolve("route.both");
+
+        result.IsSuccess.Should().BeTrue();
+        result.Sources.OfType<FirstSource>()
+            .Should()
+            .ContainSingle("a shared tool set reached twice must not produce two source instances");
+    }
+
     private sealed class FirstSource : EmptyToolSource;
 
     private sealed class SecondSource : EmptyToolSource;

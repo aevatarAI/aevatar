@@ -511,6 +511,38 @@ public sealed class AgentTurnToolCatalog
         bool hasUnresolvedConnectedServiceSelectors,
         AgentProfileRequiredToolInvocation? requiredToolInvocation,
         AgentTurnToolCatalogBudget budget)
+        : this(
+            finalAllowedToolNames,
+            profilePromptLayer,
+            selectedSkillPromptLayer,
+            selectedIntentId,
+            candidateIntentId,
+            diagnostics,
+            exactToolSelections,
+            hasUnresolvedConnectedServiceSelectors,
+            requiredToolInvocation,
+            budget,
+            recordTelemetry: true)
+    {
+    }
+
+    /// <param name="recordTelemetry">
+    /// False when this instance re-expresses an already observed turn catalog (exact-object
+    /// binding or narrowing). Those derivations describe the same materialized turn, so counting
+    /// them again would multiply every catalog metric by the number of derivation steps.
+    /// </param>
+    private AgentTurnToolCatalog(
+        IEnumerable<string> finalAllowedToolNames,
+        ProfileRoutingPromptLayer? profilePromptLayer,
+        SelectedSkillPromptLayer? selectedSkillPromptLayer,
+        string? selectedIntentId,
+        string? candidateIntentId,
+        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics,
+        IEnumerable<AgentTurnToolSelection> exactToolSelections,
+        bool hasUnresolvedConnectedServiceSelectors,
+        AgentProfileRequiredToolInvocation? requiredToolInvocation,
+        AgentTurnToolCatalogBudget budget,
+        bool recordTelemetry)
     {
         ArgumentNullException.ThrowIfNull(finalAllowedToolNames);
         ArgumentNullException.ThrowIfNull(exactToolSelections);
@@ -541,14 +573,17 @@ public sealed class AgentTurnToolCatalog
         var filteredToolCount = Math.Max(
             0,
             Math.Max(authorityToolCount, FinalAllowedToolNames.Count) - Proof.ToolCount);
-        AgentTurnToolCatalogTelemetry.RecordCatalog(
-            Proof,
-            authorityToolCount,
-            filteredToolCount,
-            Diagnostics,
-            ProfilePromptLayer?.Provenance.Source,
-            SelectedIntentId ?? CandidateIntentId,
-            HasUnresolvedConnectedServiceSelectors);
+        if (recordTelemetry)
+        {
+            AgentTurnToolCatalogTelemetry.RecordCatalog(
+                Proof,
+                authorityToolCount,
+                filteredToolCount,
+                Diagnostics,
+                ProfilePromptLayer?.Provenance.Source,
+                SelectedIntentId ?? CandidateIntentId,
+                HasUnresolvedConnectedServiceSelectors);
+        }
     }
 
     public IReadOnlySet<string> FinalAllowedToolNames { get; }
@@ -586,7 +621,11 @@ public sealed class AgentTurnToolCatalog
             var name = AgentTurnToolCatalogProof.NormalizeToolName(tool.Name);
             if (!FinalAllowedToolNames.Contains(name))
                 continue;
-            if (_selections.TryGetValue(name, out var existing) && ReferenceEquals(existing.Tool, tool))
+            // A name already bound by this catalog keeps its own exact object: that object was
+            // discovered under the turn's real execution context and is what the proof covers.
+            // Runtime tools are a separate discovery pass of the same sources, so an equally
+            // named object is a duplicate of an already-authorized tool, not a conflict.
+            if (_selections.ContainsKey(name))
                 continue;
 
             selections.Add(new AgentTurnToolSelection(tool, runtimeOrigin));
@@ -606,7 +645,8 @@ public sealed class AgentTurnToolCatalog
             selections,
             HasUnresolvedConnectedServiceSelectors,
             RequiredToolInvocation,
-            Budget);
+            Budget,
+            recordTelemetry: false);
     }
 
     public AgentTurnToolCatalog NarrowToAllowedToolNames(IEnumerable<string> allowedToolNames)
@@ -631,7 +671,8 @@ public sealed class AgentTurnToolCatalog
             selections,
             HasUnresolvedConnectedServiceSelectors,
             RequiredToolInvocation,
-            Budget);
+            Budget,
+            recordTelemetry: false);
     }
 
     public void AssertProofMatchesExactTools(IEnumerable<IAgentTool> tools)

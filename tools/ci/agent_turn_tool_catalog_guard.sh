@@ -93,6 +93,7 @@ for forbidden in \
   NyxIdExecution \
   StorageRead \
   StorageWrite \
+  ChannelCore \
   ChannelLark \
   ChannelTelegram \
   StudioLocal \

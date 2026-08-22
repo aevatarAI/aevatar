@@ -119,10 +119,6 @@ public sealed class StreamingAgentProfileConnectedOperationSelector :
         {
             return AgentProfileConnectedOperationSelectionResult.Failed("timeout");
         }
-        catch (JsonException)
-        {
-            return AgentProfileConnectedOperationSelectionResult.Failed("malformed_output");
-        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             return AgentProfileConnectedOperationSelectionResult.Failed("provider_failure");

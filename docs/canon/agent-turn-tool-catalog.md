@@ -24,7 +24,9 @@ effective_tools =
 
 ## 权威主干
 
-`ToolSetRegistry` 只拥有静态 include topology。`AgentToolDiscoveryService` 是 resolve 后唯一的 request-scoped 动态发现主干：它在 typed `AgentToolExecutionContext` 下发现 exact objects，不缓存 caller、connection、session 或 authority 事实，并对大小写不敏感的同名不同 object fail closed。
+`ToolSetRegistry` 只拥有静态 include topology。同一个 tool set 经多条 include 路径可达时只 materialize 一次；重复 materialize 会给 discovery 两个产出相同工具名的 source 实例，直接触发 name collision fail closed。`AgentToolDiscoveryService` 是 resolve 后唯一的 request-scoped 动态发现主干：它在 typed `AgentToolExecutionContext` 下发现 exact objects，不缓存 caller、connection、session 或 authority 事实，并对大小写不敏感的同名不同 object fail closed。
+
+Tool source 每次 discovery 都新建 tool object，因此"同名"跨 discovery pass 不等于"同一个对象"。已经进入 turn catalog 的名字保留 catalog 自己的 exact object——它是在本轮真实 execution context 下发现、且 proof 覆盖的那个；runtime 侧同名对象按重复丢弃，不当作冲突。只有 catalog 尚未绑定 exact object 的 allowed name 才由 runtime 补绑。
 
 所有入口按同一顺序处理：
 
@@ -53,6 +55,7 @@ Proof 的 catalog digest 覆盖 lowercase canonical name、exact description、�
 | `nyxid.privileged` | proxy/admin/key/approval/node | privileged opt-in |
 | `nyxid.execution` | SSH/code/Codex execution | execution opt-in |
 | `storage.read` / `storage.write` | storage read 与 mutation | coding/sandbox opt-in |
+| `channel.core` | 与渠道无关的 reply、registration、delivery-target | 由每个 channel set include |
 | `channel.lark` / `channel.telegram` | channel-specific actions | channel route only |
 | `studio.local` | Studio local provisioning | Studio workflow only |
 
@@ -77,7 +80,7 @@ Responses ingress 在边界兼容客户端的 `WebFetch` / `WebSearch` aliases�
 
 ### Responses, Messages, Chat Completions
 
-三入口在 ownership classification 之前共用 `ResponsesOwnedToolCatalogPlanner`，固定 profile snapshot、exact catalog 和 proof。Caller-forwarded declarations 单独分类、单独计量，不能进入 Aevatar executor。Off-grain `LlmRunCore` 重新物化后必须验证 persisted proof；显式 profile/tool-set 解析失败不能降级为 always-on providers。
+三入口在 ownership classification 之前共用 `ResponsesOwnedToolCatalogPlanner`，固定 profile snapshot、exact catalog 和 proof。Caller-forwarded declarations 单独分类、单独计量，不能进入 Aevatar executor。Off-grain `LlmRunCore` 重新物化后必须验证 persisted proof；显式 profile/tool-set 解析失败不能降级为 always-on providers。persisted proof 自带 budget，因此执行端从 sealed profile 重新推导权威 budget 并比对，不采信 payload 对自身的声明。
 
 ### Role、Channel 与 NyxID Assistant
 
@@ -137,6 +140,10 @@ Meter/Activity source 为 `Aevatar.GenAI`。低基数 metrics 固定记录：
 
 - `registered`、`discovered`、`authority`、`final`、`forwarded`、`filtered`、`rejected`、`restricted_empty`；
 - `schema_bytes`、`degradation`、`tool_round`、`outcome`、`time_to_first_output`。
+
+一次 materialize 的 turn catalog 只计一次。exact-object 绑定与 narrowing 产生的派生 catalog 重新表达同一轮，不重复计数；否则每个 catalog 指标都会被派生步数放大，且放大倍数随代码路径变化，rollout 前后不可比。
+
+`turn_class` 由本轮**实际注入**的 connected operation 决定，不由 budget 形状判定：每个 sealed profile budget 都带 connected read/write 上限作为纵深防御，按形状判定会把普通 profiled 聊天报成 `connected`，正好抹掉 rollout 对比最需要的那个维度。
 
 Digest、profile identity 和 intent identity 只写 trace attributes，不作为 metric tags。Deny reason 使用 typed enum；不得记录 token、arguments、connection identity 或完整 tool payload。Rollout 需比较 invalid tool-call rate、task success、authorization correctness 和 TTFT；任何授权错误或明显回归都停止推进并 rollback。
 

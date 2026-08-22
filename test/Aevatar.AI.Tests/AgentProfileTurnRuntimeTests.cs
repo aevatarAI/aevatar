@@ -83,23 +83,24 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
-    public async Task MainTurn_BaseAndRouteOwnedSameNameDifferentObjects_ShouldFailClosed()
+    public async Task MainTurn_BaseAndRouteOwnedSameNameDifferentObjects_ShouldKeepRouteOwnedObject()
     {
+        // The agent's registered tools and the turn catalog come from separate discovery passes,
+        // and sources allocate a new tool object per pass, so a shared name always arrives as two
+        // objects. The route-owned object is the one the turn's proof covers, so it wins and the
+        // agent-registered object is never reachable.
         var baseTool = new CountingTool("shared");
         var routeOwnedTool = new CountingTool("SHARED");
         var provider = new ForgedToolProvider("shared");
         var runtime = NewRuntime(provider, NewToolManager(baseTool));
 
-        var act = () => DrainAsync(runtime.ChatStreamAsync(
+        await DrainAsync(runtime.ChatStreamAsync(
             "run",
             NewCatalog(["shared"], exactTools: [routeOwnedTool])));
 
-        await act.Should().ThrowAsync<AgentTurnToolCatalogException>()
-            .Where(exception =>
-                exception.Failure.Code == AgentTurnToolCatalogFailureCode.ToolNameCollision);
-        provider.Requests.Should().BeEmpty();
+        provider.Requests[0].Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOwnedTool);
+        routeOwnedTool.ExecuteCount.Should().Be(1);
         baseTool.ExecuteCount.Should().Be(0);
-        routeOwnedTool.ExecuteCount.Should().Be(0);
     }
 
     [Fact]

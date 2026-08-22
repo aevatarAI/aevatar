@@ -550,23 +550,23 @@ public static class MainnetHostBuilderExtensions
                 [CreateToolSource<ChronoStorageWriteAgentToolSource>],
                 "Mutating ChronoStorage tools.");
             options.AddToolSet(
-                ToolSetNames.ChannelLark,
+                ToolSetNames.ChannelCore,
                 [
                     CreateToolSource<ChannelInteractiveReplyToolSource>,
                     CreateToolSource<ChannelRegistrationToolSource>,
                     CreateToolSource<AgentDeliveryTargetToolSource>,
-                    CreateToolSource<LarkAgentToolSource>,
                 ],
-                "Lark-only channel tools.");
+                "Channel-agnostic reply, registration, and delivery-target tools.");
+            options.AddToolSet(
+                ToolSetNames.ChannelLark,
+                [ToolSetNames.ChannelCore],
+                [CreateToolSource<LarkAgentToolSource>],
+                "Lark channel tools with the shared channel core.");
             options.AddToolSet(
                 ToolSetNames.ChannelTelegram,
-                [
-                    CreateToolSource<ChannelInteractiveReplyToolSource>,
-                    CreateToolSource<ChannelRegistrationToolSource>,
-                    CreateToolSource<AgentDeliveryTargetToolSource>,
-                    CreateToolSource<TelegramAgentToolSource>,
-                ],
-                "Telegram-only channel tools.");
+                [ToolSetNames.ChannelCore],
+                [CreateToolSource<TelegramAgentToolSource>],
+                "Telegram channel tools with the shared channel core.");
             options.AddToolSet(
                 ToolSetNames.WorkspaceDefault,
                 [
