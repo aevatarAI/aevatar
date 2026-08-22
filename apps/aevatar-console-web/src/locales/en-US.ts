@@ -1437,6 +1437,8 @@ const enUSMessages = {
   'pages.studio.studiomemberinvokeinspector.service.target': 'Service target',
   'pages.studio.studiomemberinvokeinspector.title': 'Details',
   'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
+  'pages.studio.studiomemberinvokepanel.endpoint.contract.changed':
+    'The selected member endpoint is unavailable or no longer matches this published service.',
   'pages.studio.studiomemberinvokepanel.inspector': 'Details',
   'pages.actors.index.actor': 'Actor',
   'pages.actors.index.command.recorded': 'Command recorded',

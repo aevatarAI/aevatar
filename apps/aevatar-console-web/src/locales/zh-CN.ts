@@ -1020,7 +1020,7 @@ const zhCNMessages = {
   'pages.teammemberinvoke.endpoint.notReady.description':
     '端点契约有效，但运行时尚未准备好接收调用。',
   'pages.teammemberinvoke.endpoint.versionPending.description':
-    '已提交的服务和修订版本尚未在读模型中可见。',
+    '已提交的服务和修订尚未在读模型中可见。',
   'pages.teammemberinvoke.fact.member': '成员',
   'pages.teammemberinvoke.fact.revision': '服务状态',
   'pages.teammemberinvoke.fact.service': '服务',
@@ -1357,6 +1357,8 @@ const zhCNMessages = {
   'pages.studio.studiomemberinvokeinspector.service.target': '服务目标',
   'pages.studio.studiomemberinvokeinspector.title': '详情',
   'pages.studio.studiomemberinvokepanel.endpoint': '端点',
+  'pages.studio.studiomemberinvokepanel.endpoint.contract.changed':
+    '所选成员端点不可用，或已不再匹配该发布服务。',
   'pages.studio.studiomemberinvokepanel.inspector': '详情',
   'pages.actors.index.actor': 'Actor',
   'pages.actors.index.command.recorded': 'Command recorded',
