@@ -72,6 +72,7 @@ public sealed class WorkflowCallerAccessTokenResolverTests
                 OwnerScopeKey = "scope-1",
                 SubjectId = "owner-alpha",
                 SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+                ProviderCredentialId = "provider-key-1",
             },
             NyxIdAuthority = CreateAuthority(),
             Kind = NyxIdCallerCredentialKind.AgentKey,

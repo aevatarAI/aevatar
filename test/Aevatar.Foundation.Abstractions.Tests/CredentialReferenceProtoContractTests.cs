@@ -66,6 +66,7 @@ public sealed class CredentialReferenceProtoContractTests
             OwnerScopeKey = "schedule:schedule-1",
             SubjectId = "lark:tenant:user-1",
             SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+            ProviderCredentialId = "provider-key-1",
         };
 
         var parsed = DurableCallerCredentialRef.Parser.ParseFrom(reference.ToByteArray());
@@ -75,6 +76,7 @@ public sealed class CredentialReferenceProtoContractTests
         parsed.OwnerScopeKey.ShouldBe(reference.OwnerScopeKey);
         parsed.SubjectId.ShouldBe(reference.SubjectId);
         parsed.SourceKind.ShouldBe(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        parsed.ProviderCredentialId.ShouldBe(reference.ProviderCredentialId);
     }
 
     [Fact]

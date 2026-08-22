@@ -65,6 +65,9 @@ public static class WorkflowCapabilityServiceCollectionExtensions
                 $"Every enabled {WorkflowExternalApprovalCallbackOptions.SectionName} binding must configure an HMAC secret of at least {MinHmacSecretByteLength} UTF-8 bytes.")
             .ValidateOnStart();
         services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
+        services.TryAddSingleton<
+            IWorkflowWebhookAgentKeyMaterializer,
+            WorkflowWebhookAgentKeyMaterializer>();
         services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayAdmissionPort, WorkflowWebhookReplayAdmissionPort>();
         // Zero-config default: hosts that already run on Garnet reuse the
         // actor-runtime connection for webhook replay/binding storage, and the

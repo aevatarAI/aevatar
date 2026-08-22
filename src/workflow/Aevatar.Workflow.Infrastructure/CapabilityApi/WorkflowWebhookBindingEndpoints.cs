@@ -185,16 +185,6 @@ internal static class WorkflowWebhookBindingEndpoints
             unattendedAuthorization = authorization.Authorization;
         }
 
-        string? forwardedAgentKey = null;
-        string? credentialSubject = null;
-        if (request.EnableUnattendedEffects &&
-            TryGetForwardedAgentKey(http, out var capturedAgentKey) &&
-            AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(http.User, out var capturedSubject))
-        {
-            forwardedAgentKey = capturedAgentKey;
-            credentialSubject = capturedSubject;
-        }
-
         var hmacSecret = request.HmacSecret?.Trim();
         if (hmacSecret == null || Encoding.UTF8.GetByteCount(hmacSecret) < 32)
             return BadRequest(
@@ -246,37 +236,43 @@ internal static class WorkflowWebhookBindingEndpoints
             return BadRequest("WEBHOOK_TIME_ZONE_INVALID", "timeZoneId is invalid.");
         }
 
+        IWorkflowWebhookAgentKeyMaterializer? credentialMaterializer = null;
         DurableCallerCredentialRef? durableCredential = null;
-        ISecretVault? credentialVault = null;
-        if (forwardedAgentKey != null)
+        if (request.EnableUnattendedEffects)
         {
-            credentialVault = http.RequestServices.GetService<ISecretVault>();
-            if (credentialVault == null)
+            credentialMaterializer = ResolveCredentialMaterializer(http, out var materializerUnavailable);
+            if (credentialMaterializer == null)
+                return materializerUnavailable!;
+
+            var materialized = await credentialMaterializer.MaterializeAsync(
+                callerAuthority!,
+                target.CapabilityAdmissionPlan!,
+                scopeId,
+                normalizedRoute,
+                ct);
+            if (!materialized.Succeeded)
             {
                 return Results.Json(
                     new
                     {
-                        code = "WEBHOOK_CALLER_CREDENTIAL_VAULT_UNAVAILABLE",
-                        message = "Webhook caller credential vault is unavailable.",
+                        code = materialized.ErrorCode,
+                        message = "A dedicated webhook caller credential could not be issued.",
                     },
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
+                    statusCode: materialized.StatusCode);
             }
-
-            var stored = await credentialVault.PutAsync(new StoreSecretRequest(
-                CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
-                scopeId,
-                credentialSubject!,
-                forwardedAgentKey,
-                "workflow-webhook-binding-agent-key"), ct);
-            durableCredential = new DurableCallerCredentialRef
+            durableCredential = materialized.Credential;
+        }
+        else
+        {
+            var existing = await bindingStore.GetAsync(normalizedRoute, ct);
+            if (existing?.CallerDurableCredential != null)
             {
-                Ref = stored.Reference.Ref,
-                Purpose = stored.Reference.Purpose,
-                OwnerScopeKey = stored.Reference.OwnerScopeKey,
-                SubjectId = credentialSubject,
-                SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
-                SecretReference = stored.Reference.Clone(),
-            };
+                credentialMaterializer = ResolveCredentialMaterializer(
+                    http,
+                    out var materializerUnavailable);
+                if (credentialMaterializer == null)
+                    return materializerUnavailable!;
+            }
         }
 
         var record = new WorkflowWebhookBindingRecord(
@@ -310,7 +306,8 @@ internal static class WorkflowWebhookBindingEndpoints
         catch
         {
             await RevokeBindingCredentialAsync(
-                credentialVault,
+                credentialMaterializer,
+                callerAuthority,
                 durableCredential,
                 "workflow-webhook-binding-write-failed",
                 logger: null,
@@ -321,7 +318,8 @@ internal static class WorkflowWebhookBindingEndpoints
         if (!put.Succeeded)
         {
             await RevokeBindingCredentialAsync(
-                credentialVault,
+                credentialMaterializer,
+                callerAuthority,
                 durableCredential,
                 "workflow-webhook-binding-write-rejected",
                 logger: null,
@@ -334,7 +332,8 @@ internal static class WorkflowWebhookBindingEndpoints
         var cleanupLogger = http.RequestServices.GetService<ILoggerFactory>()?
             .CreateLogger("Aevatar.Workflow.WebhookBinding");
         await RevokeBindingCredentialAsync(
-            http.RequestServices.GetService<ISecretVault>(),
+            credentialMaterializer ?? ResolveCredentialMaterializer(http, out _),
+            put.PreviousRecord?.CallerAuthority,
             put.PreviousRecord?.CallerDurableCredential,
             "workflow-webhook-binding-replaced",
             cleanupLogger,
@@ -379,16 +378,14 @@ internal static class WorkflowWebhookBindingEndpoints
             return BadRequest("WEBHOOK_ROUTE_REQUIRED", "Route key is required.");
 
         var existing = await bindingStore.GetAsync(normalizedRoute, ct);
-        if (existing?.CallerDurableCredential != null &&
-            http.RequestServices.GetService<ISecretVault>() == null)
+        IWorkflowWebhookAgentKeyMaterializer? credentialMaterializer = null;
+        if (existing?.CallerDurableCredential != null)
         {
-            return Results.Json(
-                new
-                {
-                    code = "WEBHOOK_CALLER_CREDENTIAL_VAULT_UNAVAILABLE",
-                    message = "Webhook caller credential vault is unavailable.",
-                },
-                statusCode: StatusCodes.Status503ServiceUnavailable);
+            credentialMaterializer = ResolveCredentialMaterializer(
+                http,
+                out var materializerUnavailable);
+            if (credentialMaterializer == null)
+                return materializerUnavailable!;
         }
 
         var deleted = await bindingStore.DeleteOwnedAsync(normalizedRoute, scopeId, ct);
@@ -398,7 +395,8 @@ internal static class WorkflowWebhookBindingEndpoints
         var logger = http.RequestServices.GetService<ILoggerFactory>()?
             .CreateLogger("Aevatar.Workflow.WebhookBinding");
         await RevokeBindingCredentialAsync(
-            http.RequestServices.GetService<ISecretVault>(),
+            credentialMaterializer ?? ResolveCredentialMaterializer(http, out _),
+            deleted.RemovedRecord?.CallerAuthority,
             deleted.RemovedRecord?.CallerDurableCredential,
             "workflow-webhook-binding-deleted",
             logger,
@@ -623,6 +621,32 @@ internal static class WorkflowWebhookBindingEndpoints
         return store;
     }
 
+    private static IWorkflowWebhookAgentKeyMaterializer? ResolveCredentialMaterializer(
+        HttpContext http,
+        out IResult? unavailable)
+    {
+        IWorkflowWebhookAgentKeyMaterializer? materializer;
+        try
+        {
+            materializer = http.RequestServices.GetService<IWorkflowWebhookAgentKeyMaterializer>();
+        }
+        catch (InvalidOperationException)
+        {
+            materializer = null;
+        }
+
+        unavailable = materializer != null
+            ? null
+            : Results.Json(
+                new
+                {
+                    code = "WEBHOOK_CALLER_CREDENTIAL_ISSUANCE_UNAVAILABLE",
+                    message = "Dedicated webhook caller credential issuance is unavailable.",
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        return materializer;
+    }
+
     private static bool TryGetForwardedAgentKey(HttpContext http, out string agentKey)
     {
         agentKey = string.Empty;
@@ -652,7 +676,8 @@ internal static class WorkflowWebhookBindingEndpoints
     }
 
     private static async Task<bool> RevokeBindingCredentialAsync(
-        ISecretVault? vault,
+        IWorkflowWebhookAgentKeyMaterializer? materializer,
+        ProtoWorkflowCallerNyxIdAuthority? callerAuthority,
         DurableCallerCredentialRef? reference,
         string auditReason,
         ILogger? logger,
@@ -660,35 +685,29 @@ internal static class WorkflowWebhookBindingEndpoints
     {
         if (reference == null)
             return true;
-        if (vault == null ||
-            reference.SourceKind != DurableCallerCredentialSourceKind.WebhookBinding ||
-            !string.Equals(
-                reference.Purpose,
-                CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
-                StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(reference.Ref) ||
-            string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
-            string.IsNullOrWhiteSpace(reference.SubjectId))
+        if (materializer == null)
         {
+            logger?.LogError(
+                "Webhook binding caller credential cleanup is unavailable. credentialRef={CredentialRef}",
+                reference.Ref);
             return false;
         }
 
         try
         {
-            var result = await vault.RevokeAsync(new RevokeSecretRequest(
-                reference.Ref,
-                reference.Purpose,
-                reference.OwnerScopeKey,
-                reference.SubjectId,
-                auditReason), ct);
-            if (!result.Revoked)
+            var revoked = await materializer.RevokeAsync(
+                callerAuthority,
+                reference,
+                auditReason,
+                ct);
+            if (!revoked)
             {
                 logger?.LogError(
                     "Webhook binding caller credential cleanup was not committed. credentialRef={CredentialRef} reason={AuditReason}",
                     reference.Ref,
                     auditReason);
             }
-            return result.Revoked;
+            return revoked;
         }
         catch (Exception ex)
         {

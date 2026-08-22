@@ -33,4 +33,19 @@ public sealed class DurableCallerAgentKeyContractTests
             CredentialSecretPurposes.ChannelNyxIdAgentKey).ShouldBeFalse();
         DurableCallerAgentKeyContract.Matches(null).ShouldBeFalse();
     }
+
+    [Fact]
+    public void Matches_ShouldRequireProviderCredentialIdentityForWebhookReference()
+    {
+        var credential = new DurableCallerCredentialRef
+        {
+            SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+            Purpose = CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+        };
+
+        DurableCallerAgentKeyContract.Matches(credential).ShouldBeFalse();
+
+        credential.ProviderCredentialId = "provider-key-1";
+        DurableCallerAgentKeyContract.Matches(credential).ShouldBeTrue();
+    }
 }

@@ -28,6 +28,17 @@ preserve the strong typed kind `AgentKey` through workflow, tool execution, and
 code-execution ports. They never relabel that secret as `ProxyDelegation` or use a
 five-minute token as the sandbox program's NyxID credential.
 
+Webhook binding management credentials are admission credentials only. Aevatar
+must never persist a forwarded management Agent Key as the webhook runtime
+credential. When unattended effects are enabled, Aevatar obtains a
+source-readable management bearer from the binding's exact NyxID authority,
+requests an authoritative API-key scope plan for every NyxID UserService ID in
+the committed workflow admission plan (including `code_execute`), and creates a
+dedicated key with `allow_all_services=false`, `allow_all_nodes=false`, and the
+exact planned service and node allowlists. Binding creation fails closed if any
+of those steps is unavailable or if the returned actor, owner, or service set
+drifts from the committed admission.
+
 The exact shared `chrono-sandbox` UserService contract is:
 
 ```text
@@ -68,6 +79,11 @@ sequenceDiagram
 
 - Raw Agent Keys remain absent from actor state, events, projections, read models,
   logs, and API responses.
+- Webhook durable references persist the NyxID provider credential ID alongside
+  the Vault descriptor. Replacement, disablement, rejected writes, deletion, and
+  Vault-write rollback revoke both the provider credential and Vault secret.
+  Legacy webhook references without a provider ID may have only their Vault
+  secret revoked; they are invalid for new runtime dispatch.
 - Aevatar resolves the secret only at the outbound call. Rotation therefore takes
   effect on the next exchange.
 - Chrono rejects caller attempts to override `NYXID_API_KEY` or `NYXID_BASE_URL`
@@ -94,6 +110,9 @@ Tests must prove:
 
 - channel, webhook, scheduled, and restored durable Agent Key references retain
   the `AgentKey` kind through every mapper and dispatcher;
+- webhook binding materialization never stores the inbound management key,
+  scopes the dedicated runtime key to the exact committed admission service set,
+  and rolls provider credentials back when Vault or binding persistence fails;
 - route admission and convergence require forwarding, delegation injection, and
   both scopes without deleting unrelated scopes;
 - Chrono accepts an exact Agent Key only with a valid `sandbox:execute` delegation
