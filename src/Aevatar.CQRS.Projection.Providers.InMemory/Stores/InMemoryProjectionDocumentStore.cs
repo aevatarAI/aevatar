@@ -367,6 +367,11 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
 
         if (incoming.StateVersion == existing.StateVersion)
         {
+            var maintenancePrecedence = ProjectionWriteResultEvaluator
+                .EvaluateSameVersionMaintenancePrecedence(existing.LastEventId, incoming.LastEventId);
+            if (maintenancePrecedence.HasValue)
+                return maintenancePrecedence.Value;
+
             return string.Equals(existing.LastEventId, incoming.LastEventId, StringComparison.Ordinal)
                 ? ProjectionWriteResult.Duplicate()
                 : ProjectionWriteResult.Conflict();

@@ -73,8 +73,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        ctx.Published.Should().ContainSingle();
+        ctx.Published.Should().HaveCount(2);
         ctx.Published[0].direction.Should().Be(TopologyAudience.ParentAndChildren);
+        ctx.Published[1].direction.Should().Be(TopologyAudience.Self);
         var emitted = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         emitted.Annotations["emit.event_type"].Should().Be("audit");
         emitted.Annotations["emit.payload"].Should().Be("{\"k\":1}");
@@ -90,7 +91,11 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             ctx,
             CancellationToken.None);
 
-        var defaultEmit = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        var defaultEmit = ctx.Published
+            .Where(static publication => publication.direction == TopologyAudience.Self)
+            .Select(static publication => publication.evt)
+            .OfType<StepCompletedEvent>()
+            .Single();
         defaultEmit.Annotations["emit.event_type"].Should().Be("custom");
         defaultEmit.Annotations["emit.payload"].Should().Be("fallback-payload");
     }

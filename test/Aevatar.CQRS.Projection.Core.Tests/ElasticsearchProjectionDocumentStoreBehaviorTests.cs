@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -12,6 +13,63 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 
 public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 {
+    [Fact]
+    public async Task UpsertAsync_WhenMaintenanceRepublishMatchesExistingVersion_ShouldReplaceStaleDocument()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"7","last_event_id":"evt-7","updated_at_utc_value":"2026-03-16T00:00:00Z","value":"stale-running"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"updated"}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+        var incoming = new TestStoreReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            StateVersion = 7,
+            LastEventId = CommittedStateRepublish.BuildEventId("actor-1", 7),
+            UpdatedAt = DateTimeOffset.Parse("2026-03-16T00:01:00Z"),
+            Value = "authoritative-terminal",
+        };
+
+        var result = await store.UpsertAsync(incoming);
+
+        result.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "PUT");
+        handler.CapturedRequests[1].Body.Should().Contain("authoritative-terminal");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenOrdinaryWriteFollowsMaintenanceRepublishAtSameVersion_ShouldStayStale()
+    {
+        var maintenanceEventId = CommittedStateRepublish.BuildEventId("actor-1", 7);
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            $"{{\"_seq_no\":7,\"_primary_term\":3,\"_source\":{{\"id\":\"actor-1\",\"actor_id\":\"actor-1\",\"state_version\":\"7\",\"last_event_id\":\"{maintenanceEventId}\",\"updated_at_utc_value\":\"2026-03-16T00:01:00Z\",\"value\":\"authoritative-terminal\"}}}}"));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+        var incoming = new TestStoreReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            StateVersion = 7,
+            LastEventId = "evt-7",
+            UpdatedAt = DateTimeOffset.Parse("2026-03-16T00:00:00Z"),
+            Value = "stale-running",
+        };
+
+        var result = await store.UpsertAsync(incoming);
+
+        result.Disposition.Should().Be(ProjectionWriteDisposition.Stale);
+        handler.CapturedRequests.Should().ContainSingle()
+            .Which.Method.Should().Be("GET");
+    }
+
     [Fact]
     public void AddElasticsearchDocumentProjectionStore_ShouldRegisterIndexReconcileTarget()
     {

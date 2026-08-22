@@ -710,6 +710,33 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
     }
 
     [Fact]
+    public async Task TerminalReconciliation_WithStrandedEmitCompletion_ShouldFailExactExecutionWithoutRedispatch()
+    {
+        var runId = "run-reconcile-emit-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateStartedRunAsync(runId, EmitWorkflowYaml());
+        harness.Publisher.Published.Clear();
+        harness.Publisher.PublishAttempts.Clear();
+
+        await harness.Agent.HandleEventAsync(TerminalReconciliationEnvelope(runId, observedStateVersion: 90));
+
+        harness.Agent.State.Status.Should().Be("failed");
+        harness.Agent.State.FinalError.Should().Contain("emit step completion was not observed");
+        harness.Publisher.PublishAttempts
+            .Select(static attempt => attempt.Event)
+            .OfType<StepRequestEvent>()
+            .Should().NotContain(request => request.StepId == "announce-job");
+        var recoveredCompletion = harness.Publisher.PublishAttempts
+            .Where(static attempt => attempt.Audience == TopologyAudience.Self)
+            .Select(static attempt => attempt.Event)
+            .OfType<StepCompletedEvent>()
+            .Should().ContainSingle().Subject;
+        recoveredCompletion.StepId.Should().Be("announce-job");
+        recoveredCompletion.ExecutionId.Should().Be(harness.StepExecutionId);
+        recoveredCompletion.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        recoveredCompletion.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+    }
+
+    [Fact]
     public async Task TerminalReconciliation_WithMismatchedRunId_ShouldNotChangeAuthoritativeState()
     {
         var runId = "run-reconcile-mismatch-" + Guid.NewGuid().ToString("N");
@@ -1244,6 +1271,18 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
                   - id: failed-step
                     type: transform
                 """;
+
+    private static string EmitWorkflowYaml() =>
+        """
+        name: wf_emit_recovery
+        roles: []
+        steps:
+          - id: announce-job
+            type: emit
+            parameters:
+              event_type: codex.job.requested
+              payload: $input
+        """;
 
     private static void SetAgentId(GAgentBase agent, string agentId)
     {

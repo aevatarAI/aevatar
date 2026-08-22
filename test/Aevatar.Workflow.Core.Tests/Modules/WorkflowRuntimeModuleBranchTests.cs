@@ -41,12 +41,45 @@ public sealed class WorkflowRuntimeModuleBranchTests
         await module.HandleAsync(Wrap(request), ctx, CancellationToken.None);
 
         var completion = ctx.Published
+            .Where(static publication => publication.Direction == TopologyAudience.Self)
             .Select(static publication => publication.Event)
             .OfType<StepCompletedEvent>()
             .Single();
         completion.Success.Should().BeTrue();
         completion.Output.Should().Be(request.Input);
         completion.OutputProvenance.Should().Be(WorkflowStepOutputProvenance.ForwardedInput);
+    }
+
+    [Fact]
+    public async Task EmitModule_ShouldPublishOutwardAnnouncementBeforeSelfCompletion()
+    {
+        var module = new EmitModule();
+        var request = new StepRequestEvent
+        {
+            StepId = "announce-job",
+            StepType = "emit",
+            RunId = "run-emit",
+            ExecutionId = "execution-emit",
+            Input = "payload",
+            Parameters =
+            {
+                ["event_type"] = "codex.job.requested",
+                ["payload"] = "payload",
+            },
+        };
+        var ctx = new RecordingWorkflowContext();
+
+        await module.HandleAsync(Wrap(request), ctx, CancellationToken.None);
+
+        ctx.Published.Should().HaveCount(2);
+        ctx.Published[0].Direction.Should().Be(TopologyAudience.ParentAndChildren);
+        ctx.Published[1].Direction.Should().Be(TopologyAudience.Self);
+        ctx.Published.Select(static item => item.Event)
+            .Should().AllBeOfType<StepCompletedEvent>();
+        ctx.Published.Select(static item => (StepCompletedEvent)item.Event)
+            .Should().OnlyContain(completion =>
+                completion.ExecutionId == "execution-emit" &&
+                completion.Annotations["emit.event_type"] == "codex.job.requested");
     }
 
     [Fact]

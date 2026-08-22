@@ -68,6 +68,8 @@ public sealed partial class WorkflowRunGAgent
     private const string InputFileBindingError = "workflow_input_file_binding_failed";
     internal const string OrphanedExecutionTerminalError =
         "workflow execution became inactive before a terminal completion was committed";
+    internal const string StrandedEmitTerminalError =
+        "workflow emit step completion was not observed after dispatch; external outcome is uncertain";
     private const int InteractiveActionHandoffLimit = 32;
     private const string NyxIdChatAgentKind = "nyxid.chat";
     private WorkflowDefinition? _compiledWorkflow;
@@ -783,6 +785,14 @@ public sealed partial class WorkflowRunGAgent
                 return;
             }
 
+            if (await TryFailStrandedEmitExecutionAsync(
+                    kernelState,
+                    currentRunId,
+                    command.ObservedStateVersion))
+            {
+                return;
+            }
+
             LogPreservedActiveTerminalReconciliation(
                 kernelState,
                 currentRunId,
@@ -1054,6 +1064,69 @@ public sealed partial class WorkflowRunGAgent
             kernelState.ExecutionIdsByStepId.ContainsKey(kernelState.CurrentStepId),
             pendingLlmCount,
             observedStateVersion);
+    }
+
+    private async Task<bool> TryFailStrandedEmitExecutionAsync(
+        WorkflowExecutionKernelState kernelState,
+        string runId,
+        long observedStateVersion)
+    {
+        if (!kernelState.Active ||
+            !string.Equals(
+                WorkflowRunIdNormalizer.Normalize(kernelState.RunId),
+                runId,
+                StringComparison.Ordinal) ||
+            kernelState.CurrentStepDispatchPending ||
+            string.IsNullOrWhiteSpace(kernelState.CurrentStepId) ||
+            !kernelState.ExecutionIdsByStepId.TryGetValue(
+                kernelState.CurrentStepId,
+                out var executionId) ||
+            string.IsNullOrWhiteSpace(executionId))
+        {
+            return false;
+        }
+
+        var workflow = ResolveWorkflowForTransition(State);
+        var currentStep = workflow?.GetStep(kernelState.CurrentStepId);
+        if (currentStep == null ||
+            !string.Equals(
+                WorkflowPrimitiveCatalog.ToCanonicalType(currentStep.Type),
+                "emit",
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var completion = new StepCompletedEvent
+        {
+            RunId = runId,
+            StepId = currentStep.Id,
+            ExecutionId = executionId,
+            Success = false,
+            Outcome = WorkflowStepCompletionOutcome.Failed,
+            FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+            RetryDisposition = WorkflowStepRetryDisposition.Forbidden,
+            Error = StrandedEmitTerminalError,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
+        };
+
+        Logger.LogWarning(
+            "Fail stranded workflow emit completion during terminal reconciliation. actor={ActorId} run={RunId} step={StepId} execution={ExecutionId} observedStateVersion={ObservedStateVersion}",
+            Id,
+            runId,
+            currentStep.Id,
+            executionId,
+            observedStateVersion);
+        await PublishAsync(
+            completion,
+            TopologyAudience.Self,
+            CancellationToken.None,
+            BuildDeliveryOptions(BuildStableIdentity(
+                "workflow-emit-terminal-reconcile",
+                runId,
+                currentStep.Id,
+                executionId)));
+        return true;
     }
 
     private async Task<bool> TryRecoverFailedForEachParentAsync(

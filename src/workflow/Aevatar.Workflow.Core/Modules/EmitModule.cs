@@ -39,6 +39,11 @@ public sealed class EmitModule : IEventModule<IWorkflowExecutionContext>
         };
         completed.Annotations["emit.event_type"] = eventType;
         completed.Annotations["emit.payload"] = payload;
-        await ctx.PublishAsync(completed, TopologyAudience.ParentAndChildren, ct);
+        // The outward publication is the authored emit side effect. The exact
+        // completion must also return to this run actor so its execution kernel
+        // can advance; topology parent/child routing deliberately excludes the
+        // publishing actor itself.
+        await ctx.PublishAsync(completed.Clone(), TopologyAudience.ParentAndChildren, ct);
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
     }
 }
