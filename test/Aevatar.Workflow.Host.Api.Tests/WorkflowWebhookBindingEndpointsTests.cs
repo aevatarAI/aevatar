@@ -9,6 +9,7 @@ using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
@@ -741,7 +742,7 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     }
 
     [Fact]
-    public async Task Ingress_WithExactUnattendedBinding_ShouldAttachAgentKeyCredential()
+    public async Task Ingress_WithLegacyAuthorityOnlyBinding_ShouldDispatchProxyDelegationEnvelope()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
         var plan = DurableWritePlan();
@@ -766,13 +767,8 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             HmacTimestampHeader = "X-NyxID-Timestamp",
             CallerAuthority = authority,
             UnattendedEffectAuthorization = authorization,
-            CallerDurableCredential = DurableWebhookCredential(),
         });
-        var dispatch = new RecordingDispatch
-        {
-            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
-                new WorkflowChatRunAcceptedReceipt("run-actor", "workflow-alpha", "cmd-1", "corr-1")),
-        };
+        var dispatch = CreateEnvelopeDispatch();
         var replay = new CountingReplayStore();
         var http = CreateHttpContext(
             store,
@@ -795,15 +791,94 @@ public sealed class WorkflowWebhookBindingEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         replay.Requests.Should().ContainSingle();
-        var command = dispatch.Commands.Should().ContainSingle().Subject;
-        command.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
-        command.CallerCredential.Should().NotBeNull();
-        command.CallerCredential!.BearerToken.Should().BeNull();
-        command.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
-        command.CallerCredential.NyxIdAuthority!.BindingId.Should().Be("bnd-owner-alpha");
-        command.CallerCredential.UnattendedEffectAuthorization!.AuthorizationDigest
+        dispatch.DispatchAttempts.Should().Be(1);
+        var request = dispatch.RunRequests.Should().ContainSingle().Subject;
+        request.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        request.CallerCredential.NyxIdAuthority.BindingId.Should().Be("bnd-owner-alpha");
+        request.CallerCredential.UnattendedEffectAuthorization.AuthorizationDigest
             .Should().Be(authorization.AuthorizationDigest);
-        command.CallerCredential.DurableCallerCredential!.Ref.Should().Be("sec-webhook-binding");
+        request.CallerCredential.DurableCallerCredential.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Ingress_WithValidDurableAgentKey_ShouldDispatchAgentKeyEnvelope()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var plan = DurableWritePlan();
+        var authority = CallerAuthority();
+        var authorization = WorkflowUnattendedEffectAuthorizationIntegrity.Create(
+            "actor-status-handler",
+            "scope-1",
+            "workflow-status-handler",
+            "rev-7",
+            "status-event-route",
+            "owner-alpha",
+            7,
+            authority,
+            plan);
+        var durableCredential = DurableWebhookCredential();
+        await SeedAsync(store, BindingRecord("status-event-route", "scope-1") with
+        {
+            WorkflowName = "workflow-alpha",
+            DefinitionActorId = "actor-status-handler",
+            TargetRevisionId = "rev-7",
+            PromptTemplate = """{"resource_id":"{{resource_id}}","execute":true}""",
+            HmacSignatureHeader = "X-NyxID-Signature",
+            HmacTimestampHeader = "X-NyxID-Timestamp",
+            CallerAuthority = authority,
+            UnattendedEffectAuthorization = authorization,
+            CallerDurableCredential = durableCredential,
+        });
+        var dispatch = CreateEnvelopeDispatch();
+        var replay = new CountingReplayStore();
+        var http = CreateHttpContext(
+            store,
+            replay,
+            new FakeActorBindingReader(DefinitionBinding(plan: plan)));
+        var body = Encoding.UTF8.GetBytes("""{"event_id":"delivery-1","resource_id":"res-123"}""");
+        http.Request.Body = new MemoryStream(body);
+        SignNyxId(http, "secret-1", body);
+
+        var options = Options.Create(new WorkflowWebhookIngressOptions { Enabled = false });
+        var result = await WorkflowWebhookIngressEndpoints.HandleAsync(
+            http,
+            "status-event-route",
+            new WorkflowWebhookIngressRequestBuilder(options),
+            dispatch,
+            options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        replay.Requests.Should().ContainSingle();
+        dispatch.DispatchAttempts.Should().Be(1);
+        var request = dispatch.RunRequests.Should().ContainSingle().Subject;
+        request.CallerCredential.BearerToken.Should().BeEmpty();
+        request.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.AgentKey);
+        request.CallerCredential.NyxIdAuthority.BindingId.Should().Be("bnd-owner-alpha");
+        request.CallerCredential.UnattendedEffectAuthorization.AuthorizationDigest
+            .Should().Be(authorization.AuthorizationDigest);
+        request.CallerCredential.DurableCallerCredential.Should().BeEquivalentTo(durableCredential);
+    }
+
+    [Fact]
+    public async Task Ingress_WithMalformedDurableAgentKey_ShouldRejectBeforeDispatch()
+    {
+        var credential = DurableWebhookCredential();
+        credential.OwnerScopeKey = string.Empty;
+
+        await AssertInvalidDurableCredentialRejectedAsync(credential);
+    }
+
+    [Fact]
+    public async Task Ingress_WithIncompatibleDurableAgentKey_ShouldRejectBeforeDispatch()
+    {
+        var credential = DurableWebhookCredential();
+        credential.Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey;
+        credential.SecretReference.Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey;
+
+        await AssertInvalidDurableCredentialRejectedAsync(credential);
     }
 
     [Fact]
@@ -1095,6 +1170,72 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         BindingId = "bnd-owner-alpha",
     };
 
+    private static EnvelopeCreatingDispatch CreateEnvelopeDispatch()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        return new EnvelopeCreatingDispatch(
+            provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>());
+    }
+
+    private static async Task AssertInvalidDurableCredentialRejectedAsync(
+        DurableCallerCredentialRef credential)
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var plan = DurableWritePlan();
+        var authority = CallerAuthority();
+        var authorization = WorkflowUnattendedEffectAuthorizationIntegrity.Create(
+            "actor-status-handler",
+            "scope-1",
+            "workflow-status-handler",
+            "rev-7",
+            "status-event-route",
+            "owner-alpha",
+            7,
+            authority,
+            plan);
+        await SeedAsync(store, BindingRecord("status-event-route", "scope-1") with
+        {
+            WorkflowName = "workflow-alpha",
+            DefinitionActorId = "actor-status-handler",
+            TargetRevisionId = "rev-7",
+            PromptTemplate = """{"resource_id":"{{resource_id}}","execute":true}""",
+            HmacSignatureHeader = "X-NyxID-Signature",
+            HmacTimestampHeader = "X-NyxID-Timestamp",
+            CallerAuthority = authority,
+            UnattendedEffectAuthorization = authorization,
+            CallerDurableCredential = credential,
+        });
+        var dispatch = CreateEnvelopeDispatch();
+        var replay = new CountingReplayStore();
+        var http = CreateHttpContext(
+            store,
+            replay,
+            new FakeActorBindingReader(DefinitionBinding(plan: plan)));
+        var body = Encoding.UTF8.GetBytes("""{"event_id":"delivery-invalid","resource_id":"res-123"}""");
+        http.Request.Body = new MemoryStream(body);
+        SignNyxId(http, "secret-1", body);
+
+        var options = Options.Create(new WorkflowWebhookIngressOptions { Enabled = false });
+        var result = await WorkflowWebhookIngressEndpoints.HandleAsync(
+            http,
+            "status-event-route",
+            new WorkflowWebhookIngressRequestBuilder(options),
+            dispatch,
+            options,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        (await ReadBodyAsync(http.Response)).Should()
+            .Contain("WEBHOOK_DURABLE_CALLER_CREDENTIAL_INVALID");
+        replay.Requests.Should().BeEmpty();
+        dispatch.DispatchAttempts.Should().Be(0);
+        dispatch.RunRequests.Should().BeEmpty();
+    }
+
     private static DurableCallerCredentialRef DurableWebhookCredential()
     {
         var descriptor = new SecretReference
@@ -1316,6 +1457,36 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         {
             Commands.Add(command);
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class EnvelopeCreatingDispatch(
+        ICommandEnvelopeFactory<WorkflowChatRunRequest> envelopeFactory)
+        : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+    {
+        public int DispatchAttempts { get; private set; }
+        public List<WorkflowChatRequestEvent> RunRequests { get; } = [];
+
+        public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
+            WorkflowChatRunRequest command,
+            CancellationToken ct = default)
+        {
+            DispatchAttempts++;
+            var envelope = envelopeFactory.CreateEnvelope(
+                command,
+                new CommandContext(
+                    "cmd-1",
+                    "corr-1",
+                    "run-actor",
+                    new Dictionary<string, string>(StringComparer.Ordinal)));
+            RunRequests.Add(envelope.Payload.Unpack<WorkflowChatRequestEvent>());
+            return Task.FromResult(
+                CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                    new WorkflowChatRunAcceptedReceipt(
+                        "run-actor",
+                        "workflow-alpha",
+                        "cmd-1",
+                        "corr-1")));
         }
     }
 
