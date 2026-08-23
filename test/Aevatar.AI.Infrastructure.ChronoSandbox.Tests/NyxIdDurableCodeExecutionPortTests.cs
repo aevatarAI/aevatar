@@ -97,6 +97,39 @@ public sealed class NyxIdDurableCodeExecutionPortTests
     }
 
     [Fact]
+    public async Task SubmitAsync_AgentKeyUsesApiKeyHeaderOnPublicEndpoint()
+    {
+        var handler = new SequenceHandler(_ => Response(
+            HttpStatusCode.Accepted,
+            $$"""
+              {
+                "operation_id":"{{OperationId}}",
+                "status":"queued",
+                "created_at":"2026-08-14T10:00:00Z",
+                "expires_at":"2026-08-15T10:00:00Z"
+              }
+              """));
+        var port = CreatePort(handler);
+        var execution = ExecutionRequest() with
+        {
+            Caller = new CodeExecutionCallerContext(
+                "scheduled-agent-key",
+                null,
+                CodeExecutionNyxIdCredentialKind.AgentKey),
+        };
+
+        var outcome = await port.SubmitAsync(new DurableCodeExecutionSubmitRequest(
+            execution,
+            IdempotencyKey));
+
+        outcome.Failure.Should().BeNull();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Headers.Should().NotContainKey("Authorization");
+        handler.Requests[0].Headers["X-API-Key"].Should().Equal("scheduled-agent-key");
+        handler.Requests[0].Headers["Idempotency-Key"].Should().Equal(IdempotencyKey);
+    }
+
+    [Fact]
     public async Task SubmitAsync_PersonalExecutionRouteUsesItsAdmittedSlug()
     {
         var handler = new SequenceHandler(_ => Response(
@@ -151,6 +184,31 @@ public sealed class NyxIdDurableCodeExecutionPortTests
             $"/executions/{OperationId}?_nyxid_via=us-code-alpha");
         handler.Requests[0].Headers["If-None-Match"].Should().Equal("\"v6\"");
         handler.Requests[0].Headers.Should().NotContainKey("Idempotency-Key");
+    }
+
+    [Fact]
+    public async Task GetStatusAsync_AgentKeyUsesApiKeyHeaderOnPublicEndpoint()
+    {
+        var handler = new SequenceHandler(_ => Response(
+            HttpStatusCode.NotModified,
+            string.Empty,
+            response => response.Headers.ETag = new EntityTagHeaderValue("\"v7\"")));
+        var port = CreatePort(handler);
+        var request = OperationRequest("\"v6\"") with
+        {
+            Caller = new CodeExecutionCallerContext(
+                "scheduled-agent-key",
+                null,
+                CodeExecutionNyxIdCredentialKind.AgentKey),
+        };
+
+        var outcome = await port.GetStatusAsync(request);
+
+        outcome.Failure.Should().BeNull();
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Headers.Should().NotContainKey("Authorization");
+        handler.Requests[0].Headers["X-API-Key"].Should().Equal("scheduled-agent-key");
+        handler.Requests[0].Headers["If-None-Match"].Should().Equal("\"v6\"");
     }
 
     [Fact]

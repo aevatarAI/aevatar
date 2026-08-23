@@ -156,17 +156,29 @@ internal sealed partial class NyxIdCodeExecutionPort(
         NyxIdProxyTextResponse response;
         try
         {
-            response = await client.ProxyRequestBoundedAsync(
-                    executionCredential,
-                    route.ServiceSlug,
-                    resolvedUserServiceId,
-                    ExecutionPath,
-                    HttpMethod.Post.Method,
-                    body,
-                    extraHeaders: null,
-                    MaxResponseBytes,
-                    ct)
-                .ConfigureAwait(false);
+            response = request.Caller!.ExecutionCredentialKind ==
+                       CodeExecutionNyxIdCredentialKind.AgentKey
+                ? await client.ProxyRequestBoundedWithApiKeyAsync(
+                        executionCredential,
+                        route.ServiceSlug,
+                        resolvedUserServiceId,
+                        ExecutionPath,
+                        HttpMethod.Post.Method,
+                        body,
+                        MaxResponseBytes,
+                        ct)
+                    .ConfigureAwait(false)
+                : await client.ProxyRequestBoundedAsync(
+                        executionCredential,
+                        route.ServiceSlug,
+                        resolvedUserServiceId,
+                        ExecutionPath,
+                        HttpMethod.Post.Method,
+                        body,
+                        extraHeaders: null,
+                        MaxResponseBytes,
+                        ct)
+                    .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
