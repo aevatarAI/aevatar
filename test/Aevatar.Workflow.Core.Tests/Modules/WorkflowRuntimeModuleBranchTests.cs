@@ -624,6 +624,9 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 OwnerScopeKey = "scope-workflow",
                 SubjectId = "agent-key-workflow",
                 SourceKind = sourceKind,
+                ProviderCredentialId = sourceKind == DurableCallerCredentialSourceKind.WebhookBinding
+                    ? "provider-key-workflow"
+                    : string.Empty,
             },
             Kind = NyxIdCallerCredentialKind.AgentKey,
         };

@@ -3,7 +3,10 @@ namespace Aevatar.Foundation.Abstractions.Credentials;
 public static class DurableCallerAgentKeyContract
 {
     public static bool Matches(DurableCallerCredentialRef? credential) =>
-        credential is not null && Matches(credential.SourceKind, credential.Purpose);
+        credential is not null &&
+        Matches(credential.SourceKind, credential.Purpose) &&
+        (credential.SourceKind != DurableCallerCredentialSourceKind.WebhookBinding ||
+         !string.IsNullOrWhiteSpace(credential.ProviderCredentialId));
 
     public static bool Matches(
         DurableCallerCredentialSourceKind sourceKind,

@@ -1646,6 +1646,9 @@ public sealed class ToolCallModuleContextTests
                 SubjectId = "agent-key-workflow",
                 SourceKind = sourceKind,
                 SecretReference = stored.Reference.Clone(),
+                ProviderCredentialId = sourceKind == DurableCallerCredentialSourceKind.WebhookBinding
+                    ? "provider-key-workflow"
+                    : string.Empty,
             },
             NyxIdAuthority = CreateCallerAuthority(),
             Kind = NyxIdCallerCredentialKind.AgentKey,

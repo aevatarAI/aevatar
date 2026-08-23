@@ -782,6 +782,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             SubjectId = "owner-alpha",
             SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
             SecretReference = stored.Reference.Clone(),
+            ProviderCredentialId = "provider-key-1",
         };
     }
 

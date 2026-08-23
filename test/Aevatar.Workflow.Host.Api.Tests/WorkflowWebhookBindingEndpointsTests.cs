@@ -377,17 +377,19 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     }
 
     [Fact]
-    public async Task Put_WithForwardedAgentKey_ShouldStoreOnlyVaultReference()
+    public async Task Put_WithForwardedAgentKey_ShouldMaterializeDedicatedCredentialWithoutPersistingInboundKey()
     {
         const string agentKey = "nyxid_ag_webhook_exact_service_secret";
         var store = new InMemoryWorkflowWebhookBindingStore();
         var vault = new RecordingSecretVault();
+        var materializer = new RecordingWebhookAgentKeyMaterializer();
         var http = CreateHttpContext(
             store,
             bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableWritePlan())),
             authenticationEnabled: true,
             bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
-            secretVault: vault);
+            secretVault: vault,
+            webhookAgentKeyMaterializer: materializer);
         ApplyProxyDelegationAuthentication(http, "owner-alpha", "scope-1");
         http.Request.Headers.Authorization = $"Bearer {agentKey}";
 
@@ -398,28 +400,33 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             ExactPutRequest() with { EnableUnattendedEffects = true });
 
         ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status200OK);
-        vault.PutRequests.Should().ContainSingle();
-        vault.PutRequests[0].Secret.Should().Be(agentKey);
-        vault.PutRequests[0].Purpose.Should().Be(CredentialSecretPurposes.WorkflowWebhookBindingAgentKey);
+        vault.PutRequests.Should().BeEmpty();
+        materializer.MaterializeCalls.Should().ContainSingle();
+        materializer.MaterializeCalls[0].Authority.ExternalUserId.Should().Be("owner-alpha");
+        materializer.MaterializeCalls[0].ScopeId.Should().Be("scope-1");
+        materializer.MaterializeCalls[0].RouteKey.Should().Be("status-event-route");
         var stored = (await store.GetAsync("status-event-route"))!;
         stored.CallerDurableCredential.Should().NotBeNull();
         stored.CallerDurableCredential!.SourceKind.Should().Be(DurableCallerCredentialSourceKind.WebhookBinding);
+        stored.CallerDurableCredential.ProviderCredentialId.Should().NotBeNullOrWhiteSpace();
         stored.CallerDurableCredential.SecretReference.Fingerprint.Should().NotBeNullOrWhiteSpace();
         System.Text.Json.JsonSerializer.Serialize(stored).Should().NotContain(agentKey);
         System.Text.Json.JsonSerializer.Serialize(((IValueHttpResult)result).Value).Should().NotContain(agentKey);
     }
 
     [Fact]
-    public async Task Put_WithOrdinaryOAuthBearer_ShouldNotStoreCredentialInVault()
+    public async Task Put_WithOrdinaryOAuthBearer_ShouldAlsoMaterializeDedicatedCredential()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
         var vault = new RecordingSecretVault();
+        var materializer = new RecordingWebhookAgentKeyMaterializer();
         var http = CreateHttpContext(
             store,
             bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableWritePlan())),
             authenticationEnabled: true,
             bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
-            secretVault: vault);
+            secretVault: vault,
+            webhookAgentKeyMaterializer: materializer);
         ApplyHumanAuthentication(http, "owner-alpha", "scope-1");
 
         var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
@@ -430,7 +437,32 @@ public sealed class WorkflowWebhookBindingEndpointsTests
 
         ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status200OK);
         vault.PutRequests.Should().BeEmpty();
-        (await store.GetAsync("status-event-route"))!.CallerDurableCredential.Should().BeNull();
+        materializer.MaterializeCalls.Should().ContainSingle();
+        (await store.GetAsync("status-event-route"))!.CallerDurableCredential.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Put_WhenDedicatedCredentialMaterializerIsUnavailable_ShouldFailWithoutMutation()
+    {
+        var store = new InMemoryWorkflowWebhookBindingStore();
+        var http = CreateHttpContext(
+            store,
+            bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableWritePlan())),
+            authenticationEnabled: true,
+            bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
+            registerDefaultWebhookAgentKeyMaterializer: false);
+        ApplyHumanAuthentication(http, "owner-alpha", "scope-1");
+
+        var result = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            "scope-1",
+            "status-event-route",
+            ExactPutRequest() with { EnableUnattendedEffects = true });
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        System.Text.Json.JsonSerializer.Serialize(((IValueHttpResult)result).Value)
+            .Should().Contain("WEBHOOK_CALLER_CREDENTIAL_ISSUANCE_UNAVAILABLE");
+        (await store.GetAsync("status-event-route")).Should().BeNull();
     }
 
     [Fact]
@@ -438,13 +470,13 @@ public sealed class WorkflowWebhookBindingEndpointsTests
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
         await SeedAsync(store, BindingRecord("status-event-route", "scope-other"));
-        var vault = new RecordingSecretVault();
+        var materializer = new RecordingWebhookAgentKeyMaterializer();
         var http = CreateHttpContext(
             store,
             bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableWritePlan())),
             authenticationEnabled: true,
             bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
-            secretVault: vault);
+            webhookAgentKeyMaterializer: materializer);
         ApplyProxyDelegationAuthentication(http, "owner-alpha", "scope-1");
         http.Request.Headers.Authorization = "Bearer nyxid_ag_rejected_route_secret";
 
@@ -455,22 +487,23 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             ExactPutRequest() with { EnableUnattendedEffects = true });
 
         ((IStatusCodeHttpResult)result).StatusCode.Should().Be(StatusCodes.Status409Conflict);
-        vault.PutRequests.Should().ContainSingle();
-        vault.RevokeRequests.Should().ContainSingle();
-        vault.RevokeRequests[0].Ref.Should().Be(vault.PutResults[0].Reference.Ref);
+        materializer.MaterializeCalls.Should().ContainSingle();
+        materializer.RevokeCalls.Should().ContainSingle();
+        materializer.RevokeCalls[0].Credential.Ref.Should()
+            .Be(materializer.MaterializedCredentials[0].Ref);
     }
 
     [Fact]
     public async Task ReplaceAndDelete_ShouldRevokeOnlyTheReplacedAgentKeyReferences()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
-        var vault = new RecordingSecretVault();
+        var materializer = new RecordingWebhookAgentKeyMaterializer();
         var http = CreateHttpContext(
             store,
             bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableWritePlan())),
             authenticationEnabled: true,
             bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
-            secretVault: vault);
+            webhookAgentKeyMaterializer: materializer);
         ApplyProxyDelegationAuthentication(http, "owner-alpha", "scope-1");
 
         http.Request.Headers.Authorization = "Bearer nyxid_ag_first_secret";
@@ -491,23 +524,23 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             .Should().Be(StatusCodes.Status200OK);
         var secondRef = (await store.GetAsync("status-event-route"))!.CallerDurableCredential!.Ref;
 
-        vault.RevokeRequests.Select(static request => request.Ref).Should().ContainSingle(firstRef);
+        materializer.RevokeCalls.Select(static call => call.Credential.Ref).Should().ContainSingle(firstRef);
         (await WorkflowWebhookBindingEndpoints.HandleDeleteAsync(http, "scope-1", "status-event-route"))
             .Should().BeOfType<Microsoft.AspNetCore.Http.HttpResults.NoContent>();
-        vault.RevokeRequests.Select(static request => request.Ref).Should().Equal(firstRef, secondRef);
+        materializer.RevokeCalls.Select(static call => call.Credential.Ref).Should().Equal(firstRef, secondRef);
     }
 
     [Fact]
     public async Task ReplaceAndDelete_WhenCleanupIsNotCommitted_ShouldReportTheCommittedBindingOutcome()
     {
         var store = new InMemoryWorkflowWebhookBindingStore();
-        var vault = new RecordingSecretVault { CommitRevocation = false };
+        var materializer = new RecordingWebhookAgentKeyMaterializer { CommitRevocation = false };
         var http = CreateHttpContext(
             store,
             bindingReader: new FakeActorBindingReader(DefinitionBinding(plan: DurableWritePlan())),
             authenticationEnabled: true,
             bindingQuery: new FakeBindingQuery("bnd-owner-alpha"),
-            secretVault: vault);
+            webhookAgentKeyMaterializer: materializer);
         ApplyProxyDelegationAuthentication(http, "owner-alpha", "scope-1");
 
         http.Request.Headers.Authorization = "Bearer nyxid_ag_first_secret";
@@ -529,13 +562,13 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         ((IStatusCodeHttpResult)replace).StatusCode.Should().Be(StatusCodes.Status200OK);
         var secondRef = (await store.GetAsync("status-event-route"))!.CallerDurableCredential!.Ref;
         secondRef.Should().NotBe(firstRef);
-        vault.RevokeRequests.Select(static request => request.Ref).Should().ContainSingle(firstRef);
+        materializer.RevokeCalls.Select(static call => call.Credential.Ref).Should().ContainSingle(firstRef);
 
         var delete = await WorkflowWebhookBindingEndpoints.HandleDeleteAsync(http, "scope-1", "status-event-route");
 
         delete.Should().BeOfType<Microsoft.AspNetCore.Http.HttpResults.NoContent>();
         (await store.GetAsync("status-event-route")).Should().BeNull();
-        vault.RevokeRequests.Select(static request => request.Ref).Should().Equal(firstRef, secondRef);
+        materializer.RevokeCalls.Select(static call => call.Credential.Ref).Should().Equal(firstRef, secondRef);
     }
 
     [Fact]
@@ -1255,6 +1288,7 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             SubjectId = "owner-alpha",
             SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
             SecretReference = descriptor,
+            ProviderCredentialId = "provider-webhook-binding",
         };
     }
 
@@ -1308,6 +1342,19 @@ public sealed class WorkflowWebhookBindingEndpointsTests
                 .ComputeNyxIdExplicitRequestGrantDigest(grant),
             ExecutionPolicy = policy,
         };
+        var codeExecution = new CodeExecutionCapabilityRef
+        {
+            UserServiceId = "service-chrono-sandbox",
+            ServiceSlugSnapshot = "chrono-sandbox",
+            CatalogServiceId = "catalog-chrono-sandbox",
+        };
+        codeExecution.ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeCodeExecutionCapabilityDigest(
+                codeExecution.UserServiceId,
+                codeExecution.ServiceSlugSnapshot,
+                codeExecution.CatalogServiceId);
+        codeExecution.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+        codeExecution.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
         var plan = new WorkflowCapabilityAdmissionPlan
         {
             SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
@@ -1320,6 +1367,11 @@ public sealed class WorkflowWebhookBindingEndpointsTests
                 OwnerSubject = "owner-alpha",
             },
         };
+        plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = "workflow-alpha/normalize_person",
+            Capability = new ExternalWorkflowCapabilityRef { CodeExecution = codeExecution },
+        });
         plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
         {
             CallSiteId = grant.CallSiteId,
@@ -1352,7 +1404,9 @@ public sealed class WorkflowWebhookBindingEndpointsTests
         bool authenticationEnabled = false,
         IExternalIdentityBindingQueryPort? bindingQuery = null,
         IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null,
-        ISecretVault? secretVault = null)
+        ISecretVault? secretVault = null,
+        IWorkflowWebhookAgentKeyMaterializer? webhookAgentKeyMaterializer = null,
+        bool registerDefaultWebhookAgentKeyMaterializer = true)
     {
         var services = new ServiceCollection();
         services.AddSingleton<Microsoft.Extensions.Logging.ILoggerFactory>(NullLoggerFactory.Instance);
@@ -1378,6 +1432,11 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             services.AddSingleton(callerAccessTokenProvider);
         if (secretVault != null)
             services.AddSingleton(secretVault);
+        if (webhookAgentKeyMaterializer != null)
+            services.AddSingleton(webhookAgentKeyMaterializer);
+        else if (registerDefaultWebhookAgentKeyMaterializer)
+            services.AddSingleton<IWorkflowWebhookAgentKeyMaterializer,
+                RecordingWebhookAgentKeyMaterializer>();
         var http = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
         http.Response.Body = new MemoryStream();
         return http;
@@ -1525,6 +1584,72 @@ public sealed class WorkflowWebhookBindingEndpointsTests
             return CommitRevocation
                 ? _inner.RevokeAsync(request, ct)
                 : Task.FromResult(new RevokeSecretResult(false));
+        }
+    }
+
+    private sealed class RecordingWebhookAgentKeyMaterializer
+        : IWorkflowWebhookAgentKeyMaterializer
+    {
+        private int _sequence;
+
+        public List<(
+            ProtoWorkflowCallerNyxIdAuthority Authority,
+            WorkflowCapabilityAdmissionPlan AdmissionPlan,
+            string ScopeId,
+            string RouteKey)> MaterializeCalls { get; } = [];
+
+        public List<DurableCallerCredentialRef> MaterializedCredentials { get; } = [];
+
+        public List<(
+            ProtoWorkflowCallerNyxIdAuthority? Authority,
+            DurableCallerCredentialRef Credential,
+            string AuditReason)> RevokeCalls { get; } = [];
+
+        public bool CommitRevocation { get; init; } = true;
+
+        public Task<WorkflowWebhookAgentKeyMaterializationResult> MaterializeAsync(
+            ProtoWorkflowCallerNyxIdAuthority callerAuthority,
+            WorkflowCapabilityAdmissionPlan admissionPlan,
+            string scopeId,
+            string routeKey,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            MaterializeCalls.Add((callerAuthority.Clone(), admissionPlan.Clone(), scopeId, routeKey));
+            var sequence = Interlocked.Increment(ref _sequence);
+            var descriptor = new SecretReference
+            {
+                Ref = $"sec-webhook-binding-{sequence}",
+                Purpose = CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                Fingerprint = $"sha256:test-{sequence}",
+                Version = 1,
+                OwnerScopeKey = scopeId,
+                CreatedAtUnixMs = sequence,
+            };
+            var credential = new DurableCallerCredentialRef
+            {
+                Ref = descriptor.Ref,
+                Purpose = descriptor.Purpose,
+                OwnerScopeKey = descriptor.OwnerScopeKey,
+                SubjectId = callerAuthority.ExternalUserId,
+                SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+                SecretReference = descriptor,
+                ProviderCredentialId = $"provider-webhook-binding-{sequence}",
+            };
+            MaterializedCredentials.Add(credential.Clone());
+            return Task.FromResult(
+                WorkflowWebhookAgentKeyMaterializationResult.Success(credential));
+        }
+
+        public Task<bool> RevokeAsync(
+            ProtoWorkflowCallerNyxIdAuthority? callerAuthority,
+            DurableCallerCredentialRef credential,
+            string auditReason,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            RevokeCalls.Add((callerAuthority?.Clone(), credential.Clone(), auditReason));
+            return Task.FromResult(CommitRevocation);
         }
     }
 
