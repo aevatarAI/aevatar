@@ -112,10 +112,200 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
         handler.Requests[2].Uri.Should().EndWith("/api/v1/api-keys/provider-key-rollback");
     }
 
+    [Fact]
+    public async Task Materialize_WhenAdmissionPlanIsInvalid_ShouldFailBeforeCallingProvider()
+    {
+        var handler = new SequencedNyxIdHandler();
+        var materializer = CreateMaterializer(handler, new InMemorySecretVault());
+
+        var interactivePlan = DurableAdmissionPlan();
+        interactivePlan.ExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+        var interactive = await materializer.MaterializeAsync(
+            CallerAuthority(), interactivePlan, "scope-1", "hr-01", CancellationToken.None);
+
+        var emptyPlan = DurableAdmissionPlan();
+        emptyPlan.InvocationAdmissions.Clear();
+        emptyPlan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(emptyPlan);
+        var empty = await materializer.MaterializeAsync(
+            CallerAuthority(), emptyPlan, "scope-1", "hr-01", CancellationToken.None);
+
+        interactive.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_SCOPE_INVALID");
+        empty.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_SCOPE_INVALID");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Materialize_WhenManagementBearerCannotBeIssued_ShouldFailClosed(bool throwOnIssue)
+    {
+        var handler = new SequencedNyxIdHandler();
+        var materializer = CreateMaterializer(
+            handler,
+            new InMemorySecretVault(),
+            new FailingAccessTokenProvider(throwOnIssue));
+
+        var result = await materializer.MaterializeAsync(
+            CallerAuthority(), DurableAdmissionPlan(), "scope-1", "hr-01", CancellationToken.None);
+
+        result.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_ISSUANCE_UNAVAILABLE");
+        result.StatusCode.Should().Be(503);
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Materialize_WhenScopePlanningFailsOrDrifts_ShouldReturnTypedFailure()
+    {
+        var unavailableHandler = new SequencedNyxIdHandler { ThrowAtRequestIndex = 0 };
+        var unavailable = await CreateMaterializer(unavailableHandler, new InMemorySecretVault())
+            .MaterializeAsync(
+                CallerAuthority(), DurableAdmissionPlan(), "scope-1", "hr-01", CancellationToken.None);
+
+        var rejectedHandler = new SequencedNyxIdHandler("""{"error":true,"status":429}""");
+        var rejected = await CreateMaterializer(rejectedHandler, new InMemorySecretVault())
+            .MaterializeAsync(
+                CallerAuthority(), DurableAdmissionPlan(), "scope-1", "hr-01", CancellationToken.None);
+
+        var driftedAuthority = CallerAuthority();
+        driftedAuthority.ExternalUserId = "owner-beta";
+        var driftedAdmissionPlan = DurableAdmissionPlan();
+        driftedAdmissionPlan.DurableAuthorizationOwner.OwnerSubject = "owner-beta";
+        driftedAdmissionPlan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity
+            .ComputeAdmissionDigest(driftedAdmissionPlan);
+        var driftedHandler = new SequencedNyxIdHandler(ScopePlanResponse());
+        var drifted = await CreateMaterializer(driftedHandler, new InMemorySecretVault())
+            .MaterializeAsync(
+                driftedAuthority,
+                driftedAdmissionPlan,
+                "scope-1",
+                "hr-01",
+                CancellationToken.None);
+
+        unavailable.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_SCOPE_PLAN_FAILED");
+        unavailable.StatusCode.Should().Be(502);
+        rejected.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_SCOPE_PLAN_FAILED");
+        rejected.StatusCode.Should().Be(429);
+        drifted.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_SCOPE_CHANGED");
+        drifted.StatusCode.Should().Be(409);
+    }
+
+    [Fact]
+    public async Task Materialize_WhenProviderCreationTransportFails_ShouldReturnTypedFailure()
+    {
+        var handler = new SequencedNyxIdHandler(ScopePlanResponse())
+        {
+            ThrowAtRequestIndex = 1,
+        };
+
+        var result = await CreateMaterializer(handler, new InMemorySecretVault())
+            .MaterializeAsync(
+                CallerAuthority(), DurableAdmissionPlan(), "scope-1", "hr-01", CancellationToken.None);
+
+        result.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_CREATE_FAILED");
+        result.StatusCode.Should().Be(502);
+    }
+
+    [Theory]
+    [InlineData("", 502)]
+    [InlineData("[]", 502)]
+    [InlineData("{not-json", 502)]
+    [InlineData("{}", 502)]
+    [InlineData("{\"error\":true}", 502)]
+    [InlineData("{\"error\":true,\"status\":409}", 409)]
+    [InlineData("{\"id\":\" provider-key\",\"full_key\":\"nyxid_ag_key\"}", 502)]
+    [InlineData("{\"id\":\"provider-key\",\"full_key\":\" \"}", 502)]
+    public async Task Materialize_WhenProviderCreationResponseIsInvalid_ShouldNormalizeStatus(
+        string createResponse,
+        int expectedStatus)
+    {
+        var handler = new SequencedNyxIdHandler(ScopePlanResponse(), createResponse);
+
+        var result = await CreateMaterializer(handler, new InMemorySecretVault())
+            .MaterializeAsync(
+                CallerAuthority(), DurableAdmissionPlan(), "scope-1", "hr-01", CancellationToken.None);
+
+        result.ErrorCode.Should().Be("WEBHOOK_CALLER_CREDENTIAL_CREATE_FAILED");
+        result.StatusCode.Should().Be(expectedStatus);
+    }
+
+    [Fact]
+    public async Task Revoke_WhenReferenceOrAuthorityIsInvalid_ShouldFailClosed()
+    {
+        var handler = new SequencedNyxIdHandler();
+        var materializer = CreateMaterializer(handler, new ConfigurableSecretVault(revoked: true));
+        var invalidReference = WebhookCredential(providerCredentialId: string.Empty);
+        invalidReference.Purpose = "other-purpose";
+
+        var invalid = await materializer.RevokeAsync(
+            CallerAuthority(), invalidReference, "test-revoke", CancellationToken.None);
+
+        var mismatchedAuthority = CallerAuthority();
+        mismatchedAuthority.ExternalUserId = "owner-beta";
+        var mismatched = await materializer.RevokeAsync(
+            mismatchedAuthority,
+            WebhookCredential(providerCredentialId: "provider-key-mismatch"),
+            "test-revoke",
+            CancellationToken.None);
+
+        invalid.Should().BeFalse();
+        mismatched.Should().BeFalse();
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("", true)]
+    [InlineData("{}", true)]
+    [InlineData("{\"error\":true,\"status\":404}", true)]
+    [InlineData("{\"error\":true,\"status\":500}", false)]
+    public async Task Revoke_ShouldCombineProviderAndVaultOutcomes(
+        string providerResponse,
+        bool expected)
+    {
+        var handler = new SequencedNyxIdHandler(providerResponse);
+        var materializer = CreateMaterializer(handler, new ConfigurableSecretVault(revoked: true));
+
+        var result = await materializer.RevokeAsync(
+            CallerAuthority(),
+            WebhookCredential(providerCredentialId: "provider-key-1"),
+            "test-revoke",
+            CancellationToken.None);
+
+        result.Should().Be(expected);
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Method.Should().Be(HttpMethod.Delete);
+    }
+
+    [Fact]
+    public async Task Revoke_WhenCleanupDependenciesFail_ShouldReturnFalse()
+    {
+        var providerFailureHandler = new SequencedNyxIdHandler { ThrowAtRequestIndex = 0 };
+        var providerFailure = await CreateMaterializer(
+                providerFailureHandler,
+                new ConfigurableSecretVault(revoked: true))
+            .RevokeAsync(
+                CallerAuthority(),
+                WebhookCredential(providerCredentialId: "provider-key-1"),
+                "test-revoke",
+                CancellationToken.None);
+
+        var vaultFailure = await CreateMaterializer(
+                new SequencedNyxIdHandler(),
+                new ConfigurableSecretVault(revoked: false, throwOnRevoke: true))
+            .RevokeAsync(
+                CallerAuthority(),
+                WebhookCredential(providerCredentialId: string.Empty),
+                "test-revoke",
+                CancellationToken.None);
+
+        providerFailure.Should().BeFalse();
+        vaultFailure.Should().BeFalse();
+    }
+
     private static WorkflowWebhookAgentKeyMaterializer CreateMaterializer(
         HttpMessageHandler handler,
-        ISecretVault vault) => new(
-        new FixedAccessTokenProvider(),
+        ISecretVault vault,
+        IWorkflowCallerAccessTokenProvider? accessTokenProvider = null) => new(
+        accessTokenProvider ?? new FixedAccessTokenProvider(),
         new StaticApiClientFactory(handler),
         vault,
         NullLogger<WorkflowWebhookAgentKeyMaterializer>.Instance);
@@ -126,6 +316,16 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
         ExternalUserId = "owner-alpha",
         Scope = "proxy",
         BindingId = "binding-alpha",
+    };
+
+    private static DurableCallerCredentialRef WebhookCredential(string providerCredentialId) => new()
+    {
+        Ref = "sec-webhook-binding-1",
+        Purpose = CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+        OwnerScopeKey = "scope-1",
+        SubjectId = "owner-alpha",
+        SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+        ProviderCredentialId = providerCredentialId,
     };
 
     private static WorkflowCapabilityAdmissionPlan DurableAdmissionPlan()
@@ -240,6 +440,16 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
             CancellationToken ct = default) => Task.FromResult("management-bearer");
     }
 
+    private sealed class FailingAccessTokenProvider(bool throwOnIssue)
+        : IWorkflowCallerAccessTokenProvider
+    {
+        public Task<string> IssueAsync(
+            WorkflowCallerNyxIdAuthority authority,
+            CancellationToken ct = default) => throwOnIssue
+            ? Task.FromException<string>(new InvalidOperationException("bearer issuance unavailable"))
+            : Task.FromResult(string.Empty);
+    }
+
     private sealed class StaticApiClientFactory(HttpMessageHandler handler)
         : INyxIdApiClientFactory
     {
@@ -253,6 +463,7 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
     {
         private int _index;
         public List<RecordedRequest> Requests { get; } = [];
+        public int? ThrowAtRequestIndex { get; init; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -265,6 +476,8 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
                 request.Content is null
                     ? null
                     : await request.Content.ReadAsStringAsync(cancellationToken)));
+            if (_index == ThrowAtRequestIndex)
+                throw new HttpRequestException("NyxID unavailable");
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responses[_index++], Encoding.UTF8, "application/json"),
@@ -296,5 +509,27 @@ public sealed class WorkflowWebhookAgentKeyMaterializerTests
         public Task<RevokeSecretResult> RevokeAsync(
             RevokeSecretRequest request,
             CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class ConfigurableSecretVault(bool revoked, bool throwOnRevoke = false)
+        : ISecretVault
+    {
+        public Task<StoreSecretResult> PutAsync(
+            StoreSecretRequest request,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<ResolveSecretResult> ResolveAsync(
+            ResolveSecretRequest request,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<RotateSecretResult> RotateAsync(
+            RotateSecretRequest request,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<RevokeSecretResult> RevokeAsync(
+            RevokeSecretRequest request,
+            CancellationToken ct = default) => throwOnRevoke
+            ? Task.FromException<RevokeSecretResult>(new InvalidOperationException("vault unavailable"))
+            : Task.FromResult(new RevokeSecretResult(revoked));
     }
 }
