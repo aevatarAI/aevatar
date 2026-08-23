@@ -1,4 +1,4 @@
-import { normalizeReadinessSnapshot } from "./readiness.js?v=20260823-m61-visual-delight";
+import { normalizeReadinessSnapshot } from "./readiness.js?v=20260823-m62-studio-redesign";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const backendConfig = globalThis.__AEVATAR_ASSISTANT_CONFIG__ || {};

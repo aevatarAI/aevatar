@@ -5309,138 +5309,6 @@ body:has(.settings-dialog[open]) #servicesButton,
   }
 }
 
-/* Admin Studio design pass: gradient brand glyph, elevated primary actions,
-   softer session rows, and a raised composer so the assistant surface matches
-   the admin workbench visual language. Presentation only — no markup, class,
-   or behavior contract changes. */
-
-.brand-zone::before {
-  content: "";
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
-  border-radius: 7px;
-  background:
-    radial-gradient(circle at 68% 30%, rgba(255, 255, 255, 0.55) 0 2.5px, transparent 3px),
-    linear-gradient(135deg, #4d7cff, #6a5cff);
-  box-shadow:
-    0 3px 8px -2px rgba(47, 92, 246, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35);
-}
-
-.site-header {
-  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.04);
-}
-
-.new-chat-button {
-  background: linear-gradient(135deg, #3f6dff, #2c4fe6);
-  box-shadow:
-    0 2px 8px -1px rgba(47, 92, 246, 0.35),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  transition: filter 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-}
-
-.new-chat-button:hover {
-  filter: brightness(1.06);
-  box-shadow:
-    0 4px 14px -2px rgba(47, 92, 246, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  transform: translateY(-1px);
-}
-
-.new-chat-button:active {
-  transform: translateY(0);
-}
-
-.group-label,
-.eyebrow,
-.section-title {
-  letter-spacing: 0.07em;
-}
-
-.session-item,
-.history-row {
-  border-radius: 0 var(--radius) var(--radius) 0;
-  transition: background 140ms ease, border-color 140ms ease;
-}
-
-.session-item.active,
-.history-row.active {
-  border-left-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.session-item.active .session-icon {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: var(--panel);
-  color: var(--accent);
-}
-
-.status-dot.ok {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
-}
-
-.status-dot.error {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 16%, transparent);
-}
-
-.assistant-emblem {
-  border-color: transparent;
-  background: linear-gradient(135deg, #4d7cff, #6a5cff);
-  box-shadow:
-    0 6px 16px -4px rgba(47, 92, 246, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.3);
-  color: #fff;
-}
-
-.empty-state h1 {
-  background: linear-gradient(120deg, #0e1526 30%, #2f5cf6 85%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  letter-spacing: -0.01em;
-}
-
-.quick-actions button {
-  transition: background 140ms ease, color 140ms ease;
-}
-
-.quick-actions button:hover {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.composer {
-  border-color: var(--border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow);
-  padding: 14px;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
-}
-
-.composer:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  box-shadow: var(--shadow), 0 0 0 3px var(--accent-soft);
-}
-
-.send-button {
-  border-color: transparent;
-  background: linear-gradient(135deg, #3f6dff, #2c4fe6);
-  box-shadow: 0 2px 8px -1px rgba(47, 92, 246, 0.35);
-  transition: filter 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-}
-
-.send-button:hover:not(:disabled) {
-  filter: brightness(1.07);
-  box-shadow: 0 4px 12px -2px rgba(47, 92, 246, 0.45);
-}
-
-.send-button:disabled {
-  box-shadow: none;
-  opacity: 0.45;
-}
-
-
 /* Trajectory ---------------------------------------------------------------
    A request is only the stable container. Its observable Input, Model and Tool
    operations share one time domain in the overview and one identity in the
@@ -6354,63 +6222,137 @@ body:has(.settings-dialog[open]) #servicesButton,
   .composer-status.working::before { animation: none; }
 }
 
-/* ── Delight pass ─────────────────────────────────────────────────────────
-   Presentation-only refinement on top of the Admin scale above: optically
-   centered welcome composition, lifted composer and primary actions, calmer
-   scrollbars, and softer focus affordances. No markup, class, or behavior
+
+/* ── Studio visual redesign ───────────────────────────────────────────────
+   One coherent surface language for the assistant workbench: flat solid brand
+   marks (no gradient fills), hairline cards with a single soft elevation step,
+   a capsule view switch, a quiet blue focus ring, and a welcome composition
+   built around a solid brand tile, a status-dotted readiness panel and a grid
+   of quick-action cards. Presentation only — no markup, class, or behavior
    contract changes. */
 
-body {
-  background:
-    radial-gradient(1100px 520px at 50% -140px, #f3f6fc 0%, rgba(243, 246, 252, 0) 62%),
-    var(--bg);
+/* Brand + primary actions: solid accent; depth comes from shadow, not fill. */
+.brand-zone::before {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 8px;
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ffffff'%3E%3Cpath d='M12 3l1.9 5.4 5.4 1.9-5.4 1.9L12 17.6l-1.9-5.4L4.7 10.3l5.4-1.9z'/%3E%3C/svg%3E")
+    center / 14px 14px no-repeat;
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.16);
+  content: "";
 }
 
-/* Welcome composition: the empty transcript is the landing surface, so it
-   sits at the optical center instead of hugging the top edge. */
+.brand-name {
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.new-chat-button {
+  border: 0;
+  background: var(--accent);
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.12);
+  transition: background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.new-chat-button:hover {
+  background: var(--accent-strong);
+  box-shadow: 0 5px 14px -4px rgba(30, 68, 216, 0.5);
+  filter: none;
+  transform: translateY(-1px);
+}
+
+.new-chat-button:active {
+  transform: translateY(0);
+}
+
+.toolbar-button,
+.connection-pill,
+.icon-button {
+  transition: background 130ms ease, border-color 130ms ease, color 130ms ease;
+}
+
+.group-label,
+.eyebrow,
+.section-title {
+  letter-spacing: 0.06em;
+}
+
+/* Sidebar rows: fully rounded, tint-driven; the rail only marks attention. */
+.session-item,
+.history-row {
+  border-left-color: transparent;
+  border-radius: var(--radius);
+  transition: background 130ms ease, border-color 130ms ease;
+}
+
+.session-item:hover,
+.history-row:hover {
+  border-left-color: transparent;
+  background: var(--overlay);
+}
+
+.session-item.active,
+.history-row.active {
+  border-left-color: transparent;
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+.history-row.needs-you:not(.active) {
+  box-shadow: inset 2px 0 0 var(--warning);
+}
+
+.session-item.active .session-icon {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--panel);
+  color: var(--accent);
+}
+
+.history-row.active .history-session-copy strong {
+  color: var(--text);
+}
+
+.status-dot.ok {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent);
+}
+
+.status-dot.error {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 16%, transparent);
+}
+
+/* Welcome composition: optically centered around a solid brand tile. */
 .empty-state {
-  position: relative;
   align-items: center;
   justify-content: center;
   padding: 40px 0 11vh;
   text-align: center;
 }
 
-.empty-state::before {
-  position: absolute;
-  top: 44%;
-  left: 50%;
-  width: 520px;
-  height: 340px;
-  background: radial-gradient(closest-side, rgba(77, 124, 255, 0.09), transparent);
-  content: "";
-  pointer-events: none;
-  transform: translate(-50%, -55%);
-}
-
-.empty-state > * {
-  position: relative;
-}
-
 .assistant-emblem {
   width: 56px;
   height: 56px;
-  border-radius: 18px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--accent);
   box-shadow:
-    0 12px 26px -8px rgba(47, 92, 246, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35),
-    0 0 0 7px rgba(47, 92, 246, 0.07);
+    0 1px 2px rgba(14, 21, 38, 0.12),
+    0 18px 38px -14px rgba(47, 92, 246, 0.55);
+  color: #fff;
 }
 
 .assistant-emblem svg {
-  width: 25px;
-  height: 25px;
+  width: 26px;
+  height: 26px;
 }
 
 .empty-state h1 {
-  margin: 24px 0 8px;
+  margin: 22px 0 8px;
+  color: var(--text);
   font-size: 30px;
-  letter-spacing: -0.015em;
+  font-weight: 650;
+  letter-spacing: -0.02em;
 }
 
 .empty-state p {
@@ -6425,22 +6367,23 @@ body {
   min-height: 44px;
   border-color: transparent;
   border-radius: 999px;
-  background: linear-gradient(135deg, #3f6dff, #2c4fe6);
+  background: var(--accent);
   box-shadow:
-    0 3px 10px -2px rgba(47, 92, 246, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    0 1px 2px rgba(14, 21, 38, 0.14),
+    0 12px 26px -10px rgba(47, 92, 246, 0.5);
   color: #fff;
-  padding: 0 22px;
+  padding: 0 24px;
   font-size: 14px;
   font-weight: 600;
-  transition: filter 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  transition: background 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 
 .auth-login-button:hover {
-  filter: brightness(1.06);
+  background: var(--accent-strong);
   box-shadow:
-    0 7px 18px -3px rgba(47, 92, 246, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    0 2px 3px rgba(14, 21, 38, 0.12),
+    0 16px 32px -10px rgba(47, 92, 246, 0.55);
+  filter: none;
   transform: translateY(-1px);
 }
 
@@ -6448,12 +6391,85 @@ body {
   transform: translateY(0);
 }
 
+/* Readiness: quiet card; each row's status carries a leading dot. */
+.readiness-panel {
+  border-color: var(--hairline);
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.04);
+  padding: 16px 18px;
+  text-align: left;
+}
+
+.readiness-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 550;
+}
+
+.readiness-status::before {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+/* Quick actions: a real card grid instead of a divided list. */
 .quick-actions {
-  margin-top: 40px;
+  display: grid;
+  width: min(600px, 100%);
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 36px;
+  border-top: 0;
 }
 
 .quick-actions button {
-  transition: background 140ms ease, color 140ms ease;
+  display: grid;
+  min-height: 52px;
+  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.04);
+  color: var(--text-soft);
+  padding: 10px 14px;
+  font-size: 14px;
+  text-align: left;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.quick-actions button:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.quick-actions button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-actions svg {
+  width: 15px;
+  height: 15px;
+  color: var(--tertiary);
+  transition: color 140ms ease, transform 140ms ease;
+}
+
+.quick-actions button svg:last-child {
+  width: 13px;
+  height: 13px;
+}
+
+.quick-actions button:hover svg:first-child {
+  color: var(--accent);
 }
 
 .quick-actions button:hover svg:last-child {
@@ -6461,34 +6477,115 @@ body {
   transform: translate(1px, -1px);
 }
 
-.quick-actions button svg:last-child {
-  transition: transform 140ms ease, color 140ms ease;
-}
-
-/* Floating conversation switch: lift it off the transcript plane. */
+/* Conversation switch: a floating capsule segmented control. */
 .content-view-switch {
-  box-shadow: var(--shadow-soft);
+  border-color: var(--hairline);
+  border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.05);
+  padding: 3px;
 }
 
-/* Composer: a touch more air and a calmer, deeper rest shadow. */
+.content-view-switch button {
+  min-height: 32px;
+  border-radius: 999px;
+  padding: 0 14px;
+  transition: background 130ms ease, color 130ms ease;
+}
+
+.content-view-switch button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Cards: one hairline, one radius, one quiet elevation step. */
+.connect-card,
+.authorization-callout,
+.activity-card,
+.approval-card,
+.actor-task {
+  border-color: var(--hairline);
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.04);
+}
+
+.message.assistant .message-avatar {
+  border-color: var(--hairline);
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.05);
+  color: var(--accent);
+}
+
+.message.user .message-body {
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, #ffffff);
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.03);
+}
+
+/* Composer: one calm shadow at rest; focus is a single thin blue halo, and
+   the textarea itself never draws a second frame inside the card. */
 .composer {
-  box-shadow: var(--shadow-soft);
+  border-color: var(--hairline);
+  border-radius: var(--radius-xl);
+  box-shadow:
+    0 1px 2px rgba(14, 21, 38, 0.05),
+    0 16px 36px -18px rgba(14, 21, 38, 0.14);
+  padding: 14px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .composer:focus-within {
-  box-shadow: var(--shadow-soft), 0 0 0 3px var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  box-shadow:
+    0 1px 2px rgba(14, 21, 38, 0.05),
+    0 16px 36px -18px rgba(14, 21, 38, 0.14),
+    0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .composer-icon,
 .send-button,
 .stop-button,
 .steer-button {
-  transition: background 150ms ease, color 150ms ease, filter 150ms ease,
-    box-shadow 150ms ease, transform 150ms ease;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease,
+    box-shadow 140ms ease, transform 140ms ease;
 }
 
 .composer-icon:hover {
   transform: translateY(-1px);
+}
+
+.send-button {
+  border-color: transparent;
+  background: var(--accent);
+  box-shadow: 0 1px 2px rgba(14, 21, 38, 0.14);
+  color: #fff;
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--accent-strong);
+  box-shadow: 0 5px 12px -3px rgba(30, 68, 216, 0.5);
+  filter: none;
+  transform: translateY(-1px);
+}
+
+.send-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.send-button:disabled {
+  box-shadow: none;
+  opacity: 0.45;
+}
+
+.cc-btn.primary,
+.needs-you-primary,
+.primary-button {
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.cc-btn.primary:hover:not(:disabled),
+.needs-you-primary:hover:not(:disabled),
+.primary-button:hover:not(:disabled) {
+  background: var(--accent-strong);
+  filter: none;
 }
 
 /* Trajectory toolbar: quiet chips with a real pressed state. */
@@ -6510,7 +6607,7 @@ body {
   transition: border-color 130ms ease, background 130ms ease;
 }
 
-/* Scrollbars: drop the boxed track so the rail reads as a floating thumb. */
+/* Scrollbars: no boxed track; the thumb floats on the content plane. */
 .thread,
 .recent-session-list,
 .composer-service-list,
@@ -6552,18 +6649,20 @@ body {
   background-clip: padding-box;
 }
 
-/* Softer, still unmissable focus affordance. */
+/* Focus: one thin, unmissable blue halo — no stacked frames. */
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible {
-  box-shadow:
-    0 0 0 2px var(--panel),
-    0 0 0 4px color-mix(in srgb, var(--accent) 52%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-/* Dialogs and toast carry the deepest elevation in the surface stack. */
+.composer textarea:focus-visible {
+  box-shadow: none;
+}
+
+/* Overlays carry the deepest elevation in the surface stack. */
 .settings-dialog {
   box-shadow: 0 28px 72px -16px rgba(14, 21, 38, 0.32);
 }
@@ -6572,7 +6671,6 @@ summary:focus-visible {
   box-shadow: 0 14px 36px -10px rgba(14, 21, 38, 0.28);
 }
 
-/* Inspector drawer: deeper separation from the dimmed transcript. */
 .inspector {
   box-shadow: -18px 0 48px -12px rgba(14, 21, 38, 0.22);
 }
@@ -6582,19 +6680,19 @@ summary:focus-visible {
     padding: 24px 0 9vh;
   }
 
-  .empty-state::before {
-    width: 100%;
-    height: 300px;
-  }
-
   .assistant-emblem {
     width: 50px;
     height: 50px;
-    border-radius: 16px;
+    border-radius: 15px;
   }
 
   .empty-state h1 {
     font-size: 26px;
+  }
+
+  .quick-actions {
+    grid-template-columns: 1fr;
+    margin-top: 26px;
   }
 
   /* The route label that normally spaces the composer toolbar is hidden at

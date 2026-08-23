@@ -1,4 +1,4 @@
-import { validateActionRequest } from "./protocol.js?v=20260823-m61-visual-delight";
+import { validateActionRequest } from "./protocol.js?v=20260823-m62-studio-redesign";
 
 const ACTOR_EVENT_TYPES = new Set([
   "task_snapshot",

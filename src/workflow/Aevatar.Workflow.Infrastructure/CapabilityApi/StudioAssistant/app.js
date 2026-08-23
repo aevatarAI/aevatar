@@ -1,4 +1,4 @@
-import "./transport.js?v=20260823-m61-visual-delight";
+import "./transport.js?v=20260823-m62-studio-redesign";
 import {
   consumeSse,
   mergeUsage,
@@ -9,20 +9,20 @@ import {
   redact,
   safeJson,
   validateActionContinuation,
-} from "./protocol.js?v=20260823-m61-visual-delight";
+} from "./protocol.js?v=20260823-m62-studio-redesign";
 import {
   buildConnectCardBlock,
   connectorInitial,
   splitMessageSegments,
-} from "./blocks.js?v=20260823-m61-visual-delight";
+} from "./blocks.js?v=20260823-m62-studio-redesign";
 import {
   actorCan,
   applyCurrentStateResult,
   createActorProjection,
   reduceActorEvent,
   restoreCachedAction,
-} from "./actor-state.js?v=20260823-m61-visual-delight";
-import { describeReadinessFailure } from "./readiness.js?v=20260823-m61-visual-delight";
+} from "./actor-state.js?v=20260823-m62-studio-redesign";
+import { describeReadinessFailure } from "./readiness.js?v=20260823-m62-studio-redesign";
 
 const PREFERENCES_KEY = "aevatar-studio:assistant-preferences:v4";
 const SERVICE_ACCESS_REVIEW_KEY = "aevatar-studio:pending-service-access-review:v1";
