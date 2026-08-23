@@ -66,6 +66,7 @@ internal sealed partial class NyxIdCodeExecutionPort
         {
             response = await SendDurableProxyAsync(
                     executionCredential,
+                    execution.Caller!.ExecutionCredentialKind,
                     route,
                     DurableSubmitPath,
                     HttpMethod.Post.Method,
@@ -137,6 +138,7 @@ internal sealed partial class NyxIdCodeExecutionPort
             };
         var response = await ExchangeKnownOperationAsync(
                 token!,
+                request.Caller!.ExecutionCredentialKind,
                 request.Route,
                 StatusPath(request.ProviderOperationId),
                 HttpMethod.Get.Method,
@@ -205,6 +207,7 @@ internal sealed partial class NyxIdCodeExecutionPort
         var localDiagnosticId = CreateLocalDiagnosticId();
         var exchange = await ExchangeKnownOperationAsync(
                 token!,
+                request.Caller!.ExecutionCredentialKind,
                 request.Route,
                 ResultPath(request.ProviderOperationId),
                 HttpMethod.Get.Method,
@@ -265,6 +268,7 @@ internal sealed partial class NyxIdCodeExecutionPort
         var localDiagnosticId = CreateLocalDiagnosticId();
         var exchange = await ExchangeKnownOperationAsync(
                 token!,
+                request.Caller!.ExecutionCredentialKind,
                 request.Route,
                 CancelPath(request.ProviderOperationId),
                 HttpMethod.Post.Method,
@@ -372,6 +376,7 @@ internal sealed partial class NyxIdCodeExecutionPort
 
     private async Task<DurableExchangeOutcome> ExchangeKnownOperationAsync(
         string token,
+        CodeExecutionNyxIdCredentialKind credentialKind,
         CodeExecutionRouteIdentity route,
         string path,
         string method,
@@ -385,6 +390,7 @@ internal sealed partial class NyxIdCodeExecutionPort
         {
             var response = await SendDurableProxyAsync(
                     token,
+                    credentialKind,
                     route,
                     path,
                     method,
@@ -428,6 +434,7 @@ internal sealed partial class NyxIdCodeExecutionPort
 
     private async Task<NyxIdProxyTextResponse> SendDurableProxyAsync(
         string token,
+        CodeExecutionNyxIdCredentialKind credentialKind,
         CodeExecutionRouteIdentity route,
         string path,
         string method,
@@ -441,17 +448,29 @@ internal sealed partial class NyxIdCodeExecutionPort
         if (!client.HasPublicApiEndpoint)
             throw new DurablePublicApiNotConfiguredException();
 
-        return await client.ProxyPublicRequestBoundedAsync(
-                token,
-                route.ServiceSlug,
-                route.UserServiceId!,
-                path,
-                method,
-                body,
-                extraHeaders,
-                MaxResponseBytes,
-                callCts.Token)
-            .ConfigureAwait(false);
+        return credentialKind == CodeExecutionNyxIdCredentialKind.AgentKey
+            ? await client.ProxyPublicRequestBoundedWithApiKeyAsync(
+                    token,
+                    route.ServiceSlug,
+                    route.UserServiceId!,
+                    path,
+                    method,
+                    body,
+                    extraHeaders,
+                    MaxResponseBytes,
+                    callCts.Token)
+                .ConfigureAwait(false)
+            : await client.ProxyPublicRequestBoundedAsync(
+                    token,
+                    route.ServiceSlug,
+                    route.UserServiceId!,
+                    path,
+                    method,
+                    body,
+                    extraHeaders,
+                    MaxResponseBytes,
+                    callCts.Token)
+                .ConfigureAwait(false);
     }
 
     private DurableCodeExecutionFailure ClassifyDurableHttpFailure(
