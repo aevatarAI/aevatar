@@ -356,11 +356,11 @@ public sealed class OrnnSearchSkillsToolTests
     {
         public List<string> SkillNames { get; } = [];
 
-        public Task<string?> ResolveAsync(string skillName, CancellationToken ct = default)
+        public Task<RemoteSkillAccessTokenResolution> ResolveAsync(string skillName, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             SkillNames.Add(skillName);
-            return Task.FromResult(token);
+            return Task.FromResult(RemoteSkillAccessTokenResolution.FromAccessToken(token));
         }
     }
 

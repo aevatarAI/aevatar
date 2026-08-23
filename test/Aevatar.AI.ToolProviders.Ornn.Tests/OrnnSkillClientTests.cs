@@ -622,7 +622,7 @@ public sealed class OrnnSkillClientTests
 
     private sealed class StaticRemoteSkillAccessTokenResolver : IRemoteSkillAccessTokenResolver
     {
-        public Task<string?> ResolveAsync(string skillName, CancellationToken ct = default) =>
-            Task.FromResult<string?>("caller-token");
+        public Task<RemoteSkillAccessTokenResolution> ResolveAsync(string skillName, CancellationToken ct = default) =>
+            Task.FromResult(RemoteSkillAccessTokenResolution.Resolved("caller-token"));
     }
 }

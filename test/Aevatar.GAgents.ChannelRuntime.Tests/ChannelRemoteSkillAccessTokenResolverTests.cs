@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat;
@@ -22,9 +23,10 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
             ownerToken: "ambient-owner-token",
             credentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
 
-        var token = await resolver.ResolveAsync("nyxid");
+        var resolution = await resolver.ResolveAsync("nyxid");
 
-        token.Should().Be("ambient-owner-token");
+        resolution.Succeeded.Should().BeTrue();
+        resolution.AccessToken.Should().Be("ambient-owner-token");
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }
@@ -41,9 +43,10 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
             credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
             sourceReadableToken: "source-readable-token");
 
-        var token = await resolver.ResolveAsync("nyxid");
+        var resolution = await resolver.ResolveAsync("nyxid");
 
-        token.Should().Be("source-readable-token");
+        resolution.Succeeded.Should().BeTrue();
+        resolution.AccessToken.Should().Be("source-readable-token");
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }
@@ -59,9 +62,10 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
             ownerToken: "delegation-token",
             credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation);
 
-        var token = await resolver.ResolveAsync("nyxid");
+        var resolution = await resolver.ResolveAsync("nyxid");
 
-        token.Should().BeNull();
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.ChannelBindingRequired);
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }
@@ -76,9 +80,10 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
             senderToken: " sender-route-token ",
             ownerToken: "ambient-owner-token");
 
-        var token = await resolver.ResolveAsync("nyxid");
+        var resolution = await resolver.ResolveAsync("nyxid");
 
-        token.Should().Be("sender-route-token");
+        resolution.Succeeded.Should().BeTrue();
+        resolution.AccessToken.Should().Be("sender-route-token");
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }
@@ -107,9 +112,10 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
                 "tenant-authority-alpha",
                 "ou-authority-alpha"));
 
-        var token = await resolver.ResolveAsync("nyxid");
+        var resolution = await resolver.ResolveAsync("nyxid");
 
-        token.Should().Be("sender-skill-token");
+        resolution.Succeeded.Should().BeTrue();
+        resolution.AccessToken.Should().Be("sender-skill-token");
         await issuer.Received(1).IssueByBindingIdAsync(
             Arg.Is<ExternalSubjectRef>(subject =>
                 subject.Platform == "lark" &&
@@ -130,9 +136,10 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
             ownerToken: "ambient-owner-token",
             authority: AgentToolNyxIdAuthorityContext.Empty);
 
-        var token = await resolver.ResolveAsync("nyxid");
+        var resolution = await resolver.ResolveAsync("nyxid");
 
-        token.Should().BeNull();
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.Unavailable);
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }
@@ -154,9 +161,10 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
             ownerToken: "ambient-owner-token",
             authority: CompleteAuthority());
 
-        var token = await resolver.ResolveAsync("nyxid");
+        var resolution = await resolver.ResolveAsync("nyxid");
 
-        token.Should().BeNull();
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.Unavailable);
     }
 
     [Fact]
@@ -169,9 +177,109 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
             ownerToken: "ambient-owner-token",
             authority: CompleteAuthority());
 
-        var token = await resolver.ResolveAsync("nyxid");
+        var resolution = await resolver.ResolveAsync("nyxid");
 
-        token.Should().BeNull();
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.Unavailable);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenBindingIsRevoked_ReportsChannelBindingRefreshRequired()
+    {
+        var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
+        issuer
+            .IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<CapabilityHandle>>(_ => throw new BindingRevokedException(CompleteSubject()));
+        var resolver = NewResolver(issuer);
+        using var context = PushContext(
+            bindingId: "bnd-skill-alpha",
+            senderToken: null,
+            ownerToken: "ambient-owner-token",
+            authority: CompleteAuthority());
+
+        var resolution = await resolver.ResolveAsync("nyxid");
+
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.ChannelBindingRefreshRequired);
+        resolution.AccessToken.Should().BeNull("a revoked binding must never fall back to ambient owner credentials");
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenBindingScopeMismatch_ReportsChannelBindingRefreshRequired()
+    {
+        var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
+        issuer
+            .IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<CapabilityHandle>>(_ => throw new BindingScopeMismatchException(CompleteSubject()));
+        var resolver = NewResolver(issuer);
+        using var context = PushContext(
+            bindingId: "bnd-skill-alpha",
+            senderToken: null,
+            ownerToken: "ambient-owner-token",
+            authority: CompleteAuthority());
+
+        var resolution = await resolver.ResolveAsync("nyxid");
+
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.ChannelBindingRefreshRequired);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenBindingServiceAccessMismatch_ReportsChannelBindingRefreshRequired()
+    {
+        var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
+        issuer
+            .IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<CapabilityHandle>>(_ => throw new BindingServiceAccessMismatchException(
+                CompleteSubject(),
+                new[] { "urn:nyxid:service:llm" }));
+        var resolver = NewResolver(issuer);
+        using var context = PushContext(
+            bindingId: "bnd-skill-alpha",
+            senderToken: null,
+            ownerToken: "ambient-owner-token",
+            authority: CompleteAuthority());
+
+        var resolution = await resolver.ResolveAsync("nyxid");
+
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.ChannelBindingRefreshRequired);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenIssuedCapabilityLacksToken_ReportsUnavailable()
+    {
+        var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
+        issuer
+            .IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CapabilityHandle
+            {
+                AccessToken = "",
+                Scope = "proxy",
+            }));
+        var resolver = NewResolver(issuer);
+        using var context = PushContext(
+            bindingId: "bnd-skill-alpha",
+            senderToken: null,
+            ownerToken: "ambient-owner-token",
+            authority: CompleteAuthority());
+
+        var resolution = await resolver.ResolveAsync("nyxid");
+
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.Unavailable);
     }
 
     [Fact]
@@ -239,4 +347,12 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
             "lark",
             "tenant-authority-alpha",
             "ou-authority-alpha");
+
+    private static ExternalSubjectRef CompleteSubject() =>
+        new()
+        {
+            Platform = "lark",
+            Tenant = "tenant-authority-alpha",
+            ExternalUserId = "ou-authority-alpha",
+        };
 }

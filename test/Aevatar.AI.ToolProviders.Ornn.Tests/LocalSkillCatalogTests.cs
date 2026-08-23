@@ -498,10 +498,10 @@ public sealed class LocalSkillCatalogTests
     {
         public List<string> Requests { get; } = [];
 
-        public Task<string?> ResolveAsync(string skillName, CancellationToken ct = default)
+        public Task<RemoteSkillAccessTokenResolution> ResolveAsync(string skillName, CancellationToken ct = default)
         {
             Requests.Add(skillName);
-            return Task.FromResult(token);
+            return Task.FromResult(RemoteSkillAccessTokenResolution.FromAccessToken(token));
         }
     }
 
