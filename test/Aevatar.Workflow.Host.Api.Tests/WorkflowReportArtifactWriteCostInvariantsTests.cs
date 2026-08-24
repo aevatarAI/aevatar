@@ -71,7 +71,7 @@ public sealed class WorkflowReportArtifactWriteCostInvariantsTests
     }
 
     [Fact]
-    public async Task AppliedStream_GrowsDocumentMonotonically_AndStoresEachLargeParameterTwice()
+    public async Task AppliedStream_GrowsDocumentMonotonically_AndStoresEachLargeParameterOnce()
     {
         var scenario = ReducedShape();
         using var harness = new FakeElasticsearchHarness();
@@ -89,17 +89,20 @@ public sealed class WorkflowReportArtifactWriteCostInvariantsTests
 
         var finalDocument = harness.StoredDocument();
         var shape = scenario.MeasureFinalDocument(finalDocument);
-        shape.LargeParameterOccurrences.Should().Be(2 * scenario.LargeParameterSteps.Count);
+        shape.LargeParameterOccurrences.Should().Be(scenario.LargeParameterSteps.Count);
 
-        // The PUT that commits a large-parameter request grows the JSON payload by at least two copies
-        // of the value: one in the step trace request parameters, one in the step.request timeline data.
+        // The request PUT retains one full sanitized value in immutable evidence. The latest step and
+        // step.request timeline add only typed references, so JSON growth stays below two full copies.
         foreach (var committed in scenario.Events.Where(x => x.LargeParameter != null))
         {
             var index = (int)committed.Version - 1;
             var growth = fake.DocumentPutBodyBytes[index] - fake.DocumentPutBodyBytes[index - 1];
             growth.Should().BeGreaterThanOrEqualTo(
-                2L * committed.LargeParameter!.Value.Length,
-                $"version {committed.Version} must persist both copies of the {committed.LargeParameter.Key} parameter");
+                committed.LargeParameter!.Value.Length,
+                $"version {committed.Version} must persist the {committed.LargeParameter.Key} evidence once");
+            growth.Should().BeLessThan(
+                2L * committed.LargeParameter.Value.Length,
+                $"version {committed.Version} must not embed a second full {committed.LargeParameter.Key} copy");
         }
     }
 

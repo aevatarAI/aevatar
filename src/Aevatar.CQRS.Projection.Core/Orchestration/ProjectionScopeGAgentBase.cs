@@ -46,7 +46,15 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             () => State.FailureDiagnosticDroppedTotal);
 
         if (!State.Active || State.Released)
+        {
+            // A crash between the release commit and the relay removal in ReleaseScopeAsync
+            // leaves an exact-shape relay binding behind; the publication fast path accepts it
+            // and this scope then silently drops forwarded facts on every publication. Removing
+            // the relay on any reactivation converges the topology and forces the next
+            // publication through the cold activation path (a new generation).
+            await RemoveObservationRelayAsync(State.RootActorId, ct);
             return;
+        }
 
         // The status route decision and the legacy cleanup happen before this scope's own
         // observation relay (the activation evidence every activation service reads) is
@@ -382,6 +390,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverGoldenVerified)
             .On<ProjectionMaterializationCutoverActivatedEvent>(
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverActivated)
+            .On<ProjectionMaterializationCutoverAbortedEvent>(
+                ProjectionScopeStateApplier.ApplyMaterializationCutoverAborted)
+            .On<ProjectionMaterializationRouteRolledBackEvent>(
+                ProjectionScopeStateApplier.ApplyMaterializationRouteRolledBack)
             .On<ProjectionScopeStatusRoutePreparationStartedEvent>(
                 ProjectionScopeStateApplier.ApplyStatusRoutePreparationStarted)
             .On<ProjectionScopeStatusActorSealRecordedEvent>(

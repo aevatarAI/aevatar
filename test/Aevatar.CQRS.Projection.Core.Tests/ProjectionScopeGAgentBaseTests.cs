@@ -772,6 +772,7 @@ public sealed class ProjectionScopeGAgentBaseTests
         var services = new ServiceCollection();
         services.AddSingleton<Func<ProjectionRuntimeScopeKey, TestContext>>(
             static _ => new TestContext("root-actor", "test-kind"));
+        services.AddSingleton<IStreamProvider>(new NoOpStreamProvider());
         agent.Services = services.BuildServiceProvider();
 
         return agent;
@@ -828,6 +829,32 @@ public sealed class ProjectionScopeGAgentBaseTests
             sourceStreamId: "publisher-actor",
             targetStreamId: targetStreamId,
             StreamForwardingMode.HandleThenForward);
+    }
+
+    private sealed class NoOpStreamProvider : IStreamProvider
+    {
+        public IStream GetStream(string actorId) => new NoOpStream(actorId);
+
+        private sealed class NoOpStream(string streamId) : IStream
+        {
+            public string StreamId { get; } = streamId;
+
+            public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage =>
+                throw new NotSupportedException();
+
+            public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
+                where T : IMessage, new() =>
+                throw new NotSupportedException();
+
+            public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
+                Task.CompletedTask;
+
+            public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
+                Task.CompletedTask;
+
+            public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
+                Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
+        }
     }
 
     private sealed class TestScopeAgent : ProjectionScopeGAgentBase<TestContext>

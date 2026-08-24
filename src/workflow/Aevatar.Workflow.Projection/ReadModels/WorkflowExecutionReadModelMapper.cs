@@ -158,6 +158,7 @@ public sealed class WorkflowExecutionReadModelMapper
     public WorkflowRunReport ToRunReport(WorkflowRunInsightReportDocument source)
     {
         ArgumentNullException.ThrowIfNull(source);
+        var requestEvidenceById = source.RequestEvidenceById;
 
         return new WorkflowRunReport
         {
@@ -182,10 +183,10 @@ public sealed class WorkflowExecutionReadModelMapper
             Topology = source.Topology
                 .Select(edge => new WorkflowRunTopologyEdge(edge.Parent, edge.Child))
                 .ToList(),
-            Steps = source.Steps.Select(MapStepTrace).ToList(),
+            Steps = source.Steps.Select(step => MapStepTrace(step, requestEvidenceById)).ToList(),
             RoleReplies = source.RoleReplies.Select(MapRoleReply).ToList(),
             Operations = source.Operations.Select(MapOperation).ToList(),
-            Timeline = source.Timeline.Select(MapTimelineEvent).ToList(),
+            Timeline = source.Timeline.Select(item => MapTimelineEvent(item, requestEvidenceById)).ToList(),
             Usage = MapUsage(source.Usage),
             Summary = MapSummary(source.Summary),
         };
@@ -195,6 +196,19 @@ public sealed class WorkflowExecutionReadModelMapper
     //   Old pattern: timeline mapper methods produced actor current-state timeline items.
     //   New principle: timeline mapper methods produce workflow-run export items from the report artifact.
     public WorkflowRunTimelineExportItem ToWorkflowRunTimelineExportItem(WorkflowExecutionTimelineEvent source)
+        => ToWorkflowRunTimelineExportItem(source, requestEvidenceById: null);
+
+    public WorkflowRunTimelineExportItem ToWorkflowRunTimelineExportItem(
+        WorkflowExecutionTimelineEvent source,
+        WorkflowRunInsightReportDocument report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        return ToWorkflowRunTimelineExportItem(source, report.RequestEvidenceById);
+    }
+
+    private static WorkflowRunTimelineExportItem ToWorkflowRunTimelineExportItem(
+        WorkflowExecutionTimelineEvent source,
+        IDictionary<string, WorkflowStepRequestEvidence>? requestEvidenceById)
     {
         var item = new WorkflowRunTimelineExportItem
         {
@@ -206,7 +220,11 @@ public sealed class WorkflowExecutionReadModelMapper
             StepType = source.StepType,
             EventType = source.EventType,
         };
-        item.Data.Add(source.Data);
+        item.Data.Add(ResolveRequestParameters(
+            source.RequestEvidenceReference,
+            source.DataMap,
+            requestEvidenceById,
+            source.StepId));
         return item;
     }
 
@@ -415,7 +433,9 @@ public sealed class WorkflowExecutionReadModelMapper
             _ => WorkflowRunTopologySource.Unknown,
         };
 
-    private static WorkflowRunStepTrace MapStepTrace(WorkflowExecutionStepTrace source) =>
+    private static WorkflowRunStepTrace MapStepTrace(
+        WorkflowExecutionStepTrace source,
+        IDictionary<string, WorkflowStepRequestEvidence> requestEvidenceById) =>
         new()
         {
             StepId = source.StepId,
@@ -435,8 +455,15 @@ public sealed class WorkflowExecutionReadModelMapper
             RetryDisposition = source.RetryDisposition,
             FileItemResults = source.FileItemResults?.Clone(),
             VoteAgreementDecision = source.VoteAgreementDecision?.Clone(),
-            LatestFailedAttempt = MapFailedStepAttempt(source.LatestFailedAttempt),
-            RequestParameters = source.RequestParametersMap.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            LatestFailedAttempt = MapFailedStepAttempt(
+                source.LatestFailedAttempt,
+                source.StepId,
+                requestEvidenceById),
+            RequestParameters = ResolveRequestParameters(
+                source.RequestEvidenceReference,
+                source.RequestParametersMap,
+                requestEvidenceById,
+                source.StepId),
             CompletionAnnotations = source.CompletionAnnotationsMap.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             NextStepId = source.NextStepId,
             BranchKey = source.BranchKey,
@@ -461,7 +488,9 @@ public sealed class WorkflowExecutionReadModelMapper
         };
 
     private static WorkflowRunFailedStepAttempt? MapFailedStepAttempt(
-        WorkflowExecutionFailedStepAttemptReadModel? source) =>
+        WorkflowExecutionFailedStepAttemptReadModel? source,
+        string stepId,
+        IDictionary<string, WorkflowStepRequestEvidence> requestEvidenceById) =>
         source == null
             ? null
             : new WorkflowRunFailedStepAttempt
@@ -475,10 +504,11 @@ public sealed class WorkflowExecutionReadModelMapper
                 WorkerId = source.WorkerId,
                 OutputPreview = source.OutputPreview,
                 Error = source.Error,
-                RequestParameters = source.RequestParametersMap.ToDictionary(
-                    x => x.Key,
-                    x => x.Value,
-                    StringComparer.Ordinal),
+                RequestParameters = ResolveRequestParameters(
+                    source.RequestEvidenceReference,
+                    source.RequestParametersMap,
+                    requestEvidenceById,
+                    stepId),
                 CompletionAnnotations = source.CompletionAnnotationsMap.ToDictionary(
                     x => x.Key,
                     x => x.Value,
@@ -560,7 +590,9 @@ public sealed class WorkflowExecutionReadModelMapper
             ResultJson = source.ResultJson,
         };
 
-    private static WorkflowRunTimelineEvent MapTimelineEvent(WorkflowExecutionTimelineEvent source) =>
+    private static WorkflowRunTimelineEvent MapTimelineEvent(
+        WorkflowExecutionTimelineEvent source,
+        IDictionary<string, WorkflowStepRequestEvidence> requestEvidenceById) =>
         new()
         {
             Timestamp = source.TimestampUtcValue?.ToDateTimeOffset() ?? default,
@@ -570,8 +602,42 @@ public sealed class WorkflowExecutionReadModelMapper
             StepId = source.StepId,
             StepType = source.StepType,
             EventType = source.EventType,
-            Data = source.DataMap.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            Data = ResolveRequestParameters(
+                source.RequestEvidenceReference,
+                source.DataMap,
+                requestEvidenceById,
+                source.StepId),
         };
+
+    private static Dictionary<string, string> ResolveRequestParameters(
+        WorkflowStepRequestEvidenceReference? reference,
+        IEnumerable<KeyValuePair<string, string>> legacyParameters,
+        IDictionary<string, WorkflowStepRequestEvidence>? requestEvidenceById,
+        string expectedStepId)
+    {
+        if (reference == null || string.IsNullOrWhiteSpace(reference.EvidenceId))
+            return legacyParameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+
+        if (requestEvidenceById == null ||
+            !requestEvidenceById.TryGetValue(reference.EvidenceId, out var evidence))
+        {
+            throw new InvalidOperationException(
+                $"Workflow request evidence '{reference.EvidenceId}' is missing from the report document.");
+        }
+
+        var matches = string.Equals(evidence.EvidenceId, reference.EvidenceId, StringComparison.Ordinal) &&
+                      string.Equals(evidence.ExecutionId, reference.ExecutionId, StringComparison.Ordinal) &&
+                      string.Equals(evidence.SourceEventId, reference.SourceEventId, StringComparison.Ordinal) &&
+                      (string.IsNullOrWhiteSpace(expectedStepId) ||
+                       string.Equals(evidence.StepId, expectedStepId, StringComparison.Ordinal));
+        if (!matches)
+        {
+            throw new InvalidOperationException(
+                $"Workflow request evidence reference '{reference.EvidenceId}' does not match its typed identity.");
+        }
+
+        return evidence.ParametersMap.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+    }
 
     private static WorkflowRunStatistics MapSummary(WorkflowExecutionSummary? source) =>
         source == null

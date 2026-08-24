@@ -8,7 +8,9 @@ namespace Aevatar.Workflow.Projection.Metadata;
 /// so the explicit mappings exist to keep the index small and the schema deliberate: ids, enums,
 /// names and timestamps are keyword / date; payload text (inputs, outputs, errors, prompts,
 /// tool arguments) is stored but never indexed; bulky nested attempt / vote / file material and
-/// proto maps (request parameters, completion annotations, timeline data) are disabled objects.
+/// proto maps (legacy inline parameters, completion annotations, timeline data) are disabled objects.
+/// The immutable request-evidence store and its small references are also disabled because reports
+/// are read by owner id and evidence is resolved in-document rather than queried through Elasticsearch.
 /// </summary>
 public sealed class WorkflowRunInsightReportDocumentMetadataProvider
     : IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>
@@ -26,6 +28,7 @@ public sealed class WorkflowRunInsightReportDocumentMetadataProvider
                 ["final_output"] = NotIndexedText(),
                 ["final_error"] = NotIndexedText(),
                 ["usage_value"] = UsageMetrics(),
+                ["request_evidence_by_id"] = DisabledObject(),
                 ["topology_entries"] = ObjectWithProperties(new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
                     ["parent"] = Keyword(),
@@ -58,6 +61,7 @@ public sealed class WorkflowRunInsightReportDocumentMetadataProvider
                     ["file_item_results"] = DisabledObject(),
                     ["vote_agreement_decision"] = DisabledObject(),
                     ["latest_failed_attempt"] = DisabledObject(),
+                    ["request_evidence_reference"] = DisabledObject(),
                 }),
                 ["role_reply_entries"] = ObjectWithProperties(new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
@@ -70,6 +74,7 @@ public sealed class WorkflowRunInsightReportDocumentMetadataProvider
                 {
                     ["stage"] = Keyword(),
                     ["message"] = NotIndexedText(),
+                    ["request_evidence_reference"] = DisabledObject(),
                 }),
                 ["operation_entries"] = ObjectWithProperties(new Dictionary<string, object?>(StringComparer.Ordinal)
                 {

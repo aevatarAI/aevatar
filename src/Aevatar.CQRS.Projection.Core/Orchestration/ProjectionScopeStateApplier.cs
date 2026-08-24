@@ -292,6 +292,54 @@ internal static class ProjectionScopeStateApplier
         return next;
     }
 
+    public static ProjectionScopeState ApplyMaterializationCutoverAborted(
+        ProjectionScopeState current,
+        ProjectionMaterializationCutoverAbortedEvent evt)
+    {
+        var next = current.Clone();
+        var existing = current.MaterializationCutover;
+        next.MaterializationCutover = new ProjectionMaterializationCutoverState
+        {
+            Phase = ProjectionMaterializationCutoverPhase.Aborted,
+            CandidateRoute = evt.CandidateRoute?.Clone() ?? existing?.CandidateRoute?.Clone(),
+            CandidateSource = existing?.CandidateSource?.Clone(),
+            CandidateFingerprint = existing?.CandidateFingerprint ?? string.Empty,
+            UpdatedAtUtc = evt.OccurredAtUtc?.Clone(),
+            AbortReason = evt.Reason ?? string.Empty,
+        };
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
+    public static ProjectionScopeState ApplyMaterializationRouteRolledBack(
+        ProjectionScopeState current,
+        ProjectionMaterializationRouteRolledBackEvent evt)
+    {
+        if (evt.Route == null || evt.Route.RouteEpoch <= 0)
+            throw new InvalidOperationException("A rolled-back materialization route requires a positive route epoch.");
+        if (current.ActiveMaterializationRoute != null &&
+            evt.Route.RouteEpoch <= current.ActiveMaterializationRoute.RouteEpoch)
+        {
+            throw new InvalidOperationException(
+                "A materialization route rollback must advance the actor-owned route epoch.");
+        }
+
+        var next = current.Clone();
+        next.ActiveMaterializationRoute = evt.Route.Clone();
+        var existing = current.MaterializationCutover;
+        next.MaterializationCutover = new ProjectionMaterializationCutoverState
+        {
+            Phase = ProjectionMaterializationCutoverPhase.Aborted,
+            CandidateRoute = existing?.CandidateRoute?.Clone(),
+            CandidateSource = existing?.CandidateSource?.Clone(),
+            CandidateFingerprint = existing?.CandidateFingerprint ?? string.Empty,
+            UpdatedAtUtc = evt.OccurredAtUtc?.Clone(),
+            AbortReason = evt.Reason ?? string.Empty,
+        };
+        next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
+        return next;
+    }
+
     private static bool HasSameRoute(
         ProjectionMaterializationRouteFingerprint? left,
         ProjectionMaterializationRouteFingerprint? right) =>

@@ -1,5 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.Runtime;
@@ -48,6 +50,11 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
             return;
         }
 
+        // An aborted cutover is terminal: the owner stays on the compatibility route until a
+        // cutover is explicitly requested again (e.g. after the mutation budget is raised).
+        if (State.MaterializationCutover?.Phase == ProjectionMaterializationCutoverPhase.Aborted)
+            return;
+
         if (WorkflowRunIncrementalGraphMaterializer.IsIncrementalRoute(State.ActiveMaterializationRoute))
             return;
 
@@ -88,14 +95,63 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
         _ = context;
         _ = envelope;
         _ = result;
-        if (State.MaterializationCutover is
-            {
-                Phase: not ProjectionMaterializationCutoverPhase.Unspecified and
-                       not ProjectionMaterializationCutoverPhase.Activated,
-            })
+        if (WorkflowProjectionGraphRoutePolicy.HasInProgressCutover(State.MaterializationCutover))
         {
             await ScheduleCutoverContinuationAsync(ct);
         }
+    }
+
+    protected override async ValueTask<bool> TryRecoverObservationAsync(
+        WorkflowExecutionMaterializationContext context,
+        EventEnvelope envelope,
+        StateEvent stateEvent,
+        Exception error,
+        CancellationToken ct)
+    {
+        _ = envelope;
+        _ = stateEvent;
+        ct.ThrowIfCancellationRequested();
+
+        // Post-cutover escape hatch: a command-observed or maintenance full replacement that
+        // can never fit the bounded mutation budget must not stall the observation pipeline.
+        // Roll the route back to the compatibility writer durably, then let the base retry the
+        // observation on it — the report write is idempotent and the graph falls back to the
+        // unbounded legacy replacement for this owner. The dispatch executor aggregates
+        // per-materializer failures, so the signal may arrive wrapped.
+        var overBound = error as ProjectionGraphCandidateOverBoundException ??
+                        (error as ProjectionDispatchAggregateException)?.Failures
+                        .Select(static failure => failure.Exception)
+                        .OfType<ProjectionGraphCandidateOverBoundException>()
+                        .FirstOrDefault();
+        if (overBound == null ||
+            !WorkflowRunIncrementalGraphMaterializer.IsIncrementalRoute(context.MaterializationRoute))
+        {
+            return false;
+        }
+
+        var activeRoute = State.ActiveMaterializationRoute;
+        if (activeRoute == null ||
+            !WorkflowRunIncrementalGraphMaterializer.IsIncrementalRoute(activeRoute))
+        {
+            return false;
+        }
+
+        var rollbackRoute = new ProjectionMaterializationRouteFingerprint
+        {
+            ContractId = WorkflowExecutionGraphConstants.LegacyContractId,
+            ContractVersion = WorkflowExecutionGraphConstants.LegacyContractVersion,
+            PhysicalNamespace = WorkflowExecutionGraphConstants.Scope,
+            RouteEpoch = Math.Max(1, activeRoute.RouteEpoch) + 1,
+        };
+        await PersistDomainEventAsync(new ProjectionMaterializationRouteRolledBackEvent
+        {
+            Route = rollbackRoute,
+            Reason = overBound.Message,
+            OccurredAtUtc = Timestamp.FromDateTimeOffset(
+                (Services.GetService<TimeProvider>() ?? TimeProvider.System).GetUtcNow()),
+        });
+        context.MaterializationRoute = State.ActiveMaterializationRoute?.Clone() ?? BuildCompatibilityRoute();
+        return true;
     }
 
     [EventHandler]
@@ -118,13 +174,9 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
         WorkflowProjectionGraphRoutePolicy.EnsureCanFollow(activeRoute, candidateRoute);
 
         var existing = State.MaterializationCutover;
-        if (existing is
-            {
-                Phase: not ProjectionMaterializationCutoverPhase.Unspecified and
-                       not ProjectionMaterializationCutoverPhase.Activated,
-            })
+        if (WorkflowProjectionGraphRoutePolicy.HasInProgressCutover(existing))
         {
-            if (!WorkflowProjectionGraphRoutePolicy.Equals(existing.CandidateRoute, candidateRoute))
+            if (!WorkflowProjectionGraphRoutePolicy.Equals(existing!.CandidateRoute, candidateRoute))
             {
                 throw new InvalidOperationException(
                     "Another materialization route cutover is already in progress.");
@@ -162,6 +214,30 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
 
         var orchestrator = Services.GetRequiredService<WorkflowProjectionGraphCutoverOrchestrator>();
         var now = (Services.GetService<TimeProvider>() ?? TimeProvider.System).GetUtcNow();
+        try
+        {
+            await ContinueCutoverPhaseAsync(cutover, candidateRoute, orchestrator, now);
+        }
+        catch (ProjectionGraphCandidateOverBoundException ex)
+        {
+            // The candidate can never fit the bounded mutation budget. Abort the saga
+            // durably instead of rebuilding the same over-bound candidate after every
+            // observation; the owner stays on the compatibility route.
+            await PersistDomainEventAsync(new ProjectionMaterializationCutoverAbortedEvent
+            {
+                CandidateRoute = candidateRoute.Clone(),
+                Reason = ex.Message,
+                OccurredAtUtc = Timestamp.FromDateTimeOffset(now),
+            });
+        }
+    }
+
+    private async Task ContinueCutoverPhaseAsync(
+        ProjectionMaterializationCutoverState cutover,
+        ProjectionMaterializationRouteFingerprint candidateRoute,
+        WorkflowProjectionGraphCutoverOrchestrator orchestrator,
+        DateTimeOffset now)
+    {
         switch (cutover.Phase)
         {
             case ProjectionMaterializationCutoverPhase.Requested:
@@ -274,6 +350,9 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
 
     private Task ScheduleCutoverContinuationAsync(CancellationToken ct)
     {
+        if (!WorkflowProjectionGraphRoutePolicy.HasInProgressCutover(State.MaterializationCutover))
+            return Task.CompletedTask;
+
         var routeEpoch = State.MaterializationCutover?.CandidateRoute?.RouteEpoch ?? 0;
         return routeEpoch <= 0
             ? Task.CompletedTask
@@ -312,7 +391,8 @@ internal static class WorkflowProjectionGraphRoutePolicy
         cutover is
         {
             Phase: not ProjectionMaterializationCutoverPhase.Unspecified and
-                   not ProjectionMaterializationCutoverPhase.Activated,
+                   not ProjectionMaterializationCutoverPhase.Activated and
+                   not ProjectionMaterializationCutoverPhase.Aborted,
         };
 
     public static void EnsureCanFollow(

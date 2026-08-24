@@ -118,6 +118,24 @@ public sealed class Neo4jProjectionGraphStoreTelemetryTests
     }
 
     [Fact]
+    public async Task ObserveWriteAsync_WhenResultResolverThrows_RecordsCompletedAndReturnsResult()
+    {
+        var logger = new RecordingLogger();
+
+        var value = await Neo4jProjectionGraphStoreTelemetry.ObserveWriteAsync(
+            logger,
+            Context(),
+            CancellationToken.None,
+            () => Task.FromResult(7),
+            _ => throw new InvalidOperationException("resolver failed"));
+
+        value.Should().Be(7, "the write succeeded; a telemetry resolver failure must not fail it");
+        var entry = logger.Entries.Should().ContainSingle().Subject;
+        entry.Level.Should().Be(LogLevel.Information);
+        entry.Properties["Result"].Should().Be(Neo4jProjectionGraphStoreTelemetry.CompletedResult);
+    }
+
+    [Fact]
     public async Task ObserveWriteAsync_WhenTelemetryThrows_DoesNotFailSuccessfulWrite()
     {
         var counterCallbacks = 0;

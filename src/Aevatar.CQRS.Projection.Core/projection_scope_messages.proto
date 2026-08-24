@@ -181,6 +181,10 @@ enum ProjectionMaterializationCutoverPhase {
   PROJECTION_MATERIALIZATION_CUTOVER_PHASE_CANDIDATE_BUILT = 2;
   PROJECTION_MATERIALIZATION_CUTOVER_PHASE_GOLDEN_VERIFIED = 3;
   PROJECTION_MATERIALIZATION_CUTOVER_PHASE_ACTIVATED = 4;
+  // Terminal failure state: the candidate cannot be served within the bounded
+  // mutation budget, so the owner stays on (or rolls back to) the compatibility
+  // route until a cutover is explicitly requested again.
+  PROJECTION_MATERIALIZATION_CUTOVER_PHASE_ABORTED = 5;
 }
 
 message ProjectionMaterializationCutoverState {
@@ -190,6 +194,7 @@ message ProjectionMaterializationCutoverState {
   string candidate_fingerprint = 4;
   google.protobuf.Timestamp updated_at_utc = 5;
   ProjectionMaterializationActivationProof activation_proof = 6;
+  string abort_reason = 7;
 }
 
 message ProjectionMaterializationActivationProof {
@@ -405,6 +410,23 @@ message ProjectionMaterializationCutoverActivatedEvent {
   string candidate_fingerprint = 3;
   google.protobuf.Timestamp occurred_at_utc = 4;
   ProjectionMaterializationActivationProof activation_proof = 5;
+}
+
+// Terminal abort of an in-progress cutover (e.g. the candidate exceeds the
+// bounded mutation budget). The active route is unchanged.
+message ProjectionMaterializationCutoverAbortedEvent {
+  ProjectionMaterializationRouteFingerprint candidate_route = 1;
+  string reason = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
+}
+
+// Post-activation escape hatch: the active route is rolled back to the
+// compatibility route at an advanced epoch when the incremental route can no
+// longer serve this owner, and the cutover record is closed as aborted.
+message ProjectionMaterializationRouteRolledBackEvent {
+  ProjectionMaterializationRouteFingerprint route = 1;
+  string reason = 2;
+  google.protobuf.Timestamp occurred_at_utc = 3;
 }
 
 // Phase 1 of a cutover: the route is committed WARMING at a new epoch.

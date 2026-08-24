@@ -425,9 +425,24 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
 
         reportStore.Document!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
         reportStore.Document.LastEventId.Should().Be(maintenanceEventId);
+        reportStore.Document.Timeline.Count(static entry => entry.Stage == "workflow.completed")
+            .Should().Be(1, "the repair appends the terminal entry the document was missing");
+        var repairedEndedAt = reportStore.Document.EndedAt;
         var repaired = await graphStore.ReadOwnerSnapshotAsync(route);
         repaired.Snapshot.Source.EventId.Should().Be(maintenanceEventId);
         repaired.Snapshot.Source.StateVersion.Should().Be(1);
+
+        // A repeated republish against the now-healthy document must not append the terminal
+        // outcome a second time nor move EndedAt to the duplicate's observation time.
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            1,
+            maintenanceEventId,
+            new WorkflowCompletedEvent { RunId = "run-1", Success = true },
+            status: "completed"));
+
+        reportStore.Document!.Timeline.Count(static entry => entry.Stage == "workflow.completed")
+            .Should().Be(1);
+        reportStore.Document.EndedAt.Should().Be(repairedEndedAt);
 
         await projector.ProjectAsync(context, BuildCommittedEnvelope(
             1,
@@ -438,6 +453,46 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         reportStore.Document.LastEventId.Should().Be(maintenanceEventId);
         (await graphStore.ReadOwnerSnapshotAsync(route)).Snapshot.Should()
             .BeEquivalentTo(repaired.Snapshot);
+    }
+
+    [Fact]
+    public async Task Projector_WhenMaintenanceRepublishFollowsHealthyTerminalDocument_ShouldNotDuplicateTerminalTimelineEntry()
+    {
+        var reportStore = new RecordingDocumentStore();
+        var graphStore = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var projector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            new RecordingGraphWriter(),
+            graphStore,
+            materializer);
+        var context = Context();
+
+        // The report scope observed the ordinary terminal event: one terminal timeline entry.
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            1,
+            "evt-completed",
+            new WorkflowCompletedEvent { RunId = "run-1", Success = true },
+            status: "completed",
+            observedAt: DateTimeOffset.Parse("2026-08-18T08:00:00Z")));
+        reportStore.Document!.Timeline.Count(static entry => entry.Stage == "workflow.completed")
+            .Should().Be(1);
+        var endedAt = reportStore.Document.EndedAt;
+
+        // A maintenance republish of the same terminal outcome at the same version repairs the
+        // graph but must not append the terminal timeline entry again.
+        var maintenanceEventId = CommittedStateRepublish.BuildEventId("actor-1", 1);
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            1,
+            maintenanceEventId,
+            new WorkflowCompletedEvent { RunId = "run-1", Success = true },
+            status: "completed",
+            observedAt: DateTimeOffset.Parse("2026-08-18T09:30:00Z")));
+
+        reportStore.Document!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
+        reportStore.Document.Timeline.Count(static entry => entry.Stage == "workflow.completed")
+            .Should().Be(1);
+        reportStore.Document.EndedAt.Should().Be(endedAt);
     }
 
     [Fact]
@@ -904,9 +959,10 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         string eventId,
         IMessage payload,
         string commandId = "cmd-1",
-        string status = "running")
+        string status = "running",
+        DateTimeOffset? observedAt = null)
     {
-        var timestamp = DateTimeOffset.Parse("2026-08-18T08:00:00Z");
+        var timestamp = observedAt ?? DateTimeOffset.Parse("2026-08-18T08:00:00Z");
         return new EventEnvelope
         {
             Id = $"outer-{version}",
