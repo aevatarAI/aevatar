@@ -371,6 +371,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             Status = ServiceDeploymentStatus.Active,
             ActivatedAt = now.Clone(),
             ArtifactHash = NormalizeExpectedArtifactHash(artifact.ArtifactHash),
+            ActivationAttemptId = activationAttemptId,
         };
         var dispatchPending = BuildServingTargetDispatchPendingEvent(
             identity,
@@ -1075,9 +1076,52 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             return;
         }
 
+        var servingActorId = ServiceActorIds.ServingSet(command.Identity);
+        var admission = await _dispatchPort.DispatchAsync(
+            servingActorId,
+            CreateEnvelope(
+                servingActorId,
+                $"service-serving-remove:{ServiceKeys.Build(command.Identity)}:{deployment.DeploymentId}:{deployment.ServingTargetOperationId}",
+                new RemoveDeploymentFromServiceServingTargetsCommand
+                {
+                    Identity = command.Identity.Clone(),
+                    DeploymentId = deployment.DeploymentId,
+                    RevisionId = deployment.RevisionId,
+                    PrimaryActorId = deployment.PrimaryActorId,
+                    ActivationAttemptId = deployment.ActivationAttemptId,
+                    ServingTargetOperationId = deployment.ServingTargetOperationId,
+                    ReplyActorId = Id,
+                    Reason = $"deactivate:{deployment.DeploymentId}",
+                }),
+            CancellationToken.None);
+        if (!admission.Accepted)
+            throw new InvalidOperationException("Service serving target removal was not admitted.");
+    }
+
+    [EventHandler]
+    public async Task HandleServingTargetsRemovedAsync(ServiceServingTargetsRemovedAck ack)
+    {
+        ArgumentNullException.ThrowIfNull(ack);
+        EnsureDeploymentIdentity(ack.Identity, allowInitialize: false);
+        if (ActiveInboundEnvelope != null &&
+            !string.Equals(
+                ActiveInboundEnvelope.Route?.PublisherActorId,
+                ServiceActorIds.ServingSet(ack.Identity!),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!State.Deployments.TryGetValue(ack.DeploymentId, out var deployment) ||
+            deployment.Status != ServiceDeploymentStatus.Active ||
+            !MatchesDeactivationAck(deployment, ack))
+        {
+            return;
+        }
+
         await _runtimeActivator.DeactivateAsync(
             new ServiceRuntimeDeactivationRequest(
-                command.Identity.Clone(),
+                ack.Identity!.Clone(),
                 deployment.DeploymentId,
                 deployment.RevisionId,
                 deployment.PrimaryActorId),
@@ -1085,12 +1129,20 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
 
         await PersistDomainEventAsync(new ServiceDeploymentDeactivatedEvent
         {
-            Identity = command.Identity.Clone(),
+            Identity = ack.Identity.Clone(),
             DeploymentId = deployment.DeploymentId,
             RevisionId = deployment.RevisionId,
             DeactivatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
     }
+
+    private static bool MatchesDeactivationAck(
+        ServiceDeploymentRecord deployment,
+        ServiceServingTargetsRemovedAck ack) =>
+        string.Equals(deployment.RevisionId, ack.RevisionId, StringComparison.Ordinal) &&
+        string.Equals(deployment.PrimaryActorId, ack.PrimaryActorId, StringComparison.Ordinal) &&
+        string.Equals(deployment.ActivationAttemptId ?? string.Empty, ack.ActivationAttemptId ?? string.Empty, StringComparison.Ordinal) &&
+        string.Equals(deployment.ServingTargetOperationId ?? string.Empty, ack.ServingTargetOperationId ?? string.Empty, StringComparison.Ordinal);
 
     protected override ServiceDeploymentState TransitionState(ServiceDeploymentState current, IMessage evt) =>
         StateTransitionMatcher
@@ -1121,6 +1173,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ActivatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
             UpdatedAt = evt.ActivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
             ArtifactHash = NormalizeExpectedArtifactHash(evt.ArtifactHash),
+            ActivationAttemptId = evt.ActivationAttemptId ?? string.Empty,
         };
         // Preserve the legacy reducer contract: an activated event always closes the
         // activation pending record. New code atomically follows it with an explicit
@@ -1415,6 +1468,14 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             string.Equals(pending.DeploymentId, evt.DeploymentId, StringComparison.Ordinal) &&
             string.Equals(pending.ServingTargetOperationId, evt.OperationId, StringComparison.Ordinal))
         {
+            if (next.Deployments.TryGetValue(evt.DeploymentId, out var deployment))
+            {
+                var activated = deployment.Clone();
+                activated.ActivationAttemptId = evt.ActivationAttemptId ?? string.Empty;
+                activated.ServingTargetOperationId = evt.OperationId ?? string.Empty;
+                next.Deployments[evt.DeploymentId] = activated;
+            }
+
             next.PendingActivations.Remove(evt.RevisionId);
             if (!string.IsNullOrWhiteSpace(evt.ActivationAttemptId))
             {
@@ -1534,6 +1595,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 ActivatedAt = deployment.ActivatedAt?.Clone(),
                 UpdatedAt = evt.DeactivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
                 ArtifactHash = deployment.ArtifactHash,
+                ActivationAttemptId = deployment.ActivationAttemptId,
+                ServingTargetOperationId = deployment.ServingTargetOperationId,
             };
         }
 
@@ -1570,6 +1633,8 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 ActivatedAt = deployment.ActivatedAt?.Clone(),
                 UpdatedAt = evt.OccurredAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
                 ArtifactHash = deployment.ArtifactHash,
+                ActivationAttemptId = deployment.ActivationAttemptId,
+                ServingTargetOperationId = deployment.ServingTargetOperationId,
             };
         }
 

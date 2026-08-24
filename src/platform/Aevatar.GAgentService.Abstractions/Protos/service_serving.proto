@@ -31,6 +31,8 @@ message ServiceServingTargetSpec {
   int32 allocation_weight = 4;
   ServiceServingState serving_state = 5;
   repeated string enabled_endpoint_ids = 6;
+  string serving_target_operation_id = 7;
+  string activation_attempt_id = 8;
 }
 
 message ServiceServingSetState {
@@ -82,6 +84,21 @@ message RemoveDeploymentFromServiceServingTargetsCommand {
   ServiceIdentity identity = 1;
   string deployment_id = 2;
   string reason = 3;
+  string revision_id = 4;
+  string primary_actor_id = 5;
+  string serving_target_operation_id = 6;
+  string activation_attempt_id = 7;
+  string reply_actor_id = 8;
+}
+
+message ServiceServingTargetsRemovedAck {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string revision_id = 3;
+  string primary_actor_id = 4;
+  string serving_target_operation_id = 5;
+  string activation_attempt_id = 6;
+  google.protobuf.Timestamp removed_at = 7;
 }
 
 message ServiceServingSetUpdatedEvent {

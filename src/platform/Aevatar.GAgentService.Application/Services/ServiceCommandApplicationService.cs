@@ -107,19 +107,6 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         DeactivateServiceDeploymentCommand command,
         CancellationToken ct = default)
     {
-        var servingActorId = await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
-        await _targetProvisioner.EnsureInvocationCatalogTargetAsync(command.Identity, ct);
-        await DispatchAsync(
-            servingActorId,
-            new RemoveDeploymentFromServiceServingTargetsCommand
-            {
-                Identity = command.Identity.Clone(),
-                DeploymentId = command.DeploymentId,
-                Reason = $"deactivate:{command.DeploymentId}",
-            },
-            $"{CorrelationForService(command.Identity)}:{command.DeploymentId}:serving-remove",
-            ct);
-
         var actorId = await _targetProvisioner.EnsureDeploymentTargetAsync(command.Identity, ct);
         return await DispatchAsync(actorId, command, $"{CorrelationForService(command.Identity)}:{command.DeploymentId}", ct);
     }
