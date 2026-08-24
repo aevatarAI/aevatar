@@ -214,6 +214,7 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         var graphWriter = new RecordingGraphWriter();
         var versionedStore = new SequencedVersionedGraphStore(
             ProjectionGraphDeltaApplyDisposition.Gap,
+            ProjectionGraphDeltaApplyDisposition.InvalidDelta,
             ProjectionGraphDeltaApplyDisposition.Applied);
         var projector = new WorkflowRunInsightReportArtifactProjector(
             reportStore,
@@ -230,11 +231,11 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
 
         var first = () => projector.ProjectAsync(context, envelope).AsTask();
         await first.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Graph delta was rejected with Gap*");
+            .WithMessage("*full-owner repair was rejected with InvalidDelta*");
         await projector.ProjectAsync(context, envelope.Clone());
 
         reportStore.UpsertCount.Should().Be(1);
-        versionedStore.ApplyCount.Should().Be(2);
+        versionedStore.ApplyCount.Should().Be(3);
         graphWriter.UpsertCount.Should().Be(0);
     }
 
@@ -274,6 +275,58 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
             StateVersion = 1,
             EventId = "evt-1",
         });
+    }
+
+    [Fact]
+    public async Task Projector_WhenSourceVersionJumps_ShouldRepairFromAuthoritativeReport_AndReplayExactly()
+    {
+        var reportStore = new RecordingDocumentStore();
+        var graphWriter = new RecordingGraphWriter();
+        var store = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var projector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            graphWriter,
+            store,
+            materializer);
+        var context = Context();
+        var route = materializer.ResolveStoreRoute(
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            "actor-1",
+            IncrementalRoute());
+
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(1, "evt-1", new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "step-1",
+            StepType = "tool_call",
+        }));
+        var jumped = BuildCommittedEnvelope(6, "evt-6", new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "step-2",
+            StepType = "tool_call",
+        });
+
+        var first = () => projector.ProjectAsync(context, jumped).AsTask();
+        await first.Should().NotThrowAsync(
+            "a committed actor state may advance by more than one version in one published state snapshot");
+        var repaired = (await store.ReadOwnerSnapshotAsync(route)).Snapshot;
+        repaired.Source.Should().BeEquivalentTo(new ProjectionGraphSourceCoordinate
+        {
+            ActorId = "actor-1",
+            StateVersion = 6,
+            EventId = "evt-6",
+        });
+        repaired.Nodes.Select(static node => node.NodeId).Should().Contain(
+            "step:actor-1:cmd-1:step-1",
+            "step:actor-1:cmd-1:step-2");
+
+        var replay = () => projector.ProjectAsync(context, jumped.Clone()).AsTask();
+        await replay.Should().NotThrowAsync(
+            "recovery after the repair committed must recognize the same full candidate as an exact duplicate");
+        (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Should().BeEquivalentTo(repaired);
+        graphWriter.UpsertCount.Should().Be(0);
     }
 
     [Fact]

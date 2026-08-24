@@ -110,15 +110,41 @@ public sealed class WorkflowRunInsightReportArtifactProjector
                 context.ProjectionKind,
                 context.MaterializationRoute!);
         var result = await _versionedGraphStore.ApplyDeltaAsync(delta, ct);
-        if (result.Disposition is ProjectionGraphDeltaApplyDisposition.Applied or
-            ProjectionGraphDeltaApplyDisposition.ExactDuplicate)
+        if (IsCommitted(result))
         {
             return;
+        }
+
+        // A committed state snapshot is authoritative at its source version, but the actor may
+        // publish one snapshot after a batch advances that version by more than one. The normal
+        // incremental delta cannot safely bridge that gap because intermediate payload-specific
+        // mutations may be absent. Repair from the complete report instead. EventIdConflict is
+        // included for the crash window where that repair committed but the projection scope
+        // watermark did not: replay first rebuilds the normal delta, then proves the same full
+        // candidate is already present through ExactDuplicate.
+        if (result.Disposition is ProjectionGraphDeltaApplyDisposition.Gap or
+            ProjectionGraphDeltaApplyDisposition.EventIdConflict)
+        {
+            var repairDelta = _incrementalGraphMaterializer.BuildFullCandidateDelta(
+                readModel,
+                context.ProjectionKind,
+                context.MaterializationRoute!);
+            var repairResult = await _versionedGraphStore.ApplyDeltaAsync(repairDelta, ct);
+            if (IsCommitted(repairResult))
+                return;
+
+            throw new InvalidOperationException(
+                $"Workflow graph delta was rejected with {result.Disposition}: {result.Detail} " +
+                $"The full-owner repair was rejected with {repairResult.Disposition}: {repairResult.Detail}");
         }
 
         throw new InvalidOperationException(
             $"Workflow graph delta was rejected with {result.Disposition}: {result.Detail}");
     }
+
+    private static bool IsCommitted(ProjectionGraphDeltaApplyResult result) =>
+        result.Disposition is ProjectionGraphDeltaApplyDisposition.Applied or
+            ProjectionGraphDeltaApplyDisposition.ExactDuplicate;
 
     private static WorkflowRunInsightReportDocument ReduceReport(
         WorkflowRunInsightReportDocument? existing,
