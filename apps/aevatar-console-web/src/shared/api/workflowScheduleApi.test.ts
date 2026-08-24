@@ -167,7 +167,34 @@ describe('workflowScheduleApi', () => {
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
-        json: async () => ({ schedule: createSummary(), recentFires: [] }),
+        json: async () => ({
+          schedule: createSummary(),
+          recentFires: [
+            {
+              ScheduledFireAt: '2026-08-20T08:00:00Z',
+              CompletedAt: '2026-08-20T08:01:00Z',
+              IdempotencyKey: 'schedule-alpha:fire:1',
+              RunActorId: 'run-alpha',
+              Error: '',
+              Manual: false,
+            },
+            {
+              ScheduledFireAt: '2026-08-20T09:00:00Z',
+              CompletedAt: '2026-08-20T09:01:00Z',
+              IdempotencyKey: 'schedule-alpha:fire:2',
+              RunActorId: null,
+              Error: 'Run identity was not recorded',
+              Manual: false,
+            },
+            {
+              ScheduledFireAt: '2026-08-20T10:00:00Z',
+              CompletedAt: '2026-08-20T10:01:00Z',
+              IdempotencyKey: 'schedule-alpha:fire:3',
+              Error: '',
+              Manual: false,
+            },
+          ],
+        }),
       } as Response)
       .mockResolvedValueOnce({
         ok: true,
@@ -195,7 +222,11 @@ describe('workflowScheduleApi', () => {
         json: async () => createReceipt(),
       } as Response);
 
-    await workflowScheduleApi.get('scope-alpha', 'wf-alpha', 'schedule-alpha');
+    const detail = await workflowScheduleApi.get(
+      'scope-alpha',
+      'wf-alpha',
+      'schedule-alpha',
+    );
     await workflowScheduleApi.update(
       'scope-alpha',
       'wf-alpha',
@@ -241,5 +272,10 @@ describe('workflowScheduleApi', () => {
     expect(
       fetchMock.mock.calls.slice(1).every(([, init]) => init?.method),
     ).toBe(true);
+    expect(detail.recentFires).toEqual([
+      expect.objectContaining({ runActorId: 'run-alpha' }),
+      expect.objectContaining({ runActorId: '' }),
+      expect.objectContaining({ runActorId: '' }),
+    ]);
   });
 });

@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import * as React from 'react';
 import { workflowScheduleApi } from '@/shared/api/workflowScheduleApi';
@@ -554,6 +555,7 @@ describe('WorkflowScheduleSurface', () => {
           scheduledFireAt: '2026-08-20T01:00:00Z',
           completedAt: '2026-08-20T01:02:00Z',
           idempotencyKey: 'schedule-alpha:fire:1',
+          runActorId: '',
           error: '',
           manual: false,
         },
@@ -561,6 +563,7 @@ describe('WorkflowScheduleSurface', () => {
           scheduledFireAt: '2026-08-19T03:00:00Z',
           completedAt: '2026-08-19T03:01:00Z',
           idempotencyKey: 'schedule-alpha:manual:1',
+          runActorId: '',
           error: 'Workflow invocation failed',
           manual: true,
         },
@@ -631,6 +634,7 @@ describe('WorkflowScheduleSurface', () => {
           scheduledFireAt: '2026-08-20T01:00:00Z',
           completedAt: '2026-08-20T01:02:00Z',
           idempotencyKey: 'schedule-alpha:fire:1',
+          runActorId: '',
           error: '',
           manual: false,
         },
@@ -736,6 +740,7 @@ describe('WorkflowScheduleSurface', () => {
           scheduledFireAt: '2026-08-20T01:00:00Z',
           completedAt: '2026-08-20T01:02:00Z',
           idempotencyKey: 'schedule-alpha:fire:1',
+          runActorId: '',
           error: 'Capability admission rejected the scheduled request.',
           manual: false,
         },
@@ -743,6 +748,7 @@ describe('WorkflowScheduleSurface', () => {
           scheduledFireAt: '2026-08-19T03:00:00Z',
           completedAt: '2026-08-19T03:01:00Z',
           idempotencyKey: 'schedule-alpha:manual:1',
+          runActorId: 'run-manual-alpha',
           error: '',
           manual: true,
         },
@@ -758,6 +764,18 @@ describe('WorkflowScheduleSurface', () => {
     expect(
       await screen.findByRole('heading', { name: 'Recent attempts' }),
     ).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog');
+    await waitFor(() =>
+      expect(
+        within(dialog).getByText('Schedule history', {
+          selector: '.ant-modal-title *',
+        }),
+      ).toBeVisible(),
+    );
+    expect(
+      within(dialog).getByText('Schedule: Daily workflow run'),
+    ).toBeVisible();
+    expect(within(dialog).getByText('Workflow: Weekly review')).toBeVisible();
     expect(
       await screen.findByRole('columnheader', { name: 'Scheduled time' }),
     ).toBeVisible();
@@ -769,7 +787,8 @@ describe('WorkflowScheduleSurface', () => {
     expect(screen.getByText('Scheduled')).toBeVisible();
     expect(screen.getByText('Manual')).toBeVisible();
     expect(screen.getByText('Failed')).toBeVisible();
-    expect(screen.getByText('Succeeded')).toBeVisible();
+    expect(screen.getByText('Run started')).toBeVisible();
+    expect(screen.queryByText('Succeeded')).not.toBeInTheDocument();
     expect(
       screen.getByText('The scheduled attempt could not start the Workflow.'),
     ).toBeVisible();
@@ -780,7 +799,12 @@ describe('WorkflowScheduleSurface', () => {
     ).not.toBeVisible();
     expect(screen.getByText('Technical details')).toBeInTheDocument();
     expect(screen.queryByText('schedule-alpha:fire:1')).not.toBeInTheDocument();
-    expect(screen.getAllByRole('link')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: /Open Run from/ })).toBeVisible();
+    expect(
+      screen
+        .getByText('The scheduled attempt could not start the Workflow.')
+        .closest('tr'),
+    ).not.toHaveAttribute('role', 'link');
 
     fireEvent.click(screen.getByText('Technical details'));
     expect(
@@ -792,7 +816,81 @@ describe('WorkflowScheduleSurface', () => {
     );
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(history.push).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha&origin=schedule',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
+    );
+  });
+
+  it('opens an authoritative History attempt directly in Activity', async () => {
+    const schedule = createScheduleSummary();
+    const onClose = jest.fn();
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get.mockResolvedValue({
+      schedule,
+      recentFires: [
+        {
+          scheduledFireAt: '2026-08-20T01:00:00Z',
+          completedAt: '2026-08-20T01:02:00Z',
+          idempotencyKey: 'schedule-alpha:fire:1',
+          runActorId: 'run-alpha',
+          error: '',
+          manual: false,
+        },
+      ],
+    });
+
+    renderSurface(true, 'modal', onClose, 'list');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
+
+    fireEvent.click(await screen.findByRole('link', { name: /Open Run from/ }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(history.push).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-alpha?workflowId=wf-alpha&schedule=schedule-alpha',
+    );
+  });
+
+  it('opens a successful legacy attempt in schedule-filtered Activity', async () => {
+    const schedule = createScheduleSummary();
+    const onClose = jest.fn();
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get.mockResolvedValue({
+      schedule,
+      recentFires: [
+        {
+          scheduledFireAt: '2026-08-20T01:00:00Z',
+          completedAt: '2026-08-20T01:02:00Z',
+          idempotencyKey: 'schedule-alpha:fire:1',
+          runActorId: '',
+          error: '',
+          manual: false,
+        },
+      ],
+    });
+
+    renderSurface(true, 'modal', onClose, 'list');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
+
+    fireEvent.click(
+      await screen.findByRole('link', { name: /View related runs from/ }),
+    );
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(history.push).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
     );
   });
 
@@ -813,6 +911,7 @@ describe('WorkflowScheduleSurface', () => {
           scheduledFireAt: '2026-08-21T01:00:00Z',
           completedAt: '2026-08-21T01:01:00Z',
           idempotencyKey: 'schedule-alpha:fire:3',
+          runActorId: '',
           error: 'Scheduled request was rejected.',
           manual: false,
         },
@@ -820,6 +919,7 @@ describe('WorkflowScheduleSurface', () => {
           scheduledFireAt: '2026-08-20T01:00:00Z',
           completedAt: '2026-08-20T01:01:00Z',
           idempotencyKey: 'schedule-alpha:fire:2',
+          runActorId: '',
           error: '',
           manual: false,
         },
@@ -827,6 +927,7 @@ describe('WorkflowScheduleSurface', () => {
           scheduledFireAt: '2026-08-19T03:00:00Z',
           completedAt: '2026-08-19T03:01:00Z',
           idempotencyKey: 'schedule-alpha:manual:1',
+          runActorId: '',
           error: 'Manual request was rejected.',
           manual: true,
         },
@@ -840,7 +941,11 @@ describe('WorkflowScheduleSurface', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
 
     await screen.findByRole('heading', { name: 'Recent attempts' });
-    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(4));
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll('.wa-vnext__schedule-history-table tbody tr'),
+      ).toHaveLength(3),
+    );
     expect(screen.getAllByText('Technical details')).toHaveLength(2);
     expect(
       screen.getByText('The scheduled attempt could not start the Workflow.'),

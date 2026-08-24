@@ -703,6 +703,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-selected-title > div { display: grid; gap: 1px; min-width: 0; }
 .wa-vnext__schedule-selected-title strong { color: var(--wa-ink); font-size: 16px; line-height: 21px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wa-vnext__schedule-selected-title span { color: var(--wa-muted); font-size: 11px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-vnext__schedule-selected-context { align-items: center; display: flex; gap: 5px; min-width: 0; }
 .wa-vnext__schedule-detail { display: grid; gap: 18px; min-width: 0; }
 .wa-vnext__schedule-detail > .ant-tabs { margin-bottom: -2px; }
 .wa-vnext__schedule-overview { display: grid; gap: 14px; min-width: 0; }
@@ -739,7 +740,10 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-history-table th { background: var(--wa-subtle); border-bottom: 1px solid var(--wa-line); color: var(--wa-muted); font-size: 10px; font-weight: 650; letter-spacing: 1px; padding: 9px 12px; position: sticky; text-align: left; text-transform: uppercase; top: 0; z-index: 1; }
 .wa-vnext__schedule-history-table td { border-bottom: 1px solid var(--wa-line); color: var(--wa-ink); line-height: 17px; padding: 11px 12px; vertical-align: top; }
 .wa-vnext__schedule-history-table tbody tr:last-child td { border-bottom: 0; }
-.wa-vnext__schedule-history-table tbody tr:hover { background: #f9fafb; }
+.wa-vnext__schedule-history-table tbody tr.wa-vnext__schedule-history-row--clickable { cursor: pointer; }
+.wa-vnext__schedule-history-table tbody tr.wa-vnext__schedule-history-row--clickable:hover { background: #f9fafb; }
+.wa-vnext__schedule-history-attempt-link { color: inherit; text-decoration: none; }
+.wa-vnext__schedule-history-attempt-link:focus-visible { border-radius: 2px; outline: 2px solid var(--wa-blue); outline-offset: 2px; }
 .wa-vnext__schedule-history-table th:nth-child(1), .wa-vnext__schedule-history-table td:nth-child(1) { width: 24%; }
 .wa-vnext__schedule-history-table th:nth-child(2), .wa-vnext__schedule-history-table td:nth-child(2) { width: 13%; }
 .wa-vnext__schedule-history-table th:nth-child(3), .wa-vnext__schedule-history-table td:nth-child(3) { width: 39%; }
@@ -750,6 +754,8 @@ export const workflowActivityVNextCss = `
 .wa-vnext__schedule-history-result details { color: var(--wa-muted); }
 .wa-vnext__schedule-history-result summary { cursor: pointer; font-size: 11px; font-weight: 650; }
 .wa-vnext__schedule-history-result code { background: var(--wa-red-bg); border-radius: 4px; color: #7a271a; display: block; font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 6px; max-height: 96px; overflow: auto; overflow-wrap: anywhere; padding: 7px 8px; white-space: pre-wrap; }
+.wa-vnext__schedule-history-completed { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
+.wa-vnext__schedule-history-completed .anticon { color: var(--wa-blue); flex: 0 0 auto; }
 .wa-vnext__schedule-empty--history { padding: 14px; }
 .wa-vnext__schedule-empty { background: var(--wa-subtle); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); padding: 20px 22px; }
 .wa-vnext__schedule-empty-title { font-size: 15px; line-height: 22px; margin: 0 0 6px; }

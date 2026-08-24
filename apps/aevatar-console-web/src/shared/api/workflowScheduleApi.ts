@@ -51,6 +51,7 @@ export type WorkflowScheduleFire = {
   readonly scheduledFireAt: string;
   readonly completedAt: string;
   readonly idempotencyKey: string;
+  readonly runActorId: string;
   readonly error: string;
   readonly manual: boolean;
 };
@@ -238,6 +239,12 @@ function decodeWorkflowScheduleDetail(value: unknown): WorkflowScheduleDetail {
             ['idempotencyKey', 'IdempotencyKey'],
             `${entryLabel}.idempotencyKey`,
           ),
+          runActorId:
+            readNullableString(
+              fire,
+              ['runActorId', 'RunActorId'],
+              `${entryLabel}.runActorId`,
+            ) ?? '',
           error: readString(fire, ['error', 'Error'], `${entryLabel}.error`),
           manual: readBoolean(
             fire,

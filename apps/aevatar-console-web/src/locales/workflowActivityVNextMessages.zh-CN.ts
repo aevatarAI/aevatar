@@ -607,6 +607,9 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.detailTitle': '计划任务详情',
     'workflowActivityVNext.schedule.historyLoading': '正在加载历史记录…',
     'workflowActivityVNext.schedule.historyLoadFailed': '无法加载历史记录',
+    'workflowActivityVNext.schedule.historyTitle': '计划任务历史',
+    'workflowActivityVNext.schedule.scheduleContext': '计划任务：{name}',
+    'workflowActivityVNext.schedule.workflowContext': '工作流：{name}',
     'workflowActivityVNext.schedule.overview': '概览',
     'workflowActivityVNext.schedule.history': '历史记录',
     'workflowActivityVNext.schedule.recentAttempts': '最近尝试',
@@ -624,6 +627,10 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '定时尝试未能启动工作流。',
     'workflowActivityVNext.schedule.manualAttemptFailed':
       '手动尝试未能启动工作流。',
+    'workflowActivityVNext.schedule.openRunAria': '打开 {date} 的运行记录',
+    'workflowActivityVNext.schedule.viewRelatedRunsAria':
+      '查看 {date} 附近的相关运行',
+    'workflowActivityVNext.schedule.runStarted': '运行已启动',
     'workflowActivityVNext.schedule.enable': '启用',
     'workflowActivityVNext.schedule.failed': '失败',
     'workflowActivityVNext.schedule.failedCount': '{count} 次失败',
@@ -637,7 +644,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.runNow': '立即运行',
     'workflowActivityVNext.schedule.scheduled': '定时触发',
     'workflowActivityVNext.schedule.scheduledAt': '计划于 {date}',
-    'workflowActivityVNext.schedule.succeeded': '成功',
     'workflowActivityVNext.schedule.totalCount': '共 {count} 次',
     'workflowActivityVNext.schedule.totalFires': '触发总数',
     'workflowActivityVNext.schedule.viewAria': '查看 {name}',

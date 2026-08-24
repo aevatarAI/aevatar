@@ -154,15 +154,15 @@ describe('Workflow Activity vNext Activity ledger', () => {
     );
   });
 
-  it('shows Schedule-origin context when Activity is opened from Schedule history', async () => {
-    mockSearch = '?workflowId=wf-alpha&schedule=schedule-alpha&origin=schedule';
+  it('filters by Schedule without inventing a Run source', async () => {
+    mockSearch = '?workflowId=wf-alpha&schedule=schedule-alpha';
 
     renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
 
     await waitFor(() =>
       expect(mockListActivityRuns).toHaveBeenCalledWith('scope-alpha', {
         status: undefined,
-        origins: ['schedule'],
+        origins: undefined,
         definitionActorIds: undefined,
         scheduleIds: ['schedule-alpha'],
         workflowId: 'wf-alpha',
@@ -184,8 +184,18 @@ describe('Workflow Activity vNext Activity ledger', () => {
       }),
     ).toBeVisible();
     expect(
-      screen.getByRole('button', { name: 'Remove source filter schedule' }),
-    ).toBeVisible();
+      screen.queryByRole('button', { name: /Remove source filter/ }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Run source' }));
+    await screen.findByText('Chat', {
+      selector: '.ant-select-item-option-content',
+    });
+    expect(
+      screen.queryByText('Schedule', {
+        selector: '.ant-select-item-option-content',
+      }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole('button', {
@@ -193,8 +203,31 @@ describe('Workflow Activity vNext Activity ledger', () => {
       }),
     );
     expect(history.replace).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&origin=schedule',
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha',
     );
+  });
+
+  it('drops the legacy Schedule origin from Activity links', async () => {
+    mockSearch = '?workflowId=wf-alpha&schedule=schedule-alpha&origin=schedule';
+
+    renderWithQueryClient(<ActivityPage scopeId="scope-alpha" />);
+
+    await waitFor(() =>
+      expect(mockListActivityRuns).toHaveBeenCalledWith(
+        'scope-alpha',
+        expect.objectContaining({
+          origins: undefined,
+          scheduleIds: ['schedule-alpha'],
+          workflowId: 'wf-alpha',
+        }),
+      ),
+    );
+    expect(history.replace).toHaveBeenLastCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
+    );
+    expect(
+      screen.queryByRole('button', { name: /Remove source filter/ }),
+    ).not.toBeInTheDocument();
   });
 
   it('does not query global runs when the workflow filter is empty', async () => {

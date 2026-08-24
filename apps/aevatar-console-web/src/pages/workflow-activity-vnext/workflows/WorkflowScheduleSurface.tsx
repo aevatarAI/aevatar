@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  ArrowRightOutlined,
   CalendarOutlined,
   DeleteOutlined,
   DownOutlined,
@@ -34,6 +35,10 @@ import {
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import {
+  buildWorkflowActivityRunHref,
+  buildWorkflowActivitySectionHref,
+} from '../navigation';
 
 type WorkflowScheduleSurfaceProps = {
   readonly initialView?: ScheduleSurfaceView;
@@ -668,6 +673,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setSurfaceView('list');
   };
 
+  const showingHistory =
+    surfaceView === 'detail' && detailTab === 'history' && selectedSchedule;
   const selectedScheduleTitle = selectedSchedule ? (
     <div className="wa-vnext__schedule-selected-title">
       <Button
@@ -680,8 +687,35 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         type="text"
       />
       <div>
-        <strong>{selectedSchedule.displayName}</strong>
-        <span>{workflowName}</span>
+        <strong>
+          {showingHistory
+            ? t(
+                'workflowActivityVNext.schedule.historyTitle',
+                'Schedule history',
+              )
+            : selectedSchedule.displayName}
+        </strong>
+        {showingHistory ? (
+          <span className="wa-vnext__schedule-selected-context">
+            <span>
+              {t(
+                'workflowActivityVNext.schedule.scheduleContext',
+                'Schedule: {name}',
+                { name: selectedSchedule.displayName },
+              )}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {t(
+                'workflowActivityVNext.schedule.workflowContext',
+                'Workflow: {name}',
+                { name: workflowName },
+              )}
+            </span>
+          </span>
+        ) : (
+          <span>{workflowName}</span>
+        )}
       </div>
     </div>
   ) : null;
@@ -1215,14 +1249,18 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   );
 
   const activityHref = scheduleDetail.data
-    ? `/scopes/${scopeId}/workflow-activity-vnext/activity?${new URLSearchParams(
+    ? `${buildWorkflowActivitySectionHref(scopeId, 'activity')}?${new URLSearchParams(
         [
           ['workflowId', workflowId],
           ['schedule', scheduleDetail.data.schedule.scheduleId],
-          ['origin', 'schedule'],
         ],
       ).toString()}`
     : null;
+
+  const openActivity = (href: string) => {
+    onClose();
+    history.push(href);
+  };
 
   const historyView = scheduleDetail.data ? (
     <section className="wa-vnext__schedule-history">
@@ -1246,8 +1284,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
             href={activityHref}
             onClick={(event) => {
               event.preventDefault();
-              onClose();
-              history.push(activityHref);
+              openActivity(activityHref);
             }}
           >
             {t(
@@ -1288,15 +1325,65 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                 const source = fire.manual
                   ? t('workflowActivityVNext.schedule.manual', 'Manual')
                   : t('workflowActivityVNext.schedule.scheduled', 'Scheduled');
+                const formattedScheduledAt = formatScheduleDate(
+                  fire.scheduledFireAt,
+                  scheduleDetail.data.schedule.timezone,
+                );
+                const runActorId = fire.runActorId.trim();
+                const runHref = runActorId
+                  ? buildWorkflowActivityRunHref(scopeId, runActorId, {
+                      workflowId,
+                      schedule: scheduleDetail.data.schedule.scheduleId,
+                    })
+                  : null;
+                const attemptHref = runHref ?? (!failed ? activityHref : null);
+                const attemptLabel = runHref
+                  ? t(
+                      'workflowActivityVNext.schedule.openRunAria',
+                      'Open Run from {date}',
+                      { date: formattedScheduledAt },
+                    )
+                  : attemptHref
+                    ? t(
+                        'workflowActivityVNext.schedule.viewRelatedRunsAria',
+                        'View related runs from {date}',
+                        { date: formattedScheduledAt },
+                      )
+                    : null;
+                const openAttempt = () => {
+                  if (attemptHref) openActivity(attemptHref);
+                };
                 return (
-                  <tr key={`${fire.idempotencyKey}:${fire.completedAt}`}>
+                  <tr
+                    className={
+                      attemptHref
+                        ? 'wa-vnext__schedule-history-row--clickable'
+                        : undefined
+                    }
+                    key={`${fire.idempotencyKey}:${fire.completedAt}`}
+                    onClick={attemptHref ? openAttempt : undefined}
+                  >
                     <td>
-                      <time dateTime={fire.scheduledFireAt}>
-                        {formatScheduleDate(
-                          fire.scheduledFireAt,
-                          scheduleDetail.data.schedule.timezone,
-                        )}
-                      </time>
+                      {attemptHref && attemptLabel ? (
+                        <a
+                          aria-label={attemptLabel}
+                          className="wa-vnext__schedule-history-attempt-link"
+                          href={attemptHref}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openAttempt();
+                          }}
+                        >
+                          <time dateTime={fire.scheduledFireAt}>
+                            {formattedScheduledAt}
+                          </time>
+                        </a>
+                      ) : (
+                        <time dateTime={fire.scheduledFireAt}>
+                          {formattedScheduledAt}
+                        </time>
+                      )}
                     </td>
                     <td>{source}</td>
                     <td>
@@ -1308,8 +1395,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                                 'Failed',
                               )
                             : t(
-                                'workflowActivityVNext.schedule.succeeded',
-                                'Succeeded',
+                                'workflowActivityVNext.schedule.runStarted',
+                                'Run started',
                               )}
                         </Tag>
                         {failed ? (
@@ -1324,7 +1411,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                                   : 'The scheduled attempt could not start the Workflow.',
                               )}
                             </p>
-                            <details>
+                            <details
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => event.stopPropagation()}
+                            >
                               <summary>
                                 {t(
                                   'workflowActivityVNext.schedule.technicalDetails',
@@ -1338,12 +1428,17 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                       </div>
                     </td>
                     <td>
-                      <time dateTime={fire.completedAt}>
-                        {formatScheduleDate(
-                          fire.completedAt,
-                          scheduleDetail.data.schedule.timezone,
-                        )}
-                      </time>
+                      <span className="wa-vnext__schedule-history-completed">
+                        <time dateTime={fire.completedAt}>
+                          {formatScheduleDate(
+                            fire.completedAt,
+                            scheduleDetail.data.schedule.timezone,
+                          )}
+                        </time>
+                        {attemptHref ? (
+                          <ArrowRightOutlined aria-hidden="true" />
+                        ) : null}
+                      </span>
                     </td>
                   </tr>
                 );
@@ -1549,8 +1644,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                       {scheduleDetail.data.recentFires[0].error.trim()
                         ? t('workflowActivityVNext.schedule.failed', 'Failed')
                         : t(
-                            'workflowActivityVNext.schedule.succeeded',
-                            'Succeeded',
+                            'workflowActivityVNext.schedule.runStarted',
+                            'Run started',
                           )}
                     </span>
                   ) : null}

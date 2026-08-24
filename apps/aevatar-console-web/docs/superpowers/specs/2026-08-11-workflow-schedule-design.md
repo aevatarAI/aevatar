@@ -33,7 +33,10 @@ flowchart LR
 - Activity remains the separate owner of actual Run history and Run detail.
   Schedule History owns only bounded recent attempts and provides a secondary
   `View related runs in Activity` handoff with exact Workflow and Schedule
-  filters.
+  filters. A recent attempt may also open its exact Activity Run when the
+  backend fire record contains a non-empty `runActorId`. A successful legacy
+  attempt without that identity opens the same filtered Activity list rather
+  than guessing a Run destination.
 
 ## Identity Boundary
 
@@ -203,6 +206,9 @@ The UI may present only typed response facts, including:
 - last error and error code;
 - fire and failure counts;
 - recent fires;
+- a per-attempt exact Run destination only when `runActorId` is non-empty;
+- a Workflow + Schedule filtered Activity fallback for a successful legacy
+  attempt without `runActorId`;
 - service revision only when useful as secondary diagnostics.
 
 Low-level service, actor, command, correlation, credential, or Team fields do

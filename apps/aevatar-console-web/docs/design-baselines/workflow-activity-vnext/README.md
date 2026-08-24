@@ -274,7 +274,7 @@ Workflows
 1. 打开 `prototype.html`，默认进入 Workflows；点击已发布 Workflow 行的 `Schedules` 会打开该 Workflow 的 Schedule 管理弹窗。列表内的 `New schedule` 进入配置流程，已有 Schedule 可进入编辑和生命周期操作。只评审编辑器 Schedule panel 时可直接打开 `prototype-schedule.html`。
 2. 点击 `New workflow`，分别检查四种方式：描述会生成匹配节点；空白会进入画布空状态；导入会先校验 YAML；模板会先要求选择模板。
 3. 在画布点击节点，右侧打开 Node configuration；`Add node` 从左侧打开 Node library；`Edit YAML` 从右侧打开 YAML 面板。
-4. 打开一个已发布 Workflow，点击编辑器里的 `Schedules` 检查右侧 Workflow schedules 面板，再点击 `New schedule` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 保持禁用并显示 publish 原因。Workflows 管理 modal 与编辑器 panel 共享 `list -> Overview <-> History -> Edit` 管理模型和 `list -> configure -> previewing -> review -> create -> toast -> list` 创建模型。Overview 不平铺最近 attempts；History 不冒充 Run 历史；点击 `View related runs in Activity` 后，Activity 明确展示 Workflow + Schedule + scheduled origin 筛选。
+4. 打开一个已发布 Workflow，点击编辑器里的 `Schedules` 检查右侧 Workflow schedules 面板，再点击 `New schedule` 检查创建流程仍在右侧 panel；配置态必须以 `Repeat + time + timezone` 为主，只有点击 `write it as cron instead` 才显示 raw cron editor。未发布 Workflow 保持禁用并显示 publish 原因。Workflows 管理 modal 与编辑器 panel 共享 `list -> Overview <-> History -> Edit` 管理模型和 `list -> configure -> previewing -> review -> create -> toast -> list` 创建模型。Overview 不平铺最近 attempts；History 不冒充 Run 历史；点击 `View related runs in Activity` 后，Activity 明确展示 Workflow + Schedule 筛选。有后端 Run 身份的 attempt 可以直接打开对应 Activity Run；成功启动但缺少 Run 身份的旧 attempt 进入同一筛选后的 Activity，不猜测 Run 身份。
 5. 在列表或编辑器点击 `Run`，确认修订、输入、连接和外部影响。
 6. 勾选外部影响确认后点击 `Run`。记录会立即写入浏览器 `localStorage`，编辑器显示运行状态。
 7. 打开 Activity，点击任意一行查看详情。

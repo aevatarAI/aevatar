@@ -24,12 +24,28 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import { getRunStatusPresentation } from './runPresentation';
 
 const supportedRunStatuses = new Set(['running', 'completed', 'failed']);
+const supportedRunOrigins = new Set([
+  'draft',
+  'member-invoke',
+  'default-invoke',
+  'team-invoke',
+  'service-invoke',
+  'webhook',
+  'work-order',
+  'ad-hoc-chat',
+  'provisioned',
+]);
 const activityPageSize = 25;
 const activityRunsQueryPrefix = ['workflow-activity-vnext', 'activity-runs'];
 
 function normalizeRunStatusFilter(value: string | null): string {
   const normalized = value?.trim().toLowerCase() ?? '';
   return supportedRunStatuses.has(normalized) ? normalized : '';
+}
+
+function normalizeRunOriginFilter(value: string | null): string {
+  const normalized = value?.trim().toLowerCase() ?? '';
+  return supportedRunOrigins.has(normalized) ? normalized : '';
 }
 
 function formatDate(value: string | null): string {
@@ -134,7 +150,8 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   );
   const rawStatus = params.get('status');
   const status = normalizeRunStatusFilter(rawStatus);
-  const origin = params.get('origin') ?? '';
+  const rawOrigin = params.get('origin');
+  const origin = normalizeRunOriginFilter(rawOrigin);
   const definition = params.get('definition')?.trim() ?? '';
   const schedule = params.get('schedule')?.trim() ?? '';
   const workflowFilterPresent = params.has('workflowId');
@@ -233,11 +250,7 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     [replaceParam],
   );
 
-  const originLabel = origin
-    ? origin === 'schedule'
-      ? t('workflowActivityVNext.activity.originSchedule', 'Schedule')
-      : origin
-    : '';
+  const originLabel = origin;
 
   const filterContext =
     workflowFilterPresent || schedule || originLabel ? (
@@ -300,6 +313,11 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     if (!rawStatus || status) return;
     replaceParam('status', '');
   }, [rawStatus, replaceParam, status]);
+
+  React.useEffect(() => {
+    if (!rawOrigin || origin) return;
+    replaceParam('origin', '');
+  }, [origin, rawOrigin, replaceParam]);
 
   React.useEffect(() => {
     setDraftFilters(
@@ -640,13 +658,6 @@ const ActivityPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                   'Service',
                 ),
                 value: 'service-invoke',
-              },
-              {
-                label: t(
-                  'workflowActivityVNext.activity.originSchedule',
-                  'Schedule',
-                ),
-                value: 'schedule',
               },
             ]}
             value={draftFilters.origin}

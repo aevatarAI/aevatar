@@ -649,6 +649,9 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.historyLoading': 'Loading history…',
   'workflowActivityVNext.schedule.historyLoadFailed':
     "History couldn't be loaded",
+  'workflowActivityVNext.schedule.historyTitle': 'Schedule history',
+  'workflowActivityVNext.schedule.scheduleContext': 'Schedule: {name}',
+  'workflowActivityVNext.schedule.workflowContext': 'Workflow: {name}',
   'workflowActivityVNext.schedule.overview': 'Overview',
   'workflowActivityVNext.schedule.history': 'History',
   'workflowActivityVNext.schedule.recentAttempts': 'Recent attempts',
@@ -666,6 +669,10 @@ const workflowActivityVNextMessages = {
     'The scheduled attempt could not start the Workflow.',
   'workflowActivityVNext.schedule.manualAttemptFailed':
     'The manual attempt could not start the Workflow.',
+  'workflowActivityVNext.schedule.openRunAria': 'Open Run from {date}',
+  'workflowActivityVNext.schedule.viewRelatedRunsAria':
+    'View related runs from {date}',
+  'workflowActivityVNext.schedule.runStarted': 'Run started',
   'workflowActivityVNext.schedule.enable': 'Enable',
   'workflowActivityVNext.schedule.failed': 'Failed',
   'workflowActivityVNext.schedule.failedCount': '{count} failed',
@@ -679,7 +686,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.runNow': 'Run now',
   'workflowActivityVNext.schedule.scheduled': 'Scheduled',
   'workflowActivityVNext.schedule.scheduledAt': 'Scheduled {date}',
-  'workflowActivityVNext.schedule.succeeded': 'Succeeded',
   'workflowActivityVNext.schedule.totalCount': '{count} total',
   'workflowActivityVNext.schedule.totalFires': 'Total fires',
   'workflowActivityVNext.schedule.viewAria': 'View {name}',

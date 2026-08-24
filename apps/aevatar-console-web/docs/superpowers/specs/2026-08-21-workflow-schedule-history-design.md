@@ -30,8 +30,9 @@ different records:
 
 A Schedule attempt can fail before a Workflow Run exists. For that reason,
 the UI must call `recentFires` **attempts**, must not promise complete Run
-history, and must not derive a Run URL from actor, command, correlation, or
-idempotency identifiers.
+history, and must not derive or guess a Run URL from command, correlation, or
+idempotency identifiers. The backend fire record's non-empty `runActorId` is
+the only authoritative per-attempt Run destination.
 
 ## User Jobs
 
@@ -76,17 +77,20 @@ action.
 
 ### Selected Schedule header
 
-The header is stable across Overview, History, and Edit:
+The back/close structure and resource context are stable across Overview,
+History, and Edit. The History task uses an explicit task title:
 
 ```text
-[Back]  Morning digest                         [Close]
-        Weekly Feedback Report
+[Back]  Schedule history                       [Close]
+        Schedule: Morning digest · Workflow: Weekly Feedback Report
 ```
 
 - Back returns to the Schedule collection inside the current container.
 - Close exits the entire Schedule management modal or panel.
-- The Schedule name is the primary title.
-- The owning Workflow name is secondary context.
+- History uses `Schedule history` as the primary title.
+- The selected Schedule and owning Workflow are labeled secondary context.
+- Overview and Edit may retain the selected Schedule name as the primary title
+  while keeping the Workflow as secondary context.
 - There is no footer-level `Back to schedules` action.
 
 Back and Close are separate controls because they produce different state
@@ -187,7 +191,7 @@ History uses one compact table or table-like list. Each attempt exposes:
 | --- | --- | --- |
 | Scheduled time | `scheduledFireAt` | Application locale in Schedule timezone |
 | Source | `manual` | `Manual` when true; otherwise `Scheduled` |
-| Result | `error` | `Failed` when non-empty; otherwise `Succeeded` |
+| Result | `error` | `Failed` when non-empty; otherwise `Run started` |
 | Completed time | `completedAt` | Application locale in Schedule timezone |
 
 A failed row adds one concise message below its main row:
@@ -207,8 +211,16 @@ The primary row must not expose:
 - actor IDs;
 - command or correlation IDs;
 - idempotency keys;
-- a guessed Run link;
+- a guessed Run link when `runActorId` is empty;
 - a frontend-invented error category based on raw string matching.
+
+When `runActorId` is non-empty, the row provides a keyboard-accessible Run link
+and remains clickable as a whole, with a trailing arrow. It opens the existing
+Activity Run detail route and preserves `workflowId + schedule` in the query so
+Back returns to the same filtered Activity context. A successful legacy attempt
+with an empty `runActorId` uses the same interaction treatment but opens the
+Workflow + Schedule filtered Activity list; it must not guess a Run identity.
+A pre-Run failure with an empty `runActorId` remains non-interactive.
 
 ### Activity handoff
 
@@ -225,14 +237,14 @@ Schedule container and opens:
 /scopes/:scopeId/workflow-activity-vnext/activity
   ?workflowId=:workflowId
   &schedule=:scheduleId
-  &origin=schedule
 ```
 
 Activity owns the visible filter context and Run detail. The target view must
 make the Workflow and Schedule filters understandable to the user rather than
-silently filtering the table. No backend change is required because the
-Activity contract already accepts `workflowId`, `scheduleIds`, and scheduled
-origin filters.
+silently filtering the table. Schedule is an attribution dimension, not a Run
+origin, so the handoff must not add `origin=schedule` or show Schedule in the
+Activity Source filter. No backend change is required because the Activity
+contract already accepts `workflowId` and `scheduleIds` filters.
 
 ## Edit
 
@@ -265,7 +277,8 @@ stateDiagram-v2
     Overview --> Edit: Edit schedule
     Edit --> Overview: Cancel
     Edit --> Overview: Save accepted
-    History --> Activity: View related runs
+    History --> Activity: View related runs or legacy started attempt
+    History --> RunDetail: Select attempt with runActorId
     Overview --> ScheduleList: Back
     History --> ScheduleList: Back
     Edit --> ScheduleList: Back
@@ -311,8 +324,9 @@ DELETE /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
 ```
 
 The Schedule detail provides configuration, counters, current timestamps, and
-bounded `recentFires`. Activity already supplies the filtered actual-Run
-surface. There is no backend issue comment to add for this design.
+bounded `recentFires`, including `runActorId` when an attempt created a Run.
+Activity already supplies the filtered actual-Run surface and Run detail.
+There is no backend issue comment to add for this design.
 
 ## Review Artifacts
 
@@ -342,8 +356,12 @@ and History are separate PNGs so each state can be reviewed at readable size.
   under More.
 - History renders bounded attempts in a compact list and keeps raw failures
   under Technical details.
-- No attempt fabricates a Run identity or per-Run link.
+- An attempt with a non-empty backend `runActorId` opens that exact Activity
+  Run. A successful legacy attempt without one opens filtered Activity without
+  guessing identity; a failed attempt without one remains non-interactive.
 - `View related runs in Activity` uses exact Workflow and Schedule filters.
+- Schedule is absent from Activity Source filters and no handoff sends
+  `origin=schedule`.
 - Loading, successful empty, request error, and failed-attempt states remain
   distinct.
 - All timestamps follow the application locale and Schedule timezone.
