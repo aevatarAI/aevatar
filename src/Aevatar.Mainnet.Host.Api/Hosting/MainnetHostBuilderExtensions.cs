@@ -667,6 +667,7 @@ public static class MainnetHostBuilderExtensions
         services.AddSingleton<IWorkflowToolSource>(serviceProvider =>
             new AgentWorkflowToolSourceAdapter(
                 serviceProvider.GetServices<IAgentToolSource>()
+                    .Append(serviceProvider.GetRequiredService<NyxIdWorkflowAgentToolSource>())
                     .Append(serviceProvider.GetRequiredService<NyxIdExecutionAgentToolSource>())
                     .ToArray(),
                 serviceProvider.GetRequiredService<IAgentToolExecutionPort>(),
