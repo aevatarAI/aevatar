@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -101,10 +102,13 @@ public sealed class WorkflowReportArtifactWriteCostElasticsearchIntegrationTests
             typeRegistry: TypeRegistry.Empty,
             httpMessageHandler: elasticsearch);
 
-        // Create/reconcile the isolated physical index before event timing. The warm-up GET is
-        // intentionally outside the applied stream, so the derived per-event overhead cannot be
-        // mislabeled with one-time index lifecycle latency.
+        // Create/reconcile the isolated physical index before event timing through the same
+        // explicit startup lifecycle used by the host. A read intentionally does not bootstrap a
+        // missing index, even when AutoCreateIndex is enabled, so invoking the reconcile target is
+        // required before the warm-up GET. Both operations stay outside the applied stream and
+        // cannot be mislabeled as per-event serialization/client time.
         var preparationStarted = Stopwatch.GetTimestamp();
+        await ((IProjectionIndexReconcileTarget)store).ReconcileIndexAsync();
         (await store.GetAsync(RootActorId)).Should().BeNull();
         var indexPreparationElapsed = Stopwatch.GetElapsedTime(preparationStarted);
         var preparationRequests = elasticsearch.Requests.ToArray();
