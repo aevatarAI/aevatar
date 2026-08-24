@@ -588,36 +588,6 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             ct);
     }
 
-    /// <summary>
-    /// Sends one bounded Agent Key proxy exchange through the configured public NyxID API endpoint.
-    /// The key is transported only in <c>X-API-Key</c>; it is never reinterpreted as a bearer token.
-    /// </summary>
-    public Task<NyxIdProxyTextResponse> ProxyPublicRequestBoundedWithApiKeyAsync(
-        string apiKey,
-        string slug,
-        string userServiceId,
-        string path,
-        string method,
-        string? body,
-        Dictionary<string, string>? extraHeaders,
-        long maxBytes,
-        CancellationToken ct)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
-        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
-        return ProxyPublicRequestBoundedWithApiKeyCoreAsync(
-            apiKey,
-            slug,
-            userServiceId.Trim(),
-            path,
-            method,
-            body,
-            extraHeaders,
-            maxBytes,
-            ct);
-    }
-
     public Task<NyxIdProxyTextResponse> ProxyRequestBoundedWithApiKeyAsync(
         string apiKey,
         string slug,
@@ -797,35 +767,6 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             method,
             body,
             extraHeaders,
-            publicApiOnly: true,
-            applyAmbientIdempotencyKey: false);
-        return await SendTextResponseAsync(
-            request,
-            maxBytes,
-            ct,
-            allowPublicTransportFallback: false);
-    }
-
-    private async Task<NyxIdProxyTextResponse> ProxyPublicRequestBoundedWithApiKeyCoreAsync(
-        string apiKey,
-        string slug,
-        string userServiceId,
-        string path,
-        string method,
-        string? body,
-        Dictionary<string, string>? extraHeaders,
-        long maxBytes,
-        CancellationToken ct)
-    {
-        using var request = CreateProxyRequest(
-            apiKey,
-            slug,
-            userServiceId,
-            path,
-            method,
-            body,
-            extraHeaders,
-            ProxyCredentialTransport.ApiKeyHeader,
             publicApiOnly: true,
             applyAmbientIdempotencyKey: false);
         return await SendTextResponseAsync(
