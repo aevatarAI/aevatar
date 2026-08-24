@@ -65,7 +65,6 @@ public static class AgentTurnToolCatalogProofPayloadMapper
             payload.SchemaBytes != proof.SchemaBytes ||
             payload.ConnectedReadToolCount < 0 ||
             payload.ConnectedWriteToolCount < 0 ||
-            proof.ToolCount > budget.MaximumToolCount ||
             proof.SchemaBytes > budget.MaximumSchemaBytes ||
             payload.ConnectedReadToolCount > budget.MaximumConnectedReadToolCount ||
             payload.ConnectedWriteToolCount > budget.MaximumConnectedWriteToolCount ||

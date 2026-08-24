@@ -428,7 +428,7 @@ roles:
 - `llm_call` step 可在根部配置 `allowed_tools` 继续收窄本次调用；静态工具维度映射到 `AgentToolExecutionContext.ToolVisibility`，named tool-set 维度保持 request-time source refs。
 - Studio 的 `nyxid.connected_services` 每 turn 使用当前 caller token live resolve/discover，结果只存在 request-local catalog；resolution/discovery/collision failure 对本次动态工具 fail closed，不缓存为 role actor 或 process fact。
 - 工具可见范围同时作用于 provider 看到的 `LLMRequest.Tools` 和 streaming tool executor 的实际 lookup；未授权工具调用会得到 not-available tool result，不会执行工具。
-- 每个新 run 固定 `tool_catalog_policy_version`、最终 catalog proof 与 digest；workflow role 通过共享 discovery 和 catalog factory 重新物化 exact objects 并核对 proof，超出 16 个 owned tools 或 128 KiB canonical schema 会在 admission 阶段失败，不在运行时截断或回退。统一契约见 [agent-turn-tool-catalog.md](agent-turn-tool-catalog.md)。
+- 每个新 run 固定 `tool_catalog_policy_version`、最终 catalog proof 与 digest；workflow role 通过共享 discovery 和 catalog factory 重新物化 exact objects 并核对 proof。16 owned tools 是优化目标，合法 exact catalog 超目标时继续执行且不截断；128 KiB canonical schema 仍在 admission 阶段硬限制。统一契约见 [agent-turn-tool-catalog.md](agent-turn-tool-catalog.md)。
 - `event_modules` / `event_routes` 支持平铺写法和 `extensions.*` 写法，且**平铺字段优先级更高**。
 - 未配置 `event_modules` 时，`RoleGAgent` 不会额外装配 event modules（保持旧行为）。
 - Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):

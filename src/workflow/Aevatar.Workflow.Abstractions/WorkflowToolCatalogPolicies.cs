@@ -10,6 +10,7 @@ public static class WorkflowToolCatalogPolicies
 
     public const string CurrentVersion = "workflow-agent-turn-tool-catalog/v1";
 
+    // Durable optimization target only. A valid exact catalog may exceed it without rejection.
     public const int MaximumWorkflowToolCount = 16;
 
     public const int MaximumWorkflowSchemaBytes = 128 * 1024;

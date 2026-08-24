@@ -2,7 +2,7 @@
 title: "Agent Turn Tool Catalog"
 status: active
 owner: architecture
-last_updated: 2026-08-22
+last_updated: 2026-08-24
 ---
 
 # Agent Turn Tool Catalog
@@ -33,7 +33,7 @@ Tool source 每次 discovery 都新建 tool object，因此"同名"跨 discovery
 1. 解析 route ceiling 和 immutable profile/definition snapshot。
 2. request-local 发现 exact tools；duplicate、invalid schema 或 source failure 返回 typed failure。
 3. 与 intent、caller authority、runtime availability 求交集。
-4. 在预算内构造 `AgentTurnToolCatalog` 和 `AgentTurnToolCatalogProof`。
+4. 以工具数量优化目标、schema 大小和 connected-operation 风险约束构造 `AgentTurnToolCatalog` 和 `AgentTurnToolCatalogProof`。
 5. 把同一 proof 同时用于 model declarations、`AgentToolVisibilityScope`、exact object fence、持久化和 telemetry。
 6. 跨 actor/off-grain 边界只携带 typed proof；执行端重新发现 exact objects 后逐项验证。任何 digest/schema/origin/selector mismatch 都在模型或副作用前拒绝，不能回退 DI 全量工具。
 
@@ -63,18 +63,18 @@ Proof 的 catalog digest 覆盖 lowercase canonical name、exact description、�
 
 Responses ingress 在边界兼容客户端的 `WebFetch` / `WebSearch` aliases，但内部 route 只保留 `web_fetch` / `web_search` canonical schema。Caller-declared forwarded tools 不冒充 Aevatar-owned tools，Aevatar 不执行它们；owned 与 forwarded count/bytes 分别记录。
 
-## Final-catalog budgets
+## Final-catalog optimization targets and safety budgets
 
-| Turn class | Aevatar-owned count | Canonical schema | 额外约束 |
+| Turn class | Aevatar-owned count optimization target | Canonical schema hard limit | 额外约束 |
 |---|---:|---:|---|
 | ordinary text / channel / `nyxid.chat` | 8 | 48 KiB | 无 |
-| connected exact operations | 计入 ordinary 8 | 计入 48 KiB | read ≤ 3，write ≤ 1 |
+| connected exact operations | 计入 ordinary 8 目标 | 计入 48 KiB | read ≤ 3，write ≤ 1 |
 | voice realtime | 6 | 32 KiB | persisted snapshot/proof 必须同预算 |
 | workflow LLM | 16 | 128 KiB | definition scope 必须显式 |
 | admin / skill authoring | 16 | 128 KiB | opt-in profile |
 | coding / sandbox | 6 | 64 KiB | opt-in profile |
 
-超过预算必须 typed fail closed，不静默截断。Reviewed profile 的 sealed `max_owned_tool_count` 和 `max_schema_bytes` 只能进一步缩小对应 route 上限。
+工具数量只用于路由/选择优化与 telemetry：完成 typed authority 求交后的 exact catalog 即使超过数量目标也必须完整进入模型，既不能报错，也不能静默截断。`MaximumToolCount` / `max_owned_tool_count` 保留在 typed proof/profile 中表示 reviewed optimization target，不是执行正确性或授权边界。Canonical schema 大小与 connected read/write 数量仍是独立的硬安全约束，超限必须 typed fail closed。
 
 ## Boundary-specific rules
 
@@ -98,13 +98,13 @@ Connected-service task policy 优先声明 exact `catalog_service_slug + endpoin
 
 ### Workflow
 
-新建、重新发布或重新绑定的 workflow 使用 `workflow-agent-turn-tool-catalog/v1`。每个 direct 或 parameterized `llm_call` 必须在 step/role 显式声明 `allowed_tools`；空数组表示静态工具维度 restricted empty，缺字段、duplicate 或超过 16 个工具在发布前拒绝。`tool_sets` 是 definition scope 中独立、显式的 request-time dynamic source 维度，只能物化被引用 set 的 exact tools，且不能扩大 caller authority；最终静态工具与动态工具合并后仍受 workflow catalog 预算约束。
+新建、重新发布或重新绑定的 workflow 使用 `workflow-agent-turn-tool-catalog/v1`。每个 direct 或 parameterized `llm_call` 必须在 step/role 显式声明 `allowed_tools`；空数组表示静态工具维度 restricted empty，缺字段或 duplicate 在发布前拒绝。`tool_sets` 是 definition scope 中独立、显式的 request-time dynamic source 维度，只能物化被引用 set 的 exact tools，且不能扩大 caller authority；静态工具与动态工具合并后的 16-tool 值只作为优化目标，最终 exact catalog 超过该目标仍完整执行，128 KiB schema 上限继续硬约束。
 
 历史已绑定 run 的 unversioned definition 继续按 legacy v0 replay；不得从 v0 definition 新建 run。重新发布/绑定后进入 v1，run state、model-start artifact、projection 都持久化 policy version、tool descriptors、schema bytes 和 catalog digest。
 
 ### Voice
 
-Voice allowlist 只通过共享 discovery 和 `VoiceAgentTurnToolCatalogMaterializer` 物化。空 allowlist 是 restricted empty，不是 unrestricted。Session readiness、endpoint、module 和 invoker 传递同一 persisted snapshot/proof，最大 6 tools / 32 KiB；schema mismatch 或 proof drift 在执行前拒绝。
+Voice allowlist 只通过共享 discovery 和 `VoiceAgentTurnToolCatalogMaterializer` 物化。空 allowlist 是 restricted empty，不是 unrestricted。Session readiness、endpoint、module 和 invoker 传递同一 persisted snapshot/proof；6 tools 是延迟/上下文优化目标，不是请求门禁，32 KiB canonical schema 仍是硬上限。schema mismatch 或 proof drift 在执行前拒绝。
 
 ## Measured baseline
 
@@ -115,7 +115,7 @@ Voice allowlist 只通过共享 discovery 和 `VoiceAgentTurnToolCatalogMaterial
 | commit `5af59719f` | 18 | 70 | 68 | 48,328 | legacy manifest，无统一 digest |
 | issue #3512 | 5 named sets | 13 | 13 | 11,524 | `sha256:46788e82f006792a4c606a8784c036a465bd53bba143439bf7eb7e625d3a9932` |
 
-Unique tool count 下降 80.9%，canonical schema bytes 下降 76.2%，超过 60% 验收线。这个 13-tool 数字是 route ceiling snapshot，不是每轮模型注入目标；ordinary final catalog 仍受 intent/profile 求交集和 8-tool 上限约束，普通回答可以是 0-tool。
+Unique tool count 下降 80.9%，canonical schema bytes 下降 76.2%，超过 60% 验收线。这个 13-tool 数字是 route ceiling snapshot，不是每轮模型注入目标；ordinary final catalog 仍受 intent/profile 求交集并以 8 tools 为优化目标，普通回答可以是 0-tool，但合法 exact catalog 超过 8 时不得因此失败。
 
 ## Shadow、rollout 与 rollback
 
@@ -163,11 +163,11 @@ Digest、profile identity 和 intent identity 只写 trace attributes，不作�
 | channels | Lark/Telegram relay 的 proof 与 terminal delivery receipt |
 | direct ingress | Responses/Messages/Chat Completions 行为一致 |
 | unattended | typed Agent Key workflow receipt |
-| voice | ≤6/32 KiB persisted restricted proof |
-| negative | forged hidden tool、schema mismatch、over-budget 均在副作用前拒绝 |
+| voice | 6-tool target / ≤32 KiB persisted restricted proof；合法 count overflow 继续执行 |
+| negative | forged hidden tool、schema mismatch、schema/connected-operation safety budget overflow 均在副作用前拒绝 |
 
 Assistant prose、连接状态或“代码已部署”都不是成功证据。生产只做只读日志/资源观测；不得直接变更、exec、重启或 port-forward production pod。需要生产状态变更时必须写明“待运维执行后确认”。
 
 ## Governance
 
-`tools/ci/agent_turn_tool_catalog_guard.sh` 接入 repository architecture guards，固定 forbidden default membership、duplicate handling、预算、digest/baseline、workflow v1、Voice proof、shadow observation 和 5%→25%→100% rollout。任何 snapshot 变化都必须同时更新实现、测试、manifest 与本文，并在 PR 说明原因和新的实测数据。
+`tools/ci/agent_turn_tool_catalog_guard.sh` 接入 repository architecture guards，固定 forbidden default membership、duplicate handling、工具数量优化目标、schema/connected-operation 安全预算、digest/baseline、workflow v1、Voice proof、shadow observation 和 5%→25%→100% rollout。任何 snapshot 变化都必须同时更新实现、测试、manifest 与本文，并在 PR 说明原因和新的实测数据。

@@ -84,7 +84,7 @@ current-turn discovery request-locally 读取并解析 MCP catalog，与 `/keys`
 
 Profile connected-service selector 只在上述 request-local catalog 已经完成 route discovery、typed visibility 与 caller authorization 后执行。selector 优先使用 canonical `catalog_service_slug + endpoint_id + READ_ONLY/WRITE risk` 匹配 exact operation admission；只给 slug/risk 且候选仍过多时，bounded selector 最多选择 3 个 read 或 1 个 write endpoint。同类多 connection 或多个 write 无法唯一确定时只暴露 `ask_user`，不把全集交给模型。selector 不按 opaque `nyxop_*` 名称、presentation、HTTP method/path 或 `service_instance_id` 猜测，不创建/修复连接。literal name、tool-set ref 与 selector 在单个 policy 内相加，而 maximum、recovery 与 task policy 继续取交集；因此 selector 只能缩小现有 surface，不能扩大 route authority。未匹配 selector 贡献空集，非法 sealed selector fail closed。
 
-所有 connected operations 都进入统一 [`AgentTurnToolCatalog`](agent-turn-tool-catalog.md)：ordinary final catalog 总数不超过 8、schema 不超过 48 KiB，并额外限制 read ≤ 3、write ≤ 1。模型声明、exact executor object 和 persisted proof 使用同一 digest。
+所有 connected operations 都进入统一 [`AgentTurnToolCatalog`](agent-turn-tool-catalog.md)：ordinary final catalog 以 8 tools 为优化目标、schema 不超过 48 KiB，并额外硬限制 read ≤ 3、write ≤ 1。合法 exact catalog 超过数量目标时完整进入模型，不报错也不截断；模型声明、exact executor object 和 persisted proof 使用同一 digest。
 
 浏览器授权后的原请求续接仍使用同一条通用 Class-P 主链，不为任何 provider 建立专用分支。只有 actor-owned typed postcondition 已验证一个 exact UserService，且跨 turn correlation 同时匹配 accepted continuation admission、origin/continuation turn、task、完整 operation key、action request 与 postcondition dependency 时，conversation actor 才能派发 `NyxIdChatVerifiedAuthorizationContinuation`。该 closed protobuf 只包含安全 action/step/resource identity、从 typed action params 冻结的 `service_slug`、验证时间与 resume requirement；不包含 token、credential 或 generic metadata bag。
 
