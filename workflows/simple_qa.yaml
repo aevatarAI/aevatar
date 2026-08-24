@@ -7,4 +7,4 @@ roles:
 steps:
   - id: answer
     type: llm_call
-    role: assistant
+    target_role: assistant
