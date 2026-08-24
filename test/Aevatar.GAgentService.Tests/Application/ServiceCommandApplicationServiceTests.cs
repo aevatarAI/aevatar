@@ -157,13 +157,44 @@ public sealed class ServiceCommandApplicationServiceTests
         deactivateReceipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
         deactivateReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:dep-1");
         provisioner.DeploymentRequests.Should().HaveCount(2);
-        provisioner.ServingSetRequests.Should().ContainSingle();
-        provisioner.InvocationCatalogRequests.Should().ContainSingle()
-            .Which.Should().BeEquivalentTo(identity);
+        provisioner.ServingSetRequests.Should().HaveCount(2);
+        provisioner.InvocationCatalogRequests.Should().HaveCount(2);
+        provisioner.InvocationCatalogRequests.Should().OnlyContain(x =>
+            ServiceKeys.Build(x) == ServiceKeys.Build(identity));
         dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
             AnyTypeUrl<ActivateServiceRevisionCommand>(),
+            AnyTypeUrl<RemoveDeploymentFromServiceServingTargetsCommand>(),
             AnyTypeUrl<DeactivateServiceDeploymentCommand>(),
         ]);
+    }
+
+    [Fact]
+    public async Task DeactivateServiceDeploymentAsync_ShouldAskServingActorToRemoveDeploymentBeforeDeactivation()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var provisioner = new RecordingCommandTargetProvisioner();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateService(provisioner, dispatchPort);
+
+        await service.DeactivateServiceDeploymentAsync(new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-remove",
+        });
+
+        dispatchPort.Calls.Should().HaveCount(2);
+        dispatchPort.Calls[0].actorId.Should().Be(ServiceActorIds.ServingSet(identity));
+        var remove = dispatchPort.Calls[0].envelope.Payload.Unpack<RemoveDeploymentFromServiceServingTargetsCommand>();
+        remove.Identity.Should().BeEquivalentTo(identity);
+        remove.DeploymentId.Should().Be("dep-remove");
+        remove.Reason.Should().Be("deactivate:dep-remove");
+        dispatchPort.Calls[1].actorId.Should().Be(ServiceActorIds.Deployment(identity));
+        dispatchPort.Calls[1].envelope.Payload.Unpack<DeactivateServiceDeploymentCommand>()
+            .DeploymentId.Should().Be("dep-remove");
+        provisioner.ServingSetRequests.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(identity);
+        provisioner.InvocationCatalogRequests.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(identity);
     }
 
     [Fact]

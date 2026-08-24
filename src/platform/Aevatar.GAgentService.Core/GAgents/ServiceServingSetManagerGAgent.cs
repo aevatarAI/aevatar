@@ -47,6 +47,34 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
     }
 
     [EventHandler]
+    public async Task HandleRemoveDeploymentAsync(RemoveDeploymentFromServiceServingTargetsCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureIdentity(command.Identity, allowInitialize: true);
+        var deploymentId = command.DeploymentId?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(deploymentId))
+            throw new InvalidOperationException("deployment_id is required.");
+
+        var remainingTargets = State.Targets
+            .Where(target => !string.Equals(target.DeploymentId, deploymentId, StringComparison.Ordinal))
+            .Select(CloneTarget)
+            .ToList();
+        if (remainingTargets.Count == State.Targets.Count)
+            return;
+
+        await PersistDomainEventAsync(new ServiceServingSetUpdatedEvent
+        {
+            Identity = command.Identity?.Clone(),
+            Generation = State.Generation + 1,
+            Targets = { remainingTargets },
+            RolloutId = State.ActiveRolloutId ?? string.Empty,
+            Reason = command.Reason ?? string.Empty,
+            UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+        await DispatchInvocationServingObservationAsync(CancellationToken.None);
+    }
+
+    [EventHandler]
     public async Task HandleReplaceResolvedAsync(ReplaceResolvedServiceServingTargetsCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);

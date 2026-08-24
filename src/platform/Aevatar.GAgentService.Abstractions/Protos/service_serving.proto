@@ -78,6 +78,12 @@ message ReplaceResolvedServiceServingTargetsCommand {
   string reply_actor_id = 7;
 }
 
+message RemoveDeploymentFromServiceServingTargetsCommand {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string reason = 3;
+}
+
 message ServiceServingSetUpdatedEvent {
   ServiceIdentity identity = 1;
   int64 generation = 2;

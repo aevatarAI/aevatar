@@ -613,6 +613,50 @@ public sealed class ServiceServingRolloutGAgentTests
     }
 
     [Fact]
+    public async Task ServiceServingSetManager_ShouldRemoveDeploymentFromActorStateIdempotently()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var actorId = ServiceActorIds.ServingSet(identity);
+        var agent = CreateServingSetAgent(eventStore, actorId, dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        await agent.HandleReplaceResolvedAsync(new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Reason = "initial serving",
+            Targets =
+            {
+                CreateTarget("dep-keep", "rev-keep", "actor-keep", 40, "chat"),
+                CreateTarget("dep-remove", "rev-remove", "actor-remove", 60, "run"),
+            },
+        });
+
+        await agent.HandleRemoveDeploymentAsync(new RemoveDeploymentFromServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-remove",
+            Reason = "deactivate:dep-remove",
+        });
+        await agent.HandleRemoveDeploymentAsync(new RemoveDeploymentFromServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-remove",
+            Reason = "deactivate:dep-remove",
+        });
+
+        agent.State.Generation.Should().Be(2);
+        agent.State.Targets.Should().ContainSingle();
+        agent.State.Targets[0].DeploymentId.Should().Be("dep-keep");
+        (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(2);
+        dispatchPort.Calls.Should().HaveCount(2);
+        var observation = dispatchPort.Calls[1].Envelope.Payload.Unpack<ObserveServiceInvocationServingCommand>();
+        observation.SourceServingVersion.Should().Be(2);
+        observation.ServingTargets.Should().ContainSingle();
+        observation.ServingTargets[0].DeploymentId.Should().Be("dep-keep");
+    }
+
+    [Fact]
     public async Task ServiceServingSetManager_ShouldCommitResolvedOperationBeforeAckAndReAckExactDuplicate()
     {
         var eventStore = new InMemoryEventStore();
