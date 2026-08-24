@@ -18,10 +18,10 @@ import {
   Space,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
 } from "antd";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { studioApi } from "@/shared/studio/api";
 import { formatDateTime } from "@/shared/datetime/dateTime";
@@ -1349,7 +1349,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
             )}
             className="member-published-runs-replay__navigation"
           >
-            <Tooltip title={backToTeamMembersLabel}>
+            <AevatarTooltip title={backToTeamMembersLabel}>
               <Button
                 aria-label={backToTeamMembersLabel}
                 className="member-published-runs-replay__back-button"
@@ -1358,7 +1358,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 shape="circle"
                 size="small"
               />
-            </Tooltip>
+            </AevatarTooltip>
             <div className="member-published-runs-replay__breadcrumbs">
               <a
                 className="member-published-runs-replay__breadcrumb-link"
@@ -1396,7 +1396,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 </Typography.Text>
               </div>
             </div>
-            <Tooltip title={t("pages.runs.memberPublishedRuns.refresh", "Refresh")}>
+            <AevatarTooltip title={t("pages.runs.memberPublishedRuns.refresh", "Refresh")}>
               <Button
                 aria-label={t("pages.runs.memberPublishedRuns.refresh", "Refresh")}
                 icon={<ReloadOutlined />}
@@ -1405,7 +1405,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 shape="circle"
                 size="small"
               />
-            </Tooltip>
+            </AevatarTooltip>
           </div>
           {normalizedScheduleId ? (
             <div

@@ -349,16 +349,22 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.templateBrowser.useNamed': '使用模板 {name}',
     'workflowActivityVNext.new.templateBrowser.catalogue': '工作流模板目录',
     'workflowActivityVNext.new.templateBrowser.template': '模板',
-    'workflowActivityVNext.new.templateBrowser.reads': '读取',
     'workflowActivityVNext.new.templateBrowser.connection': '连接',
     'workflowActivityVNext.new.templateBrowser.does': '执行',
     'workflowActivityVNext.new.templateBrowser.updatedColumn': '更新时间',
     'workflowActivityVNext.new.templateBrowser.actions': '操作',
-    'workflowActivityVNext.new.templateBrowser.workflowInputs': '工作流输入',
     'workflowActivityVNext.new.templateBrowser.none': '无',
     'workflowActivityVNext.new.templateBrowser.llmProvider': 'LLM Provider',
     'workflowActivityVNext.new.templateBrowser.runsSteps':
       '运行 {count} 个{unit}',
+    'workflowActivityVNext.new.templateBrowser.stepsTooltipTitle':
+      '工作流步骤（{count}）',
+    'workflowActivityVNext.new.templateBrowser.stepsTooltipLoading':
+      '正在加载步骤详情…',
+    'workflowActivityVNext.new.templateBrowser.stepsTooltipUnavailable':
+      '暂时无法加载步骤详情，请点击“查看”查看完整工作流。',
+    'workflowActivityVNext.new.templateBrowser.stepsTooltipEmpty':
+      '该模板未提供可展示的工作流步骤。',
     'workflowActivityVNext.new.templateBrowser.step': '步骤',
     'workflowActivityVNext.new.templateBrowser.steps': '步骤',
     'workflowActivityVNext.new.templateBrowser.fallbackDescription':

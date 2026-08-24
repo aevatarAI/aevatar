@@ -41,6 +41,7 @@ import {
 } from "@/shared/ui/aevatarPageShells";
 import { AevatarCompactText } from "@/shared/ui/compactText";
 import AevatarContentSkeleton from "@/shared/ui/AevatarContentSkeleton";
+import AevatarTooltip from "@/shared/ui/AevatarTooltip";
 import {
   codeBlockStyle,
   summaryFieldLabelStyle,
@@ -286,15 +287,17 @@ const WorkflowsPage: React.FC = () => {
               <Typography.Text strong style={{ fontSize: 15 }}>
                 {workflow.name}
               </Typography.Text>
-              <Typography.Paragraph
-                ellipsis={{ rows: 2, tooltip: summary }}
-                style={{
-                  color: "var(--ant-color-text-secondary)",
-                  margin: 0,
-                }}
-              >
-                {summary}
-              </Typography.Paragraph>
+              <AevatarTooltip title={summary}>
+                <Typography.Paragraph
+                  ellipsis={{ rows: 2 }}
+                  style={{
+                    color: "var(--ant-color-text-secondary)",
+                    margin: 0,
+                  }}
+                >
+                  {summary}
+                </Typography.Paragraph>
+              </AevatarTooltip>
             </div>
           );
         },

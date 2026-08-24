@@ -25,11 +25,11 @@ import {
   Space,
   Spin,
   Switch,
-  Tooltip,
   Typography,
   theme,
 } from 'antd';
 import React from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { previewScheduledDispatch } from '@/shared/api/scheduledDispatchApi';
 import {
   createTeamAutomationOperationIdentity,
@@ -1492,7 +1492,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
     readonly onClick: () => void;
     readonly primary?: boolean;
   }) => (
-    <Tooltip title={label}>
+    <AevatarTooltip title={label}>
       <Button
         aria-label={label}
         className="team-automation-action-button"
@@ -1505,7 +1505,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
           danger ? 'danger' : primary ? 'primary' : 'default',
         )}
       />
-    </Tooltip>
+    </AevatarTooltip>
   );
 
   const renderActions = (view: TeamAutomationView) => {
@@ -1661,7 +1661,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
             )}
           />
           {view.lastAuthorizationErrorCode ? (
-            <Tooltip
+            <AevatarTooltip
               placement="topLeft"
               title={view.lastAuthorizationErrorCode}
             >
@@ -1675,7 +1675,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
               >
                 {view.lastAuthorizationErrorCode}
               </Typography.Text>
-            </Tooltip>
+            </AevatarTooltip>
           ) : null}
           {view.revocationPending ? (
             <Space size={8} wrap>
@@ -1957,7 +1957,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
               </Typography.Text>
             </div>
             <Space>
-              <Tooltip
+              <AevatarTooltip
                 title={copy('teams.automations.actions.refresh', 'Refresh')}
               >
                 <Button
@@ -1969,7 +1969,7 @@ const TeamAutomationsTab: React.FC<Props> = ({
                   loading={automationsQuery.isFetching}
                   onClick={() => void automationsQuery.refetch()}
                 />
-              </Tooltip>
+              </AevatarTooltip>
               <Button
                 className="team-automations-create-button"
                 disabled={eligibleMembers.length === 0}

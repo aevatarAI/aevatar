@@ -14,12 +14,12 @@ import {
   Input,
   Select,
   Space,
-  Tooltip,
   Typography,
   theme,
 } from "antd";
 import type { CollapseProps, SelectProps } from "antd";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import {
   LLM_MODEL_HEADER_KEY,
   LLM_ROUTE_HEADER_KEY,
@@ -411,7 +411,7 @@ const ConnectedProviderChip: React.FC<{
   const dotColor = ready ? token.colorSuccess : token.colorTextQuaternary;
 
   return (
-    <Tooltip
+    <AevatarTooltip
       mouseEnterDelay={0.15}
       placement="top"
       title={accessibleLabel}
@@ -445,7 +445,7 @@ const ConnectedProviderChip: React.FC<{
         />
         <span>{label}</span>
       </div>
-    </Tooltip>
+    </AevatarTooltip>
   );
 };
 
@@ -1574,7 +1574,7 @@ const SettingsPage: React.FC = () => {
                       <SummaryField
                         label={t("pages.settings.index.runtime.url", "Runtime URL")}
                         value={
-                          <Tooltip
+                          <AevatarTooltip
                             mouseEnterDelay={0.15}
                             placement="topLeft"
                             title={displayedRuntimeBaseUrl}
@@ -1582,7 +1582,7 @@ const SettingsPage: React.FC = () => {
                             <Typography.Text style={previewValueStyle}>
                               {truncateMiddle(displayedRuntimeBaseUrl, 18, 14)}
                             </Typography.Text>
-                          </Tooltip>
+                          </AevatarTooltip>
                         }
                       />
                     </div>
@@ -1627,7 +1627,7 @@ const SettingsPage: React.FC = () => {
                           <Typography.Text style={previewKeyStyle}>
                             {row.keyLabel}
                           </Typography.Text>
-                          <Tooltip
+                          <AevatarTooltip
                             mouseEnterDelay={0.15}
                             placement="topLeft"
                             title={
@@ -1644,7 +1644,7 @@ const SettingsPage: React.FC = () => {
                             <Typography.Text style={previewValueStyle}>
                               {truncateMiddle(row.value, 14, 12)}
                             </Typography.Text>
-                          </Tooltip>
+                          </AevatarTooltip>
                         </div>
                       ))}
                     </div>

@@ -13,8 +13,9 @@ import {
   SaveOutlined,
 } from '@ant-design/icons';
 import type { InputRef, MenuProps } from 'antd';
-import { Button, Dropdown, Input, Tag, Tooltip } from 'antd';
+import { Button, Dropdown, Input, Tag } from 'antd';
 import React from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { t } from '@/shared/i18n/messages';
 
 type WorkflowHeaderMenuItem = NonNullable<MenuProps['items']>[number];
@@ -548,7 +549,7 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
         value={workflowTitle}
         variant="borderless"
       />
-      <Tooltip
+      <AevatarTooltip
         title={t(
           'teamMemberWorkflowStudio.header.editWorkflowName',
           'Edit workflow name',
@@ -565,7 +566,7 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
           size="small"
           type="text"
         />
-      </Tooltip>
+      </AevatarTooltip>
     </div>
   );
 
@@ -578,7 +579,7 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
       className="workflow-studio-header__identity"
       data-testid="workflow-header-identity"
     >
-      <Tooltip title={t('teamMemberWorkflowStudio.header.back', 'Back')}>
+      <AevatarTooltip title={t('teamMemberWorkflowStudio.header.back', 'Back')}>
         <Button
           aria-label={t('teamMemberWorkflowStudio.header.back', 'Back')}
           className="workflow-studio-header__back-button"
@@ -588,7 +589,7 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
           size="small"
           type="text"
         />
-      </Tooltip>
+      </AevatarTooltip>
       <div className="workflow-studio-header__title-zone">
         <HeaderBreadcrumb
           onNavigateToTeam={onNavigateToTeam}

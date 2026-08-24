@@ -9,8 +9,9 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Input, Modal, Segmented, Space, Tooltip } from 'antd';
+import { Alert, Button, Input, Modal, Segmented, Space } from 'antd';
 import React from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import WorkflowStudioEditorSurface from '@/pages/team-member-workflow-studio/components/WorkflowStudioEditorSurface';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { formatUtcDateTime } from '@/shared/datetime/dateTime';
@@ -1008,7 +1009,7 @@ const WorkflowEditorPage: React.FC<{
           </Button>
           {!publicationCurrent &&
             (publishReadinessIssues.length > 0 ? (
-              <Tooltip
+              <AevatarTooltip
                 placement="bottomRight"
                 title={
                   <div className="wa-vnext__publish-readiness">
@@ -1022,7 +1023,7 @@ const WorkflowEditorPage: React.FC<{
                 trigger={['hover', 'focus']}
               >
                 {publishButton}
-              </Tooltip>
+              </AevatarTooltip>
             ) : (
               publishButton
             ))}

@@ -16,6 +16,7 @@ import {
 } from '@/shared/auth/session';
 import { normalizeConsoleLocale } from '@/shared/i18n/localeProvider';
 import { history } from '@/shared/navigation/history';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 
 type ConsoleLocaleOption = {
   readonly key: 'zh-CN' | 'en-US';
@@ -206,24 +207,25 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
           maxWidth: 220,
           padding: '0 10px 0 6px',
         }}
-        title={displayName}
       >
         <Avatar icon={<UserOutlined />} size={24} src={picture} />
-        <Typography.Text
-          className="console-header-actions__user-name"
-          style={{
-            flex: 1,
-            color: 'var(--ant-color-text)',
-            lineHeight: '20px',
-            marginBottom: 0,
-            maxWidth: 160,
-            minWidth: 0,
-            whiteSpace: 'nowrap',
-          }}
-          ellipsis={{ tooltip: displayName }}
-        >
-          {displayName}
-        </Typography.Text>
+        <AevatarTooltip title={displayName}>
+          <Typography.Text
+            className="console-header-actions__user-name"
+            ellipsis
+            style={{
+              flex: 1,
+              color: 'var(--ant-color-text)',
+              lineHeight: '20px',
+              marginBottom: 0,
+              maxWidth: 160,
+              minWidth: 0,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {displayName}
+          </Typography.Text>
+        </AevatarTooltip>
         <DownOutlined
           className="console-header-actions__user-caret"
           style={{

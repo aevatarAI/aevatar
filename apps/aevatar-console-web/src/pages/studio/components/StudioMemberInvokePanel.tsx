@@ -1,5 +1,5 @@
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Alert, Button, Tooltip } from 'antd';
+import { Alert, Button } from 'antd';
 import React, {
   useCallback,
   useEffect,
@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
@@ -225,11 +226,11 @@ function renderTargetMetaItem(item: TargetMetaItem): React.ReactNode {
   const content = item.label ? `${item.label}: ${item.value}` : item.value;
 
   return (
-    <Tooltip key={item.key} placement="topLeft" title={content}>
+    <AevatarTooltip key={item.key} placement="topLeft" title={content}>
       <span style={targetMetaItemWrapStyle}>
         <span style={targetMetaItemStyle}>{content}</span>
       </span>
-    </Tooltip>
+    </AevatarTooltip>
   );
 }
 
@@ -2012,7 +2013,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                   : targetTitleWrapStyle
               }
             >
-              <Tooltip placement="topLeft" title={currentMemberLabel}>
+              <AevatarTooltip placement="topLeft" title={currentMemberLabel}>
                 <div
                   style={
                     isMemberRunSurface
@@ -2022,7 +2023,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 >
                   {currentMemberLabel}
                 </div>
-              </Tooltip>
+              </AevatarTooltip>
               <div
                 style={
                   isMemberRunSurface
@@ -2034,11 +2035,11 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
                 {invokeBlockedReason ? (
                   <>
                     <span>·</span>
-                    <Tooltip placement="topLeft" title={invokeBlockedReason}>
+                    <AevatarTooltip placement="topLeft" title={invokeBlockedReason}>
                       <span style={targetMetaItemStyle}>
                         {invokeBlockedReason}
                       </span>
-                    </Tooltip>
+                    </AevatarTooltip>
                   </>
                 ) : null}
               </div>

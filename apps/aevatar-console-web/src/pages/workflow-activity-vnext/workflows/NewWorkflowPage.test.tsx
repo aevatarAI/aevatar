@@ -467,8 +467,59 @@ describe('New workflow save-target recovery', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('renders template facts in aligned table columns', async () => {
+  it('renders only decision-useful template facts with step help', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockRuntimeCatalogApi.getWorkflowTemplate.mockResolvedValue({
+      template: {
+        templateId: 'template-incident-triage',
+        displayName: 'Incident triage',
+        description: 'Classify an incident.',
+        defaultDraftName: 'Incident triage',
+        authorityStateVersion: 7,
+        stepCount: 2,
+        requiredConnections: ['pagerduty'],
+        requiresLlmProvider: true,
+        freshness: {
+          projectionWatermark: '2026-08-18T00:00:00Z',
+          lastEventId: 'event-template-7',
+          versionSemantics: 'workflow-catalog-authority-state-version',
+        },
+      },
+      yaml: 'name: incident_triage\nsteps: []\n',
+      definition: {
+        name: 'incident_triage',
+        description: 'Classify an incident.',
+        closedWorldMode: true,
+        roles: [],
+        steps: [
+          {
+            id: 'classify',
+            type: 'llm_call',
+            targetRole: '',
+            parameters: {},
+            next: 'notify',
+            branches: {},
+            children: [],
+          },
+          {
+            id: 'notify',
+            type: 'connector_call',
+            targetRole: '',
+            parameters: {},
+            next: '',
+            branches: {},
+            children: [],
+          },
+        ],
+      },
+      edges: [],
+      authorityStateVersion: 7,
+      freshness: {
+        projectionWatermark: '2026-08-18T00:00:00Z',
+        lastEventId: 'event-template-7',
+        versionSemantics: 'workflow-catalog-authority-state-version',
+      },
+    });
 
     renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
 
@@ -482,33 +533,83 @@ describe('New workflow save-target recovery', () => {
     const row = within(table).getByRole('row', { name: /Incident triage/ });
     const cells = within(row).getAllByRole('cell');
 
-    expect(headers).toHaveLength(6);
+    expect(headers).toHaveLength(5);
     expect(
-      ['Template', 'Reads', 'Connection', 'Does', 'Updated', 'Actions'].map(
-        (name) => within(table).getByRole('columnheader', { name }),
+      ['Template', 'Connection', 'Does', 'Updated', 'Actions'].map((name) =>
+        within(table).getByRole('columnheader', { name }),
       ),
     ).toEqual(headers);
-    expect(cells).toHaveLength(6);
-    expect(screen.getAllByText('Reads')).toHaveLength(1);
+    expect(headers[0]).toHaveClass('wa-vnext__template-cell--left');
+    expect(headers[1]).toHaveClass('wa-vnext__template-cell--left');
+    expect(headers[2]).toHaveClass('wa-vnext__template-cell--left');
+    expect(headers[3]).toHaveClass('wa-vnext__template-cell--right');
+    expect(headers[4]).toHaveClass('wa-vnext__template-cell--right');
+    expect(cells).toHaveLength(5);
+    expect(screen.queryByText('Reads')).not.toBeInTheDocument();
+    expect(screen.queryByText('Workflow inputs')).not.toBeInTheDocument();
     expect(screen.getAllByText('Connection')).toHaveLength(1);
     expect(screen.getAllByText('Does')).toHaveLength(1);
     expect(within(cells[0]).getByText('Incident triage')).toBeInTheDocument();
-    expect(within(cells[1]).getByText('Workflow inputs')).toBeInTheDocument();
     expect(
-      within(cells[2]).getByText('LLM provider, pagerduty'),
+      cells[0].querySelector('.wa-vnext__template-marker'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(cells[1]).getByText('LLM provider, pagerduty'),
     ).toBeInTheDocument();
-    expect(within(cells[3]).getByText('Runs 2 steps')).toBeInTheDocument();
-    expect(within(cells[4]).getByText('2026/08/18')).toBeInTheDocument();
+    expect(cells[0]).toHaveClass('wa-vnext__template-cell--left');
+    expect(cells[1]).toHaveClass('wa-vnext__template-cell--left');
+    expect(cells[2]).toHaveClass('wa-vnext__template-cell--left');
+    expect(cells[3]).toHaveClass('wa-vnext__template-cell--right');
+    expect(cells[4]).toHaveClass('wa-vnext__template-cell--right');
+    const stepSummary = within(cells[2]).getByRole('button', {
+      name: 'Runs 2 steps',
+    });
+    expect(mockRuntimeCatalogApi.getWorkflowTemplate).not.toHaveBeenCalled();
+    fireEvent.mouseEnter(stepSummary);
+    await waitFor(() => {
+      expect(mockRuntimeCatalogApi.getWorkflowTemplate).toHaveBeenCalledWith(
+        'template-incident-triage',
+      );
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveTextContent('Workflow steps (2)');
+      expect(tooltip).toHaveTextContent('classify');
+      expect(tooltip).toHaveTextContent('LLM call');
+      expect(tooltip).toHaveTextContent('notify');
+      expect(tooltip).toHaveTextContent('Connector call');
+    });
+    expect(within(cells[3]).getByText('2026/08/18')).toBeInTheDocument();
     expect(
-      within(cells[5]).getByRole('button', {
+      within(cells[4]).getByRole('button', {
         name: 'View Incident triage',
       }),
     ).toBeInTheDocument();
     expect(
-      within(cells[5]).getByRole('button', {
+      within(cells[4]).getByRole('button', {
         name: 'Use template Incident triage',
       }),
     ).toBeInTheDocument();
+  });
+
+  it('shows an actionable tooltip state when step details are unavailable', async () => {
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockRuntimeCatalogApi.getWorkflowTemplate.mockRejectedValue(
+      new Error('Template details unavailable'),
+    );
+
+    renderWithQueryClient(<WorkflowTemplatesPage scopeId="scope-alpha" />);
+
+    const stepSummary = await screen.findByRole('button', {
+      name: 'Runs 2 steps',
+    });
+    fireEvent.mouseEnter(stepSummary);
+
+    await waitFor(() => {
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveTextContent(
+        'Step details are unavailable. Open View to inspect this template.',
+      );
+      expect(tooltip).not.toHaveTextContent('Loading step details');
+    });
   });
 
   it('lets vertical wheel input over the template table reach the page scroller', async () => {

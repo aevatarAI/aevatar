@@ -8,8 +8,9 @@ import {
   LoadingOutlined,
   PauseCircleOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Segmented, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Segmented, Tag, Typography } from 'antd';
 import React from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { t } from '@/shared/i18n/messages';
 import {
   type ExecutionLogItem,
@@ -1141,7 +1142,7 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                       tokenUsage.totalTokens,
                     )
                   : null}
-                <Tooltip
+                <AevatarTooltip
                   title={t(
                     'teamMemberWorkflowStudio.executionPanel.copyAll',
                     'Copy all logs',
@@ -1170,9 +1171,9 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                     size="small"
                     type="text"
                   />
-                </Tooltip>
+                </AevatarTooltip>
                 {onCollapse ? (
-                  <Tooltip
+                  <AevatarTooltip
                     title={t(
                       'shared.workflowExecutionLogs.collapse',
                       'Collapse workflow logs',
@@ -1191,9 +1192,9 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                       size="small"
                       type="text"
                     />
-                  </Tooltip>
+                  </AevatarTooltip>
                 ) : null}
-                <Tooltip
+                <AevatarTooltip
                   title={t(
                     'teamMemberWorkflowStudio.executionPanel.clear',
                     'Clear logs',
@@ -1209,7 +1210,7 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                     size="small"
                     type="text"
                   />
-                </Tooltip>
+                </AevatarTooltip>
               </div>
               {error ? (
                 <div style={{ flexBasis: '100%' }}>
@@ -1466,7 +1467,7 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                         </div>
                       ) : null}
                       {overviewMode === 'events' && selectedEntry ? (
-                        <Tooltip
+                        <AevatarTooltip
                           title={t(
                             'teamMemberWorkflowStudio.executionPanel.copySelected',
                             'Copy selected log',
@@ -1495,7 +1496,7 @@ const WorkflowExecutionLogsPanel: React.FC<WorkflowExecutionLogsPanelProps> = ({
                             size="small"
                             type="text"
                           />
-                        </Tooltip>
+                        </AevatarTooltip>
                       ) : null}
                     </div>
                   </div>
