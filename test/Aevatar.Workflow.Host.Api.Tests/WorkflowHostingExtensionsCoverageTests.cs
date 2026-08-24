@@ -147,7 +147,7 @@ public sealed class WorkflowHostingExtensionsCoverageTests
         var act = () => services.AddWorkflowProjectionReadModelProviders(configuration);
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Exactly one graph projection provider must be enabled*");
+            .WithMessage("*Only one graph projection provider can be enabled*");
     }
 
     [Fact]

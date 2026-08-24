@@ -263,6 +263,37 @@ public sealed class ScriptNativeGraphProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_WhenGraphProjectionDisabled_ShouldSkipPayloadMaterialization()
+    {
+        var graphWriter = new RecordingNativeGraphWriter();
+        var projector = new ScriptNativeGraphProjector(
+            graphWriter,
+            new StubScriptProjectionPayloadMaterializer(_ =>
+                throw new InvalidOperationException("Payload materialization must be skipped.")),
+            new ScriptNativeGraphMaterializer(),
+            new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+        var context = new ScriptExecutionMaterializationContext
+        {
+            RootActorId = "claim-runtime",
+            ProjectionKind = "script-execution-read-model",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildEnvelope(
+                new ScriptDomainFactCommitted
+                {
+                    ActorId = "claim-runtime",
+                    StateVersion = 4,
+                    OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T01:00:00Z")
+                        .ToUnixTimeMilliseconds(),
+                },
+                new ScriptBehaviorState()));
+
+        graphWriter.LastUpsert.Should().BeNull();
+    }
+
+    [Fact]
     public void Ctor_ShouldThrow_WhenDependenciesMissing()
     {
         Action noWriter = () => new ScriptNativeGraphProjector(

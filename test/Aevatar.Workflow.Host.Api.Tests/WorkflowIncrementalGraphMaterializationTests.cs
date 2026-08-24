@@ -29,6 +29,38 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
     }
 
     [Fact]
+    public async Task Projector_WhenGraphProviderIsDisabled_ShouldSkipIncrementalGraphMaterialization()
+    {
+        var reportStore = new RecordingDocumentStore();
+        var graphWriter = new RecordingGraphWriter();
+        var graphStore = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var projector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            graphWriter,
+            graphStore,
+            materializer,
+            new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+        var envelope = BuildCommittedEnvelope(1, "evt-disabled", new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "step-1",
+            StepType = "tool_call",
+        });
+
+        await projector.ProjectAsync(Context(), envelope);
+
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(0);
+        var route = materializer.ResolveStoreRoute(
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            "actor-1",
+            IncrementalRoute());
+        (await graphStore.ReadOwnerSnapshotAsync(route)).Disposition
+            .Should().Be(ProjectionGraphOwnerSnapshotReadDisposition.NotFound);
+    }
+
+    [Fact]
     public void IncrementalMaterializer_ForHundredStepReport_ShouldBuildBoundedPerEventDeltas()
     {
         var materializer = CreateMaterializer();
@@ -603,6 +635,40 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
     }
 
     [Fact]
+    public async Task CutoverOrchestrator_WhenGraphProjectionDisabled_ShouldSkipBuildAndVerifyDependencies()
+    {
+        var report = BuildReport(4, "evt-4");
+        var reader = new MutableReportReader(report);
+        var store = new SequencedVersionedGraphStore(ProjectionGraphDeltaApplyDisposition.Applied);
+        var orchestrator = new WorkflowProjectionGraphCutoverOrchestrator(
+            reader,
+            store,
+            CreateMaterializer(),
+            new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+
+        var candidate = await orchestrator.BuildCandidateAsync(
+            report.RootActorId,
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            IncrementalRoute());
+        var verified = await orchestrator.VerifyCandidateAsync(
+            report.RootActorId,
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            IncrementalRoute(),
+            new ProjectionSourceCoordinate
+            {
+                ActorId = report.RootActorId,
+                StateVersion = report.StateVersion,
+                EventId = report.LastEventId,
+            },
+            candidateFingerprint: "unused");
+
+        candidate.Should().BeNull();
+        verified.Should().BeFalse();
+        reader.GetCount.Should().Be(0);
+        store.ApplyCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task OwnerReplacement_WithSameEventIdButDifferentDesiredGraph_ShouldStillConflict()
     {
         var store = new InMemoryProjectionGraphStore();
@@ -1099,12 +1165,14 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         : IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>
     {
         public WorkflowRunInsightReportDocument Document { get; } = document;
+        public int GetCount { get; private set; }
 
         public Task<WorkflowRunInsightReportDocument?> GetAsync(
             string key,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            GetCount++;
             return Task.FromResult<WorkflowRunInsightReportDocument?>(Document.Clone());
         }
 

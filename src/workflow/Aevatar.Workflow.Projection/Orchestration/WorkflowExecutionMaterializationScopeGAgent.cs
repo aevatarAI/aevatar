@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventSourcing;
@@ -26,6 +27,9 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
         WorkflowProjectionIncrementalGraphSchemaAdoption.IsGranted(
             Services.GetService<IRuntimeActorStateSchemaContextReader>());
 
+    private bool IsGraphProjectionEnabled =>
+        Services.GetService<ProjectionGraphProviderStatus>() is not { Enabled: false };
+
     protected override async ValueTask OnScopeReadyAsync(CancellationToken ct)
     {
         if (!State.Active || State.Released)
@@ -41,7 +45,7 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
             });
         }
 
-        if (!EnablesDurableObservationRecovery)
+        if (!EnablesDurableObservationRecovery || !IsGraphProjectionEnabled)
             return;
 
         if (WorkflowProjectionGraphRoutePolicy.HasInProgressCutover(State.MaterializationCutover))
@@ -95,7 +99,8 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
         _ = context;
         _ = envelope;
         _ = result;
-        if (WorkflowProjectionGraphRoutePolicy.HasInProgressCutover(State.MaterializationCutover))
+        if (IsGraphProjectionEnabled &&
+            WorkflowProjectionGraphRoutePolicy.HasInProgressCutover(State.MaterializationCutover))
         {
             await ScheduleCutoverContinuationAsync(ct);
         }
@@ -159,7 +164,7 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
         RequestProjectionMaterializationCutoverCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (!State.Active || State.Released || !EnablesDurableObservationRecovery)
+        if (!State.Active || State.Released || !EnablesDurableObservationRecovery || !IsGraphProjectionEnabled)
             return;
 
         var activeRoute = State.ActiveMaterializationRoute;
@@ -200,7 +205,7 @@ public sealed class WorkflowExecutionMaterializationScopeGAgent
         ContinueProjectionMaterializationCutoverCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (!State.Active || State.Released || !EnablesDurableObservationRecovery)
+        if (!State.Active || State.Released || !EnablesDurableObservationRecovery || !IsGraphProjectionEnabled)
             return;
 
         var cutover = State.MaterializationCutover;

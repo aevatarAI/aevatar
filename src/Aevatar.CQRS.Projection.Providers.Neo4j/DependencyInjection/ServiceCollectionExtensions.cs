@@ -21,6 +21,7 @@ public static class Neo4jProjectionServiceCollectionExtensions
             provider.GetRequiredService<Neo4jProjectionGraphStore>());
         services.AddSingleton<IVersionedProjectionGraphStore>(provider =>
             provider.GetRequiredService<Neo4jProjectionGraphStore>());
+        services.AddSingleton(new ProjectionGraphProviderStatus("Neo4j", Enabled: true));
 
         return services;
     }

@@ -20,11 +20,9 @@
 docker compose up -d kafka garnet
 ```
 
-2. 注入 Neo4j 密码并以 Distributed 环境启动：
+2. 以 Distributed 环境启动：
 
 ```bash
-export NEO4J_PASSWORD="<set-a-password>"
-export AEVATAR_Projection__Graph__Providers__Neo4j__Password="${NEO4J_PASSWORD}"
 ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host.Api
 ```
 
@@ -37,9 +35,34 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 - `ActorRuntime:KafkaReceiverBufferHighWatermark=768`
 - `ActorRuntime:KafkaReceiverBufferLowWatermark=512`
 - `Orleans:ClusteringMode=Garnet`
+- `Projection:Graph:Providers:Neo4j:Enabled=false`
+- `Projection:Graph:Providers:InMemory:Enabled=false`
 
 在上述配置下，Event Sourcing 的 `IEventStore` 会自动使用 `GarnetEventStore`（连接串复用 `ActorRuntime:OrleansGarnetConnectionString`）。
-`Projection:Graph:Providers:Neo4j:Password` 不再在仓库内提供默认明文值，需通过环境变量注入。
+图投影关闭时，workflow 与 scripting 的图写入按 no-op 成功完成，图查询返回空结果或 unavailable；document read model、workflow 执行与 scripting 执行不依赖 Neo4j。
+
+如需重新启用 Neo4j，将配置改为：
+
+```json
+"Projection": {
+  "Graph": {
+    "Providers": {
+      "Neo4j": {
+        "Enabled": true,
+        "Uri": "bolt://localhost:7687",
+        "Username": "neo4j"
+      },
+      "InMemory": {
+        "Enabled": false
+      }
+    }
+  }
+}
+```
+
+同时通过 `AEVATAR_Projection__Graph__Providers__Neo4j__Password` 注入密码。环境变量优先于 `appsettings.Distributed.json`；部署侧需要移除或设为 `false` 的开关包括 `AEVATAR_Projection__Graph__Providers__Neo4j__Enabled` 和兼容的 bare key `Projection__Graph__Providers__Neo4j__Enabled`。bare key 的优先级更高，不能遗留为 `true`。
+
+Neo4j 现在是显式 opt-in：仅配置 `Uri`、用户名或密码不会启用它，必须同时设置 `Enabled=true`。关闭期间不会保存图事实；重新启用后，已完成且不再产生事件的历史 workflow 不会自动回补。当前仓库没有自动全量 graph backfill，若需要恢复历史图，必须先执行受控的全量 reprojection，再开放图查询流量。
 
 `Orleans:ClusteringMode` 支持：
 
@@ -132,11 +155,11 @@ ASPNETCORE_ENVIRONMENT=PersistentLocal dotnet run --project src/Aevatar.Mainnet.
 
 - 该模式的目标是保住本地 actor 持久态与 workflow 存储回补能力，适合单机开发验证。
 - 由于 document / graph projection 仍是 `InMemory`，后端重启后 read model 会清空；如果 write-side 仍保留，可能出现本地 Console 看不到团队卡、但重复绑定提示“already exists”的现象。
-- 它不是完整的 distributed / production profile；若需要 durable document / graph projection，仍应使用 `Distributed` 环境并启动 Kafka、Elasticsearch、Neo4j。
+- 它不是完整的 distributed / production profile；若需要 durable document projection，应使用 `Distributed` 环境并启动 Kafka、Garnet、Elasticsearch。只有显式启用 durable graph projection 时才需要 Neo4j。
 
 ## 多机集群测试（Docker）
 
-分布式部署请直接按宿主配置拉起 Mainnet 与依赖服务（Kafka、Garnet、Elasticsearch、Neo4j）。仓库不再内置集群脚本。
+分布式部署请直接按宿主配置拉起 Mainnet 与必需依赖服务（Kafka、Garnet、Elasticsearch）。Neo4j 仅在显式启用 graph projection 时需要；仓库不再内置集群脚本。
 
 ## 端点
 

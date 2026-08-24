@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime;
@@ -101,6 +102,44 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
             StateVersion = InitialReportVersion,
             EventId = InitialReportEventId,
         });
+    }
+
+    [Fact]
+    public async Task GraphDisabled_WhenScopeStarts_ShouldNotRequestOrScheduleCutover()
+    {
+        var harness = new CutoverScopeHarness(graphProjectionEnabled: false);
+
+        var actor = await harness.StartScopeAsync();
+
+        actor.Agent.State.ActiveMaterializationRoute.Should().Be(CompatibilityRoute());
+        actor.Agent.State.MaterializationCutover.Should().BeNull();
+        actor.Outbox.Pending.Should().BeEmpty();
+        (await harness.CommittedEventTypesAsync()).Should().Equal(
+            ProjectionScopeStartedEvent.Descriptor.FullName,
+            ProjectionObservationAttachmentUpdatedEvent.Descriptor.FullName,
+            ProjectionMaterializationRouteInitializedEvent.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task GraphDisabled_WhenCutoverWasAlreadyRequested_ShouldPauseContinuation()
+    {
+        var harness = new CutoverScopeHarness();
+        var started = await harness.StartScopeAsync();
+        started.Agent.State.MaterializationCutover!.Phase.Should()
+            .Be(ProjectionMaterializationCutoverPhase.Requested);
+        var committedBeforeDisable = await harness.CommittedEventTypesAsync();
+        var disabledServices = harness.BuildServices(
+            adoptionReceiptGranted: true,
+            graphProjectionEnabled: false);
+
+        var recovered = await harness.ReactivateScopeAsync(disabledServices);
+        await recovered.Agent.HandleContinueMaterializationCutoverAsync(
+            new ContinueProjectionMaterializationCutoverCommand { ExpectedRouteEpoch = 2 });
+
+        recovered.Outbox.Pending.Should().BeEmpty();
+        recovered.Agent.State.MaterializationCutover!.Phase.Should()
+            .Be(ProjectionMaterializationCutoverPhase.Requested);
+        (await harness.CommittedEventTypesAsync()).Should().Equal(committedBeforeDisable);
     }
 
     [Theory]
@@ -668,7 +707,8 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
         public CutoverScopeHarness(
             bool adoptionReceiptGranted = true,
             bool fleetAdmissionGranted = true,
-            int? maximumCandidateMutationCount = null)
+            int? maximumCandidateMutationCount = null,
+            bool graphProjectionEnabled = true)
         {
             _graphMaterializer = new WorkflowRunIncrementalGraphMaterializer(
                 ProjectionGraphOwnerIdentityResolver.Instance,
@@ -676,12 +716,14 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
                 WorkflowRunIncrementalGraphMaterializer.MaximumCandidateMutationCount);
             _reportReader = new MutableReportReader(BuildReport());
             _fleet = new MutableFleetAdmissionSource(fleetAdmissionGranted ? CreateAdmission() : null);
-            _services = BuildServices(adoptionReceiptGranted);
+            _services = BuildServices(adoptionReceiptGranted, graphProjectionEnabled);
         }
 
         public RecordingMaterializer Materializer { get; } = new();
 
-        public IServiceProvider BuildServices(bool adoptionReceiptGranted)
+        public IServiceProvider BuildServices(
+            bool adoptionReceiptGranted,
+            bool graphProjectionEnabled = true)
         {
             var services = new ServiceCollection()
                 .AddSingleton<IEventStore>(_eventStore)
@@ -691,6 +733,9 @@ public sealed class WorkflowExecutionMaterializationScopeCutoverTests
                 .AddSingleton<TimeProvider>(new FixedTimeProvider(Now))
                 .AddSingleton<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>(_reportReader)
                 .AddSingleton<IVersionedProjectionGraphStore>(_graphStore)
+                .AddSingleton(new ProjectionGraphProviderStatus(
+                    graphProjectionEnabled ? "InMemory" : "Disabled",
+                    graphProjectionEnabled))
                 .AddSingleton(_graphMaterializer)
                 .AddSingleton<WorkflowProjectionGraphCutoverOrchestrator>()
                 .AddSingleton<IRuntimeFleetCapabilityAdmissionReader>(_fleet)

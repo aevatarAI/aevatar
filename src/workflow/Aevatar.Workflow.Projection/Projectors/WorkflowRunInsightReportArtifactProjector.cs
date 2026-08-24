@@ -15,6 +15,7 @@ public sealed class WorkflowRunInsightReportArtifactProjector
     private readonly IProjectionGraphWriter<WorkflowRunInsightReportDocument> _graphWriter;
     private readonly IVersionedProjectionGraphStore? _versionedGraphStore;
     private readonly WorkflowRunIncrementalGraphMaterializer? _incrementalGraphMaterializer;
+    private readonly ProjectionGraphProviderStatus? _graphProviderStatus;
 
     // Refactor (iter29/cluster-029-workflow-history-artifact):
     //   Old pattern: workflow history / report / graph are treated as current-state readmodels (current-state query path enriches actor snapshots by reading report artifacts; duplicate WorkflowRunTimelineDocument and WorkflowRunGraphArtifactDocument shells copy WorkflowRunInsightReportDocument; public application/query/tool/HTTP surfaces expose them as actor current-state queries instead of workflow-run artifacts)
@@ -31,12 +32,14 @@ public sealed class WorkflowRunInsightReportArtifactProjector
         IProjectionDocumentMutator<WorkflowRunInsightReportDocument, string> reportMutator,
         IProjectionGraphWriter<WorkflowRunInsightReportDocument> graphWriter,
         IVersionedProjectionGraphStore? versionedGraphStore,
-        WorkflowRunIncrementalGraphMaterializer? incrementalGraphMaterializer)
+        WorkflowRunIncrementalGraphMaterializer? incrementalGraphMaterializer,
+        ProjectionGraphProviderStatus? graphProviderStatus = null)
     {
         _reportMutator = reportMutator ?? throw new ArgumentNullException(nameof(reportMutator));
         _graphWriter = graphWriter ?? throw new ArgumentNullException(nameof(graphWriter));
         _versionedGraphStore = versionedGraphStore;
         _incrementalGraphMaterializer = incrementalGraphMaterializer;
+        _graphProviderStatus = graphProviderStatus;
     }
 
     public async ValueTask ProjectAsync(
@@ -86,6 +89,9 @@ public sealed class WorkflowRunInsightReportArtifactProjector
             throw new InvalidOperationException(
                 $"Workflow report version {stateEvent.Version} was not committed for event '{stateEvent.EventId}'.");
         }
+
+        if (_graphProviderStatus is { Enabled: false })
+            return;
 
         if (!WorkflowRunIncrementalGraphMaterializer.IsIncrementalRoute(context.MaterializationRoute))
         {
