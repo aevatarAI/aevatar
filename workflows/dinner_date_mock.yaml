@@ -201,7 +201,7 @@ steps:
     idempotency_key: "${run_id}:hold:ember_oak:timeout"
     parameters:
       target: hold_ember_oak
-      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Ember & Oak","venue_id":"ember_oak","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-ember-oak","elevenlabs_transcript":"mock-transcript-hold-ember-oak","confirmed_time":"19:30","allergy_answer":"no nuts in the kitchen at all","payment_requested":false,"duration":"1m12s"}'
+      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Ember & Oak","venue_id":"ember_oak","action":"hold","external_effect":"confirmed","restaurant_message":"temporary hold; user decision comes tonight; unselected holds will be released immediately","twilio_call_record":"mock-call-hold-ember-oak","elevenlabs_transcript":"mock-transcript-hold-ember-oak","confirmed_time":"19:30","allergy_answer":"no nuts in the kitchen at all","payment_requested":false,"duration":"1m12s"}'
     next: verify_hold_ember_oak
 
   - id: verify_hold_ember_oak
@@ -216,7 +216,7 @@ steps:
     idempotency_key: "${run_id}:hold:casa_nera:timeout"
     parameters:
       target: hold_casa_nera
-      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Casa Nera","venue_id":"casa_nera","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-casa-nera","elevenlabs_transcript":"mock-transcript-hold-casa-nera","confirmed_time":"19:30","allergy_answer":"pesto has pine nuts; kitchen can omit on request","payment_requested":false,"duration":"1m48s"}'
+      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Casa Nera","venue_id":"casa_nera","action":"hold","external_effect":"confirmed","restaurant_message":"temporary hold; user decision comes tonight; unselected holds will be released immediately","twilio_call_record":"mock-call-hold-casa-nera","elevenlabs_transcript":"mock-transcript-hold-casa-nera","confirmed_time":"19:30","allergy_answer":"pesto has pine nuts; kitchen can omit on request","payment_requested":false,"duration":"1m48s"}'
     next: verify_hold_casa_nera
 
   - id: verify_hold_casa_nera
@@ -231,7 +231,7 @@ steps:
     idempotency_key: "${run_id}:hold:atlas_row:timeout"
     parameters:
       target: hold_atlas_row
-      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Atlas Row","venue_id":"atlas_row","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-atlas-row","elevenlabs_transcript":"mock-transcript-hold-atlas-row","confirmed_time":"20:00","allergy_answer":"pesto is nut-free; evening special is not","payment_requested":false,"duration":"2m03s"}'
+      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Atlas Row","venue_id":"atlas_row","action":"hold","external_effect":"confirmed","restaurant_message":"temporary hold; user decision comes tonight; unselected holds will be released immediately","twilio_call_record":"mock-call-hold-atlas-row","elevenlabs_transcript":"mock-transcript-hold-atlas-row","confirmed_time":"20:00","allergy_answer":"pesto is nut-free; evening special is not","payment_requested":false,"duration":"2m03s"}'
     next: verify_hold_atlas_row
 
   - id: verify_hold_atlas_row
@@ -252,14 +252,14 @@ steps:
     type: assign
     parameters:
       target: post_timeout_wait_state
-      value: '{"task_id":"task-uc5b","parent_task_id":"task-uc5","stored_in":"mock_durable_workflow_state","status":"waiting_for_user_choice_after_holds_mocked","accepted_signals":["ember_oak","casa_nera","atlas_row"],"default_mock_choice":"ember_oak"}'
-    next: simulate_user_choice_after_holds
+      value: '{"task_id":"task-uc5b","parent_task_id":"task-uc5","stored_in":"mock_durable_workflow_state","status":"waiting_for_user_choice_after_holds","accepted_signals":["ember_oak","casa_nera","atlas_row"],"mock_signal_choice":"ember_oak"}'
+    next: mock_user_choice_signal_after_holds
 
-  - id: simulate_user_choice_after_holds
+  - id: mock_user_choice_signal_after_holds
     type: assign
     parameters:
       target: user_choice_after_holds
-      value: '{"task_id":"task-uc5b","selected_venue":"Ember & Oak","selected_venue_id":"ember_oak","selection_reason":"pine nut allergy makes the no-nuts kitchen safest","source":"mock_user_text","mode":"simulated_post_timeout_choice"}'
+      value: '{"task_id":"task-uc5b","selected_venue":"Ember & Oak","selected_venue_id":"ember_oak","selection_reason":"pine nut allergy makes the no-nuts kitchen safest","source":"mock_user_signal","mode":"test_only_user_choice_signal_after_holds"}'
     next: compute_release_plan
 
   - id: compute_release_plan

@@ -20,25 +20,29 @@ flowchart TD
     E --> F["Build shortlist from candidates"]
     F --> G["Show options"]
     G --> H["Emit options_shown"]
-    H --> I{"User choice before timeout?"}
+    H --> I["Persist wait state"]
+    I --> J{"Input outcome"}
 
-    I -->|"selected venue"| J["Hold selected venue"]
-    J --> K["Verify selected hold proof"]
-    K --> L["Optional calendar post-action"]
-    L --> M["Emit completed"]
-    M --> N["Final artifact: completed"]
+    J -->|"selected venue"| K["Record selected venue"]
+    K --> L["Assert selected-only hold policy"]
+    L --> M["Hold selected venue"]
+    M --> N["Verify selected hold proof"]
+    N --> O["Optional calendar post-action"]
+    O --> P["Emit completed"]
+    P --> Q["Final artifact: completed"]
 
-    I -->|"silence timeout"| O["Hold candidate venues"]
-    O --> P["Verify hold proof"]
-    P --> Q["Receive user choice after holds"]
-    Q --> R["Release unselected venues"]
-    R --> S["Verify release proof"]
-    S --> T["Optional calendar post-action"]
-    T --> U["Emit completed"]
-    U --> V["Final artifact: completed"]
+    J -->|"timeout / no_reply"| R["Wait silence timeout"]
+    R --> S["Hold all candidate venues<br/>tell restaurants decision comes tonight"]
+    S --> T["Verify hold proofs"]
+    T --> U["Wait for user choice after holds"]
+    U --> V["Release unselected venues"]
+    V --> W["Verify release proofs"]
+    W --> X["Optional calendar post-action"]
+    X --> Y["Emit completed"]
+    Y --> Z["Final artifact: completed"]
 
-    I -->|"deposit required"| W["Final artifact: failed"]
-    I -->|"ambiguous phone outcome"| X["Final artifact: needs_attention"]
+    J -->|"deposit required"| AA["Final artifact: failed"]
+    J -->|"ambiguous phone outcome"| AB["Final artifact: needs_attention"]
 ```
 
 ## Current Template Nodes
@@ -51,8 +55,8 @@ The executable template is `workflows/dinner_date_mock.yaml`. These nodes are in
 | `load_optional_calendar_context` | `assign` mock | Optional | Calendar read only. Must not block the core workflow. |
 | `discover_restaurant_candidates` | `assign` mock | Recommended | Replace with search and page-fetch connectors. |
 | `build_shortlist_from_candidates` | `assign` mock | Maybe | Can remain LLM/internal planner if candidate discovery returns structured data. |
-| `hold_selected_*` | `assign` mock | Required | Replace with phone hold connector for selected-only path. |
-| `hold_candidate_*` | `assign` mock | Required | Replace with phone hold connector for timeout hold-all path. |
+| `hold_selected_venue` | `assign` mock | Required | Replace with one phone hold connector for the venue selected before timeout. |
+| `hold_candidate_*` | `assign` mock | Required | Replace with phone hold connectors for timeout hold-all path; each call should say the user decision comes tonight and unselected holds will be released. |
 | `release_unselected_*` | `assign` mock | Required | Replace with phone release connector. |
 | `handle_ambiguous_hold_outcome` | `assign` mock | Required behavior | Can become an output branch of the real phone connector rather than a separate tool. |
 | `decide_optional_calendar_selected_only` | `assign` skip | Optional | Replace with Calendar create/readback only after selected hold succeeds. |
@@ -64,9 +68,9 @@ The executable template is `workflows/dinner_date_mock.yaml`. These nodes are in
 
 | Dependency | NyxID service | Used by template node(s) | Required output fields |
 |---|---|---|---|
-| Outbound restaurant calls | `api-twilio` | `hold_selected_*`, `hold_candidate_*`, `release_unselected_*` | `twilio_call_record`, call status, call duration, error reason if failed |
-| Voice agent / transcript extraction | `api-elevenlabs` | `hold_selected_*`, `hold_candidate_*`, `release_unselected_*` | `elevenlabs_transcript`, extracted hold/release status, extracted payment request flag |
-| Restaurant phone endpoint | Not a NyxID service | `hold_selected_*`, `hold_candidate_*`, `release_unselected_*` | Real phone number, reachable status, restaurant-side answer |
+| Outbound restaurant calls | `api-twilio` | `hold_selected_venue`, `hold_candidate_*`, `release_unselected_*` | `twilio_call_record`, call status, call duration, error reason if failed |
+| Voice agent / transcript extraction | `api-elevenlabs` | `hold_selected_venue`, `hold_candidate_*`, `release_unselected_*` | `elevenlabs_transcript`, extracted hold/release status, extracted payment request flag |
+| Restaurant phone endpoint | Not a NyxID service | `hold_selected_venue`, `hold_candidate_*`, `release_unselected_*` | Real phone number, reachable status, restaurant-side answer |
 
 Required phone connector result shape:
 
@@ -75,6 +79,7 @@ venue: string
 venue_id: string
 action: hold | release
 external_effect: confirmed | unverified | failed
+restaurant_message: string
 twilio_call_record: string
 elevenlabs_transcript: string
 payment_requested: boolean
@@ -153,7 +158,7 @@ Observed during local testing:
 ## Open Questions
 
 1. Should candidate discovery require connected search/Firecrawl, or allow user-provided candidate restaurants as a fallback?
-2. Should `hold_selected_*` / `hold_candidate_*` remain per-venue nodes, or collapse into one connector node once workflow support for array outputs and iteration is sufficient?
+2. Should timeout `hold_candidate_*` remain per-venue nodes, or collapse into one connector node once workflow support for array outputs and iteration is sufficient?
 3. Should ambiguous phone outcomes be represented as a separate workflow branch or only as `external_effect: unverified` from the phone connector?
 4. What exact Google OAuth scopes should be requested if optional Gmail/Calendar features are enabled?
 5. Should calendar creation be user-triggered after the final artifact, or automatic when Calendar write is connected?
