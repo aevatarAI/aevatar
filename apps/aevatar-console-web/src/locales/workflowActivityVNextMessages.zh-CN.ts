@@ -635,8 +635,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.manualAttemptFailed':
       '手动尝试未能启动工作流。',
     'workflowActivityVNext.schedule.openRunAria': '打开 {date} 的运行记录',
-    'workflowActivityVNext.schedule.viewRelatedRunsAria':
-      '查看 {date} 附近的相关运行',
     'workflowActivityVNext.schedule.runStarted': '运行已启动',
     'workflowActivityVNext.schedule.enable': '启用',
     'workflowActivityVNext.schedule.failed': '失败',

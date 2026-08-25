@@ -157,6 +157,29 @@ describe('workflowScheduleApi', () => {
     });
   });
 
+  it('maps the scheduled dispatch target actor to the authoritative Run destination', async () => {
+    mockJson({
+      schedule: createSummary(),
+      recentFires: [
+        {
+          scheduledFireAt: '2026-08-20T08:00:00Z',
+          completedAt: '2026-08-20T08:01:00Z',
+          idempotencyKey: 'schedule-alpha:fire:1',
+          targetActorId: 'run-alpha',
+          error: '',
+          manual: false,
+        },
+      ],
+    });
+
+    await expect(
+      workflowScheduleApi.get('scope-alpha', 'wf-alpha', 'schedule-alpha'),
+    ).resolves.toEqual({
+      schedule: expect.objectContaining({ scheduleId: 'schedule-alpha' }),
+      recentFires: [expect.objectContaining({ runActorId: 'run-alpha' })],
+    });
+  });
+
   it('keeps detail and mutation routes under the exact workflow identity', async () => {
     const fetchMock = mockJson({
       schedule: createSummary(),

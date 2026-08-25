@@ -34,9 +34,9 @@ flowchart LR
   Schedule History owns only bounded recent attempts and provides a secondary
   `View related runs in Activity` handoff with exact Workflow and Schedule
   filters. A recent attempt may also open its exact Activity Run when the
-  backend fire record contains a non-empty `runActorId`. A successful legacy
-  attempt without that identity opens the same filtered Activity list rather
-  than guessing a Run destination.
+  backend fire record contains a non-empty `runActorId`. Any attempt without
+  that authoritative identity remains non-interactive; the row must not reuse
+  the Schedule-wide Activity handoff or guess a Run destination.
 
 ## Identity Boundary
 
@@ -55,6 +55,12 @@ The frontend must not require or infer `teamId`, `memberId`, or
 `publishedServiceId` for this flow. The backend resolves the published
 service, service endpoint, active revision, and authenticated NyxID owner
 binding behind the Workflow facade.
+
+At the API boundary, the frontend normalizes the Workflow facade's
+`runActorId` and the scheduled-dispatch transport's `targetActorId` into one
+product-semantic `runActorId`. Both fields carry the same authoritative target
+Run actor identity in this response boundary. UI components must not branch on
+the transport field name or expose `targetActorId` as a second identity.
 
 Draft, unpublished, or not-ready Workflows show an unavailable validation
 state. They never fall back to Team Automation.
@@ -207,8 +213,8 @@ The UI may present only typed response facts, including:
 - fire and failure counts;
 - recent fires;
 - a per-attempt exact Run destination only when `runActorId` is non-empty;
-- a Workflow + Schedule filtered Activity fallback for a successful legacy
-  attempt without `runActorId`;
+- a separate Workflow + Schedule filtered Activity handoff for the Schedule as
+  a whole;
 - service revision only when useful as secondary diagnostics.
 
 Low-level service, actor, command, correlation, credential, or Team fields do

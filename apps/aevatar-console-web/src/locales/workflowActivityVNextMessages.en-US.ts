@@ -678,8 +678,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.manualAttemptFailed':
     'The manual attempt could not start the Workflow.',
   'workflowActivityVNext.schedule.openRunAria': 'Open Run from {date}',
-  'workflowActivityVNext.schedule.viewRelatedRunsAria':
-    'View related runs from {date}',
   'workflowActivityVNext.schedule.runStarted': 'Run started',
   'workflowActivityVNext.schedule.enable': 'Enable',
   'workflowActivityVNext.schedule.failed': 'Failed',

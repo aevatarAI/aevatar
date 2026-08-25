@@ -228,12 +228,12 @@ is non-empty, the separate `Action` cell contains a keyboard-accessible,
 arrow-only native Run link. The table row itself is not a scripted link because
 it can also contain Technical details. The link opens the existing Activity Run
 detail route in a new tab and preserves `workflowId + schedule` in the query so
-Back returns to the same filtered Activity context. A successful legacy attempt
-with an empty `runActorId` uses the same Action treatment but opens the Workflow
-+ Schedule filtered Activity list in a new tab; it must not guess a Run
-identity. A pre-Run failure with an empty `runActorId` renders an empty Action
-cell and remains non-interactive. Every arrow-only Action link retains a full
-accessible name that identifies the attempt and destination.
+Back returns to the same filtered Activity context. Any attempt with an empty
+`runActorId`, whether successful or failed, renders an empty Action cell and
+remains non-interactive. A row-level Action represents one exact attempt and
+must never fall back to the Workflow + Schedule filtered Activity list. Every
+arrow-only Action link retains a full accessible name that identifies the
+attempt and destination.
 
 ### Activity handoff
 
@@ -297,7 +297,7 @@ stateDiagram-v2
     Overview --> Edit: Edit schedule
     Edit --> Overview: Cancel
     Edit --> Overview: Save accepted
-    History --> Activity: Open related runs or legacy started attempt in new tab
+    History --> Activity: Open related runs in new tab
     History --> RunDetail: Open attempt with runActorId in new tab
     Overview --> ScheduleList: Back
     History --> ScheduleList: Back
@@ -344,9 +344,12 @@ DELETE /api/scopes/{scopeId}/workflows/{workflowId}/schedules/{scheduleId}
 ```
 
 The Schedule detail provides configuration, counters, current timestamps, and
-bounded `recentFires`, including `runActorId` when an attempt created a Run.
-Activity already supplies the filtered actual-Run surface and Run detail.
-There is no backend issue comment to add for this design.
+bounded `recentFires`, including an authoritative target Run actor identity when
+an attempt created a Run. The frontend adapter accepts the Workflow facade name
+`runActorId` and the scheduled-dispatch transport name `targetActorId`, then
+normalizes both to the UI's single `runActorId` field. Activity already supplies
+the filtered actual-Run surface and Run detail. There is no backend issue
+comment to add for this design.
 
 ## Review Artifacts
 
@@ -377,8 +380,8 @@ and History are separate PNGs so each state can be reviewed at readable size.
 - History renders bounded attempts in a compact list and keeps raw failures
   under Technical details.
 - An attempt with a non-empty backend `runActorId` opens that exact Activity
-  Run. A successful legacy attempt without one opens filtered Activity without
-  guessing identity; a failed attempt without one remains non-interactive.
+  Run. Every attempt without one remains non-interactive; the row never changes
+  scope to the Schedule-wide Activity list or guesses an identity.
 - `View related runs in Activity` uses exact Workflow and Schedule filters.
 - Activity and Run links open in a new tab without closing or navigating the
   current Schedule surface.

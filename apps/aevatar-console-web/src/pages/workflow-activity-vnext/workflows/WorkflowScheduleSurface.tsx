@@ -1329,26 +1329,19 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                   scheduleDetail.data.schedule.timezone,
                 );
                 const runActorId = fire.runActorId.trim();
-                const runHref = runActorId
+                const attemptHref = runActorId
                   ? buildWorkflowActivityRunHref(scopeId, runActorId, {
                       workflowId,
                       schedule: scheduleDetail.data.schedule.scheduleId,
                     })
                   : null;
-                const attemptHref = runHref ?? (!failed ? activityHref : null);
-                const attemptLabel = runHref
+                const attemptLabel = attemptHref
                   ? t(
                       'workflowActivityVNext.schedule.openRunAria',
                       'Open Run from {date}',
                       { date: formattedScheduledAt },
                     )
-                  : attemptHref
-                    ? t(
-                        'workflowActivityVNext.schedule.viewRelatedRunsAria',
-                        'View related runs from {date}',
-                        { date: formattedScheduledAt },
-                      )
-                    : null;
+                  : null;
                 return (
                   <tr key={`${fire.idempotencyKey}:${fire.completedAt}`}>
                     <td>

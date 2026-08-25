@@ -244,7 +244,13 @@ function decodeWorkflowScheduleDetail(value: unknown): WorkflowScheduleDetail {
               fire,
               ['runActorId', 'RunActorId'],
               `${entryLabel}.runActorId`,
-            ) ?? '',
+            ) ??
+            readNullableString(
+              fire,
+              ['targetActorId', 'TargetActorId'],
+              `${entryLabel}.targetActorId`,
+            ) ??
+            '',
           error: readString(fire, ['error', 'Error'], `${entryLabel}.error`),
           manual: readBoolean(
             fire,

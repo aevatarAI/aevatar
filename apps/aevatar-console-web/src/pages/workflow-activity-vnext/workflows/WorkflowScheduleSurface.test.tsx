@@ -902,9 +902,8 @@ describe('WorkflowScheduleSurface', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
-  it('opens a successful legacy attempt in schedule-filtered Activity', async () => {
+  it('keeps a History attempt without Run identity non-interactive', async () => {
     const schedule = createScheduleSummary();
-    const onClose = jest.fn();
     mockedWorkflowScheduleApi.list.mockResolvedValue({
       items: [schedule],
       nextCursor: null,
@@ -924,25 +923,32 @@ describe('WorkflowScheduleSurface', () => {
       ],
     });
 
-    renderSurface(true, 'modal', onClose, 'list');
+    renderSurface(true, 'modal', jest.fn(), 'list');
     fireEvent.click(
       await screen.findByRole('button', { name: 'View Daily workflow run' }),
     );
     fireEvent.click(await screen.findByRole('tab', { name: 'History' }));
 
-    const legacyActivityLink = await screen.findByRole('link', {
-      name: /View related runs from/,
+    await screen.findByRole('heading', { name: 'Recent attempts' });
+
+    expect(
+      screen.queryByRole('link', { name: /View related runs from/ }),
+    ).not.toBeInTheDocument();
+    const attemptRow = screen.getByText('Run started').closest('tr');
+    expect(attemptRow).not.toBeNull();
+    const attemptCells = attemptRow?.querySelectorAll('td');
+    expect(attemptCells).toHaveLength(5);
+    expect(attemptCells?.[4]?.querySelector('a')).toBeNull();
+
+    const relatedRunsLink = screen.getByRole('link', {
+      name: 'View related runs in Activity',
     });
-    expect(legacyActivityLink).toHaveAttribute(
+    expect(relatedRunsLink).toHaveAttribute(
       'href',
       '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
     );
-    expect(legacyActivityLink).toHaveAttribute('target', '_blank');
-    expect(legacyActivityLink).toHaveAttribute('rel', 'noopener noreferrer');
-
-    fireEvent.click(legacyActivityLink);
-
-    expect(onClose).not.toHaveBeenCalled();
+    expect(relatedRunsLink).toHaveAttribute('target', '_blank');
+    expect(relatedRunsLink).toHaveAttribute('rel', 'noopener noreferrer');
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
