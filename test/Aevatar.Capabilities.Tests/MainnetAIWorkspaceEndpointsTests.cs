@@ -1100,7 +1100,13 @@ public sealed class MainnetAIWorkspaceEndpointsTests
         "workflow-run-report.v1",
         "workflow-run-report.v1",
         AIWorkspaceRunDetailSectionVersionStatus.VersionMismatch)]
-    public async Task ActivityRunDetailMapper_ShouldPreserveReportMaterializationStatus(
+    [InlineData(
+        ObservatoryRunDetailSectionVersionStatus.Disabled,
+        0,
+        "workflow-run-report.v1",
+        "workflow-run-report.v1",
+        AIWorkspaceRunDetailSectionVersionStatus.Disabled)]
+    public async Task ActivityRunDetailMapper_ShouldPreserveSectionMaterializationStatus(
         ObservatoryRunDetailSectionVersionStatus sourceStatus,
         long sourceStateVersion,
         string reportVersion,

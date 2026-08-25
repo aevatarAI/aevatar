@@ -257,6 +257,31 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     }
 
     [Fact]
+    public async Task ArtifactQueryPort_WhenGraphProviderDisabled_ShouldExposeDisabledGraphWithoutTouchingStores()
+    {
+        var reportReader = new RecordingDocumentReader<WorkflowRunInsightReportDocument>();
+        var graphStore = new RecordingProjectionGraphStore();
+        var port = new WorkflowExecutionArtifactQueryPort(
+            reportReader,
+            new WorkflowExecutionReadModelMapper(),
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                WorkflowArtifactQueryEnabled = true,
+            },
+            legacyGraphStore: graphStore,
+            graphProviderStatus: new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+
+        port.WorkflowArtifactQueryEnabled.Should().BeTrue();
+        port.WorkflowGraphExportEnabled.Should().BeFalse();
+        (await port.GetWorkflowRunGraphExportEdgesAsync("actor-1")).Should().BeEmpty();
+        (await port.GetWorkflowRunGraphExportSubgraphAsync("actor-1")).RootNodeId.Should().Be("actor-1");
+        reportReader.GetCalls.Should().Be(0);
+        graphStore.GetNeighborsCalls.Should().Be(0);
+        graphStore.GetSubgraphCalls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ArtifactQueryPort_WhenActorIdIsBlank_ShouldShortCircuitGraphQueries()
     {
         var harness = CreateHarness(new WorkflowExecutionProjectionOptions

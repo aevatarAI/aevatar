@@ -442,6 +442,16 @@ public sealed class WorkflowRunObservatoryQueryService
         WorkflowActorSnapshot snapshot,
         CancellationToken ct)
     {
+        if (!_artifactQueryPort.WorkflowGraphExportEnabled)
+        {
+            return new ObservatoryRunGraph
+            {
+                RootNodeId = snapshot.ActorId,
+                DetailStateVersion = snapshot.StateVersion,
+                VersionStatus = ObservatoryRunDetailSectionVersionStatus.Disabled,
+            };
+        }
+
         var subgraph = await _artifactQueryPort.GetWorkflowRunGraphExportSubgraphAsync(
             snapshot.ActorId,
             ct: ct);

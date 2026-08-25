@@ -458,6 +458,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     private sealed class FakeArtifactQueryPort(List<string> calls) : IWorkflowExecutionArtifactQueryPort
     {
         public bool WorkflowArtifactQueryEnabled { get; set; }
+        public bool WorkflowGraphExportEnabled { get; set; } = true;
         public WorkflowRunReport? Report { get; init; }
         public IReadOnlyList<WorkflowRunTimelineExportItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowRunGraphExportEdge> Edges { get; init; } = [];

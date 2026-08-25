@@ -1513,6 +1513,33 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task GetRunForScopeAsync_WhenGraphExportDisabled_ShouldNotEmitGraphUnavailableWarning()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            SingleResult = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Completed),
+        };
+        var artifact = new FakeArtifactQueryPort
+        {
+            WorkflowGraphExportEnabled = false,
+            Report = new WorkflowRunReport { StateVersion = 7 },
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Sections.ExecutionPath.VersionStatus
+            .Should().Be(ObservatoryRunDetailSectionVersionStatus.Disabled);
+        detail.ExecutionPath.VersionStatus
+            .Should().Be(ObservatoryRunDetailSectionVersionStatus.Disabled);
+        detail.Diagnostics.Should().NotContain(diagnostic =>
+            diagnostic.Source == "read-model.execution_path" ||
+            diagnostic.Message == "Execution path graph source version is unavailable.");
+        artifact.GraphRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GetRunGraphForScopeAsync_ShouldExposeMismatchAndHideStaleGraph_WhenSourceVersionDiffers()
     {
         var currentState = new FakeCurrentStateQueryPort
@@ -1877,6 +1904,7 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     private sealed class FakeArtifactQueryPort : IWorkflowExecutionArtifactQueryPort
     {
         public bool WorkflowArtifactQueryEnabled => true;
+        public bool WorkflowGraphExportEnabled { get; init; } = true;
         public WorkflowRunReport? Report { get; init; }
         public WorkflowRunGraphExportSubgraph Subgraph { get; init; } = new();
         public List<string> ReportRequests { get; } = [];

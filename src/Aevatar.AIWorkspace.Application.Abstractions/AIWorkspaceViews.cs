@@ -32,6 +32,9 @@ public enum AIWorkspaceRunDetailSectionVersionStatus
 
     [JsonStringEnumMemberName("version_mismatch")]
     VersionMismatch = 3,
+
+    [JsonStringEnumMemberName("disabled")]
+    Disabled = 4,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<AIWorkspaceConversationKind>))]

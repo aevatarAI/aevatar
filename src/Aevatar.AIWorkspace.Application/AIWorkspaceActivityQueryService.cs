@@ -331,6 +331,8 @@ public sealed class AIWorkspaceActivityQueryService(
                     AIWorkspaceRunDetailSectionVersionStatus.Unavailable,
                 ObservatoryRunDetailSectionVersionStatus.VersionMismatch =>
                     AIWorkspaceRunDetailSectionVersionStatus.VersionMismatch,
+                ObservatoryRunDetailSectionVersionStatus.Disabled =>
+                    AIWorkspaceRunDetailSectionVersionStatus.Disabled,
                 _ => AIWorkspaceRunDetailSectionVersionStatus.Unknown,
             },
             EmptyToNull(section.Reason));
