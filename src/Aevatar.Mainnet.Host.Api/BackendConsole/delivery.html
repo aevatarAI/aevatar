@@ -2354,13 +2354,23 @@
         if (returnedSlot && returnedSlot !== slotKey) {
           throw new ApiError(409, "服务端返回的连接 slot 与当前操作不一致。", response, "connection_slot_mismatch");
         }
+        const expectedStatusUrl = "/api/scopes/" + encodeURIComponent(scopeId) +
+          "/delivery-requests/" + encodeURIComponent(deliveryIdValue) +
+          "/connections/" + encodeURIComponent(slotKey);
+        const receiptStatus = text(first(response, ["status"], ""));
+        const connectLinkId = text(first(response, ["connectLinkId", "connect_link_id"], ""));
+        const statusUrl = text(first(response, ["statusUrl", "status_url"], ""));
+        if (result.status !== 202 || receiptStatus !== "begin_accepted" || !connectLinkId ||
+            statusUrl !== expectedStatusUrl || result.location !== expectedStatusUrl) {
+          throw new ApiError(502, "服务端没有返回可对账的连接受理回执。", response, "invalid_connection_receipt");
+        }
         const connectUrl = safeHttpUrl(first(response, ["connectUrl", "connect_url"], ""));
         if (!connectUrl) {
           throw new ApiError(503, "服务端未返回可用的 NyxID connectUrl。", response, "missing_connect_url");
         }
         state.customer.connectionRuntime[slotKey] = Object.assign({}, response, { connectUrl: connectUrl });
         invalidateValidation();
-        state.notice = { tone: "info", title: "连接链接已创建", message: "请在 NyxID 完成连接，然后返回这里显式检查状态。" };
+        state.notice = { tone: "info", title: "连接请求已受理", message: "请在 NyxID 完成连接，然后返回这里显式检查投影状态。" };
       } catch (error) {
         if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
           state.customer.connectionErrors[slotKey] = error;
@@ -2491,6 +2501,8 @@
         renderCustomerDetail();
 
         let response = null;
+        const prior = object(state.customer.connectionRuntime[slotKey]);
+        const expectedConnectLinkId = text(first(prior, ["connectLinkId", "connect_link_id"], ""));
         for (let attempt = 0; attempt < PROJECTION_RETRY_ATTEMPTS; attempt += 1) {
           if (attempt > 0) {
             await new Promise(function (resolve) { window.setTimeout(resolve, PROJECTION_RETRY_MS); });
@@ -2507,6 +2519,11 @@
           if (returnedSlot && returnedSlot !== slotKey) {
             throw new ApiError(409, "服务端返回的连接 slot 与当前操作不一致。", response, "connection_slot_mismatch");
           }
+          const observedConnectLinkId = text(first(response, ["connectLinkId", "connect_link_id"], ""));
+          if (!observedConnectLinkId ||
+              (expectedConnectLinkId && observedConnectLinkId !== expectedConnectLinkId)) {
+            throw new ApiError(409, "连接状态属于另一个 NyxID connect link。", response, "connection_link_mismatch");
+          }
           if (connectionPollingIsTerminal(connectionStatus(response))) {
             break;
           }
@@ -2519,7 +2536,6 @@
         if (returnedSlot && returnedSlot !== slotKey) {
           throw new ApiError(409, "服务端返回的连接 slot 与当前操作不一致。", response, "connection_slot_mismatch");
         }
-        const prior = object(state.customer.connectionRuntime[slotKey]);
         state.customer.connectionRuntime[slotKey] = Object.assign({}, prior, response);
         const refreshedStatus = connectionStatus(response);
         if (["completed", "connected", "ready", "active"].indexOf(refreshedStatus) >= 0) {

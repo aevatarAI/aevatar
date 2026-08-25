@@ -154,7 +154,6 @@ function taskPlan(
     activeStepId: steps.find((step) =>
       ['running', 'waiting', 'uncertain'].includes(String(step.status)),
     )?.stepId,
-    gate: { mode: 'auto', status: 'satisfied' },
     steps,
     ...planOverrides,
   };
@@ -1305,43 +1304,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
           },
         ],
         title: 'External record retry',
-        gate: {
-          mode: 'confirm',
-          status: 'satisfied',
-          requestId: 'plan-gate-retry-3',
-          taskId: 'task-alpha',
-          planId: 'plan-alpha',
-          planRevision: 3,
-          decidedAt: '2026-08-08T00:03:00Z',
-        },
       },
     );
-    const pendingRetryPlan = {
-      ...retryPlan,
-      activeOperationId: undefined,
-      gate: {
-        mode: 'confirm',
-        status: 'pending',
-        requestId: 'plan-gate-retry-3',
-        taskId: 'task-alpha',
-        planId: 'plan-alpha',
-        planRevision: 3,
-        reason: 'This retry changes the frozen operation generation.',
-      },
-      steps: (retryPlan.steps as Record<string, unknown>[]).map((step) =>
-        step.stepId === 'step-effect'
-          ? {
-              ...step,
-              status: 'planned',
-              availableActions: undefined,
-              operation: {
-                ...(step.operation as Record<string, unknown>),
-                phase: 'requested',
-              },
-            }
-          : step,
-      ),
-    };
     const retryStartedResult = {
       kind: 'retry',
       requestId: 'retry-alpha',
@@ -1353,11 +1317,7 @@ describe('ChatPage canonical NyxID Assistant', () => {
       operationGeneration: 2,
       outcome: 'retry_started',
     };
-    const pendingRetryState = activeTaskState(pendingRetryPlan, 22, {
-      latestStepControlResult: retryStartedResult,
-      recentStepControlResults: [retryStartedResult],
-    });
-    const retryState = activeTaskState(retryPlan, 23, {
+    const retryState = activeTaskState(retryPlan, 22, {
       latestStepControlResult: retryStartedResult,
       recentStepControlResults: [retryStartedResult],
     });
@@ -1436,7 +1396,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
           21,
         ),
       )
-      .mockResolvedValueOnce(pendingRetryState)
       .mockResolvedValueOnce(retryState)
       .mockRejectedValueOnce(new Error('Current state is not visible yet.'))
       .mockResolvedValueOnce(retryState)
@@ -1516,34 +1475,8 @@ describe('ChatPage canonical NyxID Assistant', () => {
     );
     expect(await screen.findByText(/generation 2/)).toBeInTheDocument();
     expect(
-      within(taskRow('Submit external record')).getByText('planned'),
+      within(taskRow('Submit external record')).getByText('running'),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'Confirm plan' }),
-    ).toBeInTheDocument();
-    expect(requestBodies()).toEqual([
-      {
-        type: 'step.retry',
-        conversationId: 'conversation-alpha',
-        turnId: 'turn-alpha',
-        taskId: 'task-alpha',
-        stepId: 'step-effect',
-        retryRequestId: expect.any(String),
-        clientRequestId: expect.any(String),
-        expectedOperationGeneration: 1,
-        expectedStateVersion: 21,
-      },
-    ]);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm plan' }));
-    await waitFor(() =>
-      expect(
-        within(taskRow('Submit external record')).getByText('running'),
-      ).toBeInTheDocument(),
-    );
-    expect(
-      screen.queryByRole('button', { name: 'Confirm plan' }),
-    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('region', { name: 'NyxID approval observation' }),
     ).not.toBeInTheDocument();
@@ -1564,17 +1497,6 @@ describe('ChatPage canonical NyxID Assistant', () => {
         clientRequestId: expect.any(String),
         expectedOperationGeneration: 1,
         expectedStateVersion: 21,
-      },
-      {
-        type: 'plan.resolve',
-        conversationId: 'conversation-alpha',
-        taskId: 'task-alpha',
-        planId: 'plan-alpha',
-        requestId: 'plan-gate-retry-3',
-        clientRequestId: expect.any(String),
-        planRevision: 3,
-        confirmed: true,
-        expectedStateVersion: 22,
       },
     ]);
 

@@ -133,6 +133,10 @@ public sealed record WorkflowDeliveryListResponse(
     IReadOnlyList<WorkflowDeliveryView> Items,
     string? NextPageToken = null);
 
+public sealed record WorkflowDeliveryPageRequest(
+    int? PageSize = null,
+    string? PageToken = null);
+
 public sealed record WorkflowDeliveryAcceptedResponse(
     string DeliveryId,
     string Status,
@@ -162,7 +166,9 @@ public sealed record WorkflowInstallationAcceptedResponse(
 public sealed record WorkflowDeliveryConnectLinkResponse(
     string SlotKey,
     string Status,
+    string ConnectLinkId,
     string ConnectUrl,
+    string StatusUrl,
     DateTimeOffset ExpiresAt);
 
 public sealed record WorkflowDeliveryExistingConnectionView(
@@ -185,6 +191,7 @@ public sealed record WorkflowDeliveryAttachedConnectionResponse(
 public sealed record WorkflowDeliveryConnectStatusResponse(
     string SlotKey,
     string Status,
+    string ConnectLinkId,
     string? UserServiceId,
     DateTimeOffset UpdatedAt);
 
@@ -204,8 +211,13 @@ public interface IWorkflowDeliveryService
     Task<WorkflowDeliveryPackageListResponse> ListPackagesAsync(string principalId, CancellationToken ct = default);
     Task<WorkflowDeliveryPackageView> GetPackageAsync(string workflowName, string principalId, CancellationToken ct = default);
     Task<WorkflowDeliveryAcceptedResponse> CreateAsync(string principalId, WorkflowDeliveryCreateRequest request, CancellationToken ct = default);
-    Task<WorkflowDeliveryListResponse> ListAdminAsync(CancellationToken ct = default);
-    Task<WorkflowDeliveryListResponse> ListCustomerAsync(string scopeId, CancellationToken ct = default);
+    Task<WorkflowDeliveryListResponse> ListAdminAsync(
+        WorkflowDeliveryPageRequest? page = null,
+        CancellationToken ct = default);
+    Task<WorkflowDeliveryListResponse> ListCustomerAsync(
+        string scopeId,
+        WorkflowDeliveryPageRequest? page = null,
+        CancellationToken ct = default);
     Task<WorkflowDeliveryView?> GetAdminAsync(string deliveryId, CancellationToken ct = default);
     Task<WorkflowDeliveryView?> GetCustomerAsync(string deliveryId, string scopeId, CancellationToken ct = default);
     Task<WorkflowDeliveryView> ValidateAccessAsync(string deliveryId, string scopeId, CancellationToken ct = default);

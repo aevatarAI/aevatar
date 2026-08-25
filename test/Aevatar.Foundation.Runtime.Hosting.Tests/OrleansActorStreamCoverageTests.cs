@@ -126,10 +126,11 @@ public sealed class OrleansActorStreamCoverageTests
         var stream = CreateStream(provider: provider, forwardingRegistry: registry);
 
         var act = () => stream.ProduceAsync(new StringValue { Value = "continue" });
-        (await act.Should().ThrowAsync<AggregateException>()).Which.InnerExceptions.Should().ContainSingle();
+        var failure = await act.Should().ThrowAsync<EventPublicationException>();
+        failure.Which.Outcome.Should().Be(EventPublicationFailureOutcome.OutcomeUncertain);
+        failure.Which.InnerException.Should().BeOfType<AggregateException>().Which.InnerExceptions.Should().ContainSingle();
         provider.GetRecordedStream("good-target").Published.Should().ContainSingle();
     }
-
     [Fact]
     public async Task RelayAsync_ShouldNotLoopOnCyclicTopology()
     {

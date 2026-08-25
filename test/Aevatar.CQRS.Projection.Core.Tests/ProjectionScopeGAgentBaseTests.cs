@@ -667,6 +667,119 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleReplayAsync_WithEarlierInFlightObservation_ShouldResumeItBeforeChargingBacklog()
+    {
+        var processCount = 0;
+        var publisher = new RecordingEventPublisher();
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-replay-serialized-existing",
+            onProcess: _ =>
+            {
+                processCount++;
+                throw new InvalidOperationException("the in-flight source must resume on its own turn");
+            },
+            eventSourcing: new TrackingEventSourcing(),
+            enableDurableObservationRecovery: true);
+        agent.EventPublisher = publisher;
+        await InitializeFailureTrackerAsync(agent);
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = 1,
+                EventId = "evt-1",
+            },
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-replay-serialized-existing",
+                version: 1,
+                eventId: "evt-1"),
+        };
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-2",
+            SourceVersion = 2,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-replay-serialized-existing",
+                version: 2,
+                eventId: "evt-2"),
+        });
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-3",
+            SourceVersion = 3,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-replay-serialized-existing",
+                version: 3,
+                eventId: "evt-3"),
+        });
+
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand { MaxItems = 2 });
+
+        processCount.Should().Be(0);
+        agent.State.Failures.Should().OnlyContain(static failure => failure.Attempts == 0);
+        publisher.Published.Should().ContainSingle().Which.Message
+            .Should().BeOfType<ResumeProjectionInFlightObservationCommand>();
+    }
+
+    [Fact]
+    public async Task HandleReplayAsync_WhenFailureStagesSource_ShouldStopBeforeChargingNextBacklogItem()
+    {
+        var processedVersions = new List<long>();
+        var publisher = new RecordingEventPublisher();
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-replay-serialized-new",
+            onProcess: envelope =>
+            {
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                processedVersions.Add(version);
+                throw new InvalidOperationException("still failing");
+            },
+            eventSourcing: new TrackingEventSourcing(),
+            enableDurableObservationRecovery: true);
+        agent.EventPublisher = publisher;
+        await InitializeFailureTrackerAsync(agent);
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-2",
+            SourceVersion = 2,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-replay-serialized-new",
+                version: 2,
+                eventId: "evt-2"),
+        });
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-3",
+            SourceVersion = 3,
+            Envelope = BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-replay-serialized-new",
+                version: 3,
+                eventId: "evt-3"),
+        });
+
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand { MaxItems = 2 });
+
+        processedVersions.Should().Equal(2);
+        agent.State.InFlightObservation!.Source.Should().BeEquivalentTo(new ProjectionSourceCoordinate
+        {
+            ActorId = "publisher-actor",
+            StateVersion = 2,
+            EventId = "evt-2",
+        });
+        agent.State.Failures.Should().ContainSingle(static failure => failure.FailureId == "failure-2")
+            .Which.Attempts.Should().Be(1);
+        agent.State.Failures.Should().ContainSingle(static failure => failure.FailureId == "failure-3")
+            .Which.Attempts.Should().Be(0);
+        publisher.Published.Should().ContainSingle().Which.Message
+            .Should().BeOfType<ResumeProjectionInFlightObservationCommand>();
+    }
+
+    [Fact]
     public async Task HandleReplayAsync_WhenAutomatic_ShouldSkipRetryExhaustedFailures()
     {
         var processedVersions = new List<long>();
@@ -946,6 +1059,32 @@ public sealed class ProjectionScopeGAgentBaseTests
             public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
                 Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
         }
+    }
+
+    private sealed class RecordingEventPublisher : IEventPublisher
+    {
+        public List<(IMessage Message, TopologyAudience Audience)> Published { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            Published.Add((evt, audience));
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage =>
+            throw new NotSupportedException();
     }
 
     private sealed class TestScopeAgent : ProjectionScopeGAgentBase<TestContext>

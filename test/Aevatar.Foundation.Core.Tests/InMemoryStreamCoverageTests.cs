@@ -139,7 +139,7 @@ public sealed class InMemoryStreamCoverageTests
         await GetDispatchLoop(stream).WaitAsync(TimeSpan.FromSeconds(2));
 
         Func<Task> act = async () => await stream.ProduceAsync(new PingEvent { Message = "second" });
-        await act.Should().ThrowAsync<Exception>();
+        (await act.Should().ThrowAsync<EventPublicationException>()).Which.Outcome.Should().Be(EventPublicationFailureOutcome.NotAdmitted);
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public sealed class InMemoryStreamCoverageTests
         stream.Shutdown();
 
         Func<Task> act = async () => await stream.ProduceAsync(new PingEvent { Message = "after-shutdown" });
-        await act.Should().ThrowAsync<Exception>();
+        (await act.Should().ThrowAsync<EventPublicationException>()).Which.Outcome.Should().Be(EventPublicationFailureOutcome.NotAdmitted);
     }
 
     [Fact]

@@ -139,6 +139,7 @@ internal sealed class ProjectionScopeFailureTracker
                     await RecordReplayFailureAsync(
                         failure,
                         "Replay did not produce a materialization result.");
+                    break;
                 }
             }
             catch (ProjectionScopeStatusRouteBlockedException)
@@ -151,6 +152,7 @@ internal sealed class ProjectionScopeFailureTracker
             catch (Exception ex)
             {
                 await RecordReplayFailureAsync(failure, ex.Message);
+                break;
             }
         }
     }

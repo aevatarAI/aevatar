@@ -412,15 +412,25 @@ public sealed class ServiceDeploymentManagerGAgentTests
             ServiceActorIds.Deployment(identity));
         await agent.ActivateAsync();
         BindActiveDeployment(agent, identity);
+        await agent.HandleDeactivateAsync(new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-r1",
+        });
+        var deactivationOperationId = agent.State.PendingDeactivations["dep-r1"]
+            .DeactivationOperationId;
 
         await agent.HandleEventAsync(CreateRemovedAckEnvelope(
             agent.Id,
             ServiceActorIds.ServingSet(identity),
-            CreateRemovedAck(identity, operationId: "operation-old")));
+            CreateRemovedAck(
+                identity,
+                operationId: "operation-old",
+                deactivationOperationId: deactivationOperationId)));
         await agent.HandleEventAsync(CreateRemovedAckEnvelope(
             agent.Id,
             "foreign-serving-set",
-            CreateRemovedAck(identity)));
+            CreateRemovedAck(identity, deactivationOperationId: deactivationOperationId)));
 
         activator.DeactivateRequests.Should().BeEmpty();
         agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
@@ -428,13 +438,260 @@ public sealed class ServiceDeploymentManagerGAgentTests
         await agent.HandleEventAsync(CreateRemovedAckEnvelope(
             agent.Id,
             ServiceActorIds.ServingSet(identity),
-            CreateRemovedAck(identity)));
+            CreateRemovedAck(identity, deactivationOperationId: deactivationOperationId)));
 
         var request = activator.DeactivateRequests.Should().ContainSingle().Subject;
         request.DeploymentId.Should().Be("dep-r1");
         request.RevisionId.Should().Be("r1");
         request.PrimaryActorId.Should().Be("actor-r1");
         agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Deactivated);
+    }
+
+    [Fact]
+    public async Task LateRemovalAck_ShouldNotDeactivateDeploymentReusedByNewActivation()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var activator = new RecordingRuntimeActivator();
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            revisionCatalog,
+            activator,
+            ServiceActorIds.Deployment(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        BindActiveDeployment(agent, identity);
+        agent.State.Deployments["dep-r1"].ArtifactHash = artifact.ArtifactHash;
+
+        await agent.HandleDeactivateAsync(new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-r1",
+        });
+        var staleRemoval = dispatchPort.RemovalCommands.Should().ContainSingle().Subject.command;
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-new",
+            ExpectedArtifactHash = artifact.ArtifactHash,
+        });
+
+        agent.State.PendingDeactivations.Should().BeEmpty();
+        agent.State.PendingActivations["r1"].ActivationAttemptId.Should().Be("attempt-new");
+        dispatchPort.Commands.Should().ContainSingle();
+        var replacement = dispatchPort.Commands.Single().command;
+        replacement.Targets.Single().DeploymentId.Should().Be("dep-r1");
+        replacement.ActivationAttemptId.Should().Be("attempt-new");
+        replacement.OperationId.Should().NotBe(staleRemoval.ServingTargetOperationId);
+
+        await agent.HandleEventAsync(CreateRemovedAckEnvelope(
+            agent.Id,
+            ServiceActorIds.ServingSet(identity),
+            new ServiceServingTargetsRemovedAck
+            {
+                Identity = identity.Clone(),
+                DeploymentId = staleRemoval.DeploymentId,
+                RevisionId = staleRemoval.RevisionId,
+                PrimaryActorId = staleRemoval.PrimaryActorId,
+                ActivationAttemptId = staleRemoval.ActivationAttemptId,
+                ServingTargetOperationId = staleRemoval.ServingTargetOperationId,
+                DeactivationOperationId = staleRemoval.DeactivationOperationId,
+                Disposition = ServiceServingTargetRemovalDisposition.Removed,
+                RemovedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            }));
+
+        activator.DeactivateRequests.Should().BeEmpty();
+        agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
+        agent.State.PendingActivations.Should().ContainKey("r1");
+
+        await AcknowledgeLatestServingDispatchAsync(agent, identity, dispatchPort);
+
+        activator.ActivationRequests.Should().BeEmpty(
+            "the already-active deployment is reused behind the new activation fence");
+        agent.State.PendingActivations.Should().BeEmpty();
+        agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
+        agent.State.Deployments["dep-r1"].ActivationAttemptId.Should().Be("attempt-new");
+        agent.State.Deployments["dep-r1"].ServingTargetOperationId.Should().Be(replacement.OperationId);
+    }
+
+    [Fact]
+    public async Task RuntimeDeactivationFailure_ShouldResumeDurablyWithSameOperationAfterReplay()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var firstActivator = new RecordingRuntimeActivator();
+        firstActivator.ActivationResults.Enqueue(
+            new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        firstActivator.DeactivationExceptions.Enqueue(
+            new InvalidOperationException("synthetic runtime deactivation outage"));
+        var firstDispatch = new RecordingDispatchPort();
+        var firstScheduler = new RecordingCallbackScheduler();
+        var actorId = ServiceActorIds.Deployment(identity);
+        var first = CreateAgent(
+            eventStore,
+            revisionCatalog,
+            firstActivator,
+            actorId,
+            firstDispatch,
+            firstScheduler);
+        await first.ActivateAsync();
+        await first.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-r1",
+            ExpectedArtifactHash = artifact.ArtifactHash,
+        });
+        await AcknowledgeLatestServingDispatchAsync(first, identity, firstDispatch);
+
+        await first.HandleDeactivateAsync(new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-r1",
+        });
+        await AcknowledgeLatestRemovalDispatchAsync(first, identity, firstDispatch);
+
+        var failedRequest = firstActivator.DeactivateRequests.Should().ContainSingle().Subject;
+        var pending = first.State.PendingDeactivations["dep-r1"];
+        pending.Phase.Should().Be(ServiceDeploymentDeactivationPhase.RuntimeDeactivationPending);
+        pending.DeactivationOperationId.Should().Be(failedRequest.DeactivationOperationId);
+        first.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
+        await first.DeactivateAsync();
+
+        var recoveredActivator = new RecordingRuntimeActivator();
+        var recoveredDispatch = new RecordingDispatchPort();
+        var recoveredScheduler = new RecordingCallbackScheduler();
+        var recovered = CreateAgent(
+            eventStore,
+            revisionCatalog,
+            recoveredActivator,
+            actorId,
+            recoveredDispatch,
+            recoveredScheduler);
+        await recovered.ActivateAsync();
+        var continuation = recoveredScheduler.ScheduledTimeouts
+            .Select(timeout => timeout.Payload)
+            .Where(payload => payload.Is(DeactivateServiceDeploymentCommand.Descriptor))
+            .Select(payload => payload.Unpack<DeactivateServiceDeploymentCommand>())
+            .Should().ContainSingle().Subject;
+
+        continuation.DeactivationOperationId.Should().Be(failedRequest.DeactivationOperationId);
+        await recovered.HandleDeactivateAsync(continuation);
+
+        recoveredDispatch.RemovalCommands.Should().BeEmpty(
+            "the durable runtime phase must not repeat serving-target removal");
+        var recoveredRequest = recoveredActivator.DeactivateRequests.Should().ContainSingle().Subject;
+        recoveredRequest.DeactivationOperationId.Should().Be(failedRequest.DeactivationOperationId);
+        recovered.State.PendingDeactivations.Should().BeEmpty();
+        recovered.State.DeactivationFailures.Should().BeEmpty();
+        recovered.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Deactivated);
+    }
+
+    [Fact]
+    public async Task DeactivationRetrySchedulingFailure_ShouldRemainRetryableAfterPendingCommit()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var scheduler = new RecordingCallbackScheduler();
+        scheduler.ScheduleTimeoutExceptions.Enqueue(
+            new InvalidOperationException("synthetic deactivation scheduler outage"));
+        var actorId = ServiceActorIds.Deployment(identity);
+        var first = CreateAgent(
+            eventStore,
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            actorId,
+            scheduler: scheduler);
+        await first.ActivateAsync();
+        BindActiveDeployment(first, identity);
+
+        var act = () => first.HandleDeactivateAsync(new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-r1",
+        });
+
+        var failure = await act.Should().ThrowAsync<Exception>();
+        failure.Which.Should().BeAssignableTo<IRuntimeEnvelopeRetryableException>();
+        failure.Which.InnerException.Should().BeOfType<InvalidOperationException>();
+        first.State.PendingDeactivations.Should().ContainKey("dep-r1");
+        (await eventStore.GetEventsAsync(actorId)).Count(evt =>
+                evt.EventData.Is(ServiceDeploymentDeactivationRequestedEvent.Descriptor))
+            .Should().Be(1, "the pending deactivation was durable before scheduling failed");
+
+        await first.DeactivateAsync();
+        var recoveredScheduler = new RecordingCallbackScheduler();
+        var recoveredDispatch = new RecordingDispatchPort();
+        var recovered = CreateAgent(
+            eventStore,
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            actorId,
+            recoveredDispatch,
+            recoveredScheduler);
+
+        await recovered.ActivateAsync();
+
+        var continuation = recoveredScheduler.ScheduledTimeouts.Should().ContainSingle().Subject.Payload
+            .Unpack<DeactivateServiceDeploymentCommand>();
+        await recovered.HandleDeactivateAsync(continuation);
+        recoveredDispatch.RemovalCommands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task TerminalDeactivationFailure_ShouldKeepDeploymentActiveForFreshCleanupAttempt()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-08-25T00:00:00Z"));
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var scheduler = new RecordingCallbackScheduler();
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            new InMemoryEventStore(),
+            new FakeServiceRevisionCatalogQueryReader(),
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity),
+            dispatchPort,
+            scheduler,
+            timeProvider: clock);
+        await agent.ActivateAsync();
+        BindActiveDeployment(agent, identity);
+
+        await agent.HandleDeactivateAsync(new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-r1",
+        });
+        var firstOperationId = agent.State.PendingDeactivations["dep-r1"]
+            .DeactivationOperationId;
+        var expiredContinuation = scheduler.ScheduledTimeouts.Single().Payload
+            .Unpack<DeactivateServiceDeploymentCommand>();
+        clock.SetUtcNow(clock.GetUtcNow().AddMinutes(6));
+
+        await agent.HandleDeactivateAsync(expiredContinuation);
+
+        agent.State.PendingDeactivations.Should().BeEmpty();
+        agent.State.DeactivationFailures.Should().ContainKey("dep-r1");
+        agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Active);
+
+        await agent.HandleDeactivateAsync(new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-r1",
+        });
+
+        var retry = agent.State.PendingDeactivations.Should().ContainKey("dep-r1").WhoseValue;
+        retry.DeactivationOperationId.Should().NotBe(firstOperationId);
+        agent.State.DeactivationFailures.Should().BeEmpty();
+        dispatchPort.RemovalCommands.Should().HaveCount(2);
     }
 
     [Fact]
@@ -1393,7 +1650,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
         agent.State.LastAppliedEventVersion.Should().Be(committedVersion, "a late callback must not revive an inactive revision");
         agent.State.Deployments["dep-r1"].Status.Should().Be(ServiceDeploymentStatus.Deactivated);
-        agent.State.ActivationFailures.Should().NotContainKey("r1");
+        agent.State.ActivationFailures["r1"].FailureCode.Should()
+            .Be(ServiceDeploymentActivationFailureCode.SupersededByDeactivation);
         activator.ActivationRequests.Should().ContainSingle();
     }
 
@@ -1867,6 +2125,55 @@ public sealed class ServiceDeploymentManagerGAgentTests
         await AcknowledgeLatestServingDispatchAsync(replayed, identity, recoveredDispatch);
         replayed.State.PendingActivations.Should().NotContainKey("r1");
         replayed.State.ActivationFailures.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LegacyPendingServingDispatch_ShouldCheckpointPositiveSequenceBeforeRedispatch()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(identity, "r1");
+        var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+        await revisionCatalog.UpsertRevisionAsync(ServiceKeys.Build(identity), "r1", artifact);
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            revisionCatalog,
+            new RecordingRuntimeActivator(),
+            ServiceActorIds.Deployment(identity),
+            dispatchPort);
+        await agent.ActivateAsync();
+        BindActiveDeployment(agent, identity);
+        agent.State.Deployments["dep-r1"].ArtifactHash = artifact.ArtifactHash;
+        var command = new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+            ActivationAttemptId = "attempt-legacy-sequence",
+            ExpectedArtifactHash = artifact.ArtifactHash,
+        };
+        await agent.HandleActivateAsync(command);
+        var legacy = agent.State.PendingActivations["r1"].Clone();
+        legacy.Phase = ServiceDeploymentActivationPhase.ServingTargetDispatchAccepted;
+        legacy.ServingOperationSequence = 0;
+        legacy.ServingTargetOperationId = string.Empty;
+        legacy.ServingTargetCommandId = string.Empty;
+        agent.State.PendingActivations["r1"] = legacy;
+        dispatchPort.Commands.Clear();
+        dispatchPort.Envelopes.Clear();
+
+        await agent.HandleActivateAsync(command.Clone());
+
+        var migrated = agent.State.PendingActivations["r1"];
+        migrated.ServingOperationSequence.Should().BePositive();
+        migrated.ServingTargetOperationId.Should().NotBeNullOrWhiteSpace();
+        migrated.ServingTargetCommandId.Should().NotBeNullOrWhiteSpace();
+        dispatchPort.Commands.Should().ContainSingle();
+        dispatchPort.Commands[0].command.OperationSequence.Should()
+            .Be(migrated.ServingOperationSequence);
+        (await eventStore.GetEventsAsync(agent.Id)).Count(evt =>
+                evt.EventData.Is(ServiceDeploymentServingTargetsDispatchPendingEvent.Descriptor))
+            .Should().Be(2, "the legacy checkpoint must be replaced before redispatch");
     }
 
     [Fact]
@@ -2697,7 +3004,7 @@ public sealed class ServiceDeploymentManagerGAgentTests
             activator,
             ServiceActorIds.Deployment(identity));
         agent.Logger = new SignalingLogger(
-            "Late activation dependency task completed after its deadline.",
+            "Late external dependency task completed after its deadline.",
             lateObservationLogged);
         await agent.ActivateAsync();
         const string activationAttemptId = "attempt-late-runtime";
@@ -2966,6 +3273,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
             OperationId = operationId ?? command.OperationId,
             ServingGeneration = 1,
             AppliedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            OperationSequence = command.OperationSequence,
+            Disposition = ServiceServingTargetsApplyDisposition.Applied,
         };
 
     private static EventEnvelope CreateAppliedAckEnvelope(
@@ -2998,6 +3307,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
             OperationId = command.OperationId,
             ServingGeneration = servingGeneration,
             AppliedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            OperationSequence = command.OperationSequence,
+            Disposition = ServiceServingTargetsApplyDisposition.Applied,
         });
         await AcknowledgeLatestDefaultServingRevisionAsync(agent, identity, dispatchPort);
     }
@@ -3029,6 +3340,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
                 PrimaryActorId = command.PrimaryActorId,
                 ActivationAttemptId = command.ActivationAttemptId,
                 ServingTargetOperationId = command.ServingTargetOperationId,
+                DeactivationOperationId = command.DeactivationOperationId,
+                Disposition = ServiceServingTargetRemovalDisposition.Removed,
                 RemovedAt = Timestamp.FromDateTime(DateTime.UtcNow),
             }));
     }
@@ -3087,7 +3400,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
     private static ServiceServingTargetsRemovedAck CreateRemovedAck(
         ServiceIdentity identity,
-        string operationId = "operation-r1") =>
+        string operationId = "operation-r1",
+        string deactivationOperationId = "deactivation-r1") =>
         new()
         {
             Identity = identity.Clone(),
@@ -3096,6 +3410,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
             PrimaryActorId = "actor-r1",
             ActivationAttemptId = "attempt-r1",
             ServingTargetOperationId = operationId,
+            DeactivationOperationId = deactivationOperationId,
+            Disposition = ServiceServingTargetRemovalDisposition.Removed,
             RemovedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         };
 
@@ -3296,6 +3612,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
 
         public List<ServiceRuntimeDeactivationRequest> DeactivateRequests { get; } = [];
 
+        public Queue<Exception> DeactivationExceptions { get; } = [];
+
         public Task<ServiceRuntimeActivationResult> ActivateAsync(
             ServiceRuntimeActivationRequest request,
             CancellationToken ct = default)
@@ -3316,6 +3634,8 @@ public sealed class ServiceDeploymentManagerGAgentTests
         public Task DeactivateAsync(ServiceRuntimeDeactivationRequest request, CancellationToken ct = default)
         {
             DeactivateRequests.Add(request);
+            if (DeactivationExceptions.TryDequeue(out var deactivationException))
+                throw deactivationException;
             return Task.CompletedTask;
         }
     }

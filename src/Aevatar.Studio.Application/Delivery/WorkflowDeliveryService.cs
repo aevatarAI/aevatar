@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.WorkflowDelivery;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -39,8 +40,8 @@ namespace Aevatar.Studio.Application.Delivery;
 
 public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
 {
-    private const int ConnectionProjectionObservationAttempts = 40;
-    private static readonly TimeSpan ConnectionProjectionObservationInterval = TimeSpan.FromMilliseconds(250);
+    private const int ProjectionObservationAttempts = 40;
+    private static readonly TimeSpan ProjectionObservationInterval = TimeSpan.FromMilliseconds(250);
 
     private static readonly IReadOnlyList<WorkflowDeliveryTriggerOptionView> AutomaticAcceptanceTriggerIntents =
     [
@@ -142,16 +143,30 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             $"/delivery#/customer/{Uri.EscapeDataString(deliveryId)}");
     }
 
-    public async Task<WorkflowDeliveryListResponse> ListAdminAsync(CancellationToken ct = default)
+    public async Task<WorkflowDeliveryListResponse> ListAdminAsync(
+        WorkflowDeliveryPageRequest? page = null,
+        CancellationToken ct = default)
     {
-        var result = await _queries.ListAsync(new WorkflowDeliveryListQuery(PageSize: 200), ct);
+        var result = await _queries.ListAsync(
+            new WorkflowDeliveryListQuery(
+                PageSize: page?.PageSize ?? 200,
+                PageToken: NormalizeOptional(page?.PageToken)),
+            ct);
         return new WorkflowDeliveryListResponse(result.Items.Select(ToDeliveryView).ToArray(), result.NextPageToken);
     }
 
-    public async Task<WorkflowDeliveryListResponse> ListCustomerAsync(string scopeId, CancellationToken ct = default)
+    public async Task<WorkflowDeliveryListResponse> ListCustomerAsync(
+        string scopeId,
+        WorkflowDeliveryPageRequest? page = null,
+        CancellationToken ct = default)
     {
         var normalizedScope = NormalizeRequired(scopeId, nameof(scopeId));
-        var result = await _queries.ListAsync(new WorkflowDeliveryListQuery(normalizedScope, 200), ct);
+        var result = await _queries.ListAsync(
+            new WorkflowDeliveryListQuery(
+                normalizedScope,
+                page?.PageSize ?? 200,
+                NormalizeOptional(page?.PageToken)),
+            ct);
         return new WorkflowDeliveryListResponse(result.Items.Select(ToDeliveryView).ToArray(), result.NextPageToken);
     }
 
@@ -240,7 +255,13 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             created.ConnectLinkId,
             _timeProvider.GetUtcNow()), ct);
         await ObserveConnectionBeginAsync(snapshot, slot.Key, created.ConnectLinkId, ct);
-        return new WorkflowDeliveryConnectLinkResponse(slot.Key, "pending", created.ConnectUrl, created.ExpiresAt);
+        return new WorkflowDeliveryConnectLinkResponse(
+            slot.Key,
+            "begin_accepted",
+            created.ConnectLinkId,
+            created.ConnectUrl,
+            BuildConnectionStatusUrl(snapshot.TargetScopeId, snapshot.DeliveryId, slot.Key),
+            created.ExpiresAt);
     }
 
     public async Task<WorkflowDeliveryExistingConnectionListResponse> ListExistingConnectionsAsync(
@@ -348,6 +369,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
         return new WorkflowDeliveryConnectStatusResponse(
             connection.SlotKey,
             ConnectionStatusName(connection.Status),
+            connection.LinkId,
             connection.UserServiceId,
             connection.UpdatedAtUtc);
     }
@@ -435,17 +457,53 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
         EnsureNoClientConnectionReferences(request.ConnectionReferences);
         var teamId = NormalizeRequired(request.TeamId, "teamId");
         var idempotencyKey = NormalizeIdempotencyKey(request.IdempotencyKey);
+        var installationId = WorkflowDeliveryConventions.BuildInstallationId(
+            delivery.DeliveryId,
+            delivery.TargetScopeId);
+        var attempt = 1;
+        var operationId = BuildProvisionOperationId(installationId, attempt);
+        var existingInstallation = delivery.Installation;
+        if (existingInstallation is not null &&
+            (!string.Equals(existingInstallation.InstallationId, installationId, StringComparison.Ordinal) ||
+             !string.Equals(existingInstallation.IdempotencyKey, idempotencyKey, StringComparison.Ordinal) ||
+             !string.Equals(existingInstallation.ScopeId, delivery.TargetScopeId, StringComparison.Ordinal) ||
+             !string.Equals(existingInstallation.TeamId, teamId, StringComparison.Ordinal)))
+        {
+            throw InstallationConflict();
+        }
+
         var trigger = ParseTrigger(request.TriggerIntent);
         WorkflowDeliveryAcceptancePolicies.EnsureTriggerSupported(delivery.Package, trigger.Kind);
         var render = _renderer.Render(
             ToActorPackage(delivery.Package),
             request.CustomerConfig,
             ResolveConnectionReferences(delivery));
+        if (existingInstallation is not null)
+        {
+            if (!SameInstallationRequest(
+                    existingInstallation,
+                    installationId,
+                    idempotencyKey,
+                    delivery.TargetScopeId,
+                    teamId,
+                    trigger,
+                    render,
+                    request.Confirmations,
+                    caller.AuthenticatedOwner,
+                    operationId))
+            {
+                throw InstallationConflict();
+            }
+
+            return new WorkflowInstallationAcceptedResponse(
+                existingInstallation.InstallationId,
+                InstallationStatusName(existingInstallation.Status),
+                BuildInstallationStatusUrl(delivery.TargetScopeId, existingInstallation.InstallationId),
+                BuildConsoleUrl(existingInstallation));
+        }
+
         var preview = await PreviewAsync(delivery, render, trigger, caller.CapabilityAdmission, ct);
         var confirmations = ValidateConfirmations(preview, request.Confirmations);
-        var installationId = WorkflowDeliveryConventions.BuildInstallationId(delivery.DeliveryId, delivery.TargetScopeId);
-        var attempt = 1;
-        var operationId = BuildProvisionOperationId(installationId, attempt);
         var provisionRequest = BuildProvisionWorkflowRequest(
             delivery,
             installationId,
@@ -479,12 +537,145 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             operationId,
             _timeProvider.GetUtcNow()), ct);
 
-        return new WorkflowInstallationAcceptedResponse(
+        var observedInstallation = await ObserveInstallationStartAsync(
+            delivery,
             installationId,
-            "accepted",
-            BuildInstallationStatusUrl(delivery.TargetScopeId, installationId),
-            null);
+            idempotencyKey,
+            delivery.TargetScopeId,
+            teamId,
+            trigger,
+            render,
+            request.Confirmations,
+            caller.AuthenticatedOwner,
+            operationId,
+            preparation.CapabilityAdmissionPlan,
+            ct);
+
+        return new WorkflowInstallationAcceptedResponse(
+            observedInstallation.InstallationId,
+            InstallationStatusName(observedInstallation.Status),
+            BuildInstallationStatusUrl(delivery.TargetScopeId, observedInstallation.InstallationId),
+            BuildConsoleUrl(observedInstallation));
     }
+
+    private async Task<WorkflowInstallationSnapshot> ObserveInstallationStartAsync(
+        WorkflowDeliverySnapshot baseline,
+        string installationId,
+        string idempotencyKey,
+        string scopeId,
+        string teamId,
+        DeliveryTriggerIntent trigger,
+        WorkflowDeliveryRenderResult render,
+        IReadOnlyList<WorkflowDeliveryConfirmationInput>? confirmations,
+        AuthenticatedAuthorizationOwnerContext? authenticatedOwner,
+        string operationId,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < ProjectionObservationAttempts; attempt++)
+        {
+            var observed = await _queries.GetForScopeAsync(
+                baseline.DeliveryId,
+                baseline.TargetScopeId,
+                ct);
+            if (observed != null)
+            {
+                EnsureAvailable(observed);
+                if (observed.Installation != null)
+                {
+                    if (observed.StateVersion > baseline.StateVersion &&
+                        SameInstallationRequest(
+                            observed.Installation,
+                            installationId,
+                            idempotencyKey,
+                            scopeId,
+                            teamId,
+                            trigger,
+                            render,
+                            confirmations,
+                            authenticatedOwner,
+                            operationId) &&
+                        observed.Installation.CapabilityAdmissionPlan.Equals(capabilityAdmissionPlan))
+                    {
+                        return observed.Installation;
+                    }
+
+                    throw InstallationConflict();
+                }
+
+                if (observed.StateVersion > baseline.StateVersion)
+                {
+                    throw new WorkflowDeliveryException(
+                        "DELIVERY_CONFLICT",
+                        "Workflow delivery state changed before installation admission was observed.");
+                }
+            }
+
+            if (attempt + 1 < ProjectionObservationAttempts)
+                await Task.Delay(ProjectionObservationInterval, _timeProvider, ct);
+        }
+
+        throw new WorkflowDeliveryException(
+            "INSTALLATION_OBSERVATION_TIMEOUT",
+            "Workflow installation was accepted for dispatch but was not observed in the delivery read model.");
+    }
+
+    private static bool SameInstallationRequest(
+        WorkflowInstallationSnapshot installation,
+        string installationId,
+        string idempotencyKey,
+        string scopeId,
+        string teamId,
+        DeliveryTriggerIntent trigger,
+        WorkflowDeliveryRenderResult render,
+        IReadOnlyList<WorkflowDeliveryConfirmationInput>? confirmations,
+        AuthenticatedAuthorizationOwnerContext? authenticatedOwner,
+        string operationId) =>
+        string.Equals(installation.InstallationId, installationId, StringComparison.Ordinal) &&
+        string.Equals(installation.IdempotencyKey, idempotencyKey, StringComparison.Ordinal) &&
+        string.Equals(installation.ScopeId, scopeId, StringComparison.Ordinal) &&
+        string.Equals(installation.TeamId, teamId, StringComparison.Ordinal) &&
+        string.Equals(installation.OperationId, operationId, StringComparison.Ordinal) &&
+        Equals(installation.AuthenticatedOwner, authenticatedOwner) &&
+        SameTriggerIntent(installation.TriggerIntent, trigger) &&
+        string.Equals(installation.SourceHash, render.SourceHash, StringComparison.Ordinal) &&
+        string.Equals(installation.ResolvedHash, render.ResolvedHash, StringComparison.Ordinal) &&
+        string.Equals(installation.ResolvedYaml, render.ResolvedYaml, StringComparison.Ordinal) &&
+        SameItems(installation.ConfigurationValues, render.ConfigurationValues) &&
+        SameItems(installation.ConnectionReferences, render.ConnectionReferences) &&
+        SameConfirmations(installation.Confirmations, confirmations ?? []);
+
+    private static bool SameItems(
+        IReadOnlyDictionary<string, string> expected,
+        IReadOnlyDictionary<string, string> actual) =>
+        expected.Count == actual.Count &&
+        expected.All(pair => actual.TryGetValue(pair.Key, out var value) &&
+                             string.Equals(pair.Value, value, StringComparison.Ordinal));
+
+    private static bool SameConfirmations(
+        IReadOnlyList<ContractConfirmationReference> expected,
+        IReadOnlyList<WorkflowDeliveryConfirmationInput> actual) =>
+        expected.Select(static item => (item.CallSiteId?.Trim() ?? string.Empty,
+                item.RequestContractDigest?.Trim() ?? string.Empty))
+            .OrderBy(static item => item.Item1, StringComparer.Ordinal)
+            .ThenBy(static item => item.Item2, StringComparer.Ordinal)
+            .SequenceEqual(actual.Select(static item => (item.CallSiteId?.Trim() ?? string.Empty,
+                    item.RequestContractDigest?.Trim() ?? string.Empty))
+                .OrderBy(static item => item.Item1, StringComparer.Ordinal)
+                .ThenBy(static item => item.Item2, StringComparer.Ordinal));
+
+    private static bool SameTriggerIntent(
+        DeliveryTriggerIntent expected,
+        DeliveryTriggerIntent actual) =>
+        expected.Kind == actual.Kind &&
+        string.Equals(expected.Cron, actual.Cron, StringComparison.Ordinal) &&
+        string.Equals(expected.TimeZone, actual.TimeZone, StringComparison.Ordinal) &&
+        expected.RunImmediately == actual.RunImmediately;
+
+    private static WorkflowDeliveryException InstallationConflict() =>
+        new(
+            "DELIVERY_CONFLICT",
+            "Workflow delivery already has a different installation request.");
 
     public async Task<WorkflowInstallationView?> GetInstallationAsync(
         string scopeId,
@@ -552,44 +743,36 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
     {
         var baselineConnection = baseline.Connections.SingleOrDefault(connection =>
             string.Equals(connection.SlotKey, slotKey, StringComparison.Ordinal));
-        for (var attempt = 0; attempt < ConnectionProjectionObservationAttempts; attempt++)
+        var observed = await _queries.GetForScopeAsync(
+            baseline.DeliveryId,
+            baseline.TargetScopeId,
+            ct);
+        if (observed == null)
+            return;
+
+        EnsureAvailable(observed);
+        if (observed.Installation != null && observed.Installation.InstallationId.Length != 0)
         {
-            var observed = await _queries.GetForScopeAsync(baseline.DeliveryId, baseline.TargetScopeId, ct);
-            if (observed != null)
-            {
-                EnsureAvailable(observed);
-                if (observed.Installation != null && observed.Installation.InstallationId.Length != 0)
-                {
-                    throw new WorkflowDeliveryException(
-                        "CONNECTIONS_LOCKED",
-                        "Workflow delivery connections cannot be changed after installation has started.");
-                }
-
-                var observedConnection = observed.Connections.SingleOrDefault(connection =>
-                    string.Equals(connection.SlotKey, slotKey, StringComparison.Ordinal));
-                if (observedConnection != null &&
-                    string.Equals(observedConnection.LinkId, connectLinkId, StringComparison.Ordinal) &&
-                    observedConnection.Status == DeliveryConnectionStatus.Pending &&
-                    observed.StateVersion > baseline.StateVersion)
-                {
-                    return;
-                }
-
-                if (!ConnectionMatchesBaseline(observedConnection, baselineConnection))
-                {
-                    throw new WorkflowDeliveryException(
-                        "CONNECTION_ALREADY_PENDING",
-                        "Another connection link became active for this slot.");
-                }
-            }
-
-            if (attempt + 1 < ConnectionProjectionObservationAttempts)
-                await Task.Delay(ConnectionProjectionObservationInterval, _timeProvider, ct);
+            throw new WorkflowDeliveryException(
+                "CONNECTIONS_LOCKED",
+                "Workflow delivery connections cannot be changed after installation has started.");
         }
 
-        throw new WorkflowDeliveryException(
-            "CONNECTION_OBSERVATION_TIMEOUT",
-            "The connection link was accepted for dispatch but was not observed in the delivery read model.");
+        var observedConnection = observed.Connections.SingleOrDefault(connection =>
+            string.Equals(connection.SlotKey, slotKey, StringComparison.Ordinal));
+        if (observedConnection != null &&
+            string.Equals(observedConnection.LinkId, connectLinkId, StringComparison.Ordinal) &&
+            observedConnection.Status == DeliveryConnectionStatus.Pending)
+        {
+            return;
+        }
+
+        if (!ConnectionMatchesBaseline(observedConnection, baselineConnection))
+        {
+            throw new WorkflowDeliveryException(
+                "CONNECTION_ALREADY_PENDING",
+                "Another connection link became active for this slot.");
+        }
     }
 
     private async Task ObserveConnectionAttachmentAsync(
@@ -605,7 +788,7 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
             baselineConnection,
             serviceSlug,
             userServiceId);
-        for (var attempt = 0; attempt < ConnectionProjectionObservationAttempts; attempt++)
+        for (var attempt = 0; attempt < ProjectionObservationAttempts; attempt++)
         {
             var observed = await _queries.GetForScopeAsync(baseline.DeliveryId, baseline.TargetScopeId, ct);
             if (observed != null)
@@ -646,8 +829,8 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
                 }
             }
 
-            if (attempt + 1 < ConnectionProjectionObservationAttempts)
-                await Task.Delay(ConnectionProjectionObservationInterval, _timeProvider, ct);
+            if (attempt + 1 < ProjectionObservationAttempts)
+                await Task.Delay(ProjectionObservationInterval, _timeProvider, ct);
         }
 
         throw new WorkflowDeliveryException(
@@ -667,6 +850,12 @@ public sealed class WorkflowDeliveryService : IWorkflowDeliveryService
               observed.Status == baseline.Status &&
               string.Equals(observed.UserServiceId, baseline.UserServiceId, StringComparison.Ordinal) &&
               observed.UpdatedAtUtc == baseline.UpdatedAtUtc;
+
+    private static string BuildConnectionStatusUrl(
+        string scopeId,
+        string deliveryId,
+        string slotKey) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/delivery-requests/{Uri.EscapeDataString(deliveryId)}/connections/{Uri.EscapeDataString(slotKey)}";
 
     private static bool IsEligibleExistingConnection(
         NyxIdUserServiceInventoryItem candidate,

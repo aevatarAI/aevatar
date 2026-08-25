@@ -1196,7 +1196,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenSingleUseToolSucceeds_ShouldRejectReuseWithoutMutatingCatalog()
+    public async Task ChatStreamAsync_WhenSingleUseToolSucceeds_ShouldRejectCaseVariantReuseWithoutMutatingCatalog()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -1214,7 +1214,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                 DeltaToolCall = new ToolCall
                 {
                     Id = "invoke-2",
-                    Name = "aevatar_invoke_member",
+                    Name = "AEVATAR_INVOKE_MEMBER",
                     ArgumentsJson = "{\"member_id\":\"m-alpha\"}",
                 },
             }],

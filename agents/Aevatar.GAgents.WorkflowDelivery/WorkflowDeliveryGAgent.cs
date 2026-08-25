@@ -278,6 +278,21 @@ public sealed class WorkflowDeliveryGAgent
             throw new InvalidOperationException("continuation claim operation identity does not match the active attempt.");
         if (installation.Status != claim.ExpectedStatus)
             return;
+
+        var withdrawalReason = ResolveWithdrawalReason(actorNow);
+        if (withdrawalReason != WorkflowInstallationWithdrawalReason.Unspecified)
+        {
+            await PersistDomainEventAsync(new WorkflowInstallationWithdrawnEvent
+            {
+                Reason = withdrawalReason,
+                WithdrawnAtUtc = actorNow,
+                Attempt = installation.Attempt,
+                OperationId = installation.OperationId,
+                FailedFromStatus = installation.Status,
+            });
+            return;
+        }
+
         EnsureAvailable(actorNow);
 
         var existing = installation.ContinuationClaim;
@@ -466,6 +481,7 @@ public sealed class WorkflowDeliveryGAgent
             .On<WorkflowInstallationStartedEvent>(ApplyInstallationStarted)
             .On<WorkflowInstallationRetryRequestedEvent>(ApplyInstallationRetry)
             .On<WorkflowInstallationContinuationClaimedEvent>(ApplyInstallationContinuationClaimed)
+            .On<WorkflowInstallationWithdrawnEvent>(ApplyInstallationWithdrawn)
             .On<WorkflowProvisioningAcceptedEvent>(ApplyProvisioningAccepted)
             .On<WorkflowInstallationReadyEvent>(ApplyInstallationReady)
             .On<WorkflowInstallationFailedEvent>(ApplyInstallationFailed)
@@ -581,6 +597,28 @@ public sealed class WorkflowDeliveryGAgent
         return updated;
     }
 
+    internal static WorkflowDeliveryState ApplyInstallationWithdrawn(
+        WorkflowDeliveryState state,
+        WorkflowInstallationWithdrawnEvent evt)
+    {
+        var updated = state.Clone();
+        var installation = updated.Installation;
+        installation.Status = WorkflowInstallationStatus.Failed;
+        installation.Stage = "failed";
+        (installation.ErrorCode, installation.ErrorMessage) = evt.Reason switch
+        {
+            WorkflowInstallationWithdrawalReason.DeliveryRevoked =>
+                ("delivery_revoked", "The workflow delivery was revoked before installation completed."),
+            WorkflowInstallationWithdrawalReason.DeliveryExpired =>
+                ("delivery_expired", "The workflow delivery expired before installation completed."),
+            _ => throw new InvalidOperationException("workflow installation withdrawal reason is required."),
+        };
+        installation.FailureOriginStatus = evt.FailedFromStatus;
+        installation.ContinuationClaim = null;
+        installation.UpdatedAtUtc = evt.WithdrawnAtUtc.Clone();
+        return updated;
+    }
+
     internal static WorkflowDeliveryState ApplyProvisioningAccepted(WorkflowDeliveryState state, WorkflowProvisioningAcceptedEvent evt)
     {
         var updated = state.Clone();
@@ -632,6 +670,15 @@ public sealed class WorkflowDeliveryGAgent
         updated.Installation.FailureOriginStatus = evt.FailedFromStatus;
         updated.Installation.UpdatedAtUtc = evt.FailedAtUtc.Clone();
         return updated;
+    }
+
+    private WorkflowInstallationWithdrawalReason ResolveWithdrawalReason(Timestamp at)
+    {
+        if (State.LifecycleStatus == WorkflowDeliveryLifecycleStatus.Revoked)
+            return WorkflowInstallationWithdrawalReason.DeliveryRevoked;
+        if (State.ExpiresAtUtc == null || at >= State.ExpiresAtUtc)
+            return WorkflowInstallationWithdrawalReason.DeliveryExpired;
+        return WorkflowInstallationWithdrawalReason.Unspecified;
     }
 
     private void EnsureCanonicalActor(string deliveryId)
@@ -1101,6 +1148,17 @@ public sealed class WorkflowDeliveryGAgent
         ValidatePublishedServiceEvidence(installation, evidence.PublishedService);
         ValidateBoundRevisionEvidence(installation, evidence.BoundRevision);
         ValidateTriggerEvidence(installation, evidence.Trigger);
+
+        if (installation.TriggerIntent?.Kind == WorkflowDeliveryTriggerKind.None)
+        {
+            if (evidence.AcceptanceRun != null || evidence.Artifacts.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    "a no-trigger installation must not carry acceptance-run or artifact evidence.");
+            }
+            return;
+        }
+
         ValidateAcceptanceRunEvidence(evidence.AcceptanceRun);
         ValidateArtifactEvidence(evidence.Artifacts);
     }

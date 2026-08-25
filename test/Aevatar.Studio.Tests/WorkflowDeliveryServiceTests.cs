@@ -99,7 +99,7 @@ public sealed class WorkflowDeliveryServiceTests
         first.Status.Should().NotBe("ready");
         second.Status.Should().NotBe("ready");
 
-        context.Commands.Started.Should().HaveCount(2);
+        context.Commands.Started.Should().ContainSingle();
         context.Commands.Started.Should().OnlyContain(item =>
             item.InstallationId == expectedInstallationId &&
             item.IdempotencyKey == "publish-alpha");
@@ -111,11 +111,72 @@ public sealed class WorkflowDeliveryServiceTests
         context.Commands.ProvisioningAccepted.Should().BeEmpty();
         context.Commands.Ready.Should().BeEmpty();
 
-        context.Provisioning.PreparationRequests.Should().HaveCount(2);
+        context.Provisioning.PreparationRequests.Should().ContainSingle();
         context.Provisioning.PreparationRequests.Should().OnlyContain(item =>
             item.ScheduleOperationId == $"{expectedInstallationId}:provision:a1" &&
             item.ScheduleIdempotencyKey == "publish-alpha");
         context.Provisioning.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PublishAsync_WhenInstallationAlreadyExistsWithDifferentRequest_ShouldConflictBeforePreparation()
+    {
+        var context = new TestContext();
+        var request = PublishRequest("digest-alpha", "write");
+        await context.Service.PublishAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            request,
+            Caller());
+
+        var action = () => context.Service.PublishAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            request with { IdempotencyKey = "publish-beta" },
+            Caller());
+
+        var exception = (await action.Should().ThrowAsync<WorkflowDeliveryException>()).Which;
+        exception.Code.Should().Be("DELIVERY_CONFLICT");
+        context.Commands.Started.Should().ContainSingle();
+        context.Provisioning.PreparationRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task PublishAsync_WhenAnotherInstallationWinsAfterDispatch_ShouldReturnConflict()
+    {
+        var context = new TestContext(
+            startProjection: (mutation, queries) =>
+                queries.ProjectStart(mutation with { IdempotencyKey = "publish-winner" }));
+
+        var action = () => context.Service.PublishAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            PublishRequest("digest-alpha", "write"),
+            Caller());
+
+        var exception = (await action.Should().ThrowAsync<WorkflowDeliveryException>()).Which;
+        exception.Code.Should().Be("DELIVERY_CONFLICT");
+        context.Commands.Started.Should().ContainSingle();
+        context.Provisioning.PreparationRequests.Should().ContainSingle();
+        context.Queries.Snapshot.Installation!.IdempotencyKey.Should().Be("publish-winner");
+    }
+
+    [Fact]
+    public async Task PublishAsync_WhenProjectionBrieflyLags_ShouldWaitForExactInstallation()
+    {
+        var context = new TestContext(
+            startProjection: (mutation, queries) =>
+                queries.ProjectStartAfterReads(mutation, staleReads: 1));
+
+        var result = await context.Service.PublishAsync(
+            "delivery-alpha",
+            "scope-alpha",
+            PublishRequest("digest-alpha", "write"),
+            Caller());
+
+        result.Status.Should().Be("accepted");
+        context.Queries.ForScopeReads.Should().Be(3);
+        context.Queries.Snapshot.Installation!.IdempotencyKey.Should().Be("publish-alpha");
     }
 
     [Fact]
@@ -143,6 +204,21 @@ public sealed class WorkflowDeliveryServiceTests
             .Should().Equal("one_shot", "cron", "none");
         json.RootElement.GetProperty("package").GetProperty("acceptancePolicy")
             .GetProperty("automaticAcceptanceSupported").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ListCustomerAsync_ShouldForwardPageSizeAndToken()
+    {
+        var context = new TestContext();
+
+        await context.Service.ListCustomerAsync(
+            "scope-alpha",
+            new WorkflowDeliveryPageRequest(37, "cursor-alpha"));
+
+        var query = context.Queries.ListQueries.Should().ContainSingle().Subject;
+        query.TargetScopeId.Should().Be("scope-alpha");
+        query.PageSize.Should().Be(37);
+        query.PageToken.Should().Be("cursor-alpha");
     }
 
     [Fact]
@@ -248,7 +324,10 @@ public sealed class WorkflowDeliveryServiceTests
             "lark",
             "caller-bearer");
 
-        result.Status.Should().Be("pending");
+        result.Status.Should().Be("begin_accepted");
+        result.ConnectLinkId.Should().Be("link-created");
+        result.StatusUrl.Should().Be(
+            "/api/scopes/scope-alpha/delivery-requests/delivery-alpha/connections/lark");
         connectLinks.BearerToken.Should().Be("caller-bearer");
         connectLinks.Request.Should().NotBeNull();
         connectLinks.Request!.ServiceSlug.Should().Be("api-lark");
@@ -285,7 +364,7 @@ public sealed class WorkflowDeliveryServiceTests
     }
 
     [Fact]
-    public async Task CreateConnectLinkAsync_WhenProjectionLagsAfterDispatch_ShouldWaitForExactCommittedLink()
+    public async Task CreateConnectLinkAsync_WhenProjectionLagsAfterDispatch_ShouldReturnLinkWithoutPolling()
     {
         var connectLinks = new RecordingCreateConnectLinkPort();
         var context = new TestContext(
@@ -300,10 +379,12 @@ public sealed class WorkflowDeliveryServiceTests
             "lark",
             "caller-bearer");
 
-        result.Status.Should().Be("pending");
-        context.Queries.ForScopeReads.Should().BeGreaterThanOrEqualTo(3);
-        context.Queries.Snapshot.Connections.Should().ContainSingle()
-            .Which.LinkId.Should().Be("link-created");
+        result.Status.Should().Be("begin_accepted");
+        result.ConnectLinkId.Should().Be("link-created");
+        result.ConnectUrl.Should().Be("https://nyx.example/connect/redacted");
+        context.Queries.ForScopeReads.Should().Be(2);
+        context.Queries.Snapshot.Connections.Should().BeEmpty(
+            "the read model may legitimately lag an accepted actor command");
     }
 
     [Fact]
@@ -631,6 +712,7 @@ public sealed class WorkflowDeliveryServiceTests
         result.Should().Be(new WorkflowDeliveryConnectStatusResponse(
             "lark",
             "pending",
+            "link-alpha",
             null,
             updatedAt));
         context.Commands.UpdatedConnections.Should().BeEmpty();
@@ -1029,6 +1111,7 @@ public sealed class WorkflowDeliveryServiceTests
             WorkflowDeliveryOptions? options = null,
             Action<BeginWorkflowDeliveryConnectionMutation, StubQueryPort>? beginProjection = null,
             Action<AttachWorkflowDeliveryConnectionMutation, StubQueryPort>? attachProjection = null,
+            Action<StartWorkflowInstallationMutation, StubQueryPort>? startProjection = null,
             IWorkflowDeliveryPackageCatalog? packageCatalog = null)
         {
             Queries = new StubQueryPort(snapshot ?? DeliverySnapshot());
@@ -1036,9 +1119,12 @@ public sealed class WorkflowDeliveryServiceTests
                 ((BeginWorkflowDeliveryConnectionMutation value, StubQueryPort queries) => queries.ProjectBegin(value));
             var attachmentProjector = attachProjection ??
                 ((AttachWorkflowDeliveryConnectionMutation value, StubQueryPort queries) => queries.ProjectAttach(value));
+            var installationProjector = startProjection ??
+                ((StartWorkflowInstallationMutation value, StubQueryPort queries) => queries.ProjectStart(value));
             Commands = new RecordingCommandPort(
                 mutation => projector(mutation, Queries),
-                mutation => attachmentProjector(mutation, Queries));
+                mutation => attachmentProjector(mutation, Queries),
+                mutation => installationProjector(mutation, Queries));
             Preview = new StubPreviewService();
             Provisioning = new RecordingProvisioningService();
             Service = new WorkflowDeliveryService(
@@ -1157,7 +1243,8 @@ public sealed class WorkflowDeliveryServiceTests
 
     private sealed class RecordingCommandPort(
         Action<BeginWorkflowDeliveryConnectionMutation>? projectBegin = null,
-        Action<AttachWorkflowDeliveryConnectionMutation>? projectAttach = null) : IWorkflowDeliveryCommandPort
+        Action<AttachWorkflowDeliveryConnectionMutation>? projectAttach = null,
+        Action<StartWorkflowInstallationMutation>? projectStart = null) : IWorkflowDeliveryCommandPort
     {
         public List<CreateWorkflowDeliveryMutation> Created { get; } = [];
 
@@ -1222,6 +1309,7 @@ public sealed class WorkflowDeliveryServiceTests
             CancellationToken ct = default)
         {
             Started.Add(mutation);
+            projectStart?.Invoke(mutation);
             return Accepted(mutation.DeliveryId);
         }
 
@@ -1270,12 +1358,16 @@ public sealed class WorkflowDeliveryServiceTests
     private sealed class StubQueryPort(WorkflowDeliverySnapshot snapshot) : IWorkflowDeliveryQueryPort
     {
         private BeginWorkflowDeliveryConnectionMutation? _scheduledBegin;
+        private StartWorkflowInstallationMutation? _scheduledStart;
         private int _projectBeginAtRead = int.MaxValue;
+        private int _projectStartAtRead = int.MaxValue;
         private int _advanceStateVersionAtRead = int.MaxValue;
 
         public WorkflowDeliverySnapshot Snapshot { get; private set; } = snapshot;
 
         public int ForScopeReads { get; private set; }
+
+        public List<WorkflowDeliveryListQuery> ListQueries { get; } = [];
 
         public void ProjectBegin(BeginWorkflowDeliveryConnectionMutation mutation)
         {
@@ -1331,6 +1423,55 @@ public sealed class WorkflowDeliveryServiceTests
             };
         }
 
+        public void ProjectStart(StartWorkflowInstallationMutation mutation)
+        {
+            Snapshot = Snapshot with
+            {
+                Installation = new WorkflowInstallationSnapshot(
+                    mutation.InstallationId,
+                    mutation.IdempotencyKey,
+                    mutation.ScopeId,
+                    mutation.TeamId,
+                    mutation.ConfigurationValues,
+                    mutation.ConnectionReferences,
+                    mutation.TriggerIntent,
+                    mutation.SourceHash,
+                    mutation.ResolvedHash,
+                    mutation.ResolvedYaml,
+                    mutation.Confirmations,
+                    mutation.CapabilityAdmissionPlan,
+                    mutation.AuthenticatedOwner,
+                    AcceptanceInput: null,
+                    mutation.OperationId,
+                    WorkflowInstallationStatus.Accepted,
+                    "accepted",
+                    ErrorCode: null,
+                    ErrorMessage: null,
+                    WorkflowId: null,
+                    MemberId: null,
+                    PublishedServiceId: null,
+                    RevisionId: null,
+                    BindingRunId: null,
+                    ScheduleId: null,
+                    ScheduleProvisioningId: null,
+                    ScheduleProvisioningStatus: null,
+                    ReadinessEvidence: null,
+                    Attempt: 1,
+                    mutation.RequestedAtUtc,
+                    mutation.RequestedAtUtc),
+                StateVersion = Snapshot.StateVersion + 1,
+                ProjectedAtUtc = mutation.RequestedAtUtc,
+            };
+        }
+
+        public void ProjectStartAfterReads(
+            StartWorkflowInstallationMutation mutation,
+            int staleReads)
+        {
+            _scheduledStart = mutation;
+            _projectStartAtRead = ForScopeReads + staleReads + 1;
+        }
+
         public void ProjectAttachAtCurrentVersionThenAdvanceAfterReads(
             AttachWorkflowDeliveryConnectionMutation mutation,
             int staleReads)
@@ -1362,6 +1503,13 @@ public sealed class WorkflowDeliveryServiceTests
                 _projectBeginAtRead = int.MaxValue;
                 ProjectBegin(mutation);
             }
+            if (_scheduledStart != null && ForScopeReads >= _projectStartAtRead)
+            {
+                var mutation = _scheduledStart;
+                _scheduledStart = null;
+                _projectStartAtRead = int.MaxValue;
+                ProjectStart(mutation);
+            }
             if (ForScopeReads >= _advanceStateVersionAtRead)
             {
                 Snapshot = Snapshot with { StateVersion = Snapshot.StateVersion + 1 };
@@ -1372,8 +1520,11 @@ public sealed class WorkflowDeliveryServiceTests
 
         public Task<WorkflowDeliveryListResult> ListAsync(
             WorkflowDeliveryListQuery query,
-            CancellationToken ct = default) =>
-            Task.FromResult(new WorkflowDeliveryListResult([Snapshot], null));
+            CancellationToken ct = default)
+        {
+            ListQueries.Add(query);
+            return Task.FromResult(new WorkflowDeliveryListResult([Snapshot], null));
+        }
 
         public Task<WorkflowDeliverySnapshot?> FindByInstallationAsync(
             string scopeId,

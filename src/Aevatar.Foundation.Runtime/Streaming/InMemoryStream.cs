@@ -88,19 +88,30 @@ public sealed class InMemoryStream : IStream
     /// <typeparam name="T">Protobuf message type.</typeparam>
     /// <param name="message">Message to send.</param>
     /// <param name="ct">Cancellation token.</param>
-    public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
+    public async Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage
     {
-        if (message is EventEnvelope envelope)
-            return _ingressChannel.Writer.WriteAsync(envelope, ct).AsTask();
-
-        var wrapped = new EventEnvelope
+        var envelope = message as EventEnvelope ?? new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Google.Protobuf.WellKnownTypes.Any.Pack(message),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(string.Empty, TopologyAudience.Children),
         };
-        return _ingressChannel.Writer.WriteAsync(wrapped, ct).AsTask();
+        try
+        {
+            await _ingressChannel.Writer.WriteAsync(envelope, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new EventPublicationException(
+                EventPublicationFailureOutcome.NotAdmitted,
+                $"The in-memory stream '{StreamId}' rejected the event before admission.",
+                ex);
+        }
     }
 
     /// <summary>Subscribes to stream and invokes handler for matching messages.</summary>

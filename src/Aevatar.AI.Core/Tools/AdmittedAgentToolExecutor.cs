@@ -1239,7 +1239,14 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 terminalInvoked: reconciledOutcome is null,
                 retryable: false,
                 auditCompleted: false,
-                diagnosticId: failureEvidence.DiagnosticId);
+                diagnosticId: failureEvidence.DiagnosticId,
+                failureOutcome: ToolExecutionAuditErrorCode.IsTimeout(failureEvidence.Code) ||
+                                isMutation && string.Equals(
+                                    failureEvidence.Code,
+                                    "tool_execution_exception",
+                                    StringComparison.Ordinal)
+                    ? AgentToolFailureOutcome.OutcomeUncertain
+                    : AgentToolFailureOutcome.CalleeConfirmed);
             activity?.SetTag("gen_ai.tool.status", "error");
             activity?.SetTag("error.type", ex.GetType().FullName);
             activity?.SetStatus(ActivityStatusCode.Error, outcome.SafeMessage);

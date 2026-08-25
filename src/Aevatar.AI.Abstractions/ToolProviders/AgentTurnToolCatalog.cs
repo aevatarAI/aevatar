@@ -263,10 +263,16 @@ public sealed class AgentTurnToolCatalogProof
             if (!exact.TryGetValue(descriptor.Name, out var tool))
                 throw ProofMismatch();
 
+            // A persisted selector digest is evidence about the tool selected at ingress. Proof
+            // validation must rebuild that evidence from the live admission owner; feeding the
+            // persisted digest back into Describe makes selector validation tautological.
+            var liveSelectorDigest = tool is IAgentToolOperationAdmissionOwner owner
+                ? AgentToolOperationSelector.ComputeDigest(owner.OperationAdmission)
+                : string.Empty;
             var current = Describe(new AgentTurnToolSelection(
                 tool,
                 descriptor.Origin,
-                descriptor.SelectorDigest));
+                liveSelectorDigest));
             if (!string.Equals(current.Name, descriptor.Name, StringComparison.Ordinal) ||
                 !string.Equals(current.Description, descriptor.Description, StringComparison.Ordinal) ||
                 !string.Equals(current.SchemaSha256, descriptor.SchemaSha256, StringComparison.Ordinal) ||

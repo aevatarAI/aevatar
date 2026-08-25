@@ -8,7 +8,7 @@ namespace Aevatar.AI.ToolProviders.Web;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers web search, fetch, and user interaction tools.
+    /// Registers web search and fetch tools.
     /// </summary>
     public static IServiceCollection AddWebTools(
         this IServiceCollection services,

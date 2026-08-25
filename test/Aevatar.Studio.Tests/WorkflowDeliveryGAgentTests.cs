@@ -567,7 +567,7 @@ public sealed class WorkflowDeliveryGAgentTests
     }
 
     [Fact]
-    public async Task ContinuationClaim_WhenDeliveryWasRevoked_ShouldFailClosedAndNearExpiryShouldCapLease()
+    public async Task ContinuationClaim_WhenDeliveryWasRevoked_ShouldTerminalizeAndNearExpiryShouldCapLease()
     {
         var revoked = await CreateAgentAsync("delivery-alpha");
         await revoked.HandleCreateAsync(CreateCommand("delivery-alpha"));
@@ -579,10 +579,12 @@ public sealed class WorkflowDeliveryGAgentTests
             RevokedAtUtc = Timestamp.FromDateTimeOffset(CreatedAt.AddMinutes(2)),
         });
 
-        var claimRevoked = () => revoked.HandleClaimInstallationContinuationAsync(
+        await revoked.HandleClaimInstallationContinuationAsync(
             ContinuationClaimCommand(WorkflowInstallationStatus.Accepted));
-        await claimRevoked.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not active*");
+
+        revoked.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
+        revoked.State.Installation.ErrorCode.Should().Be("delivery_revoked");
+        revoked.State.Installation.FailureOriginStatus.Should().Be(WorkflowInstallationStatus.Accepted);
         revoked.State.Installation.ContinuationClaim.Should().BeNull();
 
         var nearExpiry = CreatedAt.AddHours(4).AddMinutes(-2);
@@ -599,6 +601,23 @@ public sealed class WorkflowDeliveryGAgentTests
             .Should().Be(nearExpiry);
         expiring.State.Installation.ContinuationClaim.ExpiresAtUtc
             .Should().Be(expiring.State.ExpiresAtUtc);
+    }
+
+    [Fact]
+    public async Task ContinuationClaim_WhenDeliveryExpired_ShouldTerminalizeInstallation()
+    {
+        var clock = new MutableTimeProvider(CreatedAt.AddHours(4));
+        var agent = await CreateAgentAsync("delivery-alpha", clock);
+        await agent.HandleCreateAsync(CreateCommand("delivery-alpha"));
+        await agent.HandleStartInstallationAsync(StartInstallationCommand());
+
+        await agent.HandleClaimInstallationContinuationAsync(
+            ContinuationClaimCommand(WorkflowInstallationStatus.Accepted));
+
+        agent.State.Installation.Status.Should().Be(WorkflowInstallationStatus.Failed);
+        agent.State.Installation.ErrorCode.Should().Be("delivery_expired");
+        agent.State.Installation.FailureOriginStatus.Should().Be(WorkflowInstallationStatus.Accepted);
+        agent.State.Installation.ContinuationClaim.Should().BeNull();
     }
 
     [Fact]
@@ -952,8 +971,9 @@ public sealed class WorkflowDeliveryGAgentTests
     [Fact]
     public async Task InstallationReady_ShouldPersistTypedEvidenceAndConvergeOnExactReplay()
     {
-        var agent = await CreateProvisioningAcceptedAgentAsync();
-        var command = ReadyCommand();
+        var triggerIntent = OneShotTriggerIntent();
+        var agent = await CreateProvisioningAcceptedAgentAsync(triggerIntent, includeSchedule: true);
+        var command = ReadyCommand(triggerIntent, includeSchedule: true);
 
         await agent.HandleInstallationReadyAsync(command);
         await agent.HandleInstallationReadyAsync(command.Clone());
@@ -1033,34 +1053,35 @@ public sealed class WorkflowDeliveryGAgentTests
     [Fact]
     public async Task InstallationReady_ShouldFailClosedWhenRequiredEvidenceIsMissingOrMismatched()
     {
-        var agent = await CreateProvisioningAcceptedAgentAsync();
+        var triggerIntent = OneShotTriggerIntent();
+        var agent = await CreateProvisioningAcceptedAgentAsync(triggerIntent, includeSchedule: true);
         var invalidCommands = new List<RecordWorkflowInstallationReadyCommand>();
 
-        var publishedServiceNotCommitted = ReadyCommand();
+        var publishedServiceNotCommitted = ReadyCommand(triggerIntent, includeSchedule: true);
         publishedServiceNotCommitted.Evidence.PublishedService.Committed = false;
         invalidCommands.Add(publishedServiceNotCommitted);
 
-        var publishedServiceNotRunnable = ReadyCommand();
+        var publishedServiceNotRunnable = ReadyCommand(triggerIntent, includeSchedule: true);
         publishedServiceNotRunnable.Evidence.PublishedService.Runnable = false;
         invalidCommands.Add(publishedServiceNotRunnable);
 
-        var revisionMismatch = ReadyCommand();
+        var revisionMismatch = ReadyCommand(triggerIntent, includeSchedule: true);
         revisionMismatch.Evidence.BoundRevision.RevisionId = "rev-beta";
         invalidCommands.Add(revisionMismatch);
 
-        var missingNoTriggerEvidence = ReadyCommand();
-        missingNoTriggerEvidence.Evidence.Trigger.ClearReadiness();
-        invalidCommands.Add(missingNoTriggerEvidence);
+        var missingTriggerEvidence = ReadyCommand(triggerIntent, includeSchedule: true);
+        missingTriggerEvidence.Evidence.Trigger.ClearReadiness();
+        invalidCommands.Add(missingTriggerEvidence);
 
-        var nonTerminalAcceptance = ReadyCommand();
+        var nonTerminalAcceptance = ReadyCommand(triggerIntent, includeSchedule: true);
         nonTerminalAcceptance.Evidence.AcceptanceRun.Status = WorkflowAcceptanceRunStatus.TerminalFailure;
         invalidCommands.Add(nonTerminalAcceptance);
 
-        var missingArtifacts = ReadyCommand();
+        var missingArtifacts = ReadyCommand(triggerIntent, includeSchedule: true);
         missingArtifacts.Evidence.Artifacts.Clear();
         invalidCommands.Add(missingArtifacts);
 
-        var unverifiedArtifact = ReadyCommand();
+        var unverifiedArtifact = ReadyCommand(triggerIntent, includeSchedule: true);
         unverifiedArtifact.Evidence.Artifacts[0].VerificationStatus =
             WorkflowInstallationArtifactVerificationStatus.Rejected;
         invalidCommands.Add(unverifiedArtifact);
@@ -1344,6 +1365,14 @@ public sealed class WorkflowDeliveryGAgentTests
             VerifiedBindingId = "binding-alpha",
         };
 
+    private static WorkflowDeliveryTriggerIntent OneShotTriggerIntent() =>
+        new()
+        {
+            Kind = WorkflowDeliveryTriggerKind.OneShot,
+            RunImmediately = true,
+            TimeZone = "UTC",
+        };
+
     private static RecordWorkflowProvisioningAcceptedCommand ProvisioningAcceptedCommand(
         bool includeSchedule = false,
         bool includeBindingRun = true,
@@ -1434,21 +1463,24 @@ public sealed class WorkflowDeliveryGAgentTests
                 CommittedStateVersion = 9,
             },
             Trigger = trigger,
-            AcceptanceRun = new WorkflowAcceptanceRunReadinessEvidence
+        };
+        if (intent.Kind != WorkflowDeliveryTriggerKind.None)
+        {
+            evidence.AcceptanceRun = new WorkflowAcceptanceRunReadinessEvidence
             {
                 AcceptanceRunId = "acceptance-run-alpha",
                 Status = WorkflowAcceptanceRunStatus.TerminalSuccess,
                 CommittedStateVersion = 13,
-            },
-        };
-        evidence.Artifacts.Add(new WorkflowInstallationArtifactEvidence
-        {
-            Kind = WorkflowInstallationArtifactKind.RunOutput,
-            ArtifactId = "artifact-alpha",
-            VerificationStatus = WorkflowInstallationArtifactVerificationStatus.Verified,
-            VerificationReference = "run-output:artifact-alpha",
-            ContentDigest = "sha256-artifact-alpha",
-        });
+            };
+            evidence.Artifacts.Add(new WorkflowInstallationArtifactEvidence
+            {
+                Kind = WorkflowInstallationArtifactKind.RunOutput,
+                ArtifactId = "artifact-alpha",
+                VerificationStatus = WorkflowInstallationArtifactVerificationStatus.Verified,
+                VerificationReference = "run-output:artifact-alpha",
+                ContentDigest = "sha256-artifact-alpha",
+            });
+        }
         return new RecordWorkflowInstallationReadyCommand
         {
             DeliveryId = "delivery-alpha",

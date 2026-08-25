@@ -235,12 +235,35 @@ public sealed class ProjectionScopeStatusGAgent
             route,
             ContractId,
             ContractVersion);
-        if ((warmingTerminalRoute || route?.Phase == ProjectionScopeStatusRoutePhase.Blocked) &&
-            !await HasTerminalWriterPhaseBProofsAsync(route!, sourceScopeActorId))
+        var servedTerminalRouteBlocked =
+            route?.Phase == ProjectionScopeStatusRoutePhase.Blocked &&
+            ProjectionScopeStatusRoutePolicy.IsActiveTerminalRoute(
+                route,
+                ContractId,
+                ContractVersion);
+        var activeLegacyWriterBlocked =
+            State.Active &&
+            !State.Released &&
+            route?.Phase == ProjectionScopeStatusRoutePhase.Blocked &&
+            ProjectionScopeStatusRoutePolicy.IsLegacyRoute(route);
+        if (warmingTerminalRoute || servedTerminalRouteBlocked || activeLegacyWriterBlocked)
         {
-            // Phase-B writers remain silent unless the historical drain proof, fresh V3
-            // admission and all three actor-owned seals agree with this exact writer instance.
-            return;
+            // Historical and pre-seal WARMING/BLOCKED publications cannot acquire durable seals
+            // when redelivered because their committed state image is immutable. Keep those
+            // publications frozen. Once the exact route already carries its three writer seals,
+            // however, missing live fleet proof is transient and must request redelivery.
+            if (!HasTerminalWriterBoundPhaseBSeals(route!, sourceScopeActorId))
+                return;
+
+            if (!await HasTerminalWriterLivePhaseBProofsAsync())
+            {
+                throw new ProjectionScopeStatusPhaseBProofUnavailableException(
+                    Id,
+                    sourceScopeActorId,
+                    route!.RouteEpoch,
+                    route.Phase,
+                    ProjectionScopeStatusActorRole.TerminalWriter);
+            }
         }
 
         var namesThisWriter =
@@ -326,18 +349,10 @@ public sealed class ProjectionScopeStatusGAgent
                    CancellationToken.None) != null;
     }
 
-    private async Task<bool> HasTerminalWriterPhaseBProofsAsync(
+    private bool HasTerminalWriterBoundPhaseBSeals(
         ProjectionScopeStatusRoute route,
         string sourceScopeActorId)
     {
-        if (!await HasTerminalQuiescenceReceiptAsync() ||
-            await ProjectionScopeStatusActivationSealPolicy.ReadFreshAdmissionAsync(
-                Services,
-                CancellationToken.None) == null)
-        {
-            return false;
-        }
-
         var reader = Services.GetService<IRuntimeActorStateSchemaContextReader>();
         return ProjectionScopeStatusActivationSealPolicy.TryCreate(
                    reader,
@@ -352,6 +367,12 @@ public sealed class ProjectionScopeStatusGAgent
                    ProjectionScopeStatusRoutes.BuildTerminalActorId(sourceScopeActorId),
                    currentWriterSeal);
     }
+
+    private async Task<bool> HasTerminalWriterLivePhaseBProofsAsync() =>
+        await HasTerminalQuiescenceReceiptAsync() &&
+        await ProjectionScopeStatusActivationSealPolicy.ReadFreshAdmissionAsync(
+            Services,
+            CancellationToken.None) != null;
 
     /// <summary>
     /// A released and detached source publishes nothing further, so this materializer

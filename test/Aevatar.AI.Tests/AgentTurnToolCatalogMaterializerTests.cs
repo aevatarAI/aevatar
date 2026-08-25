@@ -851,6 +851,49 @@ public sealed class AgentTurnToolCatalogMaterializerTests
         fetcher.CallCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task MaterializeCommittedAsync_WhenHistoricalProfileHasDuplicateExactCandidate_ShouldRestrictEmpty()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var validProfile = SealProfile(BuildProfile(withAlias: true));
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .PrepareAsync(
+                validProfile,
+                "session-duplicate-committed-candidate",
+                "/alpha run",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+        var historicalProfile = validProfile.Clone();
+        historicalProfile.Members.Add(historicalProfile.Members[0].Clone());
+        historicalProfile.DeterministicPolicySha256 = ByteString.Empty;
+        historicalProfile = SealProfile(historicalProfile);
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var materialization = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(new InvalidOperationException("must not classify")),
+                fetcher)
+            .MaterializeCommittedAsync(
+                historicalProfile,
+                preparation.Authority,
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEmpty();
+        materialization.ReconcileProposal.AuthorityKind.Should().Be(
+            AgentProfileTurnAuthorityKind.RestrictedEmpty);
+        materialization.Catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation &&
+            diagnostic.Detail == "committed_intent_id_collision");
+        fetcher.CallCount.Should().Be(0);
+    }
+
     [Theory]
     [InlineData(nameof(AgentProfileTurnCandidateRouteIdentity.ProfileId), "profile-other")]
     [InlineData(nameof(AgentProfileTurnCandidateRouteIdentity.ProfileVersion), "profile-v2")]

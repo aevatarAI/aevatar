@@ -1535,6 +1535,43 @@ public sealed class ProjectionScopeStatusRouteActivationTests
             "a WARMING/BLOCKED writer without Phase-B proofs consumes the publication without advancing");
     }
 
+    [Theory]
+    [InlineData(FrozenRouteKind.Terminal, ProjectionScopeStatusRoutePhase.Warming)]
+    [InlineData(FrozenRouteKind.Terminal, ProjectionScopeStatusRoutePhase.Blocked)]
+    [InlineData(FrozenRouteKind.Legacy, ProjectionScopeStatusRoutePhase.Warming)]
+    [InlineData(FrozenRouteKind.Legacy, ProjectionScopeStatusRoutePhase.Blocked)]
+    public async Task LegacyWriter_BoundRouteWithUnavailableLiveProof_RequestsRedeliveryThenRecovers(
+        FrozenRouteKind routeKind,
+        ProjectionScopeStatusRoutePhase phase)
+    {
+        var harness = BuildLegacyShadowHarness(
+            quiescence: CreateQuiescenceEvidence(),
+            phaseBReady: true);
+        await harness.Agent.ActivateForTestAsync();
+        harness.Journal.Clear();
+        var sourceState = BuildSourceStateAtVersion(3, 10);
+        sourceState.StatusRoute = routeKind == FrozenRouteKind.Terminal
+            ? ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(8, phase)
+            : ProjectionScopeStatusRoutePolicy.BuildLegacyRoute(8, phase);
+        AddPhaseBSeals(sourceState.StatusRoute);
+        var envelope = BuildCommittedSourceEnvelope(LegacyActorId, sourceState, 3);
+        harness.Fleet!.Admission = null;
+
+        Func<Task> act = () => harness.Agent.HandleObservedEnvelopeAsync(envelope);
+
+        var exception = await act.Should()
+            .ThrowAsync<ProjectionScopeStatusPhaseBProofUnavailableException>();
+        exception.Which.MaterializerActorId.Should().Be(LegacyActorId);
+        exception.Which.SourceScopeActorId.Should().Be(SourceScopeActorId);
+        exception.Which.RouteEpoch.Should().Be(8);
+        exception.Which.Phase.Should().Be(phase);
+        exception.Which.WriterRole.Should().Be(ProjectionScopeStatusActorRole.LegacyWriter);
+        harness.Journal.Should().BeEmpty();
+
+        harness.Fleet.Publish(CreateActivationSealAdmission());
+        await harness.Agent.HandleObservedEnvelopeAsync(envelope);
+    }
+
     [Fact]
     public async Task LegacyCandidate_AfterQuiescence_ReportsFreshRollbackWarmingObservation()
     {

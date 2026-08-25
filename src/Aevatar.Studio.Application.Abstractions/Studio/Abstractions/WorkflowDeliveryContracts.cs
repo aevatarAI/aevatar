@@ -215,7 +215,7 @@ public sealed record WorkflowInstallationReadinessEvidence(
     WorkflowPublishedServiceReadinessEvidence PublishedService,
     WorkflowBoundRevisionReadinessEvidence BoundRevision,
     WorkflowTriggerReadinessEvidence Trigger,
-    WorkflowAcceptanceRunReadinessEvidence AcceptanceRun,
+    WorkflowAcceptanceRunReadinessEvidence? AcceptanceRun,
     IReadOnlyList<WorkflowInstallationArtifactEvidence> Artifacts);
 
 public sealed record WorkflowInstallationContinuationClaimSnapshot(
@@ -262,7 +262,7 @@ public sealed record WorkflowInstallationSnapshot(
 {
     public WorkflowInstallationContinuationClaimSnapshot? ContinuationClaim { get; init; }
 
-    public string? AcceptanceRunId => ReadinessEvidence?.AcceptanceRun.AcceptanceRunId;
+    public string? AcceptanceRunId => ReadinessEvidence?.AcceptanceRun?.AcceptanceRunId;
 
     public IReadOnlyList<string> ArtifactEvidence =>
         ReadinessEvidence?.Artifacts.Select(static evidence => evidence.ArtifactId).ToArray() ?? [];

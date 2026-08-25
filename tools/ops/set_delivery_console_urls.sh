@@ -18,7 +18,7 @@ CONFIGMAP="${AEVATAR_DELIVERY_CONFIGMAP:-aevatar-console-backend-appsettings-dis
 FILE_KEY="appsettings.Distributed.json"
 CONSOLE_WEB_BASE_URL="${AEVATAR_DELIVERY_CONSOLE_WEB_BASE_URL:-https://aevatar-console.aevatar.ai}"
 
-kube() { kubectl --kubeconfig="$KUBECONFIG_PATH" --insecure-skip-tls-verify -n "$NAMESPACE" "$@"; }
+kube() { kubectl --kubeconfig="$KUBECONFIG_PATH" -n "$NAMESPACE" "$@"; }
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
@@ -63,6 +63,16 @@ if a != b:
 print("verified: no setting outside Aevatar:Delivery changed")
 PY
 
+FILE_KEY="$FILE_KEY" python3 - "$workdir/next.json" "$workdir/configmap-patch.json" <<'PY'
+import json, os, sys
+source, target = sys.argv[1], sys.argv[2]
+with open(source, encoding="utf-8") as stream:
+    content = stream.read()
+patch = {"data": {os.environ["FILE_KEY"]: content}}
+with open(target, "w", encoding="utf-8") as stream:
+    json.dump(patch, stream, ensure_ascii=False)
+PY
+
 echo "delivery package prerequisite: this helper does not create Aevatar:Delivery:Packages or mount YAML sources."
 echo "Each configured package requires a matching {workflowName}.yaml under Aevatar:Delivery:PackageDirectory before rollout."
 
@@ -71,8 +81,6 @@ if [ "${APPLY:-0}" != "1" ]; then
   exit 0
 fi
 
-kube create configmap "$CONFIGMAP" \
-  --from-file="$FILE_KEY=$workdir/next.json" \
-  --dry-run=client -o yaml | kube apply -f -
+kube patch configmap "$CONFIGMAP" --type=merge --patch-file "$workdir/configmap-patch.json"
 kube rollout restart deploy/aevatar-console-backend
 kube rollout status deploy/aevatar-console-backend --timeout=600s

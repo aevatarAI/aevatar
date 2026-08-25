@@ -128,14 +128,17 @@ internal static class WorkflowDeliveryEndpoints
         HttpContext http,
         [FromServices] IWorkflowDeliveryService service,
         [FromServices] IPlatformAdminAuthorizer? adminAuthorizer,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? pageSize = null,
+        string? pageToken = null)
     {
+        var page = new WorkflowDeliveryPageRequest(pageSize, pageToken);
         var admin = await ResolveAdminAsync(http, adminAuthorizer, requireAdmin: false, ct);
         if (admin.Caller is not null)
-            return await ExecuteAsync(() => service.ListAdminAsync(ct));
+            return await ExecuteAsync(() => service.ListAdminAsync(page, ct));
         if (!TryResolveCallerScope(http, out var scopeId, out var denied))
             return denied;
-        return await ExecuteAsync(() => service.ListCustomerAsync(scopeId, ct));
+        return await ExecuteAsync(() => service.ListCustomerAsync(scopeId, page, ct));
     }
 
     internal static async Task<IResult> CreateRequestAsync(
@@ -226,12 +229,16 @@ internal static class WorkflowDeliveryEndpoints
             return denied;
         if (!TryGetBearer(http, out var bearerToken))
             return Results.Unauthorized();
-        return await ExecuteAsync(() => service.CreateConnectLinkAsync(
-            deliveryId,
-            scopeId,
-            slotKey,
-            bearerToken,
-            ct));
+        return await ExecuteAsync(async () =>
+        {
+            var response = await service.CreateConnectLinkAsync(
+                deliveryId,
+                scopeId,
+                slotKey,
+                bearerToken,
+                ct);
+            return Results.Accepted(response.StatusUrl, response);
+        });
     }
 
     internal static async Task<IResult> GetConnectStatusAsync(
@@ -688,13 +695,13 @@ internal static class WorkflowDeliveryHttpErrorMapper
             Error(StatusCodes.Status410Gone, exception.Code, exception.Message),
         "PACKAGE_VERSION_CHANGED" or "CONFIRMATION_DIGEST_MISMATCH" or "CONNECTION_CONTRACT_MISMATCH" or
         "CONNECTIONS_LOCKED" or "CONNECTION_ALREADY_PENDING" or "CONNECTION_CHANGED" or
-        "EXISTING_CONNECTION_NOT_AVAILABLE" =>
+        "EXISTING_CONNECTION_NOT_AVAILABLE" or "DELIVERY_CONFLICT" =>
             Error(StatusCodes.Status409Conflict, exception.Code, exception.Message),
         "PROVISIONING_UNAUTHORIZED" =>
             Error(StatusCodes.Status401Unauthorized, exception.Code, exception.Message),
         "PROVISIONING_FAILED" =>
             Error(StatusCodes.Status503ServiceUnavailable, exception.Code, "Workflow provisioning is temporarily unavailable."),
-        "CONNECTION_OBSERVATION_TIMEOUT" =>
+        "CONNECTION_OBSERVATION_TIMEOUT" or "INSTALLATION_OBSERVATION_TIMEOUT" =>
             RetryableUnavailable(exception.Code, exception.Message),
         _ => Error(StatusCodes.Status422UnprocessableEntity, exception.Code, exception.Message),
     };

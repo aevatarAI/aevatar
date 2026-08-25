@@ -1,6 +1,4 @@
 import {
-  CheckOutlined,
-  CloseOutlined,
   PauseCircleOutlined,
   RedoOutlined,
   StopOutlined,
@@ -20,7 +18,6 @@ import type { ChatInputAnswer } from './chatApi';
 import type {
   ChatApprovalObservation,
   ChatExternalEffect,
-  ChatPlanGate,
   ChatTaskStepSource,
 } from './chatTaskPlan';
 
@@ -45,7 +42,6 @@ type Props = {
   diagnosticWire?: unknown;
   wireInspectorEnabled?: boolean;
   onInputResolve: (answer: ChatInputAnswer, input: ChatPendingInput) => void;
-  onPlanResolve: (confirmed: boolean, gate: ChatPlanGate) => void;
   onStop: () => void;
   onSteer: (instruction: string) => void;
   onRetry: (step: ChatActorStep) => void;
@@ -79,7 +75,6 @@ export function ChatActorControls({
   diagnosticWire,
   wireInspectorEnabled = false,
   onInputResolve,
-  onPlanResolve,
   onStop,
   onRetry,
   onSkip,
@@ -121,11 +116,7 @@ export function ChatActorControls({
       style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
     >
       {projection.task ? (
-        <TaskPlanLedger
-          disabled={disabled}
-          onPlanResolve={onPlanResolve}
-          projection={projection}
-        />
+        <TaskPlanLedger projection={projection} />
       ) : null}
 
       <CommittedResults projection={projection} />
@@ -329,18 +320,12 @@ export function ChatActorControls({
 }
 
 function TaskPlanLedger({
-  disabled,
-  onPlanResolve,
   projection,
 }: {
-  disabled: boolean;
-  onPlanResolve: Props['onPlanResolve'];
   projection: ChatActorProjection;
 }): React.ReactElement | null {
   const plan = projection.task;
   if (!plan) return null;
-  const gate = plan.gate;
-  const pendingGate = gate?.mode === 'confirm' && gate.status === 'pending';
   const statusCounts = plan.steps.reduce<Record<string, number>>(
     (counts, step) => {
       counts[step.status] = (counts[step.status] ?? 0) + 1;
@@ -393,63 +378,11 @@ function TaskPlanLedger({
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           <StatusTag status={plan.status} />
-          {gate ? (
-            <Tag>{`${gate.mode} · ${gate.status || 'ready'}`}</Tag>
-          ) : null}
           {Object.entries(statusCounts).map(([status, count]) => (
             <Tag key={status}>{`${status} ${count}`}</Tag>
           ))}
         </div>
       </div>
-      {gate?.reason ? (
-        <div
-          style={{
-            borderBottom: '1px solid #eef2f7',
-            color: '#475569',
-            fontSize: 12,
-            padding: '9px 14px',
-          }}
-        >
-          {gate.reason}
-        </div>
-      ) : null}
-      {pendingGate ? (
-        <div
-          style={{
-            alignItems: 'center',
-            borderBottom: '1px solid #eef2f7',
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-            padding: '10px 14px',
-          }}
-        >
-          <strong style={{ color: '#0f172a', fontSize: 12 }}>
-            {t(
-              'pages.chat.actorControls.planDecision',
-              'Confirm this disclosed plan',
-            )}
-          </strong>
-          <Button
-            disabled={disabled}
-            icon={<CheckOutlined />}
-            onClick={() => onPlanResolve(true, gate)}
-            size="small"
-            type="primary"
-          >
-            {t('pages.chat.actorControls.confirmPlan', 'Confirm plan')}
-          </Button>
-          <Button
-            danger
-            disabled={disabled}
-            icon={<CloseOutlined />}
-            onClick={() => onPlanResolve(false, gate)}
-            size="small"
-          >
-            {t('pages.chat.actorControls.rejectPlan', 'Reject plan')}
-          </Button>
-        </div>
-      ) : null}
       <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
         {plan.steps.map((step) => {
           const stalled = isActorReportedStalled(step);

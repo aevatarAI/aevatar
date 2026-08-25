@@ -201,6 +201,49 @@ public sealed class ProjectionScopeStatusTerminalRouteTests
         harness.Agent.State.Released.Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData(ProjectionScopeStatusRoutePhase.Warming)]
+    [InlineData(ProjectionScopeStatusRoutePhase.Blocked)]
+    public async Task HandleObservedEnvelopeAsync_BoundPhaseBWithUnavailableLiveProof_RequestsRedelivery(
+        ProjectionScopeStatusRoutePhase phase)
+    {
+        var harness = await TerminalHarness.CreateStartedAsync(
+            quiescence: null,
+            phaseBReady: true);
+        var sourceState = BuildSourceState();
+        sourceState.StatusRoute = ProjectionScopeStatusRoutePolicy.BuildTerminalRoute(5, phase);
+        sourceState.StatusRoute.BlockedVersion = phase == ProjectionScopeStatusRoutePhase.Blocked ? 12 : 0;
+        AddPhaseBSeals(sourceState.StatusRoute);
+        var envelope = BuildForwardedEnvelope(
+            sourceState,
+            BuildStateEvent(
+                version: 12,
+                eventId: "evt-bound-live-proof-unavailable",
+                new ProjectionScopeWatermarkAdvancedEvent()));
+
+        Func<Task> act = () => harness.Agent.HandleObservedEnvelopeAsync(envelope);
+
+        var exception = await act.Should()
+            .ThrowAsync<ProjectionScopeStatusPhaseBProofUnavailableException>();
+        exception.Which.MaterializerActorId.Should().Be(TerminalActorId);
+        exception.Which.SourceScopeActorId.Should().Be(SourceScopeActorId);
+        exception.Which.RouteEpoch.Should().Be(5);
+        exception.Which.Phase.Should().Be(phase);
+        exception.Which.WriterRole.Should().Be(ProjectionScopeStatusActorRole.TerminalWriter);
+        harness.Dispatcher.Documents.Should().BeEmpty();
+        harness.Outbox.Sent.Should().BeEmpty();
+
+        var recovered = await TerminalHarness.CreateStartedAsync(
+            quiescence: CreateQuiescenceEvidence(),
+            phaseBReady: true);
+        await recovered.Agent.HandleObservedEnvelopeAsync(envelope);
+        if (phase == ProjectionScopeStatusRoutePhase.Warming)
+        {
+            recovered.Outbox.Sent.Should().ContainSingle(message =>
+                message.Message is ProjectionScopeStatusWriterCaughtUpEvent);
+        }
+    }
+
     [Fact]
     public async Task HandleEnsureAsync_WhenAlreadyStarted_ShouldBeIdempotent()
     {

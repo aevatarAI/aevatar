@@ -8,6 +8,7 @@ internal static class ToolExecutionAuditErrorCode
     {
         "code_execution_submit_recovery_expired",
         "code_execution_timed_out",
+        "codex_execution_timed_out",
         "OPERATION_EXPIRED",
         "SANDBOX_TIMEOUT",
         "managed_proxy_timeout",

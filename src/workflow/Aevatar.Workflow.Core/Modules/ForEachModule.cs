@@ -35,6 +35,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
     internal static TimeSpan DurablePublicationRetryDelay => TimeSpan.FromSeconds(1);
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
     private readonly HashSet<AcceptedChildPublicationKey> _acceptedChildPublications = [];
+    private readonly HashSet<AcceptedChildPublicationKey> _preparedChildPublicationAttempts = [];
 
     /// <summary>Module name.</summary>
     public string Name => "foreach";
@@ -233,6 +234,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 
                 if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
                 {
+                    MarkPublicationAttemptPrepared(parentKey, entry);
                     parentState.PendingDispatches.Add(entry);
                 }
                 else if (backpressureApplied == null)
@@ -891,22 +893,37 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         ForEachParentState parentState)
     {
         var settledStepIds = parentState.SettledWorkerStepIds.ToHashSet(StringComparer.Ordinal);
-        var outstandingStepIds = parentState.PendingDispatches
-            .Select(static pending => pending.StepId)
-            .Where(stepId => !settledStepIds.Contains(stepId))
-            .Distinct(StringComparer.Ordinal)
+        var unresolvedDispatches = parentState.PendingDispatches
+            .Where(pending => !settledStepIds.Contains(pending.StepId))
+            .GroupBy(static pending => pending.StepId, StringComparer.Ordinal)
+            .Select(static group => group.Last())
             .ToArray();
         var stateChanged = parentState.PendingDispatches.Count > 0;
-        foreach (var stepId in outstandingStepIds)
+        var backpressure = state.Backpressure;
+        foreach (var pending in unresolvedDispatches)
         {
-            if (!parentState.OutstandingWorkerStepIds.Contains(stepId))
+            if (pending.PublicationFailureOutcome is
+                WorkflowChildPublicationFailureOutcome.Unspecified or
+                WorkflowChildPublicationFailureOutcome.OutcomeUncertain)
             {
-                parentState.OutstandingWorkerStepIds.Add(stepId);
-                stateChanged = true;
+                if (!parentState.OutstandingWorkerStepIds.Contains(pending.StepId))
+                {
+                    parentState.OutstandingWorkerStepIds.Add(pending.StepId);
+                    stateChanged = true;
+                }
+                continue;
             }
+
+            // Only a typed NotAdmitted receipt proves that the child never entered an inbox.
+            // Legacy/unspecified intents remain conservative because they may have escaped before
+            // the publication result was checkpointed.
+            AddIfMissing(parentState.SettledWorkerStepIds, pending.StepId);
+            parentState.OutstandingWorkerStepIds.Remove(pending.StepId);
+            if (backpressure != null)
+                BackpressureHelper.CompleteWithoutTopUp(backpressure);
+            stateChanged = true;
         }
         parentState.PendingDispatches.Clear();
-        var backpressure = state.Backpressure;
         if (backpressure == null)
             return stateChanged;
 
@@ -957,6 +974,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             }
 
             EnsureStableChildIdentity(entry, parentState);
+            MarkPublicationAttemptQueued(entry);
             parentState.ChildExecutionIds[entry.StepId] = entry.ExecutionId;
             parentState.PendingDispatches.Add(entry);
         }
@@ -968,7 +986,7 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         CancellationToken ct)
     {
         var checkpointRequired = false;
-        var identityCheckpointRequired = false;
+        var prePublicationCheckpointRequired = false;
         var retryParentKeys = new HashSet<string>(StringComparer.Ordinal);
         var pendingPublications = new List<PendingDispatchPublication>();
 
@@ -983,7 +1001,8 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                     continue;
                 }
 
-                identityCheckpointRequired |= EnsureStableChildIdentity(entry, parentState);
+                prePublicationCheckpointRequired |= EnsureStableChildIdentity(entry, parentState);
+                prePublicationCheckpointRequired |= NormalizePublicationAttemptState(parentKey, entry);
                 if (_acceptedChildPublications.Contains(
                         BuildAcceptedChildPublicationKey(parentKey, entry)))
                 {
@@ -993,9 +1012,9 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             }
         }
 
-        // Upgrade-era pending entries may predate stable child identities. Fence those identities
-        // before any publication so a crash cannot replay the same child under a different operation.
-        if (identityCheckpointRequired)
+        // Fence stable child identities and the monotonic "publication may begin" fact before
+        // transport admission. Crash recovery can then never downgrade uncertainty to rejection.
+        if (prePublicationCheckpointRequired)
         {
             await SaveStateAsync(state, ctx, ct);
             checkpointRequired = false;
@@ -1012,6 +1031,10 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         {
             if (result.Error != null)
             {
+                result.Entry.PublicationFailureOutcome = MergePublicationFailureOutcome(
+                    result.Entry.PublicationFailureOutcome,
+                    result.FailureOutcome);
+                checkpointRequired = true;
                 ctx.Logger.LogWarning(
                     result.Error,
                     "ForEach child publication remains pending run={RunId} step={StepId}",
@@ -1052,7 +1075,10 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 TopologyAudience.Self,
                 ct,
                 BuildChildPublishOptions(publication.Entry));
-            return new PendingDispatchPublicationResult(publication, null);
+            return new PendingDispatchPublicationResult(
+                publication,
+                Error: null,
+                WorkflowChildPublicationFailureOutcome.Unspecified);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1060,7 +1086,13 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
         }
         catch (Exception ex)
         {
-            return new PendingDispatchPublicationResult(publication, ex);
+            var failureOutcome = ex is EventPublicationException
+                {
+                    Outcome: EventPublicationFailureOutcome.NotAdmitted,
+                }
+                ? WorkflowChildPublicationFailureOutcome.NotAdmitted
+                : WorkflowChildPublicationFailureOutcome.OutcomeUncertain;
+            return new PendingDispatchPublicationResult(publication, ex, failureOutcome);
         }
     }
 
@@ -1070,12 +1102,80 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 
     private sealed record PendingDispatchPublicationResult(
         PendingDispatchPublication Publication,
-        Exception? Error)
+        Exception? Error,
+        WorkflowChildPublicationFailureOutcome FailureOutcome)
     {
         public string ParentKey => Publication.ParentKey;
 
         public BackpressureQueueEntry Entry => Publication.Entry;
     }
+
+    private void MarkPublicationAttemptPrepared(
+        string parentKey,
+        BackpressureQueueEntry entry)
+    {
+        entry.PublicationAttemptStateKnown = true;
+        entry.PublicationAttempted = true;
+        _preparedChildPublicationAttempts.Add(
+            BuildAcceptedChildPublicationKey(parentKey, entry));
+    }
+
+    private static void MarkPublicationAttemptQueued(BackpressureQueueEntry entry)
+    {
+        entry.PublicationAttemptStateKnown = true;
+        entry.PublicationAttempted = false;
+    }
+
+    private bool NormalizePublicationAttemptState(
+        string parentKey,
+        BackpressureQueueEntry entry)
+    {
+        if (!entry.PublicationAttemptStateKnown)
+        {
+            entry.PublicationAttemptStateKnown = true;
+            entry.PublicationAttempted = true;
+            entry.PublicationFailureOutcome = WorkflowChildPublicationFailureOutcome.OutcomeUncertain;
+            return true;
+        }
+
+        if (!entry.PublicationAttempted)
+        {
+            entry.PublicationAttempted = true;
+            return true;
+        }
+
+        if (entry.PublicationFailureOutcome ==
+            WorkflowChildPublicationFailureOutcome.OutcomeUncertain)
+            return false;
+
+        if (entry.PublicationFailureOutcome ==
+            WorkflowChildPublicationFailureOutcome.NotAdmitted)
+        {
+            entry.PublicationFailureOutcome =
+                WorkflowChildPublicationFailureOutcome.OutcomeUncertain;
+            return true;
+        }
+
+        if (_preparedChildPublicationAttempts.Remove(
+                BuildAcceptedChildPublicationKey(parentKey, entry)))
+        {
+            return false;
+        }
+
+        entry.PublicationFailureOutcome = WorkflowChildPublicationFailureOutcome.OutcomeUncertain;
+        return true;
+    }
+
+    private static WorkflowChildPublicationFailureOutcome MergePublicationFailureOutcome(
+        WorkflowChildPublicationFailureOutcome current,
+        WorkflowChildPublicationFailureOutcome observed) =>
+        current == WorkflowChildPublicationFailureOutcome.OutcomeUncertain ||
+        observed == WorkflowChildPublicationFailureOutcome.OutcomeUncertain
+            ? WorkflowChildPublicationFailureOutcome.OutcomeUncertain
+            : observed == WorkflowChildPublicationFailureOutcome.NotAdmitted ||
+              current == WorkflowChildPublicationFailureOutcome.NotAdmitted
+                ? WorkflowChildPublicationFailureOutcome.NotAdmitted
+                : WorkflowChildPublicationFailureOutcome.Unspecified;
 
     private ForEachModuleState LoadState(IWorkflowExecutionContext ctx)
     {

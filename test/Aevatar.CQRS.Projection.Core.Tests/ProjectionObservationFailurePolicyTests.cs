@@ -7,6 +7,19 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class ProjectionObservationFailurePolicyTests
 {
     [Fact]
+    public void ShouldPropagate_ShouldReturnTrue_ForUnavailablePhaseBProof()
+    {
+        var exception = new ProjectionScopeStatusPhaseBProofUnavailableException(
+            "projection-status-terminal:source",
+            "source",
+            7,
+            ProjectionScopeStatusRoutePhase.Warming,
+            ProjectionScopeStatusActorRole.TerminalWriter);
+
+        ProjectionObservationFailurePolicy.ShouldPropagate(exception).Should().BeTrue();
+    }
+
+    [Fact]
     public void ShouldPropagate_ShouldReturnTrue_ForOptimisticConcurrencyException()
     {
         var exception = new EventStoreOptimisticConcurrencyException("actor-1", 4, 5);

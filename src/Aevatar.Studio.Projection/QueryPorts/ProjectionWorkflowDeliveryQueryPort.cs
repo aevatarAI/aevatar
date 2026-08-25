@@ -397,8 +397,7 @@ public sealed class ProjectionWorkflowDeliveryQueryPort : IWorkflowDeliveryQuery
             throw InvalidDocument("installation readiness published_service is missing");
         var boundRevision = value.BoundRevision ??
             throw InvalidDocument("installation readiness bound_revision is missing");
-        var acceptanceRun = value.AcceptanceRun ??
-            throw InvalidDocument("installation readiness acceptance_run is missing");
+        var acceptanceRun = value.AcceptanceRun;
 
         return new ApplicationInstallationReadinessEvidence(
             new ApplicationPublishedServiceEvidence(
@@ -415,12 +414,14 @@ public sealed class ProjectionWorkflowDeliveryQueryPort : IWorkflowDeliveryQuery
                 boundRevision.CommittedStateVersion),
             MapTriggerReadiness(
                 value.Trigger ?? throw InvalidDocument("installation readiness trigger is missing")),
-            new ApplicationAcceptanceRunEvidence(
-                NormalizeRequired(
-                    acceptanceRun.AcceptanceRunId,
-                    "projected readiness acceptance_run_id"),
-                MapAcceptanceRunStatus(acceptanceRun.Status),
-                acceptanceRun.CommittedStateVersion),
+            acceptanceRun == null
+                ? null
+                : new ApplicationAcceptanceRunEvidence(
+                    NormalizeRequired(
+                        acceptanceRun.AcceptanceRunId,
+                        "projected readiness acceptance_run_id"),
+                    MapAcceptanceRunStatus(acceptanceRun.Status),
+                    acceptanceRun.CommittedStateVersion),
             value.Artifacts.Select(MapArtifactEvidence).ToArray());
     }
 

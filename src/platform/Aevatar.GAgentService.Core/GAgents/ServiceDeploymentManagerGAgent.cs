@@ -20,9 +20,13 @@ namespace Aevatar.GAgentService.Core.GAgents;
 public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymentState>
 {
     private const string ActivationRetryCallbackPrefix = "service-deployment-activation-retry";
+    private const string DeactivationRetryCallbackPrefix = "service-deployment-deactivation-retry";
     private static readonly TimeSpan ActivationRetryInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ActivationRetryBudget = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ActivationRecoveryMinimumDelay = TimeSpan.FromMilliseconds(1);
+    private static readonly TimeSpan DeactivationRetryInterval = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan DeactivationRetryBudget = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DeactivationRecoveryMinimumDelay = TimeSpan.FromMilliseconds(1);
 
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IServiceRevisionCatalogQueryReader _revisionCatalogQueryReader;
@@ -62,6 +66,15 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 scheduleExpired: true,
                 ct: ct);
         }
+
+        foreach (var pending in State.PendingDeactivations.Values.ToArray())
+        {
+            await ScheduleDeactivationRetryAsync(
+                State.Identity,
+                pending,
+                scheduleExpired: true,
+                ct: ct);
+        }
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -87,6 +100,13 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             command.RevisionId,
             activationAttemptId,
             expectedArtifactHash);
+        if (!await ResolveActivationDeactivationConflictAsync(
+                command.Identity,
+                pending))
+        {
+            return;
+        }
+
         await ScheduleActivationRetryAsync(
             command.Identity,
             pending,
@@ -187,6 +207,12 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ServiceDeploymentActivationPhase.ServingTargetDispatchPending or
             ServiceDeploymentActivationPhase.ServingTargetDispatchAccepted)
         {
+            pending = await EnsureServingTargetDispatchPendingAsync(
+                command.Identity,
+                command.RevisionId,
+                activationAttemptId,
+                pending.DeploymentId,
+                pending.PrimaryActorId);
             await DispatchServingTargetsAsync(
                 command.Identity,
                 command.RevisionId,
@@ -380,6 +406,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             activation.DeploymentId,
             activation.PrimaryActorId,
             pending,
+            ResolveServingOperationSequence(pending),
             now.ToDateTime());
         await PersistDomainEventsAsync([activated, dispatchPending]);
         await DispatchServingTargetsAsync(
@@ -442,6 +469,41 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ExpectedArtifactHash = expectedArtifactHash,
         });
         return State.PendingActivations[revisionId];
+    }
+
+    private async Task<bool> ResolveActivationDeactivationConflictAsync(
+        ServiceIdentity identity,
+        ServiceDeploymentPendingActivationRecord activation)
+    {
+        var deactivation = State.PendingDeactivations.Values.FirstOrDefault(candidate =>
+            string.Equals(candidate.RevisionId, activation.RevisionId, StringComparison.Ordinal) ||
+            (!string.IsNullOrWhiteSpace(activation.DeploymentId) &&
+             string.Equals(candidate.DeploymentId, activation.DeploymentId, StringComparison.Ordinal)));
+        if (deactivation == null)
+            return true;
+
+        if (GetDeactivationPhase(deactivation) ==
+            ServiceDeploymentDeactivationPhase.ServingTargetRemovalPending)
+        {
+            await PersistDomainEventAsync(new ServiceDeploymentDeactivationSupersededEvent
+            {
+                Identity = identity.Clone(),
+                DeploymentId = deactivation.DeploymentId,
+                DeactivationOperationId = deactivation.DeactivationOperationId,
+                SupersededByActivationAttemptId = activation.ActivationAttemptId,
+                SupersededAt = Timestamp.FromDateTime(UtcNow),
+            });
+            return true;
+        }
+
+        await FailActivationAsync(
+            identity,
+            activation.RevisionId,
+            activation.ActivationAttemptId,
+            ServiceDeploymentActivationFailureCode.SupersededByDeactivation,
+            GetTerminalFailureReason(
+                ServiceDeploymentActivationFailureCode.SupersededByDeactivation));
+        return false;
     }
 
     private async Task DeferOrFailRetryableActivationAsync(
@@ -527,7 +589,10 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                  ServiceDeploymentActivationPhase.ServingTargetDispatchPending or
                  ServiceDeploymentActivationPhase.ServingTargetDispatchAccepted) &&
             string.Equals(pending.DeploymentId, deploymentId, StringComparison.Ordinal) &&
-            string.Equals(pending.PrimaryActorId, primaryActorId, StringComparison.Ordinal))
+            string.Equals(pending.PrimaryActorId, primaryActorId, StringComparison.Ordinal) &&
+            pending.ServingOperationSequence > 0 &&
+            !string.IsNullOrWhiteSpace(pending.ServingTargetOperationId) &&
+            !string.IsNullOrWhiteSpace(pending.ServingTargetCommandId))
         {
             return pending;
         }
@@ -539,6 +604,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             deploymentId,
             primaryActorId,
             pending,
+            ResolveServingOperationSequence(pending),
             UtcNow));
         return State.PendingActivations[revisionId];
     }
@@ -550,6 +616,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         string deploymentId,
         string primaryActorId,
         ServiceDeploymentPendingActivationRecord pending,
+        long operationSequence,
         DateTime preparedAtUtc) =>
         new()
         {
@@ -559,16 +626,22 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             PrimaryActorId = primaryActorId ?? string.Empty,
             ActivationAttemptId = activationAttemptId,
             OperationId = string.IsNullOrWhiteSpace(pending.ServingTargetOperationId)
-                ? Guid.NewGuid().ToString("N")
+                ? BuildServingOperationId(identity, deploymentId, operationSequence)
                 : pending.ServingTargetOperationId,
             CommandId = string.IsNullOrWhiteSpace(pending.ServingTargetCommandId)
-                ? Guid.NewGuid().ToString("N")
+                ? BuildServingCommandId(identity, deploymentId, operationSequence)
                 : pending.ServingTargetCommandId,
             DeadlineAt = pending.DeadlineAt?.Clone(),
             ActivationStartedAt = pending.StartedAt?.Clone(),
             PreparedAt = Timestamp.FromDateTime(preparedAtUtc),
             ExpectedArtifactHash = pending.ExpectedArtifactHash,
+            OperationSequence = operationSequence,
         };
+
+    private long ResolveServingOperationSequence(ServiceDeploymentPendingActivationRecord pending) =>
+        pending.ServingOperationSequence > 0
+            ? pending.ServingOperationSequence
+            : checked(State.LastServingOperationSequence + 1);
 
     private async Task DispatchServingTargetsAsync(
         ServiceIdentity identity,
@@ -602,6 +675,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                     activationAttemptId,
                     pending.ServingTargetOperationId,
                     pending.ServingTargetCommandId,
+                    pending.ServingOperationSequence,
                     artifact,
                     ct));
             if (!admitted)
@@ -671,10 +745,26 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 ServiceDeploymentActivationPhase.ServingTargetDispatchAccepted or
                 ServiceDeploymentActivationPhase.DefaultServingRevisionDispatchPending) ||
             !string.Equals(pending.DeploymentId, ack.DeploymentId, StringComparison.Ordinal) ||
-            !string.Equals(pending.ServingTargetOperationId, ack.OperationId, StringComparison.Ordinal))
+            !string.Equals(pending.ServingTargetOperationId, ack.OperationId, StringComparison.Ordinal) ||
+            pending.ServingOperationSequence != ack.OperationSequence)
         {
             return;
         }
+
+        if (ack.Disposition == ServiceServingTargetsApplyDisposition.Superseded)
+        {
+            if (ack.SupersededByOperationSequence <= ack.OperationSequence)
+                return;
+            await FailActivationAsync(
+                ack.Identity!,
+                ack.RevisionId,
+                ack.ActivationAttemptId,
+                ServiceDeploymentActivationFailureCode.ServingTargetSuperseded,
+                GetTerminalFailureReason(ServiceDeploymentActivationFailureCode.ServingTargetSuperseded));
+            return;
+        }
+        if (ack.Disposition != ServiceServingTargetsApplyDisposition.Applied)
+            return;
 
         // Success belongs to the deployment actor's inbox observation order. An ACK handled at
         // or after the actor-owned deadline loses to the timeout fence even if AppliedAt claims
@@ -789,6 +879,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ServingGeneration = pending.ServingGeneration,
             AppliedAt = pending.ServingTargetsAppliedAt?.Clone() ?? Timestamp.FromDateTime(UtcNow),
             DefaultServingCommittedAt = ack.CommittedAt.Clone(),
+            OperationSequence = pending.ServingOperationSequence,
         });
     }
 
@@ -927,6 +1018,180 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         }
     }
 
+    private async Task ScheduleDeactivationRetryAsync(
+        ServiceIdentity identity,
+        ServiceDeploymentPendingDeactivationRecord pending,
+        bool scheduleExpired,
+        CancellationToken ct)
+    {
+        var nowUtc = UtcNow;
+        var deadlineUtc = pending.DeadlineAt?.ToDateTime() ?? nowUtc;
+        var remaining = deadlineUtc - nowUtc;
+        if (remaining <= TimeSpan.Zero && !scheduleExpired)
+            return;
+
+        var dueTime = remaining <= TimeSpan.Zero
+            ? DeactivationRecoveryMinimumDelay
+            : remaining < DeactivationRetryInterval
+                ? remaining
+                : DeactivationRetryInterval;
+        var retryCommand = new DeactivateServiceDeploymentCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = pending.DeploymentId,
+            DeactivationDeadlineAt = pending.DeadlineAt?.Clone()
+                                     ?? Timestamp.FromDateTime(deadlineUtc),
+            DeactivationOperationId = pending.DeactivationOperationId,
+        };
+
+        Logger.LogInformation(
+            "Service deactivation retry armed. serviceKey={ServiceKey} deploymentId={DeploymentId} phase={Phase} dueSeconds={DueSeconds:F1} deadline={Deadline:O}",
+            ServiceKeys.Build(identity),
+            pending.DeploymentId,
+            GetDeactivationPhase(pending),
+            dueTime.TotalSeconds,
+            deadlineUtc);
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                $"{DeactivationRetryCallbackPrefix}:{pending.DeploymentId}",
+                dueTime,
+                retryCommand,
+                ct: ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new ServiceDeploymentDeactivationRetrySchedulePendingException(
+                "The service deactivation pending record is durable, but its recovery callback could not be scheduled.",
+                exception);
+        }
+    }
+
+    private async Task DeferOrFailDeactivationAsync(
+        ServiceIdentity identity,
+        ServiceDeploymentPendingDeactivationRecord pending,
+        ServiceDeploymentDeactivationFailureCode failureCode,
+        string failureReason,
+        Exception? exception = null)
+    {
+        if (!TryGetMatchingPendingDeactivation(
+                pending.DeploymentId,
+                pending.DeactivationOperationId,
+                out var current))
+        {
+            return;
+        }
+
+        if (exception != null)
+        {
+            Logger.LogWarning(
+                "Service deactivation dependency failed and will be retried. serviceKey={ServiceKey} deploymentId={DeploymentId} failureCode={FailureCode} exceptionType={ExceptionType}",
+                ServiceKeys.Build(identity),
+                current.DeploymentId,
+                failureCode,
+                exception.GetType().Name);
+        }
+
+        if (IsDeactivationDeadlineReached(current))
+        {
+            await FailDeactivationAsync(
+                identity,
+                current,
+                failureCode,
+                GetDeactivationTerminalFailureReason(failureCode));
+            return;
+        }
+
+        var deferred = current.Clone();
+        deferred.DeferredAt = Timestamp.FromDateTime(UtcNow);
+        deferred.LastFailureCode = failureCode;
+        deferred.LastFailureReason = failureReason?.Trim() ?? string.Empty;
+        await PersistDomainEventAsync(new ServiceDeploymentDeactivationDeferredEvent
+        {
+            Identity = identity.Clone(),
+            Deactivation = deferred,
+        });
+    }
+
+    private async Task FailDeactivationAsync(
+        ServiceIdentity identity,
+        ServiceDeploymentPendingDeactivationRecord pending,
+        ServiceDeploymentDeactivationFailureCode failureCode,
+        string failureReason)
+    {
+        if (!TryGetMatchingPendingDeactivation(
+                pending.DeploymentId,
+                pending.DeactivationOperationId,
+                out var current))
+        {
+            return;
+        }
+
+        if (State.DeactivationFailures.TryGetValue(current.DeploymentId, out var existing) &&
+            string.Equals(
+                existing.DeactivationOperationId,
+                current.DeactivationOperationId,
+                StringComparison.Ordinal) &&
+            existing.FailureCode == failureCode &&
+            string.Equals(existing.FailureReason, failureReason, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Logger.LogError(
+            "Service deactivation failed terminally. serviceKey={ServiceKey} deploymentId={DeploymentId} failureCode={FailureCode} failureReason={FailureReason}",
+            ServiceKeys.Build(identity),
+            current.DeploymentId,
+            failureCode,
+            failureReason);
+        await PersistDomainEventAsync(new ServiceDeploymentDeactivationFailedEvent
+        {
+            Identity = identity.Clone(),
+            DeploymentId = current.DeploymentId,
+            RevisionId = current.RevisionId,
+            DeactivationOperationId = current.DeactivationOperationId,
+            ActivationAttemptId = current.ActivationAttemptId,
+            ServingTargetOperationId = current.ServingTargetOperationId,
+            FailureCode = failureCode,
+            FailureReason = failureReason,
+            OccurredAt = Timestamp.FromDateTime(UtcNow),
+        });
+    }
+
+    private bool IsDeactivationDeadlineReached(
+        ServiceDeploymentPendingDeactivationRecord pending) =>
+        pending.DeadlineAt == null || UtcNow >= pending.DeadlineAt.ToDateTime();
+
+    private static ServiceDeploymentDeactivationPhase GetDeactivationPhase(
+        ServiceDeploymentPendingDeactivationRecord pending) =>
+        pending.Phase == ServiceDeploymentDeactivationPhase.Unspecified
+            ? ServiceDeploymentDeactivationPhase.ServingTargetRemovalPending
+            : pending.Phase;
+
+    private static ServiceDeploymentDeactivationFailureCode GetDeactivationDeadlineFailureCode(
+        ServiceDeploymentPendingDeactivationRecord pending) =>
+        pending.LastFailureCode != ServiceDeploymentDeactivationFailureCode.Unspecified
+            ? pending.LastFailureCode
+            : GetDeactivationPhase(pending) ==
+              ServiceDeploymentDeactivationPhase.RuntimeDeactivationPending
+                ? ServiceDeploymentDeactivationFailureCode.RuntimeDeactivationFailed
+                : ServiceDeploymentDeactivationFailureCode.ServingTargetRemovalFailed;
+
+    private static string GetDeactivationTerminalFailureReason(
+        ServiceDeploymentDeactivationFailureCode failureCode) =>
+        failureCode switch
+        {
+            ServiceDeploymentDeactivationFailureCode.ServingTargetRemovalFailed =>
+                "Service serving target removal did not complete before the deactivation deadline.",
+            ServiceDeploymentDeactivationFailureCode.RuntimeDeactivationFailed =>
+                "Service runtime deactivation did not complete before the deactivation deadline.",
+            _ => "Service deactivation failed.",
+        };
+
     private static ServiceDeploymentActivationDeferredEvent BuildDeferredEvent(
         ServiceIdentity identity,
         ServiceDeploymentPendingActivationRecord pending,
@@ -956,6 +1221,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             DefaultServingDispatchAcceptedAt = pending.DefaultServingDispatchAcceptedAt?.Clone(),
             ServingGeneration = pending.ServingGeneration,
             ServingTargetsAppliedAt = pending.ServingTargetsAppliedAt?.Clone(),
+            ServingOperationSequence = pending.ServingOperationSequence,
         };
 
     private bool IsActivationDeadlineReached(ServiceDeploymentPendingActivationRecord pending) =>
@@ -1013,6 +1279,10 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 "Default serving revision did not commit before the activation deadline.",
             ServiceDeploymentActivationFailureCode.DefaultServingRevisionSuperseded =>
                 "Default serving revision was superseded by a newer serving generation.",
+            ServiceDeploymentActivationFailureCode.SupersededByDeactivation =>
+                "Service activation was superseded by an accepted deactivation operation.",
+            ServiceDeploymentActivationFailureCode.ServingTargetSuperseded =>
+                "Service serving target update was superseded by a newer operation.",
             ServiceDeploymentActivationFailureCode.ActivationDependencyUnavailable =>
                 "A required service activation dependency remained unavailable until the activation deadline.",
             _ => "Service activation failed.",
@@ -1061,7 +1331,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         });
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public async Task HandleDeactivateAsync(DeactivateServiceDeploymentCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -1069,33 +1339,102 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         if (string.IsNullOrWhiteSpace(command.DeploymentId))
             throw new InvalidOperationException("deployment_id is required.");
 
-        if (!State.Deployments.TryGetValue(command.DeploymentId, out var deployment) ||
-            string.IsNullOrWhiteSpace(deployment.PrimaryActorId) ||
-            deployment.Status != ServiceDeploymentStatus.Active)
+        var requestedOperationId = command.DeactivationOperationId?.Trim() ?? string.Empty;
+        var isContinuation = command.DeactivationDeadlineAt != null ||
+                             !string.IsNullOrEmpty(requestedOperationId);
+        if (State.PendingDeactivations.TryGetValue(command.DeploymentId, out var pending))
         {
+            if (!string.IsNullOrEmpty(requestedOperationId) &&
+                !string.Equals(
+                    pending.DeactivationOperationId,
+                    requestedOperationId,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+        else
+        {
+            if (isContinuation ||
+                !State.Deployments.TryGetValue(command.DeploymentId, out var deployment) ||
+                string.IsNullOrWhiteSpace(deployment.PrimaryActorId) ||
+                deployment.Status != ServiceDeploymentStatus.Active)
+            {
+                return;
+            }
+
+            foreach (var activation in State.PendingActivations.Values
+                         .Where(candidate =>
+                             string.Equals(
+                                 candidate.DeploymentId,
+                                 deployment.DeploymentId,
+                                 StringComparison.Ordinal) ||
+                             string.Equals(
+                                 candidate.RevisionId,
+                                 deployment.RevisionId,
+                                 StringComparison.Ordinal))
+                         .ToArray())
+            {
+                await FailActivationAsync(
+                    command.Identity,
+                    activation.RevisionId,
+                    activation.ActivationAttemptId,
+                    ServiceDeploymentActivationFailureCode.SupersededByDeactivation,
+                    GetTerminalFailureReason(
+                        ServiceDeploymentActivationFailureCode.SupersededByDeactivation));
+            }
+
+            var nowUtc = UtcNow;
+            var operationId = string.IsNullOrEmpty(requestedOperationId)
+                ? Guid.NewGuid().ToString("N")
+                : requestedOperationId;
+            pending = new ServiceDeploymentPendingDeactivationRecord
+            {
+                DeploymentId = deployment.DeploymentId,
+                RevisionId = deployment.RevisionId,
+                PrimaryActorId = deployment.PrimaryActorId,
+                ActivationAttemptId = deployment.ActivationAttemptId,
+                ServingTargetOperationId = deployment.ServingTargetOperationId,
+                DeactivationOperationId = operationId,
+                RemovalCommandId = BuildRemovalEnvelopeId(operationId),
+                Phase = ServiceDeploymentDeactivationPhase.ServingTargetRemovalPending,
+                DeadlineAt = command.DeactivationDeadlineAt?.Clone()
+                             ?? Timestamp.FromDateTime(nowUtc + DeactivationRetryBudget),
+                StartedAt = Timestamp.FromDateTime(nowUtc),
+                DeferredAt = Timestamp.FromDateTime(nowUtc),
+            };
+            await PersistDomainEventAsync(new ServiceDeploymentDeactivationRequestedEvent
+            {
+                Identity = command.Identity.Clone(),
+                Deactivation = pending.Clone(),
+            });
+            pending = State.PendingDeactivations[command.DeploymentId];
+        }
+
+        await ScheduleDeactivationRetryAsync(
+            command.Identity,
+            pending,
+            scheduleExpired: false,
+            ct: CancellationToken.None);
+        if (IsDeactivationDeadlineReached(pending))
+        {
+            var failureCode = GetDeactivationDeadlineFailureCode(pending);
+            await FailDeactivationAsync(
+                command.Identity,
+                pending,
+                failureCode,
+                GetDeactivationTerminalFailureReason(failureCode));
             return;
         }
 
-        var servingActorId = ServiceActorIds.ServingSet(command.Identity);
-        var admission = await _dispatchPort.DispatchAsync(
-            servingActorId,
-            CreateEnvelope(
-                servingActorId,
-                $"service-serving-remove:{ServiceKeys.Build(command.Identity)}:{deployment.DeploymentId}:{deployment.ServingTargetOperationId}",
-                new RemoveDeploymentFromServiceServingTargetsCommand
-                {
-                    Identity = command.Identity.Clone(),
-                    DeploymentId = deployment.DeploymentId,
-                    RevisionId = deployment.RevisionId,
-                    PrimaryActorId = deployment.PrimaryActorId,
-                    ActivationAttemptId = deployment.ActivationAttemptId,
-                    ServingTargetOperationId = deployment.ServingTargetOperationId,
-                    ReplyActorId = Id,
-                    Reason = $"deactivate:{deployment.DeploymentId}",
-                }),
-            CancellationToken.None);
-        if (!admission.Accepted)
-            throw new InvalidOperationException("Service serving target removal was not admitted.");
+        if (GetDeactivationPhase(pending) ==
+            ServiceDeploymentDeactivationPhase.RuntimeDeactivationPending)
+        {
+            await ExecuteRuntimeDeactivationAsync(command.Identity, pending);
+            return;
+        }
+
+        await DispatchServingTargetRemovalAsync(command.Identity, pending);
     }
 
     [EventHandler]
@@ -1112,42 +1451,218 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             return;
         }
 
-        if (!State.Deployments.TryGetValue(ack.DeploymentId, out var deployment) ||
-            deployment.Status != ServiceDeploymentStatus.Active ||
-            !MatchesDeactivationAck(deployment, ack))
+        if (!State.PendingDeactivations.TryGetValue(ack.DeploymentId, out var pending) ||
+            !MatchesDeactivationAck(pending, ack))
         {
             return;
         }
 
-        await _runtimeActivator.DeactivateAsync(
-            new ServiceRuntimeDeactivationRequest(
-                ack.Identity!.Clone(),
-                deployment.DeploymentId,
-                deployment.RevisionId,
-                deployment.PrimaryActorId),
-            CancellationToken.None);
+        if (ack.Disposition == ServiceServingTargetRemovalDisposition.Superseded)
+        {
+            await PersistDomainEventAsync(new ServiceDeploymentDeactivationSupersededEvent
+            {
+                Identity = ack.Identity!.Clone(),
+                DeploymentId = pending.DeploymentId,
+                DeactivationOperationId = pending.DeactivationOperationId,
+                SupersededByActivationAttemptId = ack.ActualActivationAttemptId,
+                SupersededAt = Timestamp.FromDateTime(UtcNow),
+            });
+            return;
+        }
+
+        if (ack.Disposition is not (
+                ServiceServingTargetRemovalDisposition.Removed or
+                ServiceServingTargetRemovalDisposition.AlreadyAbsent))
+        {
+            return;
+        }
+
+        if (GetDeactivationPhase(pending) ==
+            ServiceDeploymentDeactivationPhase.ServingTargetRemovalPending)
+        {
+            await PersistDomainEventAsync(
+                new ServiceDeploymentRuntimeDeactivationInvocationStartedEvent
+                {
+                    Identity = ack.Identity!.Clone(),
+                    DeploymentId = pending.DeploymentId,
+                    DeactivationOperationId = pending.DeactivationOperationId,
+                    InvocationCount = pending.RuntimeDeactivationInvocationCount + 1,
+                    InvocationStartedAt = Timestamp.FromDateTime(UtcNow),
+                    RemovalObservedAt = ack.RemovedAt?.Clone()
+                                        ?? Timestamp.FromDateTime(UtcNow),
+                });
+            pending = State.PendingDeactivations[ack.DeploymentId];
+        }
+
+        await ExecuteRuntimeDeactivationAsync(ack.Identity!, pending);
+    }
+
+    private async Task DispatchServingTargetRemovalAsync(
+        ServiceIdentity identity,
+        ServiceDeploymentPendingDeactivationRecord pending)
+    {
+        try
+        {
+            var servingActorId = ServiceActorIds.ServingSet(identity);
+            var admission = await AwaitExternalWithinDeadlineAsync(
+                pending.DeadlineAt,
+                "serving-target-removal-dispatch",
+                ct => _dispatchPort.DispatchAsync(
+                    servingActorId,
+                    CreateEnvelope(
+                        servingActorId,
+                        pending.RemovalCommandId,
+                        new RemoveDeploymentFromServiceServingTargetsCommand
+                        {
+                            Identity = identity.Clone(),
+                            DeploymentId = pending.DeploymentId,
+                            RevisionId = pending.RevisionId,
+                            PrimaryActorId = pending.PrimaryActorId,
+                            ActivationAttemptId = pending.ActivationAttemptId,
+                            ServingTargetOperationId = pending.ServingTargetOperationId,
+                            DeactivationOperationId = pending.DeactivationOperationId,
+                            ReplyActorId = Id,
+                            Reason = $"deactivate:{pending.DeploymentId}",
+                        }),
+                    ct));
+            if (!admission.Accepted)
+            {
+                await DeferOrFailDeactivationAsync(
+                    identity,
+                    pending,
+                    ServiceDeploymentDeactivationFailureCode.ServingTargetRemovalFailed,
+                    "Service serving target removal was not admitted.");
+                return;
+            }
+
+            if (!TryGetMatchingPendingDeactivation(
+                    pending.DeploymentId,
+                    pending.DeactivationOperationId,
+                    out var current) ||
+                current.RemovalDispatchAcceptedAt != null)
+            {
+                return;
+            }
+
+            var accepted = current.Clone();
+            accepted.RemovalDispatchAcceptedAt = Timestamp.FromDateTime(UtcNow);
+            accepted.DeferredAt = Timestamp.FromDateTime(UtcNow);
+            accepted.LastFailureCode = ServiceDeploymentDeactivationFailureCode.Unspecified;
+            accepted.LastFailureReason = string.Empty;
+            await PersistDomainEventAsync(new ServiceDeploymentDeactivationDeferredEvent
+            {
+                Identity = identity.Clone(),
+                Deactivation = accepted,
+            });
+        }
+        catch (Exception exception)
+        {
+            await DeferOrFailDeactivationAsync(
+                identity,
+                pending,
+                ServiceDeploymentDeactivationFailureCode.ServingTargetRemovalFailed,
+                exception.Message,
+                exception);
+        }
+    }
+
+    private async Task ExecuteRuntimeDeactivationAsync(
+        ServiceIdentity identity,
+        ServiceDeploymentPendingDeactivationRecord pending)
+    {
+        if (!TryGetMatchingPendingDeactivation(
+                pending.DeploymentId,
+                pending.DeactivationOperationId,
+                out pending))
+        {
+            return;
+        }
+
+        if (IsDeactivationDeadlineReached(pending))
+        {
+            await FailDeactivationAsync(
+                identity,
+                pending,
+                ServiceDeploymentDeactivationFailureCode.RuntimeDeactivationFailed,
+                GetDeactivationTerminalFailureReason(
+                    ServiceDeploymentDeactivationFailureCode.RuntimeDeactivationFailed));
+            return;
+        }
+
+        try
+        {
+            await AwaitExternalWithinDeadlineAsync(
+                pending.DeadlineAt,
+                "service-runtime-deactivation",
+                async ct =>
+                {
+                    await _runtimeActivator.DeactivateAsync(
+                        new ServiceRuntimeDeactivationRequest(
+                            identity.Clone(),
+                            pending.DeploymentId,
+                            pending.RevisionId,
+                            pending.PrimaryActorId,
+                            pending.DeactivationOperationId),
+                        ct);
+                    return true;
+                });
+        }
+        catch (Exception exception)
+        {
+            await DeferOrFailDeactivationAsync(
+                identity,
+                pending,
+                ServiceDeploymentDeactivationFailureCode.RuntimeDeactivationFailed,
+                exception.Message,
+                exception);
+            return;
+        }
+
+        if (!TryGetMatchingPendingDeactivation(
+                pending.DeploymentId,
+                pending.DeactivationOperationId,
+                out var current))
+        {
+            return;
+        }
 
         await PersistDomainEventAsync(new ServiceDeploymentDeactivatedEvent
         {
-            Identity = ack.Identity.Clone(),
-            DeploymentId = deployment.DeploymentId,
-            RevisionId = deployment.RevisionId,
-            DeactivatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            Identity = identity.Clone(),
+            DeploymentId = current.DeploymentId,
+            RevisionId = current.RevisionId,
+            DeactivatedAt = Timestamp.FromDateTime(UtcNow),
+            DeactivationOperationId = current.DeactivationOperationId,
+            ActivationAttemptId = current.ActivationAttemptId,
+            ServingTargetOperationId = current.ServingTargetOperationId,
         });
     }
 
     private static bool MatchesDeactivationAck(
-        ServiceDeploymentRecord deployment,
+        ServiceDeploymentPendingDeactivationRecord pending,
         ServiceServingTargetsRemovedAck ack) =>
-        string.Equals(deployment.RevisionId, ack.RevisionId, StringComparison.Ordinal) &&
-        string.Equals(deployment.PrimaryActorId, ack.PrimaryActorId, StringComparison.Ordinal) &&
-        string.Equals(deployment.ActivationAttemptId ?? string.Empty, ack.ActivationAttemptId ?? string.Empty, StringComparison.Ordinal) &&
-        string.Equals(deployment.ServingTargetOperationId ?? string.Empty, ack.ServingTargetOperationId ?? string.Empty, StringComparison.Ordinal);
+        string.Equals(
+            pending.DeactivationOperationId,
+            ack.DeactivationOperationId,
+            StringComparison.Ordinal) &&
+        string.Equals(pending.RevisionId, ack.RevisionId, StringComparison.Ordinal) &&
+        string.Equals(pending.PrimaryActorId, ack.PrimaryActorId, StringComparison.Ordinal) &&
+        string.Equals(pending.ActivationAttemptId, ack.ActivationAttemptId, StringComparison.Ordinal) &&
+        string.Equals(
+            pending.ServingTargetOperationId,
+            ack.ServingTargetOperationId,
+            StringComparison.Ordinal);
 
     protected override ServiceDeploymentState TransitionState(ServiceDeploymentState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
             .On<ServiceDeploymentActivatedEvent>(ApplyActivated)
+            .On<ServiceDeploymentDeactivationRequestedEvent>(ApplyDeactivationRequested)
+            .On<ServiceDeploymentDeactivationDeferredEvent>(ApplyDeactivationDeferred)
+            .On<ServiceDeploymentRuntimeDeactivationInvocationStartedEvent>(
+                ApplyRuntimeDeactivationInvocationStarted)
+            .On<ServiceDeploymentDeactivationSupersededEvent>(ApplyDeactivationSuperseded)
+            .On<ServiceDeploymentDeactivationFailedEvent>(ApplyDeactivationFailed)
             .On<ServiceDeploymentDeactivatedEvent>(ApplyDeactivated)
             .On<ServiceDeploymentHealthChangedEvent>(ApplyHealthChanged)
             .On<ServiceDeploymentActivationFailedEvent>(ApplyActivationFailed)
@@ -1273,6 +1788,9 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ServingTargetsAppliedAt = FirstOptionalTimestamp(
                 evt.ServingTargetsAppliedAt,
                 existing?.ServingTargetsAppliedAt),
+            ServingOperationSequence = evt.ServingOperationSequence != 0
+                ? evt.ServingOperationSequence
+                : existing?.ServingOperationSequence ?? 0,
         };
 
     private static Timestamp FirstTimestamp(
@@ -1355,7 +1873,18 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             ServingTargetOperationId = evt.OperationId ?? string.Empty,
             ServingTargetCommandId = evt.CommandId ?? string.Empty,
             ExpectedArtifactHash = evt.ExpectedArtifactHash ?? string.Empty,
+            ServingOperationSequence = evt.OperationSequence,
         };
+        next.LastServingOperationSequence = Math.Max(
+            next.LastServingOperationSequence,
+            evt.OperationSequence);
+        if (next.Deployments.TryGetValue(evt.DeploymentId, out var deployment))
+        {
+            var fencedDeployment = deployment.Clone();
+            fencedDeployment.ActivationAttemptId = evt.ActivationAttemptId ?? string.Empty;
+            fencedDeployment.ServingTargetOperationId = evt.OperationId ?? string.Empty;
+            next.Deployments[evt.DeploymentId] = fencedDeployment;
+        }
         next.ActivationFailures.Remove(evt.RevisionId);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Identity, evt.DeploymentId, "serving-targets-dispatch-pending");
@@ -1492,6 +2021,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                         DefaultServingCommittedAt = evt.DefaultServingCommittedAt?.Clone(),
                         ExpectedArtifactHash = NormalizeExpectedArtifactHash(
                             pending.ExpectedArtifactHash),
+                        ServingOperationSequence = pending.ServingOperationSequence,
                         CompletedAt = FirstTimestamp(
                             evt.DefaultServingCommittedAt,
                             evt.AppliedAt,
@@ -1580,35 +2110,196 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     private static string BuildCompletionKey(string? revisionId, string? activationAttemptId) =>
         $"{revisionId?.Trim() ?? string.Empty}\n{NormalizeActivationAttemptId(activationAttemptId)}";
 
-    private static ServiceDeploymentState ApplyDeactivated(ServiceDeploymentState state, ServiceDeploymentDeactivatedEvent evt)
+    private static ServiceDeploymentState ApplyDeactivationRequested(
+        ServiceDeploymentState state,
+        ServiceDeploymentDeactivationRequestedEvent evt)
     {
         var next = state.Clone();
         next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
-        if (next.Deployments.TryGetValue(evt.DeploymentId, out var deployment))
+        if (evt.Deactivation != null &&
+            !string.IsNullOrWhiteSpace(evt.Deactivation.DeploymentId) &&
+            !string.IsNullOrWhiteSpace(evt.Deactivation.DeactivationOperationId))
         {
-            next.Deployments[evt.DeploymentId] = new ServiceDeploymentRecord
+            var pending = evt.Deactivation.Clone();
+            if (pending.Phase == ServiceDeploymentDeactivationPhase.Unspecified)
             {
-                DeploymentId = deployment.DeploymentId,
-                RevisionId = deployment.RevisionId,
-                PrimaryActorId = deployment.PrimaryActorId,
-                Status = ServiceDeploymentStatus.Deactivated,
-                ActivatedAt = deployment.ActivatedAt?.Clone(),
-                UpdatedAt = evt.DeactivatedAt?.Clone() ?? Timestamp.FromDateTime(DateTime.UtcNow),
-                ArtifactHash = deployment.ArtifactHash,
-                ActivationAttemptId = deployment.ActivationAttemptId,
-                ServingTargetOperationId = deployment.ServingTargetOperationId,
-            };
+                pending.Phase =
+                    ServiceDeploymentDeactivationPhase.ServingTargetRemovalPending;
+            }
+
+            next.PendingDeactivations[pending.DeploymentId] = pending;
+            next.DeactivationFailures.Remove(pending.DeploymentId);
         }
 
-        if (next.PendingActivations.TryGetValue(evt.RevisionId, out var pending) &&
-            string.Equals(pending.DeploymentId, evt.DeploymentId, StringComparison.Ordinal))
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(
+            evt.Identity,
+            evt.Deactivation?.DeploymentId,
+            "deactivation-requested");
+        return next;
+    }
+
+    private static ServiceDeploymentState ApplyDeactivationDeferred(
+        ServiceDeploymentState state,
+        ServiceDeploymentDeactivationDeferredEvent evt)
+    {
+        var next = state.Clone();
+        next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
+        if (evt.Deactivation != null &&
+            state.PendingDeactivations.TryGetValue(
+                evt.Deactivation.DeploymentId,
+                out var existing) &&
+            string.Equals(
+                existing.DeactivationOperationId,
+                evt.Deactivation.DeactivationOperationId,
+                StringComparison.Ordinal))
         {
-            next.PendingActivations.Remove(evt.RevisionId);
+            next.PendingDeactivations[evt.Deactivation.DeploymentId] =
+                evt.Deactivation.Clone();
         }
+
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(
+            evt.Identity,
+            evt.Deactivation?.DeploymentId,
+            "deactivation-deferred");
+        return next;
+    }
+
+    private static ServiceDeploymentState ApplyRuntimeDeactivationInvocationStarted(
+        ServiceDeploymentState state,
+        ServiceDeploymentRuntimeDeactivationInvocationStartedEvent evt)
+    {
+        var next = state.Clone();
+        next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
+        if (next.PendingDeactivations.TryGetValue(evt.DeploymentId, out var pending) &&
+            string.Equals(
+                pending.DeactivationOperationId,
+                evt.DeactivationOperationId,
+                StringComparison.Ordinal))
+        {
+            var invoked = pending.Clone();
+            invoked.Phase = ServiceDeploymentDeactivationPhase.RuntimeDeactivationPending;
+            invoked.RuntimeDeactivationInvocationCount = evt.InvocationCount;
+            invoked.RuntimeDeactivationInvocationStartedAt = evt.InvocationStartedAt?.Clone();
+            invoked.RemovalObservedAt = evt.RemovalObservedAt?.Clone();
+            invoked.DeferredAt = evt.InvocationStartedAt?.Clone()
+                                 ?? pending.DeferredAt?.Clone();
+            invoked.LastFailureCode = ServiceDeploymentDeactivationFailureCode.Unspecified;
+            invoked.LastFailureReason = string.Empty;
+            next.PendingDeactivations[evt.DeploymentId] = invoked;
+        }
+
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(
+            evt.Identity,
+            evt.DeploymentId,
+            "runtime-deactivation-invoked");
+        return next;
+    }
+
+    private static ServiceDeploymentState ApplyDeactivationSuperseded(
+        ServiceDeploymentState state,
+        ServiceDeploymentDeactivationSupersededEvent evt)
+    {
+        var next = state.Clone();
+        next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
+        if (next.PendingDeactivations.TryGetValue(evt.DeploymentId, out var pending) &&
+            string.Equals(
+                pending.DeactivationOperationId,
+                evt.DeactivationOperationId,
+                StringComparison.Ordinal))
+        {
+            next.PendingDeactivations.Remove(evt.DeploymentId);
+        }
+
+        next.DeactivationFailures.Remove(evt.DeploymentId);
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(
+            evt.Identity,
+            evt.DeploymentId,
+            "deactivation-superseded");
+        return next;
+    }
+
+    private static ServiceDeploymentState ApplyDeactivationFailed(
+        ServiceDeploymentState state,
+        ServiceDeploymentDeactivationFailedEvent evt)
+    {
+        var next = state.Clone();
+        next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
+        if (next.PendingDeactivations.TryGetValue(evt.DeploymentId, out var pending) &&
+            string.Equals(
+                pending.DeactivationOperationId,
+                evt.DeactivationOperationId,
+                StringComparison.Ordinal))
+        {
+            next.PendingDeactivations.Remove(evt.DeploymentId);
+            next.DeactivationFailures[evt.DeploymentId] =
+                new ServiceDeploymentDeactivationFailureRecord
+                {
+                    DeploymentId = evt.DeploymentId,
+                    RevisionId = evt.RevisionId,
+                    DeactivationOperationId = evt.DeactivationOperationId,
+                    FailureCode = evt.FailureCode,
+                    FailureReason = evt.FailureReason,
+                    OccurredAt = evt.OccurredAt?.Clone()
+                                 ?? Timestamp.FromDateTime(DateTime.UtcNow),
+                };
+        }
+
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = BuildEventId(
+            evt.Identity,
+            evt.DeploymentId,
+            "deactivation-failed");
+        return next;
+    }
+
+    private static ServiceDeploymentState ApplyDeactivated(
+        ServiceDeploymentState state,
+        ServiceDeploymentDeactivatedEvent evt)
+    {
+        var next = state.Clone();
+        next.Identity = evt.Identity?.Clone() ?? state.Identity?.Clone() ?? new ServiceIdentity();
+        var ownsPending = next.PendingDeactivations.TryGetValue(evt.DeploymentId, out var pending) &&
+                          string.Equals(
+                              pending.DeactivationOperationId,
+                              evt.DeactivationOperationId,
+                              StringComparison.Ordinal);
+        if (ownsPending &&
+            next.Deployments.TryGetValue(evt.DeploymentId, out var deployment) &&
+            DeploymentMatchesDeactivationFence(
+                deployment,
+                evt.ActivationAttemptId,
+                evt.ServingTargetOperationId))
+        {
+            var deactivated = deployment.Clone();
+            deactivated.Status = ServiceDeploymentStatus.Deactivated;
+            deactivated.UpdatedAt = evt.DeactivatedAt?.Clone()
+                                    ?? Timestamp.FromDateTime(DateTime.UtcNow);
+            next.Deployments[evt.DeploymentId] = deactivated;
+        }
+
+        if (ownsPending)
+            next.PendingDeactivations.Remove(evt.DeploymentId);
+        next.DeactivationFailures.Remove(evt.DeploymentId);
 
         foreach (var completionKey in next.ActivationCompletions
-                     .Where(x => string.Equals(x.Value.DeploymentId, evt.DeploymentId, StringComparison.Ordinal))
-                     .Select(x => x.Key)
+                     .Where(entry =>
+                         string.Equals(
+                             entry.Value.DeploymentId,
+                             evt.DeploymentId,
+                             StringComparison.Ordinal) &&
+                         string.Equals(
+                             entry.Value.ActivationAttemptId,
+                             evt.ActivationAttemptId,
+                             StringComparison.Ordinal) &&
+                         string.Equals(
+                             entry.Value.ServingTargetOperationId,
+                             evt.ServingTargetOperationId,
+                             StringComparison.Ordinal))
+                     .Select(static entry => entry.Key)
                      .ToArray())
         {
             next.ActivationCompletions.Remove(completionKey);
@@ -1618,6 +2309,19 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         next.LastEventId = BuildEventId(evt.Identity, evt.DeploymentId, "deactivated");
         return next;
     }
+
+    private static bool DeploymentMatchesDeactivationFence(
+        ServiceDeploymentRecord deployment,
+        string? activationAttemptId,
+        string? servingTargetOperationId) =>
+        string.Equals(
+            deployment.ActivationAttemptId,
+            activationAttemptId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            deployment.ServingTargetOperationId,
+            servingTargetOperationId,
+            StringComparison.Ordinal);
 
     private static ServiceDeploymentState ApplyHealthChanged(ServiceDeploymentState state, ServiceDeploymentHealthChangedEvent evt)
     {
@@ -1683,6 +2387,25 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         return false;
     }
 
+    private bool TryGetMatchingPendingDeactivation(
+        string deploymentId,
+        string deactivationOperationId,
+        out ServiceDeploymentPendingDeactivationRecord pending)
+    {
+        if (State.PendingDeactivations.TryGetValue(deploymentId, out var current) &&
+            string.Equals(
+                current.DeactivationOperationId,
+                deactivationOperationId,
+                StringComparison.Ordinal))
+        {
+            pending = current;
+            return true;
+        }
+
+        pending = null!;
+        return false;
+    }
+
     private async Task<bool> EnsureMatchingPendingWithinDeadlineAsync(
         ServiceIdentity identity,
         string revisionId,
@@ -1703,15 +2426,21 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         return false;
     }
 
-    private async Task<T> AwaitExternalWithinDeadlineAsync<T>(
+    private Task<T> AwaitExternalWithinDeadlineAsync<T>(
         ServiceDeploymentPendingActivationRecord pending,
+        string operationName,
+        Func<CancellationToken, Task<T>> invoke) =>
+        AwaitExternalWithinDeadlineAsync(pending.DeadlineAt, operationName, invoke);
+
+    private async Task<T> AwaitExternalWithinDeadlineAsync<T>(
+        Timestamp? deadline,
         string operationName,
         Func<CancellationToken, Task<T>> invoke)
     {
-        var deadlineUtc = pending.DeadlineAt?.ToDateTime() ?? UtcNow;
+        var deadlineUtc = deadline?.ToDateTime() ?? UtcNow;
         var remaining = deadlineUtc - UtcNow;
         if (remaining <= TimeSpan.Zero)
-            throw new TimeoutException($"External activation operation '{operationName}' exceeded its deadline.");
+            throw new TimeoutException($"External operation '{operationName}' exceeded its deadline.");
 
         CancellationTokenSource? timeoutCts = new();
         Task<T>? dependencyTask = null;
@@ -1748,7 +2477,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             catch (Exception exception)
             {
                 logger.LogWarning(
-                    "Activation dependency cancellation callback failed after its deadline. operation={Operation} exceptionType={ExceptionType}",
+                    "External dependency cancellation callback failed after its deadline. operation={Operation} exceptionType={ExceptionType}",
                     operationName,
                     exception.GetType().Name);
             }
@@ -1768,14 +2497,14 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 if (completed.IsFaulted)
                 {
                     observation.Logger.LogWarning(
-                        "Late activation dependency task faulted after its deadline. operation={Operation} exceptionType={ExceptionType}",
+                        "Late external dependency task faulted after its deadline. operation={Operation} exceptionType={ExceptionType}",
                         observation.OperationName,
                         completed.Exception?.GetBaseException().GetType().Name ?? "Unknown");
                 }
                 else
                 {
                     observation.Logger.LogDebug(
-                        "Late activation dependency task completed after its deadline. operation={Operation} status={Status}",
+                        "Late external dependency task completed after its deadline. operation={Operation} status={Status}",
                         observation.OperationName,
                         completed.Status);
                 }
@@ -1794,6 +2523,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
         string activationAttemptId,
         string operationId,
         string commandId,
+        long operationSequence,
         PreparedServiceRevisionArtifact artifact,
         CancellationToken ct)
     {
@@ -1809,6 +2539,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                     Reason = "deployment activation",
                     ActivationAttemptId = activationAttemptId,
                     OperationId = operationId,
+                    OperationSequence = operationSequence,
                     ReplyActorId = Id,
                     Targets =
                     {
@@ -1841,6 +2572,21 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
 
     private static string BuildDefaultServingEnvelopeId(string? servingOperationId) =>
         $"service-deployment-default-serving:{servingOperationId?.Trim() ?? string.Empty}";
+
+    private static string BuildServingOperationId(
+        ServiceIdentity identity,
+        string deploymentId,
+        long operationSequence) =>
+        $"service-serving-operation:{ServiceKeys.Build(identity)}:{deploymentId}:{operationSequence}";
+
+    private static string BuildServingCommandId(
+        ServiceIdentity identity,
+        string deploymentId,
+        long operationSequence) =>
+        $"service-serving-command:{ServiceKeys.Build(identity)}:{deploymentId}:{operationSequence}";
+
+    private static string BuildRemovalEnvelopeId(string deactivationOperationId) =>
+        $"service-deployment-remove-serving:{deactivationOperationId}";
 
     private DateTime UtcNow => _timeProvider.GetUtcNow().UtcDateTime;
 

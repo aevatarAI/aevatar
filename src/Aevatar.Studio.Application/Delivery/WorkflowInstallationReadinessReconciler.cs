@@ -135,6 +135,30 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
         if (triggerResult.Result != null)
             return triggerResult.Result;
 
+        if (installation.TriggerIntent.Kind == WorkflowDeliveryTriggerKind.None)
+        {
+            var noTriggerEvidence = new WorkflowInstallationReadinessEvidence(
+                new WorkflowPublishedServiceReadinessEvidence(
+                    publishedServiceId,
+                    Committed: true,
+                    Runnable: true,
+                    contract.PublishedServiceStateVersion),
+                new WorkflowBoundRevisionReadinessEvidence(
+                    revisionId,
+                    NormalizeOptional(installation.BindingRunId) ?? string.Empty,
+                    Bound: true,
+                    contract.BoundRevisionStateVersion),
+                triggerResult.Evidence!,
+                AcceptanceRun: null,
+                Artifacts: []);
+            return await RecordReadyAsync(
+                delivery.DeliveryId,
+                installation,
+                claim!,
+                noTriggerEvidence,
+                ct);
+        }
+
         var runResult = await ResolveAcceptanceRunAsync(
             delivery,
             installation,
@@ -164,15 +188,30 @@ public sealed class WorkflowInstallationReadinessReconciler : IWorkflowInstallat
                 run.CommittedStateVersion),
             runResult.Artifacts!);
 
+        return await RecordReadyAsync(
+            delivery.DeliveryId,
+            installation,
+            claim!,
+            evidence,
+            ct);
+    }
+
+    private async Task<WorkflowInstallationReadinessReconciliationResult> RecordReadyAsync(
+        string deliveryId,
+        WorkflowInstallationSnapshot installation,
+        WorkflowInstallationContinuationClaimSnapshot claim,
+        WorkflowInstallationReadinessEvidence evidence,
+        CancellationToken ct)
+    {
         var receipt = await _commands.RecordInstallationReadyAsync(
             new RecordWorkflowInstallationReadyMutation(
-                delivery.DeliveryId,
+                deliveryId,
                 installation.InstallationId,
                 evidence,
                 installation.Attempt,
                 installation.OperationId,
                 _timeProvider.GetUtcNow(),
-                claim!.ClaimId,
+                claim.ClaimId,
                 claim.ClaimantId),
             ct);
         return new WorkflowInstallationReadinessReconciliationResult(

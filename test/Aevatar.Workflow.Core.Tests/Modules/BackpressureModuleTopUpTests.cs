@@ -107,8 +107,8 @@ public sealed class BackpressureModuleTopUpTests
 
         context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Select(x => x.StepId)
             .Should().Equal("foreach-floor_item_2");
-        context.SaveAttempts.Should().Be(2,
-            "the child settlement and accepted publication acknowledgements share one checkpoint");
+        context.SaveAttempts.Should().Be(3,
+            "a top-up publication attempt is fenced after the settlement checkpoint");
         var settledParent = context.LoadState<ForEachModuleState>("foreach")
             .Parents["run-foreach-floor:foreach-floor"];
         settledParent.PendingDispatches.Select(entry => entry.StepId)
@@ -392,6 +392,81 @@ public sealed class BackpressureModuleTopUpTests
                 firstChild.StepId,
                 firstChild.ExecutionId)
             .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ForEachModule_FailFast_ShouldReleaseDefinitelyUnpublishedSiblingSlot()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-foreach-publication-rejection")
+        {
+            FailPublishOnce = evt => evt is StepRequestEvent { Input: "a1" },
+        };
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-parent-a",
+                StepType = "foreach",
+                RunId = context.RunId,
+                Input = "a0\n---\na1",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["max_concurrent_workers"] = "2",
+                },
+            }),
+            context,
+            CancellationToken.None);
+
+        var publishedChild = context.Published.Select(static item => item.Event)
+            .OfType<StepRequestEvent>()
+            .Should().ContainSingle().Subject;
+        publishedChild.Input.Should().Be("a0");
+        var staleRetry = context.Scheduled.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
+        context.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = publishedChild.StepId,
+                RunId = publishedChild.RunId,
+                ExecutionId = publishedChild.ExecutionId,
+                Success = false,
+                Error = "parent failed",
+                FailureOutcome = WorkflowStepFailureOutcome.CalleeConfirmed,
+            }),
+            context,
+            CancellationToken.None);
+
+        var failedState = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey);
+        failedState.Backpressure.ActiveWorkers.Should().Be(0);
+        failedState.CompletedParentAttempts.Values.Should().ContainSingle()
+            .Which.OutstandingChildExecutionIds.Should().BeEmpty();
+
+        context.Published.Clear();
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-parent-b",
+                StepType = "foreach",
+                RunId = context.RunId,
+                Input = "b0",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["max_concurrent_workers"] = "2",
+                },
+            }),
+            context,
+            CancellationToken.None);
+        context.Published.Select(static item => item.Event).OfType<StepRequestEvent>()
+            .Should().ContainSingle(request => request.Input == "b0");
+
+        context.Published.Clear();
+        await module.HandleAsync(Envelope(staleRetry), context, CancellationToken.None);
+        context.Published.Select(static item => item.Event).OfType<StepRequestEvent>()
+            .Should().NotContain(request => request.StepId.StartsWith("foreach-parent-a", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1470,7 +1545,67 @@ public sealed class BackpressureModuleTopUpTests
         replayed.StepId.Should().Be(escaped.StepId);
         replayed.ExecutionId.Should().Be(escaped.ExecutionId);
         replayed.IdempotencyKey.Should().Be(escaped.IdempotencyKey);
-        context.SaveAttempts.Should().Be(1);
+        context.SaveAttempts.Should().Be(2,
+            "the initial intent fence and outcome-uncertain publication fact are durable before retry");
+    }
+
+    [Fact]
+    public async Task ForEachModule_LaterNotAdmittedRetry_ShouldNotDowngradeEarlierUncertainPublication()
+    {
+        var module = new ForEachModule();
+        var context = new RecordingWorkflowContext("run-publication-outcome-monotonic")
+        {
+            ThrowAfterPublishOnce = evt => evt is StepRequestEvent { Input: "uncertain" },
+        };
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "foreach-publication-outcome-monotonic",
+                StepType = "foreach",
+                RunId = context.RunId,
+                Input = "failed\n---\nuncertain",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["max_concurrent_workers"] = "2",
+                },
+            }),
+            context,
+            CancellationToken.None);
+        var retry = context.Scheduled.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<ForEachPublicationRetryFiredEvent>().Subject;
+        context.FailPublishOnce = evt => evt is StepRequestEvent { Input: "uncertain" };
+        context.Published.Clear();
+
+        await module.HandleAsync(Envelope(retry), context, CancellationToken.None);
+
+        var afterRetry = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey);
+        var uncertainChild = afterRetry.Parents[$"{context.RunId}:foreach-publication-outcome-monotonic"]
+            .PendingDispatches.Single(entry => entry.Input == "uncertain");
+        uncertainChild
+            .PublicationFailureOutcome.Should().Be(
+                WorkflowChildPublicationFailureOutcome.OutcomeUncertain);
+
+        var failedChild = afterRetry.Parents[$"{context.RunId}:foreach-publication-outcome-monotonic"]
+            .PendingDispatches.Single(entry => entry.Input == "failed");
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = failedChild.StepId,
+                RunId = failedChild.RunId,
+                ExecutionId = failedChild.ExecutionId,
+                Success = false,
+                Error = "failed",
+                FailureOutcome = WorkflowStepFailureOutcome.CalleeConfirmed,
+            }),
+            context,
+            CancellationToken.None);
+
+        var terminal = context.LoadState<ForEachModuleState>(ForEachModule.ModuleStateKey);
+        terminal.Backpressure.ActiveWorkers.Should().Be(1);
+        terminal.CompletedParentAttempts.Values.Should().ContainSingle()
+            .Which.OutstandingChildExecutionIds.Values.Should().ContainSingle()
+            .Which.Should().Be(uncertainChild.ExecutionId);
     }
 
     [Fact]
@@ -1563,7 +1698,8 @@ public sealed class BackpressureModuleTopUpTests
             .Should().Equal(Enumerable.Range(0, 20)
                 .Where(index => index != 7)
                 .Select(index => $"foreach-batch-recover_item_{index}"));
-        context.SaveAttempts.Should().Be(1);
+        context.SaveAttempts.Should().Be(2,
+            "the initial intent fence and not-admitted publication fact are durable before retry");
         var checkpoint = context.LoadState<ForEachModuleState>("foreach")
             .Parents["run-batch-recover:foreach-batch-recover"];
         checkpoint.DispatchedStepIds.Should().BeEmpty();
@@ -1576,7 +1712,7 @@ public sealed class BackpressureModuleTopUpTests
 
         context.Published.Select(x => x.Event).OfType<StepRequestEvent>().Select(request => request.StepId)
             .Should().Equal("foreach-batch-recover_item_7");
-        context.SaveAttempts.Should().Be(1);
+        context.SaveAttempts.Should().Be(3);
         var recovered = context.LoadState<ForEachModuleState>("foreach")
             .Parents["run-batch-recover:foreach-batch-recover"];
         recovered.PendingDispatches.Should().HaveCount(20);
@@ -1676,7 +1812,8 @@ public sealed class BackpressureModuleTopUpTests
             .Should().Equal(firstBatch.Select(request => request.ExecutionId));
         replayedBatch.Select(request => request.IdempotencyKey)
             .Should().Equal(firstBatch.Select(request => request.IdempotencyKey));
-        context.SaveAttempts.Should().Be(2);
+        context.SaveAttempts.Should().Be(3,
+            "a fresh module checkpoints crash-recovery uncertainty before replaying the batch");
         context.LoadState<ForEachModuleState>("foreach")
             .Parents["run-batch-save-failure:foreach-batch-save-failure:execution:parent-execution"]
             .PendingDispatches.Should().HaveCount(20);
@@ -2305,19 +2442,25 @@ public sealed class BackpressureModuleTopUpTests
             lock (_publicationGate)
             {
                 if (FailPublish?.Invoke(evt) == true)
-                    throw new InvalidOperationException("simulated persistent publish failure");
+                    throw new EventPublicationException(
+                        EventPublicationFailureOutcome.NotAdmitted,
+                        "simulated persistent publish failure");
 
                 if (FailPublishOnce?.Invoke(evt) == true)
                 {
                     FailPublishOnce = null;
-                    throw new InvalidOperationException("simulated publish failure");
+                    throw new EventPublicationException(
+                        EventPublicationFailureOutcome.NotAdmitted,
+                        "simulated publish failure");
                 }
 
                 Published.Add((evt, audience));
                 if (ThrowAfterPublishOnce?.Invoke(evt) == true)
                 {
                     ThrowAfterPublishOnce = null;
-                    throw new InvalidOperationException("simulated ambiguous publish failure");
+                    throw new EventPublicationException(
+                        EventPublicationFailureOutcome.OutcomeUncertain,
+                        "simulated ambiguous publish failure");
                 }
             }
         }

@@ -236,6 +236,25 @@ public sealed class AgentTurnToolCatalogTests
     }
 
     [Fact]
+    public void PersistedProof_ShouldRejectLiveConnectedSelectorDrift()
+    {
+        var original = new AdmissionTestTool(CreateReadAdmission("service-instance-alpha"));
+        var catalog = NewCatalog(
+            [original],
+            AgentTurnToolCatalogBudget.ConnectedOperations,
+            AgentTurnToolOrigin.ConnectedService);
+        var restored = AgentTurnToolCatalogProofPayloadMapper.FromPayload(catalog.Proof.ToPayload());
+
+        restored.AssertMatchesExactTools(
+            [new AdmissionTestTool(CreateReadAdmission("service-instance-alpha"))]);
+        var act = () => restored.AssertMatchesExactTools(
+            [new AdmissionTestTool(CreateReadAdmission("service-instance-beta"))]);
+
+        act.Should().Throw<AgentTurnToolCatalogException>()
+            .Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.CatalogProofMismatch);
+    }
+
+    [Fact]
     public void PersistedProof_ShouldRestoreToolCountAboveOptimizationTarget()
     {
         var catalog = NewCatalog(
@@ -460,4 +479,40 @@ public sealed class AgentTurnToolCatalogTests
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
     }
+
+    private sealed class AdmissionTestTool(AgentToolOperationAdmission operationAdmission)
+        : IAgentTool, IAgentToolOperationAdmissionOwner
+    {
+        public string Name => "connected_lookup";
+
+        public string Description => "Look up connected resources";
+
+        public string ParametersSchema => "{\"type\":\"object\"}";
+
+        public bool IsReadOnly => true;
+
+        public AgentToolOperationAdmission OperationAdmission => operationAdmission;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    private static AgentToolOperationAdmission CreateReadAdmission(string serviceInstanceId) =>
+        new(
+            serviceInstanceId,
+            "connected-service",
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/items",
+            "contract-digest-alpha",
+            [],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive]),
+            "catalog-digest-alpha");
 }

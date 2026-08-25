@@ -16,6 +16,7 @@ namespace Aevatar.GAgentService.Core.GAgents;
 public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
 {
     private const string RegistrationRetryCallbackId = "service-definition-registration-retry";
+    internal const int MaximumDefaultServingOperationHistory = 64;
 
     private readonly IActorDispatchPort _dispatchPort;
     private readonly INyxIdServiceRegistrationPort _registrationPort;
@@ -291,6 +292,7 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
 
         if (command.ServingGeneration < State.DefaultServingGeneration)
         {
+            var supersededAt = Timestamp.FromDateTime(DateTime.UtcNow);
             await PersistDomainEventAsync(new DefaultServingRevisionSupersededEvent
             {
                 Identity = command.Identity.Clone(),
@@ -301,11 +303,23 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
                 ActivationAttemptId = command.ActivationAttemptId?.Trim() ?? string.Empty,
                 DeploymentId = command.DeploymentId.Trim(),
                 ServingGeneration = command.ServingGeneration,
-                SupersededAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                SupersededAt = supersededAt,
                 SupersededByGeneration = State.DefaultServingGeneration,
             });
             await DispatchDefaultServingRevisionCommittedAckAsync(
-                State.DefaultServingRevisionOperations[operationId],
+                new DefaultServingRevisionOperationRecord
+                {
+                    RevisionId = command.RevisionId,
+                    OperationId = operationId,
+                    CommandId = command.CommandId.Trim(),
+                    ReplyActorId = command.ReplyActorId.Trim(),
+                    ActivationAttemptId = command.ActivationAttemptId?.Trim() ?? string.Empty,
+                    DeploymentId = command.DeploymentId.Trim(),
+                    ServingGeneration = command.ServingGeneration,
+                    CommittedAt = supersededAt,
+                    Disposition = DefaultServingRevisionCommitDisposition.Superseded,
+                    SupersededByGeneration = State.DefaultServingGeneration,
+                },
                 CancellationToken.None);
             return;
         }
@@ -647,6 +661,7 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
                 next.DefaultServingRevisionId = operation.RevisionId;
                 next.DefaultServingGeneration = operation.ServingGeneration;
             }
+            PruneDefaultServingOperationHistory(next);
         }
 
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
@@ -690,11 +705,25 @@ public sealed class ServiceDefinitionGAgent : GAgentBase<ServiceDefinitionState>
         }
 
         next.DefaultServingRevisionOperations[operation.OperationId] = operation;
+        PruneDefaultServingOperationHistory(next);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(
             evt.Identity,
             $"default-serving-superseded:{evt.RevisionId}:{evt.OperationId}");
         return next;
+    }
+
+    private static void PruneDefaultServingOperationHistory(ServiceDefinitionState state)
+    {
+        foreach (var operationId in state.DefaultServingRevisionOperations.Values
+                     .OrderByDescending(static operation => operation.ServingGeneration)
+                     .ThenBy(static operation => operation.OperationId, StringComparer.Ordinal)
+                     .Skip(MaximumDefaultServingOperationHistory)
+                     .Select(static operation => operation.OperationId)
+                     .ToArray())
+        {
+            state.DefaultServingRevisionOperations.Remove(operationId);
+        }
     }
 
     private bool TryValidateDefaultServingContinuation(

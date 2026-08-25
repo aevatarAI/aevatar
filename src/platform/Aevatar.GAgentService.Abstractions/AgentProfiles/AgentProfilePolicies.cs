@@ -99,12 +99,30 @@ public static partial class AgentProfilePolicies
             diagnostics.AddRange(ValidateToolPolicy(
                 draft.RuntimeProfile.RecoveryToolPolicy,
                 "runtimeProfile.recoveryToolPolicy"));
-            foreach (var member in draft.RuntimeProfile.Members)
+            var intentIds = new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < draft.RuntimeProfile.Members.Count; index++)
             {
+                var member = draft.RuntimeProfile.Members[index];
+                var intentId = member.IntentId?.Trim() ?? string.Empty;
+                if (intentId.Length == 0)
+                {
+                    diagnostics.Add(Diagnostic(
+                        "PROFILE_INTENT_ID_REQUIRED",
+                        $"runtimeProfile.members[{index}].intentId",
+                        "Profile member intent id is required."));
+                }
+                else if (!intentIds.Add(intentId))
+                {
+                    diagnostics.Add(Diagnostic(
+                        "PROFILE_INTENT_ID_DUPLICATE",
+                        $"runtimeProfile.members[{index}].intentId",
+                        $"Profile member intent id '{intentId}' must be unique."));
+                }
+
                 diagnostics.AddRange(ValidateExactSkillReference(member));
                 diagnostics.AddRange(ValidateToolPolicy(
                     member.TaskToolPolicy,
-                    $"runtimeProfile.members[{member.IntentId}].taskToolPolicy"));
+                    $"runtimeProfile.members[{index}].taskToolPolicy"));
             }
         }
 

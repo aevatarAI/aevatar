@@ -621,19 +621,9 @@ public sealed partial class ToolCallModule :
 
         if (state.StopCancellation != null && state.PendingOperations.Count == 0)
         {
-            if (string.Equals(
-                    envelope.Route?.PublisherActorId,
-                    ctx.AgentId,
-                    StringComparison.Ordinal))
-            {
-                state.StopCancellation = null;
-                await SaveStateAsync(state, ctx, ct);
-                return;
-            }
-
-            await PublishPendingStopReleaseAsync(state, ctx, ct);
-            throw new WorkflowToolStopCancellationPendingException(
-                "Workflow stop release has been republished and is waiting for self delivery.");
+            state.StopCancellation = null;
+            await SaveStateAsync(state, ctx, ct);
+            return;
         }
 
         if (state.PendingOperations.Count == 0)

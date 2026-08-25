@@ -476,13 +476,24 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             .ConfigureAwait(false);
         if (!discovery.IsSuccess)
         {
+            var failure = discovery.Failure!;
+            if (failure.Code == AgentToolDiscoveryFailureCode.ToolNameCollision)
+            {
+                Logger.LogWarning(
+                    "Agent tool discovery collision degraded to built-in tools. tool={ToolName} source={SourceType} conflictingSource={ConflictingSourceType}",
+                    failure.ToolName,
+                    failure.SourceType,
+                    failure.ConflictingSourceType);
+                RefreshSourceTools([]);
+                return;
+            }
+
             Logger.LogError(
-                "Agent tool discovery failed closed. code={FailureCode} tool={ToolName} source={SourceType} conflictingSource={ConflictingSourceType}",
-                discovery.Failure!.Code,
-                discovery.Failure.ToolName,
-                discovery.Failure.SourceType,
-                discovery.Failure.ConflictingSourceType);
-            throw new AgentToolDiscoveryException(discovery.Failure);
+                "Agent tool discovery failed closed. code={FailureCode} tool={ToolName} source={SourceType}",
+                failure.Code,
+                failure.ToolName,
+                failure.SourceType);
+            throw new AgentToolDiscoveryException(failure);
         }
 
         ct.ThrowIfCancellationRequested();

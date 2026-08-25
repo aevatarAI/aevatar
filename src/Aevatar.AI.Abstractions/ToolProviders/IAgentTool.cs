@@ -153,9 +153,7 @@ public interface IAgentToolOperationCanceller
 {
     Task<AgentToolOperationCancellationResult> CancelOperationAsync(
         AgentToolOperationCancellationRequest request,
-        CancellationToken ct = default) =>
-        Task.FromException<AgentToolOperationCancellationResult>(
-            new NotSupportedException("This durable tool does not support explicit cancellation."));
+        CancellationToken ct = default);
 }
 
 public interface IAgentToolDurableOperation : IAgentToolOperationReconciler, IAgentToolOperationCanceller

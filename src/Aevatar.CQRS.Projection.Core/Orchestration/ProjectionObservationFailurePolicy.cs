@@ -17,6 +17,9 @@ internal static class ProjectionObservationFailurePolicy
             // A blocked status route refuses the observation until the route is flipped; the
             // envelope must be redelivered, never swallowed.
             ProjectionScopeStatusRouteBlockedException => true,
+            // A route already names a Phase-B writer, but its current proof set is not visible.
+            // Swallowing the publication would advance the transport checkpoint permanently.
+            ProjectionScopeStatusPhaseBProofUnavailableException => true,
             // The terminal status writer could not apply the document (Conflict/Gap). It reaches
             // the source scope wrapped in the relay's aggregate: the observation must fail so it
             // is redelivered and no checkpoint advances on an unproved status write.

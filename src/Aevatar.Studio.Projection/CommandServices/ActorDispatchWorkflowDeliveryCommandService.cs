@@ -579,7 +579,10 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
                 CommittedStateVersion = value.BoundRevision.CommittedStateVersion,
             },
             Trigger = MapTriggerReadinessEvidence(value.Trigger),
-            AcceptanceRun = new WorkflowAcceptanceRunReadinessEvidence
+        };
+        if (value.AcceptanceRun is not null)
+        {
+            result.AcceptanceRun = new WorkflowAcceptanceRunReadinessEvidence
             {
                 AcceptanceRunId = value.AcceptanceRun.AcceptanceRunId,
                 Status = value.AcceptanceRun.Status switch
@@ -591,8 +594,8 @@ internal sealed class ActorDispatchWorkflowDeliveryCommandService
                     _ => throw new ArgumentOutOfRangeException(nameof(value.AcceptanceRun.Status)),
                 },
                 CommittedStateVersion = value.AcceptanceRun.CommittedStateVersion,
-            },
-        };
+            };
+        }
         result.Artifacts.Add((value.Artifacts ?? throw new ArgumentNullException(nameof(value.Artifacts)))
             .Select(MapArtifactEvidence));
         return result;

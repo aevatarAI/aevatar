@@ -37,6 +37,12 @@ enum WorkflowInstallationStatus {
   WORKFLOW_INSTALLATION_STATUS_READY = 4;
 }
 
+enum WorkflowInstallationWithdrawalReason {
+  WORKFLOW_INSTALLATION_WITHDRAWAL_REASON_UNSPECIFIED = 0;
+  WORKFLOW_INSTALLATION_WITHDRAWAL_REASON_DELIVERY_REVOKED = 1;
+  WORKFLOW_INSTALLATION_WITHDRAWAL_REASON_DELIVERY_EXPIRED = 2;
+}
+
 enum WorkflowScheduleReadinessStatus {
   WORKFLOW_SCHEDULE_READINESS_STATUS_UNSPECIFIED = 0;
   WORKFLOW_SCHEDULE_READINESS_STATUS_READY = 1;
@@ -442,6 +448,14 @@ message ClaimWorkflowInstallationContinuationCommand {
 
 message WorkflowInstallationContinuationClaimedEvent {
   WorkflowInstallationContinuationClaim claim = 1;
+}
+
+message WorkflowInstallationWithdrawnEvent {
+  WorkflowInstallationWithdrawalReason reason = 1;
+  google.protobuf.Timestamp withdrawn_at_utc = 2;
+  int32 attempt = 3;
+  string operation_id = 4;
+  WorkflowInstallationStatus failed_from_status = 5;
 }
 
 message RecordWorkflowProvisioningAcceptedCommand {

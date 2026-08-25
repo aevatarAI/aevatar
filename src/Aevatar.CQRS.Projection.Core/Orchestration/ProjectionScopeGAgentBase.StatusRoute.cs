@@ -482,16 +482,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             out seal);
     }
 
-    private async Task<bool> HasLegacyWriterPhaseBProofsAsync(
+    private bool HasLegacyWriterBoundPhaseBSeals(
         ProjectionScopeStatusRoute route,
         string sourceScopeActorId)
     {
-        if ((await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt == null ||
-            await ReadActivationSealAdmissionAsync(CancellationToken.None) == null)
-        {
-            return false;
-        }
-
         var reader = Services.GetService<IRuntimeActorStateSchemaContextReader>();
         var agentKind = reader?.Current?.AgentKind ?? string.Empty;
         return ProjectionScopeStatusActivationSealPolicy.TryCreate(
@@ -507,6 +501,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                    ProjectionScopeStatusRoutes.BuildTerminalActorId(sourceScopeActorId),
                    currentWriterSeal);
     }
+
+    private async Task<bool> HasLegacyWriterLivePhaseBProofsAsync() =>
+        (await ReadTerminalQuiescenceAsync(CancellationToken.None)).Receipt != null &&
+        await ReadActivationSealAdmissionAsync(CancellationToken.None) != null;
 
     private static bool MatchesPreparation(
         ProjectionScopeStatusRoutePreparation? preparation,
@@ -1006,11 +1004,22 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         }
 
         var route = sourceState.StatusRoute;
-        if (route?.Phase is ProjectionScopeStatusRoutePhase.Warming or
-                ProjectionScopeStatusRoutePhase.Blocked &&
-            !await HasLegacyWriterPhaseBProofsAsync(route, sourceScopeActorId))
+        if (route != null &&
+            (route.Phase is ProjectionScopeStatusRoutePhase.Warming or
+                ProjectionScopeStatusRoutePhase.Blocked))
         {
-            return true;
+            if (!HasLegacyWriterBoundPhaseBSeals(route, sourceScopeActorId))
+                return true;
+
+            if (!await HasLegacyWriterLivePhaseBProofsAsync())
+            {
+                throw new ProjectionScopeStatusPhaseBProofUnavailableException(
+                    Id,
+                    sourceScopeActorId,
+                    route.RouteEpoch,
+                    route.Phase,
+                    ProjectionScopeStatusActorRole.LegacyWriter);
+            }
         }
 
         if (ProjectionScopeStatusRoutePolicy.LegacyShadowIsSuperseded(route))
@@ -1285,4 +1294,31 @@ public sealed class ProjectionScopeStatusRouteBlockedException(string scopeActor
     public string ScopeActorId { get; } = scopeActorId;
 
     public long RouteEpoch { get; } = routeEpoch;
+}
+
+/// <summary>
+/// A WARMING/BLOCKED status publication carries exact actor-owned writer seals, but its fresh
+/// fleet admission or quiescence receipt is not currently visible. The provider must redeliver
+/// the exact committed publication after the live proof becomes visible; acknowledging it would
+/// create a permanent projection gap.
+/// </summary>
+public sealed class ProjectionScopeStatusPhaseBProofUnavailableException(
+    string materializerActorId,
+    string sourceScopeActorId,
+    long routeEpoch,
+    ProjectionScopeStatusRoutePhase phase,
+    ProjectionScopeStatusActorRole writerRole)
+    : InvalidOperationException(
+        $"Status materializer '{materializerActorId}' cannot prove Phase-B admission for source '{sourceScopeActorId}', route epoch {routeEpoch}, phase {phase}, writer role {writerRole}; the observation is redelivered."),
+        IRuntimeEnvelopeRetryableException
+{
+    public string MaterializerActorId { get; } = materializerActorId;
+
+    public string SourceScopeActorId { get; } = sourceScopeActorId;
+
+    public long RouteEpoch { get; } = routeEpoch;
+
+    public ProjectionScopeStatusRoutePhase Phase { get; } = phase;
+
+    public ProjectionScopeStatusActorRole WriterRole { get; } = writerRole;
 }

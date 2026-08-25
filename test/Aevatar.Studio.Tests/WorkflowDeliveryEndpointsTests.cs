@@ -170,7 +170,11 @@ public sealed class WorkflowDeliveryEndpointsTests
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Ok<WorkflowDeliveryConnectLinkResponse>>();
+        var accepted = result.Should().BeOfType<Accepted<WorkflowDeliveryConnectLinkResponse>>()
+            .Subject;
+        accepted.Value!.Status.Should().Be("begin_accepted");
+        accepted.Value.ConnectLinkId.Should().Be("link-created");
+        accepted.Location.Should().Be(accepted.Value.StatusUrl);
         service.ConnectLinkBearer.Should().Be("delivery-runtime-token");
     }
 
@@ -496,6 +500,28 @@ public sealed class WorkflowDeliveryEndpointsTests
     }
 
     [Fact]
+    public async Task InstallationObservationTimeout_ShouldMapToRetryable503()
+    {
+        WorkflowDeliveryHttpErrorMapper.TryMap(
+                new WorkflowDeliveryException(
+                    "INSTALLATION_OBSERVATION_TIMEOUT",
+                    "installation projection was not observed"),
+                out var result)
+            .Should().BeTrue();
+        var http = CreateContext(CustomerScopeId, CustomerUserId);
+        http.Response.Body = new MemoryStream();
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.RootElement.GetProperty("code").GetString().Should()
+            .Be("INSTALLATION_OBSERVATION_TIMEOUT");
+        body.RootElement.GetProperty("retryable").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
     public async Task BindingRequired_ShouldDirectApiClientsBackToDeliveryLoginFinalization()
     {
         WorkflowDeliveryHttpErrorMapper.TryMap(
@@ -596,6 +622,7 @@ public sealed class WorkflowDeliveryEndpointsTests
             new(
                 "lark",
                 "pending",
+                "link-created",
                 null,
                 DateTimeOffset.Parse("2026-08-16T14:15:16Z"));
 
@@ -654,11 +681,14 @@ public sealed class WorkflowDeliveryEndpointsTests
             CancellationToken ct = default) =>
             Unexpected<WorkflowDeliveryAcceptedResponse>();
 
-        public Task<WorkflowDeliveryListResponse> ListAdminAsync(CancellationToken ct = default) =>
+        public Task<WorkflowDeliveryListResponse> ListAdminAsync(
+            WorkflowDeliveryPageRequest? page = null,
+            CancellationToken ct = default) =>
             Unexpected<WorkflowDeliveryListResponse>();
 
         public Task<WorkflowDeliveryListResponse> ListCustomerAsync(
             string scopeId,
+            WorkflowDeliveryPageRequest? page = null,
             CancellationToken ct = default) =>
             Unexpected<WorkflowDeliveryListResponse>();
 
@@ -698,8 +728,10 @@ public sealed class WorkflowDeliveryEndpointsTests
                 return Task.FromException<WorkflowDeliveryConnectLinkResponse>(ConnectLinkException);
             return Task.FromResult(new WorkflowDeliveryConnectLinkResponse(
                 slotKey,
-                "pending",
+                "begin_accepted",
+                "link-created",
                 "https://nyx.example/connect/redacted",
+                $"/api/scopes/{scopeId}/delivery-requests/{deliveryId}/connections/{slotKey}",
                 DateTimeOffset.Parse("2026-08-16T14:15:16Z")));
         }
 

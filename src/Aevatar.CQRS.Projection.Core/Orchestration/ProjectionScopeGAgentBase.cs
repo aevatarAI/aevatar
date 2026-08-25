@@ -220,6 +220,17 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         if (!State.Active || State.Released || State.Failures.Count == 0)
             return;
 
+        // Durable observations are strictly serialized. Replaying a later failure while an
+        // earlier source is still staged makes DispatchObservationAsync recover the staged
+        // source first; if that recovery fails, the replay tracker would otherwise charge the
+        // later failure for the earlier source's attempt. Resume the actor-owned observation
+        // before admitting any backlog item.
+        if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
+        {
+            await ScheduleInFlightObservationRecoveryAsync(CancellationToken.None);
+            return;
+        }
+
         if (command.AutomaticRecovery)
         {
             var observedScopeStateVersion = command.ObservedScopeStateVersion > 0
@@ -246,6 +257,11 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                 ct,
                 ProjectionObservationDispatchOrigin.FailureReplay),
             includeRetryExhausted: !command.AutomaticRecovery);
+
+        // A failed replay can leave its own source durably staged. Finish that exact source
+        // before another backlog item is attempted, preserving source ownership of retry counts.
+        if (EnablesDurableObservationRecovery && State.InFlightObservation?.Source != null)
+            await ScheduleInFlightObservationRecoveryAsync(CancellationToken.None);
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]

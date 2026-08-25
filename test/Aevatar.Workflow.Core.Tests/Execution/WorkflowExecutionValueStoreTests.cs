@@ -7,6 +7,38 @@ namespace Aevatar.Workflow.Core.Tests.Execution;
 public sealed class WorkflowExecutionValueStoreTests
 {
     [Fact]
+    public void FailedCompletion_ShouldPreserveCanonicalRetryInput()
+    {
+        var state = NormalizedState();
+        var inputValueId = Record(state, new StepCompletedEvent
+        {
+            StepId = "seed",
+            Success = true,
+            Output = "original-input",
+        });
+        WorkflowExecutionValueStore.SetCurrentStepInput(state, "original-input", inputValueId);
+
+        var failureOutputValueId = Record(
+            state,
+            new StepCompletedEvent
+            {
+                StepId = "retryable",
+                Success = false,
+                Output = "transient-failure-output",
+                Error = "try again",
+            });
+
+        state.NormalizedValues!.CurrentStepInputValueId.Should().Be(inputValueId);
+        state.NormalizedValues.Bindings["input"].ValueId.Should().Be(inputValueId);
+        state.NormalizedValues.CompletedSteps["retryable"].OutputValueId
+            .Should().Be(failureOutputValueId);
+        WorkflowExecutionValueStore.CreateVariableView(state)["input"]
+            .Should().Be("original-input");
+        WorkflowExecutionValueStore.CreateVariableView(state)["steps.retryable.output"]
+            .Should().Be("transient-failure-output");
+    }
+
+    [Fact]
     public void AssignedMirror_ShouldAliasOutputOnlyWithTypedProvenance()
     {
         var independent = NormalizedState();

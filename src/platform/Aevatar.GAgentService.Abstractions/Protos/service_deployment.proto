@@ -26,6 +26,8 @@ enum ServiceDeploymentActivationFailureCode {
   SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_ACTIVATION_DEPENDENCY_UNAVAILABLE = 8;
   SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_DEFAULT_SERVING_REVISION_DELIVERY_FAILED = 9;
   SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_DEFAULT_SERVING_REVISION_SUPERSEDED = 10;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_SUPERSEDED_BY_DEACTIVATION = 11;
+  SERVICE_DEPLOYMENT_ACTIVATION_FAILURE_CODE_SERVING_TARGET_SUPERSEDED = 12;
 }
 
 enum ServiceDeploymentActivationPhase {
@@ -35,6 +37,18 @@ enum ServiceDeploymentActivationPhase {
   SERVICE_DEPLOYMENT_ACTIVATION_PHASE_SERVING_TARGET_DISPATCH_PENDING = 3;
   SERVICE_DEPLOYMENT_ACTIVATION_PHASE_SERVING_TARGET_DISPATCH_ACCEPTED = 4;
   SERVICE_DEPLOYMENT_ACTIVATION_PHASE_DEFAULT_SERVING_REVISION_DISPATCH_PENDING = 5;
+}
+
+enum ServiceDeploymentDeactivationPhase {
+  SERVICE_DEPLOYMENT_DEACTIVATION_PHASE_UNSPECIFIED = 0;
+  SERVICE_DEPLOYMENT_DEACTIVATION_PHASE_SERVING_TARGET_REMOVAL_PENDING = 1;
+  SERVICE_DEPLOYMENT_DEACTIVATION_PHASE_RUNTIME_DEACTIVATION_PENDING = 2;
+}
+
+enum ServiceDeploymentDeactivationFailureCode {
+  SERVICE_DEPLOYMENT_DEACTIVATION_FAILURE_CODE_UNSPECIFIED = 0;
+  SERVICE_DEPLOYMENT_DEACTIVATION_FAILURE_CODE_SERVING_TARGET_REMOVAL_FAILED = 1;
+  SERVICE_DEPLOYMENT_DEACTIVATION_FAILURE_CODE_RUNTIME_DEACTIVATION_FAILED = 2;
 }
 
 message ServiceDeploymentRecord {
@@ -57,6 +71,38 @@ message ServiceDeploymentState {
   map<string, ServiceDeploymentActivationFailureRecord> activation_failures = 5;
   map<string, ServiceDeploymentPendingActivationRecord> pending_activations = 6;
   map<string, ServiceDeploymentActivationCompletionRecord> activation_completions = 7;
+  map<string, ServiceDeploymentPendingDeactivationRecord> pending_deactivations = 8;
+  map<string, ServiceDeploymentDeactivationFailureRecord> deactivation_failures = 9;
+  int64 last_serving_operation_sequence = 10;
+}
+
+message ServiceDeploymentPendingDeactivationRecord {
+  string deployment_id = 1;
+  string revision_id = 2;
+  string primary_actor_id = 3;
+  string activation_attempt_id = 4;
+  string serving_target_operation_id = 5;
+  string deactivation_operation_id = 6;
+  string removal_command_id = 7;
+  ServiceDeploymentDeactivationPhase phase = 8;
+  google.protobuf.Timestamp deadline_at = 9;
+  google.protobuf.Timestamp started_at = 10;
+  google.protobuf.Timestamp deferred_at = 11;
+  google.protobuf.Timestamp removal_dispatch_accepted_at = 12;
+  google.protobuf.Timestamp removal_observed_at = 13;
+  int32 runtime_deactivation_invocation_count = 14;
+  google.protobuf.Timestamp runtime_deactivation_invocation_started_at = 15;
+  ServiceDeploymentDeactivationFailureCode last_failure_code = 16;
+  string last_failure_reason = 17;
+}
+
+message ServiceDeploymentDeactivationFailureRecord {
+  string deployment_id = 1;
+  string revision_id = 2;
+  string deactivation_operation_id = 3;
+  ServiceDeploymentDeactivationFailureCode failure_code = 4;
+  string failure_reason = 5;
+  google.protobuf.Timestamp occurred_at = 6;
 }
 
 message ServiceDeploymentActivationFailureRecord {
@@ -89,6 +135,7 @@ message ServiceDeploymentPendingActivationRecord {
   google.protobuf.Timestamp default_serving_dispatch_accepted_at = 19;
   int64 serving_generation = 20;
   google.protobuf.Timestamp serving_targets_applied_at = 21;
+  int64 serving_operation_sequence = 22;
 }
 
 message ServiceDeploymentActivationCompletionRecord {
@@ -102,6 +149,7 @@ message ServiceDeploymentActivationCompletionRecord {
   string default_serving_command_id = 8;
   google.protobuf.Timestamp default_serving_committed_at = 9;
   string expected_artifact_hash = 10;
+  int64 serving_operation_sequence = 11;
 }
 
 message ActivateServiceRevisionCommand {
@@ -117,6 +165,8 @@ message ActivateServiceRevisionCommand {
 message DeactivateServiceDeploymentCommand {
   ServiceIdentity identity = 1;
   string deployment_id = 2;
+  google.protobuf.Timestamp deactivation_deadline_at = 3;
+  string deactivation_operation_id = 4;
 }
 
 message ServiceDeploymentDeactivatedEvent {
@@ -124,6 +174,48 @@ message ServiceDeploymentDeactivatedEvent {
   string deployment_id = 2;
   string revision_id = 3;
   google.protobuf.Timestamp deactivated_at = 4;
+  string deactivation_operation_id = 5;
+  string activation_attempt_id = 6;
+  string serving_target_operation_id = 7;
+}
+
+message ServiceDeploymentDeactivationRequestedEvent {
+  ServiceIdentity identity = 1;
+  ServiceDeploymentPendingDeactivationRecord deactivation = 2;
+}
+
+message ServiceDeploymentDeactivationDeferredEvent {
+  ServiceIdentity identity = 1;
+  ServiceDeploymentPendingDeactivationRecord deactivation = 2;
+}
+
+message ServiceDeploymentRuntimeDeactivationInvocationStartedEvent {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string deactivation_operation_id = 3;
+  int32 invocation_count = 4;
+  google.protobuf.Timestamp invocation_started_at = 5;
+  google.protobuf.Timestamp removal_observed_at = 6;
+}
+
+message ServiceDeploymentDeactivationSupersededEvent {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string deactivation_operation_id = 3;
+  string superseded_by_activation_attempt_id = 4;
+  google.protobuf.Timestamp superseded_at = 5;
+}
+
+message ServiceDeploymentDeactivationFailedEvent {
+  ServiceIdentity identity = 1;
+  string deployment_id = 2;
+  string revision_id = 3;
+  string deactivation_operation_id = 4;
+  string activation_attempt_id = 5;
+  string serving_target_operation_id = 6;
+  ServiceDeploymentDeactivationFailureCode failure_code = 7;
+  string failure_reason = 8;
+  google.protobuf.Timestamp occurred_at = 9;
 }
 
 message ServiceDeploymentActivatedEvent {
@@ -176,6 +268,7 @@ message ServiceDeploymentActivationDeferredEvent {
   google.protobuf.Timestamp default_serving_dispatch_accepted_at = 20;
   int64 serving_generation = 21;
   google.protobuf.Timestamp serving_targets_applied_at = 22;
+  int64 serving_operation_sequence = 23;
 }
 
 message ServiceDeploymentRuntimeActivationInvocationStartedEvent {
@@ -201,6 +294,7 @@ message ServiceDeploymentServingTargetsDispatchPendingEvent {
   google.protobuf.Timestamp activation_started_at = 9;
   google.protobuf.Timestamp prepared_at = 10;
   string expected_artifact_hash = 11;
+  int64 operation_sequence = 12;
 }
 
 message ServiceDeploymentServingTargetsDispatchAcceptedEvent {
@@ -244,4 +338,5 @@ message ServiceDeploymentServingTargetsAppliedEvent {
   int64 serving_generation = 6;
   google.protobuf.Timestamp applied_at = 7;
   google.protobuf.Timestamp default_serving_committed_at = 8;
+  int64 operation_sequence = 9;
 }

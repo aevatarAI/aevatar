@@ -28,14 +28,6 @@ function taskPlan(stepStatus: 'running' | 'failed' = 'running') {
     title: 'Inspect repository',
     status: 'active',
     activeStepId: 'step-alpha',
-    gate: {
-      mode: 'confirm',
-      status: 'satisfied',
-      requestId: 'gate-alpha',
-      taskId: 'task-alpha',
-      planId: 'plan-alpha',
-      planRevision: 3,
-    },
     steps: [
       {
         stepId: 'step-alpha',

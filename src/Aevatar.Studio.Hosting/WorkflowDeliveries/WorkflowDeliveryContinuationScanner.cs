@@ -162,13 +162,6 @@ public sealed class WorkflowDeliveryContinuationScanner
         if (!ClaimMatchesActiveStage(claim, installation, status) ||
             claim!.ExpiresAtUtc <= now)
         {
-            if (!IsDeliveryAvailable(delivery, now))
-            {
-                _logger.LogInformation(
-                    "Skipping workflow delivery continuation for delivery {DeliveryId}: no active claim preceded delivery withdrawal.",
-                    delivery.DeliveryId);
-                return;
-            }
             await ClaimAsync(delivery, status, ct);
             return;
         }
@@ -206,12 +199,6 @@ public sealed class WorkflowDeliveryContinuationScanner
                 claim.ClaimId);
         }
     }
-
-    private static bool IsDeliveryAvailable(
-        WorkflowDeliverySnapshot delivery,
-        DateTimeOffset now) =>
-        delivery.LifecycleStatus != WorkflowDeliveryLifecycleStatus.Revoked &&
-        delivery.ExpiresAtUtc > now;
 
     private async Task ClaimAsync(
         WorkflowDeliverySnapshot delivery,

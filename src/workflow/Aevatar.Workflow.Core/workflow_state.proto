@@ -1137,6 +1137,13 @@ message ForEachPublicationRetryFiredEvent
   string parent_key = 1;
 }
 
+enum WorkflowChildPublicationFailureOutcome
+{
+  WORKFLOW_CHILD_PUBLICATION_FAILURE_OUTCOME_UNSPECIFIED = 0;
+  WORKFLOW_CHILD_PUBLICATION_FAILURE_OUTCOME_NOT_ADMITTED = 1;
+  WORKFLOW_CHILD_PUBLICATION_FAILURE_OUTCOME_OUTCOME_UNCERTAIN = 2;
+}
+
 message MapReduceItemResult
 {
   bool success = 1;
@@ -1383,6 +1390,9 @@ message BackpressureQueueEntry
   string execution_id = 9;
   string idempotency_key = 10;
   string input_value_id = 11;
+  WorkflowChildPublicationFailureOutcome publication_failure_outcome = 12;
+  bool publication_attempted = 13;
+  bool publication_attempt_state_known = 14;
 }
 
 message BackpressureQueueState

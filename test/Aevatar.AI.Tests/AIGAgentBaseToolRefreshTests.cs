@@ -70,6 +70,47 @@ public class AIGAgentBaseToolRefreshTests
     }
 
     [Fact]
+    public async Task ActivateAsync_WhenSourceToolNamesCollide_ShouldKeepBuiltInToolsAndDegradeSources()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+        using var provider = services.BuildServiceProvider();
+        var agent = new TestAIGAgent(
+            [new MutableToolSource("source-collision"), new MutableToolSource("SOURCE-COLLISION")])
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
+        agent.RegisterManualTool("built-in-tool");
+
+        await agent.ActivateAsync();
+
+        agent.GetRegisteredToolNames().Should().Equal("built-in-tool");
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenSourceFails_ShouldRemainFailClosed()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IEventStore, InMemoryEventStoreForTests>();
+        services.AddSingleton<EventSourcingRuntimeOptions>();
+        services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
+        using var provider = services.BuildServiceProvider();
+        var agent = new TestAIGAgent([new FailingToolSource()])
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
+
+        Func<Task> act = () => agent.ActivateAsync();
+
+        var exception = await act.Should().ThrowAsync<AgentToolDiscoveryException>();
+        exception.Which.Failure.Code.Should().Be(AgentToolDiscoveryFailureCode.SourceFailed);
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenApprovalHandlerMissingAndToolRequiresApproval_ShouldDenyWithoutExecutingTool()
     {
         var tool = new CountingApprovalRequiredTool();
@@ -186,6 +227,15 @@ public class AIGAgentBaseToolRefreshTests
 
         private static IReadOnlyList<IAgentTool> ToTools(IEnumerable<string> toolNames) =>
             toolNames.Select(name => (IAgentTool)new NamedTool(name)).ToList();
+    }
+
+    private sealed class FailingToolSource : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw new InvalidOperationException("synthetic discovery failure");
+        }
     }
 
     private sealed class NamedTool : IAgentTool

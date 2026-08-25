@@ -14,6 +14,8 @@ namespace Aevatar.GAgentService.Core.GAgents;
 [GAgent("gagent.service.serving-set-manager")]
 public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSetState>
 {
+    internal const int MaximumResolvedOperationHistory = 64;
+
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IServiceServingTargetResolver _targetResolver;
 
@@ -60,7 +62,14 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
         if (target != null)
         {
             if (!MatchesRemovalFence(command, target))
+            {
+                await DispatchRemovedAckAsync(
+                    command,
+                    ServiceServingTargetRemovalDisposition.Superseded,
+                    target,
+                    CancellationToken.None);
                 return;
+            }
 
             var remainingTargets = State.Targets
                 .Where(target => !string.Equals(target.DeploymentId, deploymentId, StringComparison.Ordinal))
@@ -76,9 +85,19 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
                 UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
             });
             await DispatchInvocationServingObservationAsync(CancellationToken.None);
+            await DispatchRemovedAckAsync(
+                command,
+                ServiceServingTargetRemovalDisposition.Removed,
+                target,
+                CancellationToken.None);
+            return;
         }
 
-        await DispatchRemovedAckAsync(command, CancellationToken.None);
+        await DispatchRemovedAckAsync(
+            command,
+            ServiceServingTargetRemovalDisposition.AlreadyAbsent,
+            actualTarget: null,
+            CancellationToken.None);
     }
 
     [EventHandler]
@@ -105,13 +124,26 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
             throw new InvalidOperationException("reply_actor_id is required for activation serving updates.");
         if (command.Targets.Count != 1)
             throw new InvalidOperationException("Activation serving updates require exactly one target.");
+        if (command.OperationSequence <= 0)
+            throw new InvalidOperationException("operation_sequence must be positive for activation serving updates.");
 
         var target = command.Targets[0];
         if (State.ResolvedOperations.TryGetValue(operationId, out var appliedOperation))
         {
-            EnsureResolvedOperationMatches(appliedOperation, activationAttemptId, replyActorId, target);
+            EnsureResolvedOperationMatches(
+                appliedOperation,
+                activationAttemptId,
+                replyActorId,
+                command.OperationSequence,
+                target);
             await DispatchInvocationServingObservationAsync(CancellationToken.None);
             await DispatchAppliedAckAsync(appliedOperation, CancellationToken.None);
+            return;
+        }
+
+        if (command.OperationSequence <= State.LastResolvedOperationSequence)
+        {
+            await DispatchSupersededAppliedAckAsync(command, CancellationToken.None);
             return;
         }
 
@@ -140,6 +172,7 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
             ResolvedReplyActorId = replyActorId,
             ResolvedDeploymentId = target?.DeploymentId ?? string.Empty,
             ResolvedRevisionId = target?.RevisionId ?? string.Empty,
+            ResolvedOperationSequence = command.OperationSequence,
         });
     }
 
@@ -149,37 +182,35 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
     {
         if (!MatchesOptionalFence(command.RevisionId, target.RevisionId) ||
             !MatchesOptionalFence(command.PrimaryActorId, target.PrimaryActorId) ||
-            !MatchesOptionalFence(command.ActivationAttemptId, target.ActivationAttemptId))
+            !MatchesExactFence(command.ActivationAttemptId, target.ActivationAttemptId))
         {
             return false;
         }
 
-        return MatchesServingOperationFence(command.ServingTargetOperationId, target.ServingTargetOperationId);
+        return MatchesExactFence(command.ServingTargetOperationId, target.ServingTargetOperationId);
     }
 
     private static bool MatchesOptionalFence(string? expected, string? actual) =>
         string.IsNullOrWhiteSpace(expected) || string.Equals(expected, actual, StringComparison.Ordinal);
 
-    private static bool MatchesServingOperationFence(string? expected, string? actual)
-    {
-        var expectedOperation = expected?.Trim() ?? string.Empty;
-        var actualOperation = actual?.Trim() ?? string.Empty;
-        if (!string.IsNullOrEmpty(expectedOperation))
-            return string.Equals(expectedOperation, actualOperation, StringComparison.Ordinal);
-
-        return string.IsNullOrEmpty(actualOperation);
-    }
+    private static bool MatchesExactFence(string? expected, string? actual) =>
+        string.Equals(
+            expected?.Trim() ?? string.Empty,
+            actual?.Trim() ?? string.Empty,
+            StringComparison.Ordinal);
 
     private static void EnsureResolvedOperationMatches(
         ServiceServingResolvedOperationRecord appliedOperation,
         string activationAttemptId,
         string replyActorId,
+        long operationSequence,
         ServiceServingTargetSpec target)
     {
         if (!string.Equals(appliedOperation.ActivationAttemptId, activationAttemptId, StringComparison.Ordinal) ||
             !string.Equals(appliedOperation.ReplyActorId, replyActorId, StringComparison.Ordinal) ||
             !string.Equals(appliedOperation.DeploymentId, target.DeploymentId, StringComparison.Ordinal) ||
             !string.Equals(appliedOperation.RevisionId, target.RevisionId, StringComparison.Ordinal) ||
+            appliedOperation.OperationSequence != operationSequence ||
             appliedOperation.Target == null ||
             !MatchesResolvedTarget(appliedOperation.Target, target))
         {
@@ -230,7 +261,21 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
                 Target = evt.Targets.Count == 1
                     ? CloneTarget(evt.Targets[0])
                     : new ServiceServingTargetSpec(),
+                OperationSequence = evt.ResolvedOperationSequence,
             };
+            next.LastResolvedOperationSequence = Math.Max(
+                next.LastResolvedOperationSequence,
+                evt.ResolvedOperationSequence);
+            foreach (var staleOperationId in next.ResolvedOperations.Values
+                         .OrderByDescending(static operation => operation.OperationSequence)
+                         .ThenByDescending(static operation => operation.ServingGeneration)
+                         .ThenBy(static operation => operation.OperationId, StringComparer.Ordinal)
+                         .Skip(MaximumResolvedOperationHistory)
+                         .Select(static operation => operation.OperationId)
+                         .ToArray())
+            {
+                next.ResolvedOperations.Remove(staleOperationId);
+            }
         }
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = BuildEventId(evt.Identity, evt.Generation);
@@ -322,6 +367,8 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
 
     private async Task DispatchRemovedAckAsync(
         RemoveDeploymentFromServiceServingTargetsCommand command,
+        ServiceServingTargetRemovalDisposition disposition,
+        ServiceServingTargetSpec? actualTarget,
         CancellationToken ct)
     {
         var replyActorId = command.ReplyActorId?.Trim() ?? string.Empty;
@@ -332,7 +379,7 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
             replyActorId,
             CreateEnvelope(
                 replyActorId,
-                $"service-serving-removed:{ServiceKeys.Build(command.Identity!)}:{command.DeploymentId}:{command.ServingTargetOperationId}",
+                $"service-serving-removed:{ServiceKeys.Build(command.Identity!)}:{command.DeploymentId}:{command.DeactivationOperationId}",
                 new ServiceServingTargetsRemovedAck
                 {
                     Identity = command.Identity?.Clone(),
@@ -342,6 +389,12 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
                     ServingTargetOperationId = command.ServingTargetOperationId,
                     ActivationAttemptId = command.ActivationAttemptId,
                     RemovedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                    DeactivationOperationId = command.DeactivationOperationId,
+                    Disposition = disposition,
+                    ActualRevisionId = actualTarget?.RevisionId ?? string.Empty,
+                    ActualPrimaryActorId = actualTarget?.PrimaryActorId ?? string.Empty,
+                    ActualServingTargetOperationId = actualTarget?.ServingTargetOperationId ?? string.Empty,
+                    ActualActivationAttemptId = actualTarget?.ActivationAttemptId ?? string.Empty,
                 }),
             ct);
         if (!admission.Accepted)
@@ -373,10 +426,39 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
                     ServingGeneration = appliedOperation.ServingGeneration,
                     AppliedAt = appliedOperation.AppliedAt?.Clone()
                                 ?? Timestamp.FromDateTime(DateTime.UtcNow),
+                    OperationSequence = appliedOperation.OperationSequence,
+                    Disposition = ServiceServingTargetsApplyDisposition.Applied,
                 }),
             ct);
         if (!admission.Accepted)
             throw new InvalidOperationException("Service serving targets applied acknowledgment was not admitted.");
+    }
+
+    private async Task DispatchSupersededAppliedAckAsync(
+        ReplaceResolvedServiceServingTargetsCommand command,
+        CancellationToken ct)
+    {
+        var admission = await _dispatchPort.DispatchAsync(
+            command.ReplyActorId,
+            CreateEnvelope(
+                command.ReplyActorId,
+                $"service-serving-superseded:{command.OperationId}",
+                new ServiceServingTargetsAppliedAck
+                {
+                    Identity = command.Identity?.Clone(),
+                    RevisionId = command.Targets[0].RevisionId,
+                    DeploymentId = command.Targets[0].DeploymentId,
+                    ActivationAttemptId = command.ActivationAttemptId,
+                    OperationId = command.OperationId,
+                    OperationSequence = command.OperationSequence,
+                    ServingGeneration = State.Generation,
+                    AppliedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                    Disposition = ServiceServingTargetsApplyDisposition.Superseded,
+                    SupersededByOperationSequence = State.LastResolvedOperationSequence,
+                }),
+            ct);
+        if (!admission.Accepted)
+            throw new InvalidOperationException("Superseded service serving acknowledgment was not admitted.");
     }
 
     private EventEnvelope CreateEnvelope(string actorId, string envelopeId, IMessage payload) =>

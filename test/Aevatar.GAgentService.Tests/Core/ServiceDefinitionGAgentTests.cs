@@ -370,6 +370,74 @@ public sealed class ServiceDefinitionGAgentTests
     }
 
     [Fact]
+    public async Task OrchestratedDefaultServingCommand_ShouldBoundOperationHistoryAndFencePrunedReplay()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.Definition(identity);
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            eventStore,
+            actorId,
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
+        await agent.ActivateAsync();
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+
+        for (var generation = 1; generation <= 65; generation++)
+        {
+            await agent.HandleSetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+            {
+                Identity = identity.Clone(),
+                RevisionId = $"r-{generation}",
+                OperationId = $"operation-{generation}",
+                CommandId = $"command-{generation}",
+                ReplyActorId = ServiceActorIds.Deployment(identity),
+                ActivationAttemptId = $"attempt-{generation}",
+                DeploymentId = $"deployment-{generation}",
+                ServingGeneration = generation,
+            });
+        }
+
+        agent.State.DefaultServingRevisionOperations.Should().HaveCount(64);
+        agent.State.DefaultServingRevisionOperations.Should().NotContainKey("operation-1");
+        agent.State.DefaultServingRevisionId.Should().Be("r-65");
+        agent.State.DefaultServingGeneration.Should().Be(65);
+        await agent.DeactivateAsync();
+
+        var replayDispatch = new RecordingActorDispatchPort();
+        var replayed = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            eventStore,
+            actorId,
+            () => new ServiceDefinitionGAgent(replayDispatch));
+        await replayed.ActivateAsync();
+        await replayed.HandleSetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r-1",
+            OperationId = "operation-1",
+            CommandId = "command-1",
+            ReplyActorId = ServiceActorIds.Deployment(identity),
+            ActivationAttemptId = "attempt-1",
+            DeploymentId = "deployment-1",
+            ServingGeneration = 1,
+        });
+
+        replayed.State.DefaultServingRevisionOperations.Should().HaveCount(64);
+        replayed.State.DefaultServingRevisionOperations.Should().NotContainKey("operation-1");
+        replayed.State.DefaultServingRevisionId.Should().Be("r-65");
+        replayed.State.DefaultServingGeneration.Should().Be(65);
+        var ack = replayDispatch.Calls
+            .Where(call => call.Envelope.Payload.Is(DefaultServingRevisionCommittedAck.Descriptor))
+            .Should().ContainSingle().Subject.Envelope.Payload
+            .Unpack<DefaultServingRevisionCommittedAck>();
+        ack.OperationId.Should().Be("operation-1");
+        ack.Disposition.Should().Be(DefaultServingRevisionCommitDisposition.Superseded);
+        ack.SupersededByGeneration.Should().Be(65);
+    }
+
+    [Fact]
     public async Task OrchestratedDefaultServingCommand_ShouldRejectConflictingOperationAtSameGeneration()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();

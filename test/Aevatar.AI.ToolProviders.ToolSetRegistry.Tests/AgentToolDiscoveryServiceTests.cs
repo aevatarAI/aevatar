@@ -117,6 +117,16 @@ public sealed class AgentToolDiscoveryServiceTests
         measurements[AgentTurnToolCatalogTelemetry.RejectedCounterName].Should().Contain(1);
     }
 
+    [Fact]
+    public void DurableCancellationContract_ShouldRequireAnExplicitImplementation()
+    {
+        var method = typeof(IAgentToolOperationCanceller).GetMethod(
+            nameof(IAgentToolOperationCanceller.CancelOperationAsync));
+
+        method.Should().NotBeNull();
+        method!.IsAbstract.Should().BeTrue();
+    }
+
     private sealed class CapturingSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
     {
         public string? CapturedScopeId { get; private set; }
@@ -163,4 +173,5 @@ public sealed class AgentToolDiscoveryServiceTests
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
     }
+
 }

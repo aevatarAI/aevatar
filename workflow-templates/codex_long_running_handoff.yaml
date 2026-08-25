@@ -3,7 +3,6 @@ description: "Dispatch long-running Codex work, wait for an external callback, t
 roles:
   - id: reviewer
     name: Reviewer
-    agent_kind: workflow.role-agent
     system_prompt: "Review worker output for correctness and actionable issues."
     allowed_tools: []
 steps:

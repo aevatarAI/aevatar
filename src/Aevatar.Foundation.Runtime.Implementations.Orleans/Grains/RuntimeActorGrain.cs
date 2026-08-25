@@ -193,7 +193,17 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
 
         if (_agent != null)
-            return KindResolvesToActiveImplementation(kind);
+        {
+            if (!KindResolvesToActiveImplementation(kind))
+                return false;
+
+            // Binding and stream subscription form one initialization boundary. A previous
+            // attempt can bind the implementation and then fail while subscribing; retry must
+            // finish that boundary instead of reporting a sticky false success.
+            await SubscribeSelfStreamAsync();
+            _identityResolutionAttempted = true;
+            return true;
+        }
 
         var implementation = await BindAgentByKindAsync(kind, establishIdentity: true);
         if (implementation == null)

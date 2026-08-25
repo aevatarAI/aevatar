@@ -441,7 +441,7 @@ public sealed class ChatRuntime
         var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest, () => authorizedTools);
         var executedToolOutcomes = new List<ToolOutcomeReplyFact>();
         var readOnlyFailureCounts = new Dictionary<ReadOnlyFailureKey, int>();
-        var retiredToolNames = new HashSet<string>(StringComparer.Ordinal);
+        var retiredToolNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var toolLoopSuspended = false;
         var toolLoopTerminated = false;
         var modelInvocationRound = -1;

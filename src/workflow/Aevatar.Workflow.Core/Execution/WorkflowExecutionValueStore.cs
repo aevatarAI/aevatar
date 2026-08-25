@@ -424,6 +424,13 @@ internal static class WorkflowExecutionValueStore
             completion,
             assignedValueId,
             stepId);
+        var retryInputBinding = !completion.Success &&
+                                normalized.Bindings.TryGetValue("input", out var currentInputBinding)
+            ? currentInputBinding.Clone()
+            : null;
+        var legacyRetryInput = string.Empty;
+        var hasLegacyRetryInput = !completion.Success &&
+                                  state.Variables.TryGetValue("input", out legacyRetryInput);
         if (!string.IsNullOrWhiteSpace(completion.AssignedVariable))
         {
             var assignedVariable = completion.AssignedVariable.Trim();
@@ -440,11 +447,21 @@ internal static class WorkflowExecutionValueStore
         // first, then engine-owned step/input/mirror keys overwrite conflicts.
         var jsonAliases = ResolveJsonPropertyAliases(completion);
         RemoveOverwrittenEngineEntries(state, completion, stepId, jsonAliases);
+        if (!completion.Success)
+        {
+            if (retryInputBinding != null)
+                normalized.Bindings["input"] = retryInputBinding;
+            if (hasLegacyRetryInput)
+                state.Variables["input"] = legacyRetryInput;
+        }
 
         normalized.Bindings.Remove(stepId);
         Bind(normalized, $"{StepPrefix}{stepId}.output", outputValueId, WorkflowValueBindingKind.StepOutput);
-        Bind(normalized, "input", outputValueId, WorkflowValueBindingKind.CurrentInput);
-        normalized.CurrentStepInputValueId = outputValueId;
+        if (completion.Success)
+        {
+            Bind(normalized, "input", outputValueId, WorkflowValueBindingKind.CurrentInput);
+            normalized.CurrentStepInputValueId = outputValueId;
+        }
 
         var completed = normalized.CompletedSteps.TryGetValue(stepId, out var existing)
             ? existing

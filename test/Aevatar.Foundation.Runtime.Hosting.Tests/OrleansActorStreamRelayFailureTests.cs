@@ -24,8 +24,10 @@ public sealed class OrleansActorStreamRelayFailureTests
 
         var act = () => harness.CreateStream().ProduceAsync(new StringValue { Value = "continue traversal" });
 
-        var exception = await act.Should().ThrowAsync<AggregateException>();
-        exception.Which.InnerExceptions.Select(x => x.Message).Should().BeEquivalentTo(
+        var exception = await act.Should().ThrowAsync<EventPublicationException>();
+        exception.Which.Outcome.Should().Be(EventPublicationFailureOutcome.OutcomeUncertain);
+        var relayFailures = exception.Which.InnerException.Should().BeOfType<AggregateException>().Subject;
+        relayFailures.InnerExceptions.Select(x => x.Message).Should().BeEquivalentTo(
             new[] { "bad-target-a failed", "bad-target-b failed" });
         harness.PublishedTo("good-target").Should().ContainSingle();
         harness.PublishedTo("downstream-good-target").Should().ContainSingle();

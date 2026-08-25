@@ -579,7 +579,7 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
     }
 
     [Fact]
-    public async Task ReconcileAsync_WhenNoTriggerRunHasNoDeliveryAttribution_ShouldRemainPending()
+    public async Task ReconcileAsync_WhenInstallationHasNoTrigger_ShouldRecordReadyWithoutRunOrArtifact()
     {
         var context = new TestContext();
         context.Runs.Items =
@@ -589,9 +589,14 @@ public sealed class WorkflowInstallationReadinessReconcilerTests
 
         var result = await context.Reconciler.ReconcileAsync(Delivery(), ContinuationClaimantId);
 
-        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Pending);
-        result.Code.Should().Be("acceptance_run_pending");
-        context.Commands.Ready.Should().BeEmpty();
+        result.Status.Should().Be(WorkflowInstallationReadinessReconciliationStatus.Ready);
+        result.Code.Should().Be("readiness_recording_accepted");
+        context.Commands.Ready.Should().ContainSingle();
+        context.Commands.Ready.Single().Evidence.Trigger.NoTrigger.Should()
+            .Be(new WorkflowNoTriggerReadinessEvidence(Ready: true));
+        context.Commands.Ready.Single().Evidence.AcceptanceRun.Should().BeNull();
+        context.Commands.Ready.Single().Evidence.Artifacts.Should().BeEmpty();
+        context.Runs.Queries.Should().BeEmpty();
         context.Artifacts.Gets.Should().BeEmpty();
     }
 

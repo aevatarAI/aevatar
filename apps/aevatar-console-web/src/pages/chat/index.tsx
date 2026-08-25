@@ -67,7 +67,6 @@ import {
 } from './chatEventAdapter';
 import { chatHistoryApi } from './chatHistoryApi';
 import { ChatInput, ChatMessageBubble } from './chatPresentation';
-import type { ChatPlanGate } from './chatTaskPlan';
 import type {
   ChatMessage,
   ChatStudioTarget,
@@ -1114,35 +1113,6 @@ const ChatPage: React.FC = () => {
     [dispatchAcceptedCommand, requireControlContext],
   );
 
-  const handlePlanResolve = useCallback(
-    (confirmed: boolean, gate: ChatPlanGate) => {
-      const context = requireControlContext();
-      if (
-        !context ||
-        gate.mode !== 'confirm' ||
-        gate.status !== 'pending' ||
-        !gate.requestId ||
-        !gate.taskId ||
-        !gate.planId ||
-        gate.planRevision === undefined
-      ) {
-        return;
-      }
-      void dispatchAcceptedCommand({
-        type: 'plan.resolve',
-        conversationId: context.conversationId,
-        taskId: gate.taskId,
-        planId: gate.planId,
-        requestId: gate.requestId,
-        clientRequestId: createClientId(),
-        planRevision: gate.planRevision,
-        confirmed,
-        expectedStateVersion: context.state.stateVersion,
-      });
-    },
-    [dispatchAcceptedCommand, requireControlContext],
-  );
-
   const handleTaskStop = useCallback(() => {
     const context = requireControlContext();
     const turnId = stringField(context?.state.activeTurn, 'turnId');
@@ -1509,7 +1479,7 @@ const ChatPage: React.FC = () => {
     url.searchParams.delete('accessReview');
     url.searchParams.delete('conversationId');
     window.history.replaceState(null, '', url.toString());
-    if ((summary.reports ?? []).length === 0) {
+    if ((summary?.reports ?? []).length === 0) {
       void sendActionReport(request, 'completed', {
         userService: {
           userServiceId: request.params.serviceAccessReview.userServiceId,
@@ -1986,7 +1956,6 @@ const ChatPage: React.FC = () => {
                   void sendActionReport(request, disposition)
                 }
                 onInputResolve={handleInputResolve}
-                onPlanResolve={handlePlanResolve}
                 onRetry={(step) => dispatchStepControl('step.retry', step)}
                 onSkip={(step) => dispatchStepControl('step.skip', step)}
                 onSteer={handleSteer}

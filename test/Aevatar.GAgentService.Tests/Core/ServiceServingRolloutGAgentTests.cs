@@ -676,6 +676,7 @@ public sealed class ServiceServingRolloutGAgentTests
             Identity = identity.Clone(),
             ActivationAttemptId = "attempt-old",
             OperationId = "operation-old",
+            OperationSequence = 1,
             ReplyActorId = "deployment-manager",
             Targets = { CreateTarget("dep-1", "rev-1", "actor-1", 100, "chat") },
         });
@@ -684,6 +685,7 @@ public sealed class ServiceServingRolloutGAgentTests
             Identity = identity.Clone(),
             ActivationAttemptId = "attempt-new",
             OperationId = "operation-new",
+            OperationSequence = 2,
             ReplyActorId = "deployment-manager",
             Targets = { CreateTarget("dep-1", "rev-1", "actor-1", 100, "chat") },
         });
@@ -696,13 +698,59 @@ public sealed class ServiceServingRolloutGAgentTests
             PrimaryActorId = "actor-1",
             ActivationAttemptId = "attempt-old",
             ServingTargetOperationId = "operation-old",
+            DeactivationOperationId = "deactivation-old",
             ReplyActorId = "deployment-manager",
         });
 
         agent.State.Targets.Should().ContainSingle();
         agent.State.Targets[0].ServingTargetOperationId.Should().Be("operation-new");
         (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(2);
-        dispatchPort.Calls.Should().HaveCount(4);
+        dispatchPort.Calls.Should().HaveCount(5);
+        var superseded = dispatchPort.Calls[^1].Envelope.Payload
+            .Unpack<ServiceServingTargetsRemovedAck>();
+        superseded.Disposition.Should().Be(
+            ServiceServingTargetRemovalDisposition.Superseded);
+        superseded.DeactivationOperationId.Should().Be("deactivation-old");
+        superseded.ActualActivationAttemptId.Should().Be("attempt-new");
+        superseded.ActualServingTargetOperationId.Should().Be("operation-new");
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldNotTreatBlankRemovalFencesAsWildcards()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = CreateServingSetAgent(
+            new InMemoryEventStore(),
+            ServiceActorIds.ServingSet(identity),
+            dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        await agent.HandleReplaceResolvedAsync(new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            ActivationAttemptId = "attempt-current",
+            OperationId = "operation-current",
+            OperationSequence = 1,
+            ReplyActorId = "deployment-manager",
+            Targets = { CreateTarget("dep-1", "rev-1", "actor-1", 100, "chat") },
+        });
+
+        await agent.HandleRemoveDeploymentAsync(new RemoveDeploymentFromServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            DeploymentId = "dep-1",
+            RevisionId = "rev-1",
+            PrimaryActorId = "actor-1",
+            DeactivationOperationId = "deactivation-legacy",
+            ReplyActorId = "deployment-manager",
+        });
+
+        agent.State.Targets.Should().ContainSingle();
+        var ack = dispatchPort.Calls[^1].Envelope.Payload
+            .Unpack<ServiceServingTargetsRemovedAck>();
+        ack.Disposition.Should().Be(ServiceServingTargetRemovalDisposition.Superseded);
+        ack.ActualActivationAttemptId.Should().Be("attempt-current");
+        ack.ActualServingTargetOperationId.Should().Be("operation-current");
     }
 
     [Fact]
@@ -720,6 +768,7 @@ public sealed class ServiceServingRolloutGAgentTests
             Reason = "deployment activation",
             ActivationAttemptId = "attempt-1",
             OperationId = "operation-1",
+            OperationSequence = 1,
             ReplyActorId = "deployment-manager-1",
             Targets =
             {
@@ -827,6 +876,7 @@ public sealed class ServiceServingRolloutGAgentTests
             Identity = identity.Clone(),
             ActivationAttemptId = "attempt-1",
             OperationId = "operation-1",
+            OperationSequence = 1,
             ReplyActorId = "deployment-manager-1",
             Targets =
             {
@@ -870,6 +920,7 @@ public sealed class ServiceServingRolloutGAgentTests
             "dep-2",
             "rev-2",
             "actor-2");
+        operation2.OperationSequence = 2;
 
         await agent.HandleReplaceResolvedAsync(operation1);
         await agent.HandleReplaceResolvedAsync(operation2);
@@ -885,6 +936,109 @@ public sealed class ServiceServingRolloutGAgentTests
         delayedAck.OperationId.Should().Be("operation-1");
         delayedAck.ServingGeneration.Should().Be(1);
         delayedAck.DeploymentId.Should().Be("dep-1");
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldSupersedeUnseenOlderOperationWithoutRollbackAcrossReplay()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.ServingSet(identity);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = CreateServingSetAgent(eventStore, actorId, dispatchPort: dispatchPort);
+        await agent.ActivateAsync();
+        var newest = CreateResolvedActivationCommand(
+            identity,
+            "attempt-new",
+            "operation-new",
+            "dep-new",
+            "rev-new",
+            "actor-new",
+            operationSequence: 2);
+        var unseenOlder = CreateResolvedActivationCommand(
+            identity,
+            "attempt-old",
+            "operation-old",
+            "dep-old",
+            "rev-old",
+            "actor-old",
+            operationSequence: 1);
+
+        await agent.HandleReplaceResolvedAsync(newest);
+        var committedVersion = agent.State.LastAppliedEventVersion;
+        await agent.HandleReplaceResolvedAsync(unseenOlder);
+
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        agent.State.LastResolvedOperationSequence.Should().Be(2);
+        agent.State.Targets.Should().ContainSingle(target =>
+            target.DeploymentId == "dep-new" &&
+            target.ServingTargetOperationId == "operation-new");
+        agent.State.ResolvedOperations.Should().ContainKey("operation-new");
+        agent.State.ResolvedOperations.Should().NotContainKey("operation-old");
+        var ack = dispatchPort.Calls[^1].Envelope.Payload.Unpack<ServiceServingTargetsAppliedAck>();
+        ack.OperationId.Should().Be("operation-old");
+        ack.Disposition.Should().Be(ServiceServingTargetsApplyDisposition.Superseded);
+        ack.SupersededByOperationSequence.Should().Be(2);
+
+        await agent.DeactivateAsync();
+        var replayed = CreateServingSetAgent(eventStore, actorId);
+        await replayed.ActivateAsync();
+
+        replayed.State.LastResolvedOperationSequence.Should().Be(2);
+        replayed.State.Targets.Should().ContainSingle(target =>
+            target.DeploymentId == "dep-new" &&
+            target.ServingTargetOperationId == "operation-new");
+        replayed.State.ResolvedOperations.Should().ContainKey("operation-new");
+        replayed.State.ResolvedOperations.Should().NotContainKey("operation-old");
+    }
+
+    [Fact]
+    public async Task ServiceServingSetManager_ShouldBoundResolvedOperationHistoryAndFencePrunedReplay()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.ServingSet(identity);
+        var agent = CreateServingSetAgent(eventStore, actorId);
+        await agent.ActivateAsync();
+
+        for (var sequence = 1; sequence <= 65; sequence++)
+        {
+            await agent.HandleReplaceResolvedAsync(CreateResolvedActivationCommand(
+                identity,
+                $"attempt-{sequence}",
+                $"operation-{sequence}",
+                $"dep-{sequence}",
+                $"rev-{sequence}",
+                $"actor-{sequence}",
+                operationSequence: sequence));
+        }
+
+        agent.State.ResolvedOperations.Should().HaveCount(64);
+        agent.State.ResolvedOperations.Should().NotContainKey("operation-1");
+        agent.State.LastResolvedOperationSequence.Should().Be(65);
+        agent.State.Targets.Should().ContainSingle(target => target.DeploymentId == "dep-65");
+        await agent.DeactivateAsync();
+
+        var replayDispatch = new RecordingActorDispatchPort();
+        var replayed = CreateServingSetAgent(eventStore, actorId, dispatchPort: replayDispatch);
+        await replayed.ActivateAsync();
+        var replayedVersion = replayed.State.LastAppliedEventVersion;
+        await replayed.HandleReplaceResolvedAsync(CreateResolvedActivationCommand(
+            identity,
+            "attempt-1",
+            "operation-1",
+            "dep-1",
+            "rev-1",
+            "actor-1",
+            operationSequence: 1));
+
+        replayed.State.LastAppliedEventVersion.Should().Be(replayedVersion);
+        replayed.State.ResolvedOperations.Should().HaveCount(64);
+        replayed.State.Targets.Should().ContainSingle(target => target.DeploymentId == "dep-65");
+        var ack = replayDispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload
+            .Unpack<ServiceServingTargetsAppliedAck>();
+        ack.Disposition.Should().Be(ServiceServingTargetsApplyDisposition.Superseded);
+        ack.SupersededByOperationSequence.Should().Be(65);
     }
 
     [Fact]
@@ -1472,13 +1626,15 @@ public sealed class ServiceServingRolloutGAgentTests
         string operationId,
         string deploymentId,
         string revisionId,
-        string primaryActorId) =>
+        string primaryActorId,
+        long operationSequence = 1) =>
         new()
         {
             Identity = identity.Clone(),
             Reason = "deployment activation",
             ActivationAttemptId = activationAttemptId,
             OperationId = operationId,
+            OperationSequence = operationSequence,
             ReplyActorId = "deployment-manager-1",
             Targets =
             {

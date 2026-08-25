@@ -481,7 +481,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
                 SelectTools(routeTools.Tools, eligible));
         }
 
-        var candidate = ResolveCommittedCandidate(profile, committedAuthority);
+        var candidate = ResolveCommittedCandidate(profile, committedAuthority, diagnostics);
         if (candidate is null)
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
@@ -700,7 +700,7 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
         if (profile is not null)
         {
-            var committedCandidate = ResolveCommittedCandidate(profile, committedAuthority!);
+            var committedCandidate = ResolveCommittedCandidate(profile, committedAuthority!, diagnostics);
             if (committedAuthority!.SelectedExactSkillRef is not null && committedCandidate is null)
             {
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
@@ -998,6 +998,18 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
         LLMControlContext? llmControl,
         CancellationToken ct)
     {
+        var duplicateIntentId = profile.Members
+            .GroupBy(static member => member.IntentId, StringComparer.Ordinal)
+            .FirstOrDefault(static group => group.Count() > 1)
+            ?.Key;
+        if (duplicateIntentId is not null)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+                "intent_id_collision"));
+            return null;
+        }
+
         var aliasMatches = profile.Members
             .Where(member => member.ExplicitTriggerAliases.Any(alias => MatchesAlias(userMessage, alias)))
             .ToArray();
@@ -2209,23 +2221,33 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
 
     private static AgentProfileSkillMember? ResolveCommittedCandidate(
         AgentProfileSnapshot profile,
-        AgentProfileTurnAuthorityState committedAuthority)
+        AgentProfileTurnAuthorityState committedAuthority,
+        ICollection<AgentProfileTurnDiagnostic> diagnostics)
     {
         var candidate = committedAuthority.CandidateRoute;
         var exactRef = committedAuthority.SelectedExactSkillRef;
         if (candidate is null)
             return null;
 
-        return profile.Members.SingleOrDefault(member =>
-            string.Equals(member.IntentId, candidate.IntentId, StringComparison.Ordinal) &&
-            (exactRef is null
-                ? member.SkillRef is null
-                : member.SkillRef is not null &&
-                  string.Equals(member.SkillRef.Guid, exactRef.Guid, StringComparison.Ordinal) &&
-                  string.Equals(
-                      member.SkillRef.LiteralVersion,
-                      exactRef.LiteralVersion,
-                      StringComparison.Ordinal)));
+        var matches = profile.Members.Where(member =>
+                string.Equals(member.IntentId, candidate.IntentId, StringComparison.Ordinal) &&
+                (exactRef is null
+                    ? member.SkillRef is null
+                    : member.SkillRef is not null &&
+                      string.Equals(member.SkillRef.Guid, exactRef.Guid, StringComparison.Ordinal) &&
+                      string.Equals(
+                          member.SkillRef.LiteralVersion,
+                          exactRef.LiteralVersion,
+                          StringComparison.Ordinal)))
+            .Take(2)
+            .ToArray();
+        if (matches.Length <= 1)
+            return matches.SingleOrDefault();
+
+        diagnostics.Add(new AgentProfileTurnDiagnostic(
+            AgentProfileTurnDiagnosticCode.CatalogNeedsDisambiguation,
+            "committed_intent_id_collision"));
+        return null;
     }
 
     private static AgentProfileTurnAuthorityKind NarrowAuthority(

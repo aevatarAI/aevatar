@@ -1245,6 +1245,87 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task DeliveryShell_ConnectionCreate_ShouldRequireCorrelatedAcceptedReceipt()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/delivery");
+
+        const string script = """
+            const assert = require('node:assert/strict');
+            const vm = require('node:vm');
+            const html = require('node:fs').readFileSync(0, 'utf8');
+            const start = html.indexOf('async function createConnection(slotKey) {');
+            const end = html.indexOf('async function loadExistingConnections(', start);
+            assert.notEqual(start, -1, 'connection creation behavior must exist');
+            assert.notEqual(end, -1, 'existing connection loader must follow creation behavior');
+            const source = html.slice(start, end);
+
+            class ApiError extends Error {
+              constructor(status, message, body, code) {
+                super(message); this.status = status; this.body = body; this.code = code;
+              }
+            }
+            function first(value, keys, fallback) {
+              for (const key of keys) if (value && value[key] !== undefined) return value[key];
+              return fallback;
+            }
+            function text(value, fallback = '') {
+              const result = value == null ? '' : String(value).trim();
+              return result || fallback;
+            }
+            function makeContext(result) {
+              const context = {
+                ApiError, Object,
+                api: { async createConnectLink() { return result; } },
+                first, text,
+                object(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; },
+                safeHttpUrl(value) { return /^https:\/\//.test(String(value || '')) ? String(value) : ''; },
+                customerScopeId(value) { return text(first(value, ['targetScopeId'], '')); },
+                customerRouteIsCurrent(deliveryId, sequence) {
+                  return context.state.routeSequence === sequence &&
+                    context.state.customer.deliveryId === deliveryId;
+                },
+                invalidateValidation() {}, renderCustomerDetail() {},
+                state: {
+                  routeSequence: 7, notice: null,
+                  customer: {
+                    deliveryId:'delivery-alpha',detail:{targetScopeId:'scope-alpha'},busy:'',
+                    connectionErrors:Object.create(null),connectionRuntime:Object.create(null)
+                  }
+                }
+              };
+              vm.createContext(context);
+              vm.runInContext(source, context);
+              return context;
+            }
+
+            (async function() {
+              const statusUrl = '/api/scopes/scope-alpha/delivery-requests/delivery-alpha/connections/lark';
+              const accepted = makeContext({
+                status:202, location:statusUrl,
+                data:{slotKey:'lark',status:'begin_accepted',connectLinkId:'link-created',
+                  statusUrl,connectUrl:'https://nyx.example/connect/redacted'}
+              });
+              await accepted.createConnection('lark');
+              assert.equal(accepted.state.customer.connectionRuntime.lark.connectLinkId, 'link-created');
+              assert.equal(accepted.state.notice.title, '连接请求已受理');
+
+              const dishonest = makeContext({
+                status:200, location:'',
+                data:{slotKey:'lark',status:'pending',connectUrl:'https://nyx.example/connect/redacted'}
+              });
+              await dishonest.createConnection('lark');
+              assert.equal(dishonest.state.customer.connectionErrors.lark.code, 'invalid_connection_receipt');
+              assert.deepEqual(Object.keys(dishonest.state.customer.connectionRuntime), []);
+            })().catch(error => { console.error(error); process.exitCode = 1; });
+            """;
+
+        var result = await RunNodeAsync(script, html);
+
+        result.ExitCode.Should().Be(0, result.Error + result.Output);
+    }
+
+    [Fact]
     public async Task DeliveryShell_ConnectionRefresh_ShouldWaitForTerminalProjectionAndIgnoreLateRoutes()
     {
         await using var app = await CreateAppAsync();
@@ -1305,8 +1386,8 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             (async function() {
               let reads = 0;
               const observations = [
-                {slotKey:'lark',status:'pending',updatedAt:'2026-08-17T00:00:00Z'},
-                {slotKey:'lark',status:'completed',userServiceId:'us-lark',updatedAt:'2026-08-17T00:00:01Z'}
+                {slotKey:'lark',connectLinkId:'link-created',status:'pending',updatedAt:'2026-08-17T00:00:00Z'},
+                {slotKey:'lark',connectLinkId:'link-created',status:'completed',userServiceId:'us-lark',updatedAt:'2026-08-17T00:00:01Z'}
               ];
               const terminal = makeContext({
                 async refreshConnectStatus() { return {status:202,data:{status:'refresh_accepted'}}; },
@@ -1316,6 +1397,15 @@ public sealed class BackendConsoleStaticAssetEndpointTests
               assert.equal(reads, 2, 'a stale pending projection must not finish the refresh');
               assert.equal(terminal.state.customer.connectionRuntime.lark.status, 'completed');
               assert.equal(terminal.state.customer.connectionRuntime.lark.userServiceId, 'us-lark');
+
+              const mismatch = makeContext({
+                async refreshConnectStatus() { return {status:202,data:{status:'refresh_accepted'}}; },
+                async connectStatus() { return {data:{slotKey:'lark',connectLinkId:'link-other',status:'completed'}}; }
+              });
+              mismatch.state.customer.connectionRuntime.lark = {connectLinkId:'link-created'};
+              await mismatch.recheckConnection('lark');
+              assert.equal(mismatch.state.customer.connectionErrors.lark.code, 'connection_link_mismatch');
+              assert.equal(mismatch.state.customer.connectionRuntime.lark.connectLinkId, 'link-created');
 
               let releaseRefresh;
               const late = makeContext({

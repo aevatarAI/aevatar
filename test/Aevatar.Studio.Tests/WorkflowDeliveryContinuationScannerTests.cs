@@ -553,7 +553,7 @@ public sealed class WorkflowDeliveryContinuationScannerTests
     [InlineData(WorkflowInstallationStatus.Accepted, false, true)]
     [InlineData(WorkflowInstallationStatus.ProvisioningAccepted, true, false)]
     [InlineData(WorkflowInstallationStatus.ProvisioningAccepted, false, true)]
-    public async Task ScanOnceAsync_WhenDeliveryWasWithdrawnBeforeClaim_ShouldNotClaimOrResumeProvisioning(
+    public async Task ScanOnceAsync_WhenDeliveryWasWithdrawnBeforeClaim_ShouldDispatchActorOwnedReconciliation(
         WorkflowInstallationStatus status,
         bool revoked,
         bool expired)
@@ -595,7 +595,7 @@ public sealed class WorkflowDeliveryContinuationScannerTests
         provisioning.Deliveries.Should().BeEmpty();
         materializer.Deliveries.Should().BeEmpty();
         readiness.Deliveries.Should().BeEmpty();
-        commands.Claims.Should().BeEmpty();
+        commands.Claims.Should().ContainSingle();
         commands.Failures.Should().BeEmpty();
     }
 
