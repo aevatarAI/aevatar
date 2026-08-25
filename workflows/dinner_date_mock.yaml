@@ -122,8 +122,11 @@ steps:
       branch._default: wait_for_silence_timeout
     branches:
       ember_oak: record_selected_ember_oak_before_timeout
+      "Ember & Oak": record_selected_ember_oak_before_timeout
       casa_nera: record_selected_casa_nera_before_timeout
+      "Casa Nera": record_selected_casa_nera_before_timeout
       atlas_row: record_selected_atlas_row_before_timeout
+      "Atlas Row": record_selected_atlas_row_before_timeout
       deposit: final_artifact_payment_blocked
       ambiguous: handle_ambiguous_hold_outcome
       _default: wait_for_silence_timeout
@@ -166,8 +169,11 @@ steps:
       branch._default: final_artifact_invalid_selected_choice
     branches:
       ember_oak: hold_selected_ember_oak
+      "Ember & Oak": hold_selected_ember_oak
       casa_nera: hold_selected_casa_nera
+      "Casa Nera": hold_selected_casa_nera
       atlas_row: hold_selected_atlas_row
+      "Atlas Row": hold_selected_atlas_row
       _default: final_artifact_invalid_selected_choice
 
   - id: hold_selected_ember_oak
@@ -298,14 +304,14 @@ steps:
     type: assign
     parameters:
       target: post_timeout_wait_state
-      value: '{"task_id":"task-uc5b","parent_task_id":"task-uc5","stored_in":"mock_durable_workflow_state","status":"waiting_for_user_choice_after_holds","accepted_signals":["ember_oak","casa_nera","atlas_row"],"default_mock_choice":"ember_oak"}'
-    next: receive_user_choice_after_holds
+      value: '{"task_id":"task-uc5b","parent_task_id":"task-uc5","stored_in":"mock_durable_workflow_state","status":"waiting_for_user_choice_after_holds_mocked","accepted_signals":["ember_oak","casa_nera","atlas_row"],"default_mock_choice":"ember_oak"}'
+    next: simulate_user_choice_after_holds
 
-  - id: receive_user_choice_after_holds
+  - id: simulate_user_choice_after_holds
     type: assign
     parameters:
       target: user_choice_after_holds
-      value: '{"task_id":"task-uc5b","selected_venue":"Ember & Oak","selected_venue_id":"ember_oak","selection_reason":"pine nut allergy makes the no-nuts kitchen safest","source":"mock_user_text"}'
+      value: '{"task_id":"task-uc5b","selected_venue":"Ember & Oak","selected_venue_id":"ember_oak","selection_reason":"pine nut allergy makes the no-nuts kitchen safest","source":"mock_user_text","mode":"simulated_post_timeout_choice"}'
     next: compute_release_plan
 
   - id: compute_release_plan
