@@ -37,6 +37,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
             [typeof(StudioMemberBindingRunGAgent)] = StudioMemberBindingRunGAgent.ProjectionKind,
             [typeof(StudioTeamGAgent)] = StudioTeamGAgent.ProjectionKind,
             [typeof(ContentArtifactGAgent)] = ContentArtifactGAgent.ProjectionKind,
+            [typeof(ContentArtifactPinGAgent)] = ContentArtifactPinGAgent.ProjectionKind,
             [typeof(WorkOrderGAgent)] = WorkOrderGAgent.ProjectionKind,
             [typeof(WorkflowDeliveryGAgent)] = WorkflowDeliveryGAgent.ProjectionKind,
             [typeof(StudioWorkspaceGAgent)] = StudioWorkspaceGAgent.ProjectionKind,

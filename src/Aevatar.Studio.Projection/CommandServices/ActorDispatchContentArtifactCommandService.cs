@@ -52,6 +52,8 @@ internal sealed class ActorDispatchContentArtifactCommandService : IContentArtif
         };
         if (ToRetentionPolicy(request.RetentionPolicy) is { } retentionPolicy)
             command.RetentionPolicy = retentionPolicy;
+        foreach (var (key, value) in request.Labels ?? new Dictionary<string, string>(StringComparer.Ordinal))
+            command.Labels.Add(key, value);
         return DispatchAsync(scopeId, artifactId, command, "create", 0, ct);
     }
 

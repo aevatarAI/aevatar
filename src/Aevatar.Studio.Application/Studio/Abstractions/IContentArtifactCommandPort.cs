@@ -47,3 +47,20 @@ public interface IContentArtifactCommandPort
         ContentArtifactPrincipalContract requester,
         CancellationToken ct = default);
 }
+
+public interface IContentArtifactPinCommandPort
+{
+    Task<ContentArtifactPinAcceptedReceipt> SetAsync(
+        string scopeId,
+        string pinKey,
+        SetContentArtifactPinRequest request,
+        ContentArtifactPrincipalContract requester,
+        CancellationToken ct = default);
+
+    Task<ContentArtifactPinAcceptedReceipt> ClearAsync(
+        string scopeId,
+        string pinKey,
+        ClearContentArtifactPinRequest request,
+        ContentArtifactPrincipalContract requester,
+        CancellationToken ct = default);
+}
