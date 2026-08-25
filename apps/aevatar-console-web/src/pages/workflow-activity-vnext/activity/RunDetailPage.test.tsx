@@ -412,6 +412,53 @@ describe('Workflow Activity vNext run detail console', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
+  it('keeps the Run detail workspace stable while authoritative data loads', () => {
+    const pending = new Promise<never>(() => undefined);
+    mockWorkflowActivityApi.getRun.mockReturnValue(pending);
+    mockWorkflowActivityApi.getRunGraph.mockReturnValue(pending);
+    mockWorkflowActivityApi.listRuns.mockReturnValue(pending);
+
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    expect(
+      screen.getByRole('heading', { name: 'Run details' }),
+    ).toBeInTheDocument();
+
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-busy', 'true');
+    expect(status).toHaveClass(
+      'wa-vnext-run-detail',
+      'wa-vnext-run-detail--bounded',
+      'wa-vnext-run-detail--loading',
+    );
+    expect(screen.getByText('Loading run details…')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+
+    expect(
+      document.querySelector('.wa-vnext-run-detail__rail'),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelector('.wa-vnext-run-detail__stage'),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelector('.wa-vnext-run-detail__graph'),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelector('.wa-vnext-run-detail__details'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Back to Activity' }),
+    ).toBeEnabled();
+
+    expect(
+      screen.queryByRole('heading', { name: 'Loading run…' }),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector('.wa-vnext__state')).not.toBeInTheDocument();
+  });
+
   it('renders a published-runs style console for the current run and preserves workflow context when switching history', async () => {
     renderWithQueryClient(
       <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,

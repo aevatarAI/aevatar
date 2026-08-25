@@ -646,6 +646,100 @@ export const workflowActivityVNextCss = `
 .wa-vnext-run-detail .ant-tag {
   margin-inline-end: 0;
 }
+@keyframes wa-vnext-run-detail-skeleton-pulse {
+  0%, 100% { opacity: .55; }
+  50% { opacity: 1; }
+}
+.wa-vnext-run-detail--loading {
+  cursor: progress;
+}
+.wa-vnext-run-detail--loading .wa-vnext-run-detail__rail-header,
+.wa-vnext-run-detail--loading .wa-vnext-run-detail__stage-header,
+.wa-vnext-run-detail--loading .wa-vnext-run-detail__logs-header,
+.wa-vnext-run-detail--loading .wa-vnext-run-detail__inspector-header {
+  min-height: 54px;
+}
+.wa-vnext-run-detail__skeleton-line,
+.wa-vnext-run-detail__skeleton-dot,
+.wa-vnext-run-detail__skeleton-node {
+  animation: wa-vnext-run-detail-skeleton-pulse 1.5s ease-in-out infinite;
+}
+.wa-vnext-run-detail__skeleton-line {
+  background: color-mix(in srgb, var(--wa-line) 64%, var(--wa-subtle));
+  border-radius: 4px;
+  display: block;
+  height: 10px;
+  max-width: 100%;
+}
+.wa-vnext-run-detail__skeleton-line--title { height: 14px; width: 112px; }
+.wa-vnext-run-detail__skeleton-line--short { width: 72px; }
+.wa-vnext-run-detail__skeleton-line--run { width: 76%; }
+.wa-vnext-run-detail__skeleton-line--meta { height: 9px; width: 48%; }
+.wa-vnext-run-detail__skeleton-line--heading { height: 16px; width: 148px; }
+.wa-vnext-run-detail__skeleton-line--pill { border-radius: 10px; height: 20px; width: 64px; }
+.wa-vnext-run-detail__skeleton-line--subtitle { width: 196px; }
+.wa-vnext-run-detail__skeleton-line--node-title { height: 12px; width: 62%; }
+.wa-vnext-run-detail__skeleton-line--node-meta { height: 9px; width: 42%; }
+.wa-vnext-run-detail__skeleton-line--label { height: 12px; width: 44px; }
+.wa-vnext-run-detail__skeleton-line--duration { height: 9px; width: 42px; }
+.wa-vnext-run-detail__skeleton-line--step { width: 68%; }
+.wa-vnext-run-detail__skeleton-line--step-meta { height: 8px; width: 44%; }
+.wa-vnext-run-detail__skeleton-line--inspector-title { height: 12px; width: 132px; }
+.wa-vnext-run-detail__skeleton-line--tabs { height: 12px; margin-bottom: 10px; width: 180px; }
+.wa-vnext-run-detail__skeleton-line--content { width: 82%; }
+.wa-vnext-run-detail__skeleton-line--content-short { width: 58%; }
+.wa-vnext-run-detail__skeleton-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+.wa-vnext-run-detail__run--loading {
+  cursor: progress;
+  min-height: 53px;
+}
+.wa-vnext-run-detail__graph--loading {
+  overflow: hidden;
+  position: relative;
+}
+.wa-vnext-run-detail__skeleton-node {
+  background: var(--wa-surface);
+  border: 1px solid var(--wa-line);
+  border-radius: 6px;
+  display: grid;
+  gap: 9px;
+  left: 50%;
+  padding: 14px;
+  position: absolute;
+  transform: translateX(-50%);
+  width: clamp(160px, 28%, 220px);
+  z-index: 1;
+}
+.wa-vnext-run-detail__skeleton-node--1 { top: 10%; }
+.wa-vnext-run-detail__skeleton-node--2 { top: 42%; }
+.wa-vnext-run-detail__skeleton-node--3 { top: 74%; }
+.wa-vnext-run-detail__skeleton-connector {
+  background: var(--wa-line);
+  height: 18%;
+  left: 50%;
+  position: absolute;
+  top: 27%;
+  width: 1px;
+}
+.wa-vnext-run-detail__skeleton-connector--second { top: 59%; }
+.wa-vnext-run-detail__step--loading { cursor: progress; }
+.wa-vnext-run-detail__skeleton-dot {
+  background: color-mix(in srgb, var(--wa-line) 72%, var(--wa-subtle));
+  border-radius: 50%;
+  height: 12px;
+  justify-self: center;
+  width: 12px;
+}
+.wa-vnext-run-detail__skeleton-step-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.wa-vnext-run-detail__inspector-body--loading { gap: 10px; }
 .wa-vnext__node-inspector { background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); bottom: 16px; box-shadow: 0 16px 36px rgba(16, 24, 40, .16); display: flex; flex-direction: column; max-width: calc(100% - 32px); min-height: 0; overflow: hidden; position: absolute; right: 16px; top: 16px; width: min(400px, calc(100% - 32px)); z-index: 20; }
 .wa-vnext__node-inspector-header { align-items: flex-start; border-bottom: 1px solid var(--wa-line); display: flex; gap: 12px; justify-content: space-between; padding: 16px 16px 14px; }
 .wa-vnext__node-inspector-title.ant-typography { font-size: 15px; line-height: 1.35; margin: 0; }
@@ -900,5 +994,5 @@ export const workflowActivityVNextCss = `
   .wa-vnext__state--compact .ant-alert { align-items: flex-start; }
   .wa-vnext__state--compact .ant-alert-action { margin-inline-start: 0; margin-top: 8px; }
 }
-@media (prefers-reduced-motion: reduce) { .wa-vnext *, .wa-vnext *::before, .wa-vnext *::after { scroll-behavior: auto !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { .wa-vnext *, .wa-vnext *::before, .wa-vnext *::after { animation: none !important; scroll-behavior: auto !important; transition: none !important; } }
 `;

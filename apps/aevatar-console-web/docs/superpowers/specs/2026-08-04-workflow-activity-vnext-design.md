@@ -667,7 +667,7 @@ hierarchy and density while using production tokens and real data states.
 | Activity | Empty | No observed Runs for active server filters | Clear filters or Run a Workflow |
 | Activity | Error | Query failure distinct from empty | Retry |
 | Activity | Unknown status | Neutral Unknown label plus raw value | Open detail |
-| Run detail | Loading | Identity shell and independent detail/graph loading | Wait |
+| Run detail | Loading | Stable Run detail workspace skeleton with one accessible status; history, graph, logs, and inspector geometry stay visible without invented facts or repeated loading copy | Wait or return to Activity |
 | Run detail | Not found | Scoped non-disclosure-safe not-found state | Back to Activity |
 | Run detail | Running | Partial committed trace | Refresh through bounded polling |
 | Run detail | Completed | Final output and immutable trace | Run again when eligible |
