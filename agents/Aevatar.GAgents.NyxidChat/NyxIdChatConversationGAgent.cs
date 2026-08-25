@@ -94,6 +94,7 @@ public sealed class NyxIdChatConversationGAgent
         var next = StateTransitionMatcher
             .Match(current, evt)
             .On<AgentProfileBoundEvent>(ApplyAgentProfileBound)
+            .On<ConversationContextAttachmentsBoundEvent>(ApplyContextAttachmentsBound)
             .On<NyxIdChatConversationCreationStartedEvent>(ApplyConversationCreationStarted)
             .On<NyxIdChatConversationRegistrationAcceptedEvent>(ApplyConversationRegistrationAccepted)
             .On<NyxIdChatPendingCreationFirstTurnFinalizedEvent>(
@@ -214,6 +215,14 @@ public sealed class NyxIdChatConversationGAgent
             return;
         }
         if (command.FirstTurn is not null &&
+            State.ContextAttachments is not null &&
+            !ConversationContextAttachmentAdmission.HasAttachments(command.ContextAttachments))
+        {
+            throw new InvalidOperationException("A conversation cannot remove its context attachments.");
+        }
+        if (command.FirstTurn is not null && State.ContextAttachments is not null)
+            await BindContextAttachmentsAsync(command.ContextAttachments);
+        if (command.FirstTurn is not null &&
             string.Equals(State.ScopeId, scopeId, StringComparison.Ordinal) &&
             string.Equals(State.ConversationActorId, Id, StringComparison.Ordinal) &&
             !string.IsNullOrWhiteSpace(State.HistoryInitializationOperationId))
@@ -245,6 +254,7 @@ public sealed class NyxIdChatConversationGAgent
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
 
         await BindAgentProfileAsync(command.AgentProfile);
+        await BindContextAttachmentsAsync(command.ContextAttachments);
         await PersistDomainEventAsync(new NyxIdChatConversationCreationStartedEvent
         {
             ScopeId = scopeId,
@@ -1656,6 +1666,7 @@ public sealed class NyxIdChatConversationGAgent
                 AgentProfile = turnAuthority is null ? null : State.AgentProfile?.Clone(),
                 AgentProfileTurnAuthority = turnAuthority?.Clone(),
                 Intent = intent,
+                ContextAttachments = State.ContextAttachments?.Clone(),
             },
         };
         await DispatchFirstOperationAsync(
@@ -2908,6 +2919,7 @@ public sealed class NyxIdChatConversationGAgent
             OwnerSubject = State.OwnerSubject,
             RoleConfiguration = State.RoleConfiguration?.Clone(),
             AgentProfile = State.AgentProfile?.Clone(),
+            ContextAttachments = State.ContextAttachments?.Clone(),
             ActiveTurn = turn,
             LatestTurn = turn.Clone(),
             ActiveTask = task,
@@ -3034,6 +3046,7 @@ public sealed class NyxIdChatConversationGAgent
             CommandAttemptId = command.CommandId.Trim(),
             ToolContext = BuildActorOwnedToolContext(command.ToolContext).ToPayload(),
             LlmControl = command.LlmControl?.Clone(),
+            ContextAttachments = State.ContextAttachments?.Clone(),
         };
         request.InputParts.AddRange(command.InputParts.Select(static part => part.Clone()));
         return request;
@@ -3170,6 +3183,27 @@ public sealed class NyxIdChatConversationGAgent
 
         var next = current.Clone();
         next.AgentProfile = evt.Profile.Clone();
+        return next;
+    }
+
+    private static NyxIdChatConversationGAgentState ApplyContextAttachmentsBound(
+        NyxIdChatConversationGAgentState current,
+        ConversationContextAttachmentsBoundEvent evt)
+    {
+        var incoming = evt.Attachments ?? new ConversationContextAttachmentSet();
+        if (!ConversationContextAttachmentAdmission.TryNormalize(incoming, out var normalized))
+            throw new InvalidOperationException("Conversation context attachment binding is invalid.");
+        if (!ConversationContextAttachmentAdmission.HasAttachments(normalized))
+            return current;
+        if (current.ContextAttachments is not null)
+        {
+            if (!ConversationContextAttachmentAdmission.ByteEquivalent(current.ContextAttachments, normalized))
+                throw new InvalidOperationException("A conversation cannot replace its context attachments.");
+            return current;
+        }
+
+        var next = current.Clone();
+        next.ContextAttachments = normalized;
         return next;
     }
 
@@ -3761,6 +3795,24 @@ public sealed class NyxIdChatConversationGAgent
 
         if (!AgentProfileSnapshotCodec.ByteEquivalent(State.AgentProfile, profile))
             throw new InvalidOperationException("A conversation cannot replace its bound agent profile.");
+    }
+
+    private async Task BindContextAttachmentsAsync(ConversationContextAttachmentSet? attachments)
+    {
+        if (!ConversationContextAttachmentAdmission.TryNormalize(attachments, out var normalized))
+            throw new InvalidOperationException("The conversation context attachment set is invalid.");
+        if (!ConversationContextAttachmentAdmission.HasAttachments(normalized))
+            return;
+        if (State.ContextAttachments is null)
+        {
+            await PersistDomainEventAsync(
+                new ConversationContextAttachmentsBoundEvent { Attachments = normalized },
+                CancellationToken.None);
+            return;
+        }
+
+        if (!ConversationContextAttachmentAdmission.ByteEquivalent(State.ContextAttachments, normalized))
+            throw new InvalidOperationException("A conversation cannot replace its context attachments.");
     }
 
     private NyxIdChatConversationGAgentState PrepareHistoryInitializationState(string scopeId)

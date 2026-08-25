@@ -1011,6 +1011,7 @@ message NyxIdChatConversationCreateCommand {
   NyxIdChatStartTurnCommand first_turn = 4;
   string requested_actor_id = 5;
   aevatar.gagentservice.AgentProfileReference agent_profile_reference = 6;
+  aevatar.ai.ConversationContextAttachmentSet context_attachments = 7;
 }
 
 message NyxIdChatConversationDeleteCommand {

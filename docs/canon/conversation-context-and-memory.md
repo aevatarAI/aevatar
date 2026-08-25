@@ -20,6 +20,7 @@ owner: architecture
 | Prompt context | 无长期事实 owner；它由发起下一次 LLM 调用的执行模块临时派生 | continuation selector、`UserMemoryPromptContextProvider` 与 `ChatRuntime` 生产；下一次 `ChatStreamAsync` 消费 | 有界、可丢弃的执行输入，不是 committed fact，不提供独立 query API |
 | Conversation transcript | 每个 conversation 的 `ChatConversationGAgent` | terminal history delivery command 生产；conversation history API 与 prompt-context selector 消费 | committed conversation fact，经 `ChatConversationCurrentStateDocument` 和正式 transcript query port 查询 |
 | User memory | 每个用户 scope 的 `UserMemoryGAgent` | 经过授权的 typed add/remove/clear command 生产；`IUserMemoryQueryPort` 与 prompt-context provider 消费 | 跨 conversation 的 committed user fact，经 `UserMemoryCurrentStateDocument` 查询 |
+| Structured context attachment | `NyxIdChatConversationGAgent`（仅拥有引用集合，不拥有档案正文） | create command 固化 typed `ConversationContextAttachmentSet`；turn execution 通过 `IContentArtifactQueryPort` verified read 消费 | ContentArtifact current-state read model 与 verified revision read；附件正文永不写入 Conversation state/transcript |
 
 `conversationId`、`sessionId/turnId` 与 user-memory owner scope 是隔离身份。代码、
 route helper 和测试不得假设它们相等，也不得从 actor ID 前缀推导另一类身份。fixture
@@ -36,6 +37,15 @@ route helper 和测试不得假设它们相等，也不得从 actor ID 前缀推
 
 如果未来需要 transcript archive、user-memory 向量检索或不同 retention，必须先定义新的
 owner、typed lifecycle 和正式 query contract；不得在 prompt 截断或 query adapter 中静默实现。
+
+Conversation structured attachments are create-only, immutable references. Each entry selects
+`FOLLOW_CURRENT` or `PINNED_REVISION`; the set is bounded to four artifact identities and is
+sealed by `ConversationContextAttachmentsBoundEvent`. Replaying the same deterministic protobuf
+bytes is idempotent; a different or missing set cannot replace an existing binding. Create
+admission reads only the ContentArtifact read model and fails closed with `ADMISSION_UNAVAILABLE`
+for missing, inactive, unauthorized, unsupported-kind, duplicate/over-limit, or unavailable
+pinned revisions. A turn may degrade to a typed unavailable placeholder when a later verified
+read is redacted, tombstoned, expired, over budget, or temporarily unavailable.
 
 ## 3. Protobuf 与写侧契约
 
@@ -123,3 +133,4 @@ message window、`RoleGAgent` session tracking limit、user-memory 50 条上限�
 5. fixture 是否使用不同的 conversation/session/user identity？
 6. 是否把核心 category/source/recovery/control 语义建模为 Protobuf，而非 generic bag？
 7. 是否意外新增了统一 memory framework 或 LLM provider 对 user-memory lifecycle 的所有权？
+8. 附件是否只经 read model + verified read 注入，且 identity header 标明实际 revision/hash/media type？

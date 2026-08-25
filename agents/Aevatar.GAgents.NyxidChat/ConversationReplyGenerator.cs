@@ -16,6 +16,8 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using UglyToad.PdfPig;
@@ -103,6 +105,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly ISystemSkillOverlayProvider? _overlayProvider;
     private readonly IBuiltInPromptFloorProvider _builtInPromptFloorProvider;
     private readonly IAgentToolDiscoveryService _toolDiscoveryService;
+    private readonly ContentArtifactConversationPromptLayerMaterializer? _contentArtifactPromptLayerMaterializer;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -148,7 +151,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IAgentToolExecutionPort? toolExecutionPort = null,
         IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null,
         IEnumerable<IAgentToolSource>? nyxIdChatToolSources = null,
-        IAgentToolDiscoveryService? toolDiscoveryService = null)
+        IAgentToolDiscoveryService? toolDiscoveryService = null,
+        IContentArtifactQueryPort? contentArtifactQueryPort = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -170,6 +174,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _builtInPromptFloorProvider = builtInPromptFloorProvider ??
                                       throw new ArgumentNullException(nameof(builtInPromptFloorProvider));
         _toolDiscoveryService = toolDiscoveryService ?? AgentToolDiscoveryService.Instance;
+        _contentArtifactPromptLayerMaterializer = contentArtifactQueryPort is null
+            ? null
+            : new ContentArtifactConversationPromptLayerMaterializer(contentArtifactQueryPort);
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
     }
 
@@ -372,6 +379,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 ct)
             .ConfigureAwait(false);
         var inputFileRefs = CollectInputFileRefs(input.Parts);
+        var conversationLayer = await MaterializeConversationContextLayerAsync(
+                attachmentContext,
+                effectiveToolContext,
+                activity,
+                ct)
+            .ConfigureAwait(false);
         effectiveToolContext = WithInputFileRefs(effectiveToolContext, inputFileRefs)!;
         var ownerFallbackToolContext = WithInputFileRefs(replyPlan.OwnerFallbackToolContext, inputFileRefs);
         LogChannelLlmToolPlan(
@@ -391,7 +404,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             effectiveToolContext,
             externalMetadata,
             tools,
-            input.AttachmentVisibilityInstruction);
+            input.AttachmentVisibilityInstruction,
+            conversationLayer);
 
         // The unbound-sender gate (issue #1318) detaches the entire tool surface while
         // the kernel prompt still documents those tools; without this override the
@@ -408,8 +422,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     ? UnboundSenderToolsDisabledNotice
                     : effectiveTurnCatalog is { ExactTools.Count: 0 }
                         ? RestrictedEmptyCatalogNotice
-                        : null,
-                effectiveTurnCatalog)),
+                : null,
+                effectiveTurnCatalog,
+                conversationLayer)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
@@ -2029,7 +2044,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AgentToolExecutionContext toolContext,
         IReadOnlyDictionary<string, string> externalMetadata,
         ToolManager tools,
-        string? attachmentVisibilityInstruction)
+        string? attachmentVisibilityInstruction,
+        ConversationContextPromptLayer? conversationLayer = null)
     {
         var history = new global::Aevatar.AI.Core.Chat.ChatHistory
         {
@@ -2049,7 +2065,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt(externalMetadata, toolContext, attachmentVisibilityInstruction)),
+                    ChatMessage.System(BuildSystemPrompt(
+                        externalMetadata,
+                        toolContext,
+                        attachmentVisibilityInstruction,
+                        conversation: conversationLayer)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -2375,12 +2395,52 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return valid.Length == 0 ? null : valid;
     }
 
+    private async Task<ConversationContextPromptLayer?> MaterializeConversationContextLayerAsync(
+        ChatAttachmentInputContext? attachmentContext,
+        AgentToolExecutionContext toolContext,
+        ChatActivity activity,
+        CancellationToken ct)
+    {
+        if (_contentArtifactPromptLayerMaterializer is null ||
+            attachmentContext?.ContextAttachments is not { Attachments.Count: > 0 })
+            return null;
+
+        var scopeId = NormalizeOptional(toolContext.Caller.ScopeId) ??
+                      NormalizeOptional(activity.Conversation?.CanonicalKey);
+        var principalId = NormalizeOptional(toolContext.Caller.OwnerSubject);
+        if (scopeId is null || principalId is null)
+            return null;
+
+        try
+        {
+            return await _contentArtifactPromptLayerMaterializer.MaterializeAsync(
+                    scopeId,
+                    new ContentArtifactPrincipalContract(principalId, "nyxid"),
+                    attachmentContext.ContextAttachments,
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Conversation context attachment materialization failed closed. activityId={ActivityId}",
+                activity.Id);
+            return null;
+        }
+    }
+
     private string BuildSystemPrompt(
         IReadOnlyDictionary<string, string> metadata,
         AgentToolExecutionContext toolContext,
         string? attachmentVisibilityInstruction = null,
         string? runtimeNotice = null,
-        AgentTurnToolCatalog? turnCatalog = null)
+        AgentTurnToolCatalog? turnCatalog = null,
+        ConversationContextPromptLayer? conversation = null)
     {
         var runtimeFacts = new StringBuilder();
         AppendRuntimeFact(
@@ -2416,7 +2476,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             turnCatalog?.ProfilePromptLayer,
             turnCatalog?.SelectedSkillPromptLayer,
             runtime,
-            conversation: null).Prompt;
+            conversation).Prompt;
     }
 
     // The typed channel context is the authoritative platform source: the per-step plan path hands

@@ -1,5 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
@@ -7,6 +8,7 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Capabilities;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -179,18 +181,21 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
     private readonly IChatRoutePolicyQueryPort _routeQueryPort;
     private readonly ChatRouteResolver _routeResolver;
     private readonly INyxIdChatAgentProfileResolver _agentProfileResolver;
+    private readonly IContentArtifactQueryPort? _contentArtifactQueryPort;
 
     public NyxIdChatConversationCreateCommandTargetResolver(
         IActorRuntime actorRuntime,
         IChatRoutePolicyQueryPort routeQueryPort,
         ChatRouteResolver routeResolver,
-        INyxIdChatAgentProfileResolver agentProfileResolver)
+        INyxIdChatAgentProfileResolver agentProfileResolver,
+        IContentArtifactQueryPort? contentArtifactQueryPort = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _routeQueryPort = routeQueryPort ?? throw new ArgumentNullException(nameof(routeQueryPort));
         _routeResolver = routeResolver ?? throw new ArgumentNullException(nameof(routeResolver));
         _agentProfileResolver = agentProfileResolver ??
                                 throw new ArgumentNullException(nameof(agentProfileResolver));
+        _contentArtifactQueryPort = contentArtifactQueryPort;
     }
 
     public async Task<CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>> ResolveAsync(
@@ -222,6 +227,12 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                 return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
                     NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
             }
+        }
+
+        if (!await ValidateContextAttachmentsAsync(command, ct))
+        {
+            return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
         }
 
         var callerScope = OwnerScope.ForNyxIdNative(command.ScopeId);
@@ -268,6 +279,58 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
                 createdActor,
                 createdLocally: true,
                 NyxIdChatConversationCreateStatus.Accepted));
+    }
+
+    private async Task<bool> ValidateContextAttachmentsAsync(
+        NyxIdChatConversationCreateCommand command,
+        CancellationToken ct)
+    {
+        if (!ConversationContextAttachmentAdmission.TryNormalize(
+                command.ContextAttachments,
+                out var normalized))
+            return false;
+        command.ContextAttachments = normalized;
+        if (normalized.Attachments.Count == 0)
+            return true;
+        if (_contentArtifactQueryPort is null)
+            return false;
+
+        var requester = command.FirstTurn?.ToolContext?.Caller?.OwnerSubject?.Trim();
+        if (string.IsNullOrWhiteSpace(requester))
+            return false;
+
+        foreach (var attachment in normalized.Attachments)
+        {
+            ContentArtifactCurrentStateResponse? artifact;
+            try
+            {
+                artifact = await _contentArtifactQueryPort.GetAsync(
+                    command.ScopeId.Trim(),
+                    attachment.ArtifactId,
+                    ct);
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (artifact is null ||
+                !string.Equals(artifact.LifecycleStatus, ContentArtifactLifecycleStatusNames.Active, StringComparison.Ordinal) ||
+                !ConversationContextAttachmentAdmission.IsAllowedKind(artifact.Kind) ||
+                !ConversationContextAttachmentAdmission.IsAuthorized(artifact, requester))
+                return false;
+
+            if (attachment.RevisionMode == ConversationContextAttachmentRevisionMode.PinnedRevision)
+            {
+                var revision = artifact.Revisions.FirstOrDefault(item =>
+                    string.Equals(item.RevisionId, attachment.PinnedRevisionId, StringComparison.Ordinal));
+                if (revision is null ||
+                    !string.Equals(revision.Availability, ContentArtifactRevisionAvailabilityNames.Available, StringComparison.Ordinal))
+                    return false;
+            }
+        }
+
+        return true;
     }
 }
 

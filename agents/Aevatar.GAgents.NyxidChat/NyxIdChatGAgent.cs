@@ -18,6 +18,7 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Google.Protobuf;
@@ -49,6 +50,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     private readonly NyxIdRelayOptions? _relayOptions;
     private readonly TimeProvider _timeProvider;
     private readonly AgentTurnToolCatalogMaterializer? _turnCatalogMaterializer;
+    private readonly ContentArtifactConversationPromptLayerMaterializer? _contentArtifactPromptLayerMaterializer;
+    private ConversationContextPromptLayer? _activeConversationPromptLayer;
     private AgentProfileTelemetryContext? _activeAgentProfileTelemetryContext;
     private int _systemSkillOverlayPromptLogCounter;
 
@@ -68,7 +71,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         TimeProvider? timeProvider = null,
         AgentTurnToolCatalogMaterializer? turnCatalogMaterializer = null,
         RoleChatExecutionOptions? chatExecutionOptions = null,
-        ISecretVault? chatToolRecoverySecretVault = null)
+        ISecretVault? chatToolRecoverySecretVault = null,
+        IContentArtifactQueryPort? contentArtifactQueryPort = null)
         : base(toolExecutionPort, llmProviderFactory, additionalHooks, agentMiddlewares, llmMiddlewares, toolSources,
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort,
@@ -83,6 +87,9 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         _relayOptions = relayOptions;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _turnCatalogMaterializer = turnCatalogMaterializer;
+        _contentArtifactPromptLayerMaterializer = contentArtifactQueryPort is null
+            ? null
+            : new ContentArtifactConversationPromptLayerMaterializer(contentArtifactQueryPort);
     }
 
     protected override TimeProvider ChatRequestTimeProvider => _timeProvider;
@@ -142,7 +149,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             turnCatalog?.ProfilePromptLayer,
             turnCatalog?.SelectedSkillPromptLayer,
             runtime,
-            conversation: null);
+            _activeConversationPromptLayer);
 
         if (global is not null && _systemSkillOverlayPromptLogCounter++ % SystemSkillOverlayPromptLogSampleRate == 0)
         {
@@ -163,6 +170,34 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
+        _activeConversationPromptLayer = null;
+        if (_contentArtifactPromptLayerMaterializer is not null &&
+            request.ContextAttachments is { Attachments.Count: > 0 } &&
+            !string.IsNullOrWhiteSpace(toolContext.Caller.ScopeId) &&
+            !string.IsNullOrWhiteSpace(toolContext.Caller.OwnerSubject))
+        {
+            try
+            {
+                _activeConversationPromptLayer = await _contentArtifactPromptLayerMaterializer.MaterializeAsync(
+                        toolContext.Caller.ScopeId,
+                        new ContentArtifactPrincipalContract(toolContext.Caller.OwnerSubject, "nyxid"),
+                        request.ContextAttachments,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                Logger.LogWarning(
+                    exception,
+                    "Direct NyxID conversation attachment materialization failed closed. sessionId={SessionId}",
+                    request.SessionId);
+            }
+        }
+
         var profile = State.AgentProfile;
         if (profile is null)
             return null;

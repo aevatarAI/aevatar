@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -61,4 +62,5 @@ public sealed record AgentRunReplyStepPlan(
 
 internal sealed record ChatAttachmentInputContext(
     IReadOnlyList<RecentConversationAttachmentActivity> RecentAttachmentActivities,
-    string? UserAccessToken);
+    string? UserAccessToken,
+    ConversationContextAttachmentSet? ContextAttachments = null);

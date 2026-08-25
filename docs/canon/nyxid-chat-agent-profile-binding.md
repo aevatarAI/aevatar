@@ -67,6 +67,26 @@ connected-service selector 可以额外封存 `readiness.requested_scopes`，用
 
 Request-local `AgentTurnToolCatalog` 不是 DI service、cache 或进程级上下文。非 Profile consumer 必须显式传 `null`；当前只有 genuinely unprofiled NyxID Chat 允许这个值表达未绑定。
 
+## Structured context attachments
+
+Conversation creation may carry a typed `ConversationContextAttachmentSet` alongside the profile
+reference. This is a separate authority: an attachment names an exact ContentArtifact identity
+and chooses `FOLLOW_CURRENT` or `PINNED_REVISION`; it does not grant write access or turn the
+artifact into profile content. The create resolver validates the artifact read model before actor
+creation (active lifecycle, owner/reader ACL, `TEXT`/`MARKDOWN`/`STRUCTURED_DOCUMENT` kind, and
+available pinned revision). Any failure is `ADMISSION_UNAVAILABLE` and no actor is created.
+
+The Conversation actor commits `ConversationContextAttachmentsBoundEvent` once. Equal protobuf
+bytes are idempotent; a different or absent later declaration is rejected. The sealed set is
+passed through transient LLM operation carriers and materialized each turn into the existing
+conversation prompt layer. `FOLLOW_CURRENT` therefore observes a newly committed current
+revision on the next turn while `PINNED_REVISION` remains stable. Materialization uses the
+verified ContentArtifact read path and emits an identity header (`artifact_id`, actual
+`revision_id`, content hash prefix, media type). Redaction, tombstone, retention expiry, ACL or
+backing failures, read-model unavailability, and either prompt budget produce a typed unavailable
+placeholder plus diagnostic; content is never truncated or persisted in Conversation state,
+read models, or transcript history.
+
 ## Static route tool ceiling
 
 Profiled 与 genuinely unprofiled NyxID Chat 共用 Host 静态注册的
