@@ -48,7 +48,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         steps:
           - id: reply
             type: llm_call
-            role: assistant
+            target_role: assistant
             parameters: {}
         """;
 
@@ -424,7 +424,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         steps:
           - id: reply
             type: llm_call
-            role: studio
+            target_role: studio
             parameters: {}
         """;
 
@@ -563,8 +563,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             $"      - Authorable top-level keys: {WorkflowYamlRootSchema.FormatAuthorableRootFields()}",
             $"      - Do NOT use top-level keys from other workflow dialects, including {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}",
             "      - roles: list of {id, name, system_prompt, allowed_tools}; every role used by llm_call must declare allowed_tools, and an empty list is valid; prefer omitting provider/model so runtime default is used",
-            "      - steps: list of {id, type, role, parameters, next, branches}",
-            "      - Step objects may only use these root keys: id, type, role, target_role, parameters, next, branches, children, retry, on_error, timeout_ms",
+            "      - steps: list of {id, type, target_role, parameters, next, branches}",
+            "      - Step objects may only use these root keys: id, type, target_role, parameters, next, branches, children, retry, on_error, timeout_ms",
             "      - Do NOT add unsupported step-level fields such as description, title, summary, notes, input_schema, output_schema, metadata, or examples",
             "      - Available step types: llm_call, transform, assign, guard, conditional, switch,",
             "        while, foreach, parallel, race, map_reduce, evaluate, reflect, connector_call, secure_connector_call,",
@@ -614,7 +614,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             "      steps:",
             "        - id: summarize_review",
             "          type: llm_call",
-            "          role: reviewer",
+            "          target_role: reviewer",
             "          parameters:",
             "            prompt: \"Summarize the input and call out urgent issues.\"",
             "          next: gate_urgent",
@@ -663,7 +663,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
         [
             "  - id: classify_route",
             "    type: llm_call",
-            "    role: planner",
+            "    target_role: planner",
             "    parameters:",
             "      prompt_prefix: \"Classify the user request into exactly one route token: direct or workflow. Respond with only one lowercase token and no extra text.\\n\\n\"",
             "    next: route_intent",
@@ -684,7 +684,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             string.Empty,
             "  - id: generate_workflow_yaml",
             "    type: llm_call",
-            "    role: planner",
+            "    target_role: planner",
             "    parameters:",
             "      prompt_prefix: \"Generate a complete workflow YAML for the user request below. Return only a single ```yaml fenced block.\\n\\n\"",
             "    next: validate_yaml",
@@ -698,7 +698,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             string.Empty,
             "  - id: reply_direct",
             "    type: llm_call",
-            "    role: assistant",
+            "    target_role: assistant",
             "    next: done",
             string.Empty,
             "  - id: validate_yaml",
@@ -719,7 +719,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             string.Empty,
             "  - id: refine_yaml",
             "    type: llm_call",
-            "    role: planner",
+            "    target_role: planner",
             "    parameters:",
             "      prompt_prefix: \"Please refine the workflow YAML based on the validation error or user feedback below. Return a corrected full workflow YAML only in a single ```yaml fenced block. Do not include unsupported step-level fields such as description, title, summary, notes, metadata, input_schema, or output_schema. Primitive-specific options must be placed under step.parameters.\\n\\n\"",
             "    next: validate_yaml",

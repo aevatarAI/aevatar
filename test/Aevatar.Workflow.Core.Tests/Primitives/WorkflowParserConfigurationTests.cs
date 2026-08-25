@@ -610,7 +610,7 @@ public class WorkflowParserConfigurationTests
                 next: classify_route
               - id: classify_route
                 type: llm_call
-                role: planner
+                target_role: planner
                 parameters:
                   prompt_prefix: "Return one token: direct or workflow."
                 next: route_intent
@@ -628,7 +628,7 @@ public class WorkflowParserConfigurationTests
                 next: generate_workflow_yaml
               - id: generate_workflow_yaml
                 type: llm_call
-                role: planner
+                target_role: planner
                 next: validate_yaml
               - id: validate_yaml
                 type: workflow_yaml_validate
@@ -645,7 +645,7 @@ public class WorkflowParserConfigurationTests
                   "false": refine_yaml
               - id: refine_yaml
                 type: llm_call
-                role: assistant
+                target_role: assistant
                 next: validate_yaml
               - id: extract_and_execute
                 type: dynamic_workflow
@@ -658,7 +658,7 @@ public class WorkflowParserConfigurationTests
                 next: reply_direct
               - id: reply_direct
                 type: llm_call
-                role: assistant
+                target_role: assistant
                 next: done
               - id: done
                 type: assign
