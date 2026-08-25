@@ -135,14 +135,14 @@ steps:
     type: assign
     parameters:
       target: post_timeout_wait_state
-      value: '{"status":"waiting_for_user_choice_after_holds","accepted_signals":["ember_oak","casa_nera","atlas_row"],"mock_signal_choice":"ember_oak","hold_proofs":["mock-call-hold-ember-oak","mock-transcript-hold-ember-oak","mock-call-hold-casa-nera","mock-transcript-hold-casa-nera","mock-call-hold-atlas-row","mock-transcript-hold-atlas-row"]}'
+      value: '{"status":"waiting_for_user_confirmation_after_holds","held":["ember_oak","casa_nera","atlas_row"],"accepted_signals":["ember_oak","casa_nera","atlas_row"],"message":"All three mock holds are confirmed. Workflow is waiting for the user to confirm one venue before releasing the other two.","mock_resume_signal":"ember_oak","hold_proofs":["mock-call-hold-ember-oak","mock-transcript-hold-ember-oak","mock-call-hold-casa-nera","mock-transcript-hold-casa-nera","mock-call-hold-atlas-row","mock-transcript-hold-atlas-row"]}'
     next: mock_user_choice_signal_after_holds
 
   - id: mock_user_choice_signal_after_holds
     type: assign
     parameters:
       target: user_choice_after_holds
-      value: '{"selected_venue":"Ember & Oak","selected_venue_id":"ember_oak","source":"mock_user_signal","mode":"test_only_user_choice_signal_after_holds"}'
+      value: '{"selected_venue":"Ember & Oak","selected_venue_id":"ember_oak","source":"test_only_resume_signal","mode":"mock_user_confirmation_after_holds"}'
     next: release_unselected_casa_nera
 
   - id: release_unselected_casa_nera
@@ -179,7 +179,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"silence_timeout_hold_all_then_choose","kept":"Ember & Oak","released":["Casa Nera","Atlas Row"],"proof":{"call_records":["mock-call-hold-ember-oak","mock-call-hold-casa-nera","mock-call-hold-atlas-row","mock-call-release-casa-nera","mock-call-release-atlas-row"],"transcripts":["mock-transcript-hold-ember-oak","mock-transcript-hold-casa-nera","mock-transcript-hold-atlas-row","mock-transcript-release-casa-nera","mock-transcript-release-atlas-row"],"verification":"${steps.verify_final_contract_after_holds.output}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
+      value: '{"workflow_status":"completed","path":"silence_timeout_hold_all_then_user_confirmed","kept":"Ember & Oak","released":["Casa Nera","Atlas Row"],"user_confirmation":"${steps.mock_user_choice_signal_after_holds.json.source}","proof":{"call_records":["mock-call-hold-ember-oak","mock-call-hold-casa-nera","mock-call-hold-atlas-row","mock-call-release-casa-nera","mock-call-release-atlas-row"],"transcripts":["mock-transcript-hold-ember-oak","mock-transcript-hold-casa-nera","mock-transcript-hold-atlas-row","mock-transcript-release-casa-nera","mock-transcript-release-atlas-row"],"verification":"${steps.verify_final_contract_after_holds.output}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"all_three_venues_held_after_timeout":true,"awaits_user_confirmation_before_release":true,"selected_venue_confirmed":true,"unselected_holds_released":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
     next: ""
 
   - id: final_artifact_payment_blocked
