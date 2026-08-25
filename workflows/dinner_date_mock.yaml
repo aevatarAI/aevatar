@@ -1,0 +1,151 @@
+name: dinner_date_mock
+description: Executable mock workflow for a simplified dinner-date flow. Restaurant research and phone outcomes are represented by deterministic mock assign nodes.
+when_to_use: Use to validate the dinner-date shortlist, silence timeout, hold-all, release, and final artifact flow without calling search providers or restaurants.
+configuration:
+  closed_world_mode: true
+roles: []
+steps:
+  - id: capture_user_choice
+    type: assign
+    parameters:
+      target: simulated_user_choice
+      value: "$input"
+    next: initialize_context
+
+  - id: initialize_context
+    type: assign
+    parameters:
+      target: dinner_date_context
+      value: '{"task_id":"task-uc5","participant":"Priya","requested_window":"this week","party_size":2,"requested_day":"Friday","requested_time":"19:30","policy":{"money_spend_allowed":false,"reservation_calls_auto_allowed":true,"no_hold_before_options_shown":true},"external_dependency_mode":"mock"}'
+    next: mock_research_context
+
+  - id: mock_research_context
+    type: assign
+    parameters:
+      target: venue_research_context
+      value: '{"mocked_services":["web-search","api-firecrawl"],"required_for_core_workflow":false,"facts":{"candidate_count":3,"area":"central","seating":"indoors"}}'
+    next: build_mock_shortlist
+
+  - id: build_mock_shortlist
+    type: assign
+    parameters:
+      target: dinner_shortlist
+      value: '{"options_shown":false,"venues":[{"name":"Ember & Oak","location":"Keong Saik","requested_time":"19:30","seating":"indoors","note":"nut-free kitchen claim; verify by phone","hold_status":"not_started"},{"name":"Casa Nera","location":"Duxton Hill","requested_time":"19:30","seating":"indoors","note":"Italian menu; verify pine nuts by phone","hold_status":"not_started"},{"name":"Atlas Row","location":"Amoy Street","requested_time":"19:30","seating":"indoors","note":"strong reviews; verify availability by phone","hold_status":"not_started"}]}'
+    next: mark_options_shown
+
+  - id: mark_options_shown
+    type: assign
+    parameters:
+      target: options_gate
+      value: '{"options_shown":true,"external_effect":"not_applied","message":"Three options have been shown. No restaurant has been called or held yet.","available_user_action":"name one venue in plain text","silence_timeout_ms":2000,"production_timeout":"10m"}'
+    next: route_user_choice_before_timeout
+
+  - id: route_user_choice_before_timeout
+    type: switch
+    parameters:
+      on: "${steps.capture_user_choice.output}"
+      branch.ember_oak: mock_hold_selected_ember_oak
+      branch.casa_nera: mock_hold_selected_casa_nera
+      branch.atlas_row: mock_hold_selected_atlas_row
+      branch._default: wait_for_silence_timeout
+    branches:
+      ember_oak: mock_hold_selected_ember_oak
+      casa_nera: mock_hold_selected_casa_nera
+      atlas_row: mock_hold_selected_atlas_row
+      _default: wait_for_silence_timeout
+
+  - id: wait_for_silence_timeout
+    type: delay
+    parameters:
+      duration_ms: "2000"
+    next: mark_silence_timeout
+
+  - id: mark_silence_timeout
+    type: assign
+    parameters:
+      target: user_gate_result
+      value: '{"status":"timeout","production_timeout":"10m","test_timeout_ms":2000,"pending_input_status":"cancelled","next_branch":"hold_all"}'
+    next: mock_hold_ember_oak
+
+  - id: mock_hold_ember_oak
+    type: assign
+    parameters:
+      target: hold_ember_oak
+      value: '{"mocked_service":"restaurant-phone","venue":"Ember & Oak","action":"hold","external_effect":"confirmed","confirmed_time":"19:30","allergy_answer":"no nuts in the kitchen at all"}'
+    next: mock_hold_casa_nera
+
+  - id: mock_hold_casa_nera
+    type: assign
+    parameters:
+      target: hold_casa_nera
+      value: '{"mocked_service":"restaurant-phone","venue":"Casa Nera","action":"hold","external_effect":"confirmed","confirmed_time":"19:30","allergy_answer":"pesto has pine nuts; kitchen can omit on request"}'
+    next: mock_hold_atlas_row
+
+  - id: mock_hold_atlas_row
+    type: assign
+    parameters:
+      target: hold_atlas_row
+      value: '{"mocked_service":"restaurant-phone","venue":"Atlas Row","action":"hold","external_effect":"confirmed","confirmed_time":"20:00","allergy_answer":"pesto is nut-free; evening special is not"}'
+    next: report_mock_holds
+
+  - id: report_mock_holds
+    type: assign
+    parameters:
+      target: hold_summary
+      value: '{"status":"all_three_held","selected_venue":null,"message":"All three mock holds are confirmed. Workflow is waiting for the user to choose one."}'
+    next: mock_user_selects_after_holds
+
+  - id: mock_user_selects_after_holds
+    type: assign
+    parameters:
+      target: user_choice_after_holds
+      value: '{"task_id":"task-uc5b","selected_venue":"Ember & Oak","selection_reason":"pine nut allergy makes the no-nuts kitchen safest","source":"mock_user_text"}'
+    next: mock_release_casa_nera
+
+  - id: mock_release_casa_nera
+    type: assign
+    parameters:
+      target: release_casa_nera
+      value: '{"mocked_service":"restaurant-phone","venue":"Casa Nera","action":"release","external_effect":"confirmed"}'
+    next: mock_release_atlas_row
+
+  - id: mock_release_atlas_row
+    type: assign
+    parameters:
+      target: release_atlas_row
+      value: '{"mocked_service":"restaurant-phone","venue":"Atlas Row","action":"release","external_effect":"confirmed"}'
+    next: final_artifact_after_holds
+
+  - id: mock_hold_selected_ember_oak
+    type: assign
+    parameters:
+      target: selected_only_hold
+      value: '{"mocked_service":"restaurant-phone","venue":"Ember & Oak","action":"hold","external_effect":"confirmed","confirmed_time":"19:30","allergy_answer":"no nuts in the kitchen at all"}'
+    next: final_artifact_selected_only
+
+  - id: mock_hold_selected_casa_nera
+    type: assign
+    parameters:
+      target: selected_only_hold
+      value: '{"mocked_service":"restaurant-phone","venue":"Casa Nera","action":"hold","external_effect":"confirmed","confirmed_time":"19:30","allergy_answer":"pesto has pine nuts; kitchen can omit on request"}'
+    next: final_artifact_selected_only
+
+  - id: mock_hold_selected_atlas_row
+    type: assign
+    parameters:
+      target: selected_only_hold
+      value: '{"mocked_service":"restaurant-phone","venue":"Atlas Row","action":"hold","external_effect":"confirmed","confirmed_time":"20:00","allergy_answer":"pesto is nut-free; evening special is not"}'
+    next: final_artifact_selected_only
+
+  - id: final_artifact_selected_only
+    type: assign
+    parameters:
+      target: dinner_date_artifact
+      value: '{"workflow_status":"completed","path":"user_choice_before_timeout","kept":"${steps.mock_hold_selected_ember_oak.json.venue}${steps.mock_hold_selected_casa_nera.json.venue}${steps.mock_hold_selected_atlas_row.json.venue}","released":[],"required_external_dependencies_mocked":["restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true}}'
+    next: ""
+
+  - id: final_artifact_after_holds
+    type: assign
+    parameters:
+      target: dinner_date_artifact
+      value: '{"workflow_status":"completed","path":"silence_timeout_hold_all_then_choose","kept":"Ember & Oak","released":["Casa Nera","Atlas Row"],"why":"no pine nuts in the Ember & Oak kitchen","required_external_dependencies_mocked":["restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true}}'
