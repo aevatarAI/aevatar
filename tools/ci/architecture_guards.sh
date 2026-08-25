@@ -1472,6 +1472,9 @@ if [ -n "${reducer_test_coverage_violations}" ]; then
   exit 1
 fi
 
+echo "Running deterministic compute handler guard..."
+bash tools/ci/deterministic_compute_handler_guard.sh
+
 stateful_replay_contract_requirements=(
   "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentReplayContractTests.cs"
   "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"

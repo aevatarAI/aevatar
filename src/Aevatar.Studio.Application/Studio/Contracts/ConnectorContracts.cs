@@ -40,7 +40,8 @@ public sealed record ConnectorDefinitionDto(
     int Retry,
     HttpConnectorDefinitionDto Http,
     CliConnectorDefinitionDto Cli,
-    McpConnectorDefinitionDto Mcp);
+    McpConnectorDefinitionDto Mcp,
+    HostCallbackConnectorDefinitionDto? HostCallback);
 
 public sealed record HttpConnectorDefinitionDto(
     string BaseUrl,
@@ -68,6 +69,11 @@ public sealed record McpConnectorDefinitionDto(
     ConnectorAuthDefinitionDto Auth,
     string DefaultTool,
     IReadOnlyList<string> AllowedTools,
+    IReadOnlyList<string> AllowedInputKeys);
+
+public sealed record HostCallbackConnectorDefinitionDto(
+    string Handler,
+    IReadOnlyList<string> AllowedOperations,
     IReadOnlyList<string> AllowedInputKeys);
 
 public sealed record ConnectorAuthDefinitionDto(

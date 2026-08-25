@@ -3,6 +3,7 @@ using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Capabilities;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
@@ -36,6 +37,8 @@ public class BootstrapServiceCollectionExtensionsTests
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(CliConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HostCallbackConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(TelegramUserConnectorBuilder));
+        provider.GetServices<IHostCallbackConnectorHandler>()
+            .Should().ContainSingle(static handler => handler is SHA256DeterministicComputeHandler);
     }
 
     [Fact]
@@ -108,6 +111,8 @@ public class BootstrapServiceCollectionExtensionsTests
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(CliConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(HostCallbackConnectorBuilder));
         connectorBuilders.Should().ContainSingle(x => x.GetType() == typeof(TelegramUserConnectorBuilder));
+        provider.GetServices<IHostCallbackConnectorHandler>()
+            .Should().ContainSingle(static handler => handler is SHA256DeterministicComputeHandler);
     }
 
     [Fact]

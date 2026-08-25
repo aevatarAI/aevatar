@@ -1,5 +1,6 @@
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Configuration;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,6 +30,9 @@ public static class ServiceCollectionExtensions
 
     private static void RegisterConnectorBuilders(IServiceCollection services)
     {
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IHostCallbackConnectorHandler,
+            SHA256DeterministicComputeHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HttpConnectorBuilder>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, CliConnectorBuilder>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IConnectorBuilder, HostCallbackConnectorBuilder>());
