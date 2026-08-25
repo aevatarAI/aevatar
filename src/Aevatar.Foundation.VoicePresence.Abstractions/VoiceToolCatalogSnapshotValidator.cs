@@ -8,6 +8,7 @@ namespace Aevatar.Foundation.VoicePresence.Abstractions;
 /// </summary>
 public static class VoiceToolCatalogSnapshotValidator
 {
+    // Persisted optimization target only. It is not a catalog validity ceiling.
     public const int MaximumToolCount = 6;
     public const int MaximumSchemaBytes = 32 * 1024;
 
@@ -23,12 +24,12 @@ public static class VoiceToolCatalogSnapshotValidator
             throw Invalid("Voice tool catalog budget does not match the reviewed voice policy.");
         }
 
-        if (proof.ToolCount < 0 || proof.ToolCount > MaximumToolCount ||
+        if (proof.ToolCount < 0 ||
             proof.SchemaBytes < 0 || proof.SchemaBytes > MaximumSchemaBytes ||
             proof.ToolCount != snapshot.Tools.Count ||
             proof.ToolCount != proof.ToolDescriptors.Count)
         {
-            throw Invalid("Voice tool catalog proof counts are inconsistent or over budget.");
+            throw Invalid("Voice tool catalog proof counts are inconsistent or its schema is over budget.");
         }
 
         if (string.IsNullOrWhiteSpace(proof.CatalogDigest))

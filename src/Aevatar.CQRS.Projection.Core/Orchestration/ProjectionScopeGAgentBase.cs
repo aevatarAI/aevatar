@@ -46,7 +46,15 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             () => State.FailureDiagnosticDroppedTotal);
 
         if (!State.Active || State.Released)
+        {
+            // A crash between the release commit and the relay removal in ReleaseScopeAsync
+            // leaves an exact-shape relay binding behind; the publication fast path accepts it
+            // and this scope then silently drops forwarded facts on every publication. Removing
+            // the relay on any reactivation converges the topology and forces the next
+            // publication through the cold activation path (a new generation).
+            await RemoveObservationRelayAsync(State.RootActorId, ct);
             return;
+        }
 
         // The status route decision and the legacy cleanup happen before this scope's own
         // observation relay (the activation evidence every activation service reads) is
@@ -382,6 +390,10 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverGoldenVerified)
             .On<ProjectionMaterializationCutoverActivatedEvent>(
                 ProjectionScopeStateApplier.ApplyMaterializationCutoverActivated)
+            .On<ProjectionMaterializationCutoverAbortedEvent>(
+                ProjectionScopeStateApplier.ApplyMaterializationCutoverAborted)
+            .On<ProjectionMaterializationRouteRolledBackEvent>(
+                ProjectionScopeStateApplier.ApplyMaterializationRouteRolledBack)
             .On<ProjectionScopeStatusRoutePreparationStartedEvent>(
                 ProjectionScopeStateApplier.ApplyStatusRoutePreparationStarted)
             .On<ProjectionScopeStatusActorSealRecordedEvent>(
@@ -441,6 +453,9 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
         var durableSource = EnablesDurableObservationRecovery
             ? BuildRequiredSourceCoordinate(sourceActorId, observedMetadata)
             : null;
+        if (durableSource != null && origin != ProjectionObservationDispatchOrigin.InFlightRecovery)
+            await RecoverBlockingInFlightObservationAsync(durableSource, ct);
+
         if (origin == ProjectionObservationDispatchOrigin.Observed)
         {
             await PersistDomainEventAsync(new ProjectionScopeEnvelopeReceivedEvent
@@ -530,6 +545,29 @@ public abstract partial class ProjectionScopeGAgentBase<TContext>
             result.EventType,
             Stopwatch.GetElapsedTime(startedAt));
         return result;
+    }
+
+    private async Task RecoverBlockingInFlightObservationAsync(
+        ProjectionSourceCoordinate received,
+        CancellationToken ct)
+    {
+        var pending = State.InFlightObservation;
+        if (pending?.Source == null ||
+            pending.Envelope == null ||
+            HasSameSource(pending.Source, received) ||
+            CanMaintenanceSupersede(pending.Source, received))
+        {
+            return;
+        }
+
+        // Transport retries do not guarantee that the staged source is redelivered before
+        // newer observations. Finish the actor-owned durable observation in this turn so the
+        // current envelope can be admitted only after its predecessor advances the watermark.
+        await DispatchObservationAsync(
+            pending.Envelope,
+            ct,
+            ProjectionObservationDispatchOrigin.InFlightRecovery);
+        await ScheduleFailureRecoveryAsync(ct);
     }
 
     private DurableSourceAdmission AdmitDurableSource(ProjectionSourceCoordinate received)

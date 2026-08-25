@@ -12,6 +12,27 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class ProjectionGraphWriterTests
 {
     [Fact]
+    public async Task UpsertAsync_WhenGraphProviderIsDisabled_ShouldSkipMaterializationAndStoreWrite()
+    {
+        var store = new RecordingGraphStore();
+        var materializer = new CountingGraphMaterializer();
+        var writer = new ProjectionGraphWriter<TestGraphReadModel>(
+            store,
+            materializer,
+            providerStatus: new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+
+        await writer.UpsertAsync(new TestGraphReadModel
+        {
+            Id = "owner-disabled",
+            StateVersion = 1,
+            GraphScope = "scope-disabled",
+        }, "test-graph");
+
+        materializer.InvocationCount.Should().Be(0);
+        store.LastReplacement.Should().BeNull();
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldReplaceOwnerGraphAndRemoveDisconnectedStaleEdges()
     {
         var store = new InMemoryProjectionGraphStore();

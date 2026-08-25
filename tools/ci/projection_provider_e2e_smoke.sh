@@ -14,6 +14,7 @@ NEO4J_URI="bolt://${NEO4J_HOST}:${NEO4J_PORT}"
 NEO4J_USERNAME="neo4j"
 NEO4J_PASSWORD="password"
 RESULTS_DIR=""
+BENCHMARK_REPORT_FILE="${REPO_ROOT}/artifacts/ci/workflow-report-artifact-write-cost.txt"
 export NEO4J_PASSWORD
 
 cleanup() {
@@ -121,6 +122,8 @@ export AEVATAR_TEST_ELASTICSEARCH_ENDPOINT="${ELASTICSEARCH_ENDPOINT}"
 export AEVATAR_TEST_NEO4J_URI="${NEO4J_URI}"
 export AEVATAR_TEST_NEO4J_USERNAME="${NEO4J_USERNAME}"
 export AEVATAR_TEST_NEO4J_PASSWORD="${NEO4J_PASSWORD}"
+export AEVATAR_TEST_WORKFLOW_REPORT_BENCHMARK_PATH="${BENCHMARK_REPORT_FILE}"
+rm -f "${BENCHMARK_REPORT_FILE}"
 
 run_provider_integration_tests_on_host \
   "test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj" \
@@ -166,5 +169,13 @@ validate_trx() {
 validate_trx "${RESULTS_FILE_CORE}" "Projection provider core e2e"
 validate_trx "${RESULTS_FILE_SCRIPTING}" "Projection provider scripting e2e"
 validate_trx "${RESULTS_FILE_WORKFLOW}" "Projection provider workflow read-model e2e"
+
+if [ ! -s "${BENCHMARK_REPORT_FILE}" ]; then
+  echo "Workflow report-artifact benchmark output is missing: ${BENCHMARK_REPORT_FILE}"
+  exit 1
+fi
+
+echo "Workflow report-artifact benchmark output:"
+cat "${BENCHMARK_REPORT_FILE}"
 
 echo "Projection provider e2e smoke test passed."

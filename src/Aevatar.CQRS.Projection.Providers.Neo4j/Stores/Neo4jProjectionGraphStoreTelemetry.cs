@@ -173,7 +173,9 @@ internal static class Neo4jProjectionGraphStoreTelemetry
         try
         {
             var result = await write();
-            RecordTerminal(logger, context, startedAtTimestamp, resolveResult(result), null);
+            // The write succeeded; a throwing result resolver is a telemetry concern and
+            // must never turn this committed write into an observed (or propagated) failure.
+            RecordTerminal(logger, context, startedAtTimestamp, ResolveResultSafe(resolveResult, result), null);
             return result;
         }
         catch (OperationCanceledException ex) when (callerCancellationToken.IsCancellationRequested)
@@ -272,6 +274,19 @@ internal static class Neo4jProjectionGraphStoreTelemetry
         }
 
         logger.LogError(message, arguments);
+    }
+
+    private static string ResolveResultSafe<TResult>(Func<TResult, string> resolveResult, TResult result)
+    {
+        try
+        {
+            return resolveResult(result);
+        }
+        catch (Exception ex)
+        {
+            TraceObservationFailure(ex);
+            return CompletedResult;
+        }
     }
 
     private static void SafeObserve(Action observation)

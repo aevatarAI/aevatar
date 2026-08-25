@@ -127,6 +127,46 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
         }
     }
 
+    [Neo4jIntegrationFact]
+    public async Task EnsureSchema_WhenEdgeIdIndexNameHasWrongSchema_ShouldFailClosed()
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var nodeLabel = $"ProjectionGraphNodeEdgeIdConflict{suffix}";
+        var edgeType = $"PROJECTION_REL_EDGEID_CONFLICT_{suffix}";
+        var preferredEdgeIdIndexName = PreferredRelationshipEdgeIdIndexName(edgeType);
+        var constraintName = ConstraintName(nodeLabel);
+        var options = CreateOptions(nodeLabel, edgeType);
+        await using var driver = CreateDriver(options);
+        var store = new Neo4jProjectionGraphStore(options);
+
+        try
+        {
+            // Squat the preferred edge-id index name with a non-equivalent schema; the store
+            // must fail closed instead of awaiting the squatter and serving scans.
+            await ExecuteAsync(
+                driver,
+                options.Database,
+                $"CREATE RANGE INDEX {preferredEdgeIdIndexName} FOR ()-[r:{edgeType}]-() ON (r.scope)");
+            await AwaitIndexAsync(driver, options.Database, preferredEdgeIdIndexName);
+
+            Func<Task> act = () => store.ListNodesByOwnerAsync("edgeid-scope", "edgeid-owner");
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage($"*{preferredEdgeIdIndexName}*occupied by a non-equivalent schema*");
+        }
+        finally
+        {
+            await store.DisposeAsync();
+            await CleanupSchemaAsync(
+                driver,
+                options.Database,
+                nodeLabel,
+                edgeType,
+                constraintName,
+                preferredEdgeIdIndexName);
+        }
+    }
+
     private static Neo4jProjectionGraphStoreOptions CreateOptions(string nodeLabel, string edgeType)
     {
         return new Neo4jProjectionGraphStoreOptions
@@ -237,6 +277,9 @@ public sealed class Neo4jSchemaInitializationIntegrationTests
 
     private static string PreferredRelationshipIndexName(string edgeType) =>
         $"projection_graph_relationship_scope_owner_id_{edgeType}".ToLowerInvariant();
+
+    private static string PreferredRelationshipEdgeIdIndexName(string edgeType) =>
+        $"projection_graph_relationship_scope_edge_id_{edgeType}".ToLowerInvariant();
 
     private static string ConstraintName(string nodeLabel) =>
         $"projection_graph_node_scope_id_{nodeLabel}".ToLowerInvariant();

@@ -191,6 +191,15 @@ internal static class WorkflowExecutionValueStore
                 "Workflow value release requires exact step and execution identity.");
         }
 
+        // Release is atomic for the whole lifecycle declaration. Keep every released
+        // canonical tombstone so an older (step, execution) redelivery remains idempotent
+        // even after later iterations have re-bound and released the same variable names.
+        if (normalized.CanonicalValues.Values.Any(value =>
+                value.Released != null && IsSameRelease(value.Released, stepId, executionId)))
+        {
+            return;
+        }
+
         var plans = new List<ValueReleasePlan>();
         foreach (var rawName in lifecycle.ReleaseVariablesAfterSuccess)
         {
@@ -202,7 +211,17 @@ internal static class WorkflowExecutionValueStore
             {
                 if (IsSameRelease(priorRelease, stepId, executionId))
                     continue;
-                throw WorkflowValueLifecycleException.ReleasedValueAccessed(name);
+
+                // Per-iteration release: a later execution re-bound the name to a new
+                // canonical value after the prior release. The tombstone covers only its
+                // own value id, so a live binding to a different value is a fresh release
+                // target under the same name; anything else is a stale release attempt.
+                if (!normalized.Bindings.TryGetValue(name, out var rebound) ||
+                    string.IsNullOrWhiteSpace(rebound.ValueId) ||
+                    string.Equals(rebound.ValueId, priorRelease.ValueId, StringComparison.Ordinal))
+                {
+                    throw WorkflowValueLifecycleException.ReleasedValueAccessed(name);
+                }
             }
 
             if (!normalized.Bindings.TryGetValue(name, out var binding) ||
@@ -235,6 +254,7 @@ internal static class WorkflowExecutionValueStore
                 Digest = CreateDigest(first.Canonical.Value ?? string.Empty),
                 ReleasedAfterStepId = stepId,
                 ReleasedAfterExecutionId = executionId,
+                ValueId = first.ValueId,
             };
             first.Canonical.Value = string.Empty;
             first.Canonical.Released = tombstone.Clone();
@@ -2030,8 +2050,16 @@ internal static class WorkflowExecutionValueStore
         public bool TryGetValue(string key, out string value)
         {
             var normalized = _state.NormalizedValues!;
-            if (normalized.ReleasedBindings.ContainsKey(key))
+            // A tombstone covers only its own value id: a name re-bound to a new canonical
+            // value after the release (per-iteration release) serves the live binding.
+            if (normalized.ReleasedBindings.TryGetValue(key, out var tombstone) &&
+                (!normalized.Bindings.TryGetValue(key, out var liveBinding) ||
+                 string.IsNullOrWhiteSpace(liveBinding.ValueId) ||
+                 string.Equals(liveBinding.ValueId, tombstone.ValueId, StringComparison.Ordinal)))
+            {
                 throw WorkflowValueLifecycleException.ReleasedValueAccessed(key);
+            }
+
             if (normalized.Bindings.TryGetValue(key, out var binding))
             {
                 if (!normalized.CanonicalValues.TryGetValue(binding.ValueId, out var canonical))

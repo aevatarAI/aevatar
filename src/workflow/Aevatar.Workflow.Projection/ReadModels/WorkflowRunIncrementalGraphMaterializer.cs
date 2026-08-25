@@ -14,12 +14,17 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
 
     private readonly IProjectionGraphOwnerIdentityResolver _ownerIdentityResolver;
     private readonly WorkflowRunGraphArtifactMaterializer _fullMaterializer = new();
+    private readonly int _maximumCandidateMutationCount;
 
     public WorkflowRunIncrementalGraphMaterializer(
-        IProjectionGraphOwnerIdentityResolver ownerIdentityResolver)
+        IProjectionGraphOwnerIdentityResolver ownerIdentityResolver,
+        int maximumCandidateMutationCount = MaximumCandidateMutationCount)
     {
         _ownerIdentityResolver = ownerIdentityResolver ??
                                  throw new ArgumentNullException(nameof(ownerIdentityResolver));
+        if (maximumCandidateMutationCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumCandidateMutationCount));
+        _maximumCandidateMutationCount = maximumCandidateMutationCount;
     }
 
     public ProjectionGraphRouteFingerprint ResolveStoreRoute(
@@ -405,15 +410,11 @@ public sealed class WorkflowRunIncrementalGraphMaterializer
         return string.Empty;
     }
 
-    private static void EnsureCandidateIsBounded(ProjectionGraphDelta delta)
+    private void EnsureCandidateIsBounded(ProjectionGraphDelta delta)
     {
         var mutationCount = ProjectionGraphDeltaContract.CountMutations(delta);
-        if (mutationCount > MaximumCandidateMutationCount)
-        {
-            throw new InvalidOperationException(
-                $"Workflow graph candidate requires {mutationCount} mutations; " +
-                $"the bounded cutover limit is {MaximumCandidateMutationCount}.");
-        }
+        if (mutationCount > _maximumCandidateMutationCount)
+            throw new ProjectionGraphCandidateOverBoundException(mutationCount, _maximumCandidateMutationCount);
     }
 
     private static ProjectionGraphNodeMutation ToMutation(ProjectionGraphNode node)

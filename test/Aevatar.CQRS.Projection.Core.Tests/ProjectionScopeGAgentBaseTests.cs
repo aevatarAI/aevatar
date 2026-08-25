@@ -240,6 +240,55 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleObservedEnvelopeAsync_WhenNewerSourceFollowsWatermarkFailure_ShouldRecoverInFlightFirst()
+    {
+        var processedVersions = new List<long>();
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-newer-source-recovery",
+            onProcess: envelope =>
+            {
+                CommittedStateEventEnvelope.TryUnpack(envelope, out var published).Should().BeTrue();
+                var version = published!.StateEvent.Version;
+                processedVersions.Add(version);
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: new TrackingEventSourcing(
+                failOnEventType: typeof(ProjectionScopeWatermarkAdvancedEvent)),
+            enableDurableObservationRecovery: true);
+        await InitializeFailureTrackerAsync(agent);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservationEnvelope(
+                "projection-scope-newer-source-recovery",
+                version: 8,
+                eventId: "evt-8")));
+
+        agent.State.InFlightObservation!.Source.Should().BeEquivalentTo(
+            new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = 8,
+                EventId = "evt-8",
+            });
+
+        await agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-newer-source-recovery",
+            version: 9,
+            eventId: "evt-9"));
+
+        processedVersions.Should().Equal(8, 8, 9);
+        agent.State.InFlightObservation.Should().BeNull();
+        agent.State.SuccessfulMaterializationTotal.Should().Be(2);
+        agent.State.LastSuccessfulSourceCoordinatesByActor["publisher-actor"]
+            .Should().BeEquivalentTo(new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = 9,
+                EventId = "evt-9",
+            });
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_WhenSameVersionHasDifferentEventId_ShouldFailClosed()
     {
         var processed = 0;
@@ -270,17 +319,21 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
-    public async Task HandleObservedEnvelopeAsync_WhenDifferentSourceIsInFlight_ShouldFailClosed()
+    public async Task HandleObservedEnvelopeAsync_WhenDifferentSourceIsInFlight_ShouldRecoverItBeforeNewSource()
     {
-        var processed = 0;
+        var processedVersions = new List<long>();
         var agent = BuildActivatedAgent(
             scopeId: "projection-scope-pending-source",
-            onProcess: _ =>
+            onProcess: envelope =>
             {
-                processed++;
-                return ProjectionScopeDispatchResult.Success(2, "event-type");
+                CommittedStateEventEnvelope.TryUnpack(envelope, out var published).Should().BeTrue();
+                var version = published!.StateEvent.Version;
+                processedVersions.Add(version);
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
             },
+            eventSourcing: new TrackingEventSourcing(),
             enableDurableObservationRecovery: true);
+        await InitializeFailureTrackerAsync(agent);
         agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
         {
             Source = new ProjectionSourceCoordinate
@@ -295,9 +348,47 @@ public sealed class ProjectionScopeGAgentBaseTests
                 eventId: "evt-1"),
         };
 
+        await agent.HandleObservedEnvelopeAsync(BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-pending-source",
+            version: 2,
+            eventId: "evt-2"));
+
+        processedVersions.Should().Equal(1, 2);
+        agent.State.InFlightObservation.Should().BeNull();
+        agent.State.LastSuccessfulSourceCoordinatesByActor["publisher-actor"]
+            .Should().BeEquivalentTo(new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = 2,
+                EventId = "evt-2",
+            });
+    }
+
+    [Fact]
+    public async Task HandleObservedEnvelopeAsync_WhenInFlightEnvelopeIsMissing_ShouldFailClosed()
+    {
+        var processed = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-missing-in-flight-envelope",
+            onProcess: _ =>
+            {
+                processed++;
+                return ProjectionScopeDispatchResult.Success(2, "event-type");
+            },
+            enableDurableObservationRecovery: true);
+        agent.State.InFlightObservation = new ProjectionScopeInFlightObservation
+        {
+            Source = new ProjectionSourceCoordinate
+            {
+                ActorId = "publisher-actor",
+                StateVersion = 1,
+                EventId = "evt-1",
+            },
+        };
+
         Func<Task> act = () => agent.HandleObservedEnvelopeAsync(
             BuildForwardedCommittedObservationEnvelope(
-                "projection-scope-pending-source",
+                "projection-scope-missing-in-flight-envelope",
                 version: 2,
                 eventId: "evt-2"));
 
@@ -772,6 +863,7 @@ public sealed class ProjectionScopeGAgentBaseTests
         var services = new ServiceCollection();
         services.AddSingleton<Func<ProjectionRuntimeScopeKey, TestContext>>(
             static _ => new TestContext("root-actor", "test-kind"));
+        services.AddSingleton<IStreamProvider>(new NoOpStreamProvider());
         agent.Services = services.BuildServiceProvider();
 
         return agent;
@@ -828,6 +920,32 @@ public sealed class ProjectionScopeGAgentBaseTests
             sourceStreamId: "publisher-actor",
             targetStreamId: targetStreamId,
             StreamForwardingMode.HandleThenForward);
+    }
+
+    private sealed class NoOpStreamProvider : IStreamProvider
+    {
+        public IStream GetStream(string actorId) => new NoOpStream(actorId);
+
+        private sealed class NoOpStream(string streamId) : IStream
+        {
+            public string StreamId { get; } = streamId;
+
+            public Task ProduceAsync<T>(T message, CancellationToken ct = default) where T : IMessage =>
+                throw new NotSupportedException();
+
+            public Task<IAsyncDisposable> SubscribeAsync<T>(Func<T, Task> handler, CancellationToken ct = default)
+                where T : IMessage, new() =>
+                throw new NotSupportedException();
+
+            public Task UpsertRelayAsync(StreamForwardingBinding binding, CancellationToken ct = default) =>
+                Task.CompletedTask;
+
+            public Task RemoveRelayAsync(string targetStreamId, CancellationToken ct = default) =>
+                Task.CompletedTask;
+
+            public Task<IReadOnlyList<StreamForwardingBinding>> ListRelaysAsync(CancellationToken ct = default) =>
+                Task.FromResult<IReadOnlyList<StreamForwardingBinding>>([]);
+        }
     }
 
     private sealed class TestScopeAgent : ProjectionScopeGAgentBase<TestContext>
@@ -906,6 +1024,7 @@ public sealed class ProjectionScopeGAgentBaseTests
     {
         private readonly List<IMessage> _pending = [];
         private readonly System.Type? _failOnEventType;
+        private int _remainingInjectedFailures;
 
         public TrackingEventSourcing(
             long initialVersion = 0,
@@ -913,6 +1032,7 @@ public sealed class ProjectionScopeGAgentBaseTests
         {
             CurrentVersion = initialVersion;
             _failOnEventType = failOnEventType;
+            _remainingInjectedFailures = failOnEventType == null ? 0 : 1;
         }
 
         public int DiscardCallCount { get; private set; }
@@ -920,8 +1040,11 @@ public sealed class ProjectionScopeGAgentBaseTests
         public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage => _pending.Add(evt);
         public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
         {
-            if (_failOnEventType != null && _pending.Any(evt => evt.GetType() == _failOnEventType))
+            if (_remainingInjectedFailures > 0 &&
+                _failOnEventType != null &&
+                _pending.Any(evt => evt.GetType() == _failOnEventType))
             {
+                _remainingInjectedFailures--;
                 _pending.Clear();
                 throw new InvalidOperationException("Injected failure before scope watermark commit.");
             }

@@ -86,13 +86,28 @@ public sealed class AgentTurnToolCatalogTests
     }
 
     [Fact]
-    public void Catalog_ShouldRejectToolCountOverBudgetWithoutTruncating()
+    public void WorkflowCatalog_ShouldAcceptToolCountAboveOptimizationTargetWithoutTruncating()
     {
-        var tools = Enumerable.Range(0, 9)
+        var tools = Enumerable.Range(0, 17)
             .Select(index => (IAgentTool)new TestTool($"tool-{index}", "Tool", "{}"))
             .ToArray();
 
-        var act = () => NewCatalog(tools, AgentTurnToolCatalogBudget.Ordinary);
+        var catalog = NewCatalog(tools, AgentTurnToolCatalogBudget.WorkflowOrAdmin);
+
+        catalog.ExactTools.Should().HaveCount(17);
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo(tools.Select(static tool => tool.Name));
+        catalog.Proof.ToolCount.Should().Be(17);
+        catalog.Proof.ToolDescriptors.Should().HaveCount(17);
+        catalog.Proof.Budget.MaximumToolCount.Should().Be(16);
+    }
+
+    [Fact]
+    public void Catalog_ShouldStillRejectSchemaBytesOverSafetyBudget()
+    {
+        var oversizedSchema = $"{{\"description\":\"{new string('x', AgentTurnToolCatalogBudget.Ordinary.MaximumSchemaBytes)}\"}}";
+        var act = () => NewCatalog(
+            [new TestTool("oversized", "Oversized", oversizedSchema)],
+            AgentTurnToolCatalogBudget.Ordinary);
 
         act.Should().Throw<AgentTurnToolCatalogException>()
             .Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.CatalogOverBudget);
@@ -221,13 +236,27 @@ public sealed class AgentTurnToolCatalogTests
     }
 
     [Fact]
-    public void PersistedProof_ShouldRejectTamperedOverBudgetSummaryBeforeRematerialization()
+    public void PersistedProof_ShouldRestoreToolCountAboveOptimizationTarget()
+    {
+        var catalog = NewCatalog(
+            [new TestTool("lookup", "Lookup", "{}")],
+            new AgentTurnToolCatalogBudget(0, AgentTurnToolCatalogBudget.Ordinary.MaximumSchemaBytes));
+
+        var restored = AgentTurnToolCatalogProofPayloadMapper.FromPayload(catalog.Proof.ToPayload());
+
+        restored.ToolCount.Should().Be(1);
+        restored.Budget.MaximumToolCount.Should().Be(0);
+        restored.CatalogDigest.Should().Be(catalog.Proof.CatalogDigest);
+    }
+
+    [Fact]
+    public void PersistedProof_ShouldRejectTamperedSchemaBudgetBeforeRematerialization()
     {
         var catalog = NewCatalog(
             [new TestTool("lookup", "Lookup", "{}")],
             AgentTurnToolCatalogBudget.Ordinary);
         var payload = catalog.Proof.ToPayload();
-        payload.Budget.MaximumToolCount = 0;
+        payload.Budget.MaximumSchemaBytes = 0;
 
         var act = () => AgentTurnToolCatalogProofPayloadMapper.FromPayload(payload);
 

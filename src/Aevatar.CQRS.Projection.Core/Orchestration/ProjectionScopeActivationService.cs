@@ -68,7 +68,24 @@ public sealed class ProjectionScopeActivationService<TLease, TContext, TScopeAge
             request.SessionId);
 
         var targetActorId = ProjectionScopeActorId.Build(scopeKey);
-        var initialBinding = await ReadActivationEvidenceAsync(scopeKey, targetActorId, ct).ConfigureAwait(false);
+        StreamForwardingBinding? initialBinding;
+        try
+        {
+            initialBinding = await ReadActivationEvidenceAsync(scopeKey, targetActorId, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            ProjectionActivationMetrics.RecordResult("warm", scopeKey.Mode, "cancelled");
+            throw;
+        }
+        catch
+        {
+            // The warm attempt failed before any cold-path work started; record it so
+            // warm/cold outcome dashboards do not undercount warm failures.
+            ProjectionActivationMetrics.RecordResult("warm", scopeKey.Mode, "failure");
+            throw;
+        }
+
         if (ProjectionScopeObservationRelayBinding.IsExactActivationEvidence(
                 initialBinding,
                 scopeKey.RootActorId,

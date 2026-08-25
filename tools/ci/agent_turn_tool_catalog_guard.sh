@@ -133,11 +133,11 @@ require_pattern \
   "the case-insensitive exact-object collision proof test is missing."
 
 require_pattern 'new\(8, 48 \* 1024\)' "${catalog_contract}" \
-  "ordinary text catalog budget must remain 8 tools / 48 KiB."
+  "ordinary text catalog optimization target / schema budget must remain 8 tools / 48 KiB."
 require_pattern \
   'new\(8, 48 \* 1024, MaximumConnectedReadToolCount: 3, MaximumConnectedWriteToolCount: 1\)' \
   "${catalog_contract}" \
-  "connected operations must remain inside 8 tools / 48 KiB with 3 reads and 1 write."
+  "connected operations must retain the 8-tool target / 48 KiB schema limit with 3 reads and 1 write."
 require_pattern 'MaximumCandidates = 64' "${connected_selector}" \
   "the connected-operation selector presentation index must remain bounded."
 require_pattern 'Tools = null' "${connected_selector}" \
@@ -169,21 +169,21 @@ require_pattern 'AuthorityFilteredExistingOperation_ShouldNotRequestConnectionAg
 require_pattern 'SelectAsync_InvalidOutput_ShouldFailClosed' "${connected_selector_tests}" \
   "the connected-operation selector malformed-output proof test is missing."
 require_pattern 'new\(6, 32 \* 1024\)' "${catalog_contract}" \
-  "voice catalog budget must remain 6 tools / 32 KiB."
+  "voice catalog optimization target / schema budget must remain 6 tools / 32 KiB."
 require_pattern 'new\(16, 128 \* 1024\)' "${catalog_contract}" \
-  "workflow/admin catalog budget must remain 16 tools / 128 KiB."
+  "workflow/admin catalog optimization target / schema budget must remain 16 tools / 128 KiB."
 require_pattern 'new\(6, 64 \* 1024\)' "${catalog_contract}" \
-  "coding catalog budget must remain 6 tools / 64 KiB."
+  "coding catalog optimization target / schema budget must remain 6 tools / 64 KiB."
 require_pattern 'MaximumWorkflowToolCount = 16' "${workflow_policy}" \
-  "workflow publication budget must remain pinned to 16 tools."
+  "workflow proof must retain its reviewed 16-tool optimization target."
 require_pattern 'MaximumWorkflowSchemaBytes = 128 \* 1024' "${workflow_policy}" \
   "workflow publication schema budget must remain pinned to 128 KiB."
 require_pattern 'MaximumToolCount = 6' "${voice_policy}" \
-  "voice persisted proof validation must remain pinned to 6 tools."
+  "voice persisted proof must retain its reviewed 6-tool optimization target."
 require_pattern 'MaximumSchemaBytes = 32 \* 1024' "${voice_policy}" \
   "voice persisted proof validation must remain pinned to 32 KiB."
-require_pattern 'Catalog_ShouldRejectToolCountOverBudgetWithoutTruncating' "${catalog_tests}" \
-  "over-budget catalogs must have a no-truncation proof test."
+require_pattern 'WorkflowCatalog_ShouldAcceptToolCountAboveOptimizationTargetWithoutTruncating' "${catalog_tests}" \
+  "catalog tool-count targets must have an acceptance-without-truncation proof test."
 
 require_pattern 'CatalogDigest_ShouldBeStableAcrossOneHundredInputPermutations' "${catalog_tests}" \
   "the 100-permutation canonical digest proof test is missing."

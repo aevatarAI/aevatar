@@ -257,6 +257,31 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
     }
 
     [Fact]
+    public async Task ArtifactQueryPort_WhenGraphProviderDisabled_ShouldExposeDisabledGraphWithoutTouchingStores()
+    {
+        var reportReader = new RecordingDocumentReader<WorkflowRunInsightReportDocument>();
+        var graphStore = new RecordingProjectionGraphStore();
+        var port = new WorkflowExecutionArtifactQueryPort(
+            reportReader,
+            new WorkflowExecutionReadModelMapper(),
+            new WorkflowExecutionProjectionOptions
+            {
+                Enabled = true,
+                WorkflowArtifactQueryEnabled = true,
+            },
+            legacyGraphStore: graphStore,
+            graphProviderStatus: new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+
+        port.WorkflowArtifactQueryEnabled.Should().BeTrue();
+        port.WorkflowGraphExportEnabled.Should().BeFalse();
+        (await port.GetWorkflowRunGraphExportEdgesAsync("actor-1")).Should().BeEmpty();
+        (await port.GetWorkflowRunGraphExportSubgraphAsync("actor-1")).RootNodeId.Should().Be("actor-1");
+        reportReader.GetCalls.Should().Be(0);
+        graphStore.GetNeighborsCalls.Should().Be(0);
+        graphStore.GetSubgraphCalls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ArtifactQueryPort_WhenActorIdIsBlank_ShouldShortCircuitGraphQueries()
     {
         var harness = CreateHarness(new WorkflowExecutionProjectionOptions
@@ -392,6 +417,17 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 {
                     Id = "actor-1",
                     RootActorId = "actor-1",
+                    RequestEvidenceById =
+                    {
+                        ["evidence-2"] = new WorkflowStepRequestEvidence
+                        {
+                            EvidenceId = "evidence-2",
+                            StepId = "step-2",
+                            ExecutionId = "execution-2",
+                            SourceEventId = "event-2",
+                            ParametersMap = { ["k2"] = "v2" },
+                        },
+                    },
                     Timeline =
                     {
                         new WorkflowExecutionTimelineEvent
@@ -407,8 +443,14 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                             Timestamp = DateTimeOffset.Parse("2026-03-17T08:03:00+00:00"),
                             Stage = "newer",
                             Message = "msg-2",
+                            StepId = "step-2",
                             EventType = "type-2",
-                            Data = { ["k2"] = "v2" },
+                            RequestEvidenceReference = new WorkflowStepRequestEvidenceReference
+                            {
+                                EvidenceId = "evidence-2",
+                                ExecutionId = "execution-2",
+                                SourceEventId = "event-2",
+                            },
                         },
                         new WorkflowExecutionTimelineEvent
                         {

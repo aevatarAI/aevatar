@@ -192,7 +192,7 @@ Skill 能力按 profile/intent 分层：
 
 chat-route policy 指定 profile、`tool_set_ref` 或 `tool_choice_hint` 时，三条直连入口都会使用同一个 plan；tool set 只是 ceiling，最终只能注入 frozen profile/intent catalog 中的 exact tools。不要为 `/v1/messages` 或 `/v1/chat/completions` 另建工具白名单。
 
-直连工具的失败语义按边界分层处理。客户端声明但不属于 frozen Aevatar-owned catalog 的 forwarded tools 仍由客户端执行，不进入 `IAgentToolExecutionPort`。属于 catalog 的名称会写入 `owned_tool_names` 并成为 deny-forward 边界；同名 alias/canonical 重复、source collision、invalid schema、预算超限或执行端 proof mismatch 都 typed fail closed，不调用模型或工具，也不跳过失败 source 后继续。Aevatar 本地 direct tool 在已经通过准入后的业务执行失败会转换成稳定 JSON tool output；`RUNNING Duplicate/Conflict` 不重放，terminal audit failure 保留真实 result 且不可重试。错误 JSON 不透出 token、请求头或内部路径；调用方取消仍取消整次 run。
+直连工具的失败语义按边界分层处理。客户端声明但不属于 frozen Aevatar-owned catalog 的 forwarded tools 仍由客户端执行，不进入 `IAgentToolExecutionPort`。属于 catalog 的名称会写入 `owned_tool_names` 并成为 deny-forward 边界；同名 alias/canonical 重复、source collision、invalid schema、schema/connected-operation 安全预算超限或执行端 proof mismatch 都 typed fail closed，不调用模型或工具，也不跳过失败 source 后继续。Tool count 只作为优化目标，合法 exact catalog 超目标仍完整进入模型。Aevatar 本地 direct tool 在已经通过准入后的业务执行失败会转换成稳定 JSON tool output；`RUNNING Duplicate/Conflict` 不重放，terminal audit failure 保留真实 result 且不可重试。错误 JSON 不透出 token、请求头或内部路径；调用方取消仍取消整次 run。
 
 ## 6. 显式 Skill 触发
 

@@ -129,21 +129,35 @@ public sealed partial class Neo4jProjectionGraphStore
                 ct);
 
             var indexes = await ReadSchemaIndexesAsync(null, ct);
-            var actualNodeOwnerIndexName = ResolveOwnerIndexName(
+            var actualNodeOwnerIndexName = ResolveRequiredIndexName(
                 indexes,
                 nodeOwnerIndexName,
                 "NODE",
-                _nodeLabel);
-            var actualRelationshipOwnerIndexName = ResolveOwnerIndexName(
+                _nodeLabel,
+                ["scope", "projectionOwnerId"]);
+            var actualRelationshipOwnerIndexName = ResolveRequiredIndexName(
                 indexes,
                 relationshipOwnerIndexName,
                 "RELATIONSHIP",
-                _edgeType);
+                _edgeType,
+                ["scope", "projectionOwnerId"]);
+            var actualRelationshipEdgeIdIndexName = ResolveRequiredIndexName(
+                indexes,
+                relationshipEdgeIdIndexName,
+                "RELATIONSHIP",
+                _edgeType,
+                ["scope", "edgeId"]);
+            var actualEdgeIdentityOwnerIndexName = ResolveRequiredIndexName(
+                indexes,
+                edgeIdentityOwnerIndexName,
+                "NODE",
+                _versionedEdgeIdentityLabel,
+                ["physicalNamespace", "projectionOwnerId"]);
 
             await AwaitIndexAsync(actualNodeOwnerIndexName, ct);
             await AwaitIndexAsync(actualRelationshipOwnerIndexName, ct);
-            await AwaitIndexAsync(relationshipEdgeIdIndexName, ct);
-            await AwaitIndexAsync(edgeIdentityOwnerIndexName, ct);
+            await AwaitIndexAsync(actualRelationshipEdgeIdIndexName, ct);
+            await AwaitIndexAsync(actualEdgeIdentityOwnerIndexName, ct);
             _schemaInitialized = true;
         }
         finally
@@ -230,26 +244,27 @@ public sealed partial class Neo4jProjectionGraphStore
             .ToArray();
     }
 
-    private static string ResolveOwnerIndexName(
+    private static string ResolveRequiredIndexName(
         IReadOnlyList<SchemaIndexDescription> indexes,
         string preferredName,
         string entityType,
-        string labelOrType)
+        string labelOrType,
+        IReadOnlyList<string> properties)
     {
         var preferredIndex = indexes.FirstOrDefault(index =>
             string.Equals(index.Name, preferredName, StringComparison.Ordinal));
         if (preferredIndex != null)
         {
-            if (IsEquivalentOwnerIndex(preferredIndex, entityType, labelOrType))
+            if (IsEquivalentRangeIndex(preferredIndex, entityType, labelOrType, properties))
                 return preferredIndex.Name;
 
             throw new InvalidOperationException(
                 $"Neo4j schema index name '{preferredName}' is occupied by a non-equivalent schema. " +
-                $"Expected RANGE {entityType} index on {labelOrType}(scope, projectionOwnerId).");
+                $"Expected RANGE {entityType} index on {labelOrType}({string.Join(", ", properties)}).");
         }
 
         var equivalentIndexes = indexes
-            .Where(index => IsEquivalentOwnerIndex(index, entityType, labelOrType))
+            .Where(index => IsEquivalentRangeIndex(index, entityType, labelOrType, properties))
             .OrderBy(index => index.Name, StringComparer.Ordinal)
             .ToArray();
         if (equivalentIndexes.Length > 0)
@@ -257,18 +272,19 @@ public sealed partial class Neo4jProjectionGraphStore
 
         throw new InvalidOperationException(
             $"Neo4j did not expose an equivalent RANGE {entityType} index for " +
-            $"{labelOrType}(scope, projectionOwnerId) after schema initialization.");
+            $"{labelOrType}({string.Join(", ", properties)}) after schema initialization.");
     }
 
-    private static bool IsEquivalentOwnerIndex(
+    private static bool IsEquivalentRangeIndex(
         SchemaIndexDescription index,
         string entityType,
-        string labelOrType)
+        string labelOrType,
+        IReadOnlyList<string> properties)
     {
         return string.Equals(index.Type, "RANGE", StringComparison.Ordinal) &&
                string.Equals(index.EntityType, entityType, StringComparison.Ordinal) &&
                index.LabelsOrTypes.SequenceEqual([labelOrType], StringComparer.Ordinal) &&
-               index.Properties.SequenceEqual(["scope", "projectionOwnerId"], StringComparer.Ordinal);
+               index.Properties.SequenceEqual(properties, StringComparer.Ordinal);
     }
 
     private static bool IsIndexAwaitTimeout(Neo4jException exception)
@@ -304,10 +320,12 @@ public sealed partial class Neo4jProjectionGraphStore
         IReadOnlyDictionary<string, object?> parameters,
         CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         await using var session = CreateSession(AccessMode.Write);
         var cursor = await session.RunAsync(cypher, parameters);
         await cursor.ConsumeAsync();
-        ct.ThrowIfCancellationRequested();
+        // No post-consume cancellation check: a consumed auto-commit write is already
+        // durable on the server, and throwing here would mislabel it as cancelled.
     }
 
     private async Task ExecuteWriteTransactionAsync(
@@ -315,12 +333,15 @@ public sealed partial class Neo4jProjectionGraphStore
         IReadOnlyDictionary<string, object?> parameters,
         CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         await using var session = CreateSession(AccessMode.Write);
         await using var transaction = await session.BeginTransactionAsync();
         var cursor = await transaction.RunAsync(cypher, parameters);
         await cursor.ConsumeAsync();
-        await transaction.CommitAsync();
         ct.ThrowIfCancellationRequested();
+        await transaction.CommitAsync();
+        // No post-commit cancellation check: the transaction is durable once committed,
+        // and throwing here would mislabel the committed write as cancelled.
     }
 
     private async Task<IReadOnlyList<IReadOnlyDictionary<string, object>>> ExecuteReadAsync(

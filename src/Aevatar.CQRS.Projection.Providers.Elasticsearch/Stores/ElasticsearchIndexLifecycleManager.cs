@@ -9,8 +9,8 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 /// <summary>
 /// Owns the physical-index lifecycle behind a stable read/write alias name.
 ///
-/// Write-path reconciliation state machine, applied once per <see cref="EnsureIndexAsync"/>
-/// invocation per alias name in a process:
+/// Index reconciliation state machine, applied once per alias name in a process across
+/// <see cref="EnsureIndexAsync"/> and explicit startup reconciliation:
 ///
 /// 1. Alias exists and points at <c>{alias}-v{fingerprint}</c> matching the
 ///    augmented metadata fingerprint → no-op.
@@ -233,6 +233,35 @@ public sealed class ElasticsearchIndexLifecycleManager : IDisposable
         if (!_autoCreate)
             return;
 
+        lock (_stateGate)
+        {
+            if (_initializedAliases.Contains(aliasName))
+                return;
+        }
+
+        await _initLock.WaitAsync(ct);
+        try
+        {
+            lock (_stateGate)
+            {
+                if (_initializedAliases.Contains(aliasName))
+                    return;
+            }
+
+            await ReconcileWithReindexCoreAsync(aliasName, metadata, ct);
+            MarkInitialized(aliasName);
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    private async Task ReconcileWithReindexCoreAsync(
+        string aliasName,
+        DocumentIndexMetadata metadata,
+        CancellationToken ct)
+    {
         var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
         var expectedPhysical = $"{aliasName}-v{fingerprint}";
 

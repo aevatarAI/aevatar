@@ -301,6 +301,9 @@ public enum ObservatoryRunDetailSectionVersionStatus
 
     [JsonStringEnumMemberName("version_mismatch")]
     VersionMismatch = 3,
+
+    [JsonStringEnumMemberName("disabled")]
+    Disabled = 4,
 }
 
 public sealed class ObservatoryRunDetailSectionVersions

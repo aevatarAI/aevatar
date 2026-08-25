@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -21,11 +22,13 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 /// real <see cref="WorkflowRunInsightReportArtifactProjector"/> and the real
 /// <see cref="ElasticsearchProjectionDocumentStore{TReadModel,TKey}"/> mutator / optimistic writer into
 /// an isolated, per-run index. A pass-through <see cref="HttpClient"/> handler records every request's
-/// real latency and body size; the table is printed through <see cref="ITestOutputHelper"/>. Only the
-/// request/byte/document invariants are asserted; no wall-clock bound is.
+/// real latency and body size; the table is printed through <see cref="ITestOutputHelper"/> and can
+/// also be persisted as a CI artifact. Only the request/byte/document invariants are asserted; no
+/// wall-clock bound is.
 /// <para>
 /// Environment: <c>AEVATAR_TEST_ELASTICSEARCH_ENDPOINT</c> (required, gates the test),
-/// <c>AEVATAR_TEST_ELASTICSEARCH_USERNAME</c> / <c>AEVATAR_TEST_ELASTICSEARCH_PASSWORD</c> (optional basic auth).
+/// <c>AEVATAR_TEST_ELASTICSEARCH_USERNAME</c> / <c>AEVATAR_TEST_ELASTICSEARCH_PASSWORD</c> (optional basic auth),
+/// <c>AEVATAR_TEST_WORKFLOW_REPORT_BENCHMARK_PATH</c> (optional durable text report).
 /// </para>
 /// </summary>
 [Trait("Category", "ProviderIntegration")]
@@ -36,6 +39,7 @@ public sealed class WorkflowReportArtifactWriteCostElasticsearchIntegrationTests
     private const string EndpointVariable = "AEVATAR_TEST_ELASTICSEARCH_ENDPOINT";
     private const string UsernameVariable = "AEVATAR_TEST_ELASTICSEARCH_USERNAME";
     private const string PasswordVariable = "AEVATAR_TEST_ELASTICSEARCH_PASSWORD";
+    private const string BenchmarkReportPathVariable = "AEVATAR_TEST_WORKFLOW_REPORT_BENCHMARK_PATH";
     private const int ElasticsearchRequestTimeoutMs = 30000;
     private static readonly TimeSpan CleanupClientTimeout = TimeSpan.FromSeconds(60);
     private const int ReplaySampleCount = 10;
@@ -97,6 +101,22 @@ public sealed class WorkflowReportArtifactWriteCostElasticsearchIntegrationTests
             keyFormatter: key => key,
             typeRegistry: TypeRegistry.Empty,
             httpMessageHandler: elasticsearch);
+
+        // Create/reconcile the isolated physical index before event timing through the same
+        // explicit startup lifecycle used by the host. A read intentionally does not bootstrap a
+        // missing index, even when AutoCreateIndex is enabled, so invoking the reconcile target is
+        // required before the warm-up GET. Both operations stay outside the applied stream and
+        // cannot be mislabeled as per-event serialization/client time.
+        var preparationStarted = Stopwatch.GetTimestamp();
+        await ((IProjectionIndexReconcileTarget)store).ReconcileIndexAsync();
+        (await store.GetAsync(RootActorId)).Should().BeNull();
+        var indexPreparationElapsed = Stopwatch.GetElapsedTime(preparationStarted);
+        var preparationRequests = elasticsearch.Requests.ToArray();
+        var lifecycleRequests = preparationRequests.Where(x => x.Kind == RequestKind.IndexLifecycle).ToArray();
+        lifecycleRequests.Should().NotBeEmpty();
+        preparationRequests.Should().ContainSingle(x => x.Kind == RequestKind.DocumentGet);
+        elasticsearch.ResetRecording();
+
         var timedMutator = new ReducerTimingMutator(store);
         var graphWriter = new CountingGraphWriter();
         var projector = new WorkflowRunInsightReportArtifactProjector(timedMutator, graphWriter);
@@ -116,22 +136,19 @@ public sealed class WorkflowReportArtifactWriteCostElasticsearchIntegrationTests
         var streamRequests = elasticsearch.Requests.ToArray();
         var streamGets = streamRequests.Where(x => x.Kind == RequestKind.DocumentGet).ToArray();
         var streamPuts = streamRequests.Where(x => x.Kind == RequestKind.DocumentPut).ToArray();
-        var lifecycleRequests = streamRequests.Where(x => x.Kind == RequestKind.IndexLifecycle).ToArray();
 
         // Uncontended path: exactly one document GET followed by one conditional PUT per applied event;
-        // the one-time index lifecycle requests all precede the first document request.
+        // index lifecycle work was completed and measured separately before this timing window.
         streamGets.Should().HaveCount(eventCount);
         streamPuts.Should().HaveCount(eventCount);
         streamPuts.Count(x => x.IsCreate).Should().Be(1);
         streamRequests.Should().OnlyContain(x => x.StatusCode != HttpStatusCode.Conflict);
-        lifecycleRequests.Should().NotBeEmpty();
-        streamRequests.Take(lifecycleRequests.Length).Should().OnlyContain(x => x.Kind == RequestKind.IndexLifecycle);
-        var documentRequests = streamRequests.Skip(lifecycleRequests.Length).ToArray();
-        documentRequests.Should().HaveCount(eventCount * 2);
-        for (var index = 0; index < documentRequests.Length; index += 2)
+        streamRequests.Should().HaveCount(eventCount * 2);
+        streamRequests.Should().NotContain(x => x.Kind == RequestKind.IndexLifecycle);
+        for (var index = 0; index < streamRequests.Length; index += 2)
         {
-            documentRequests[index].Kind.Should().Be(RequestKind.DocumentGet, $"event {index / 2 + 1} must start with a GET");
-            documentRequests[index + 1].Kind.Should().Be(RequestKind.DocumentPut, $"event {index / 2 + 1} must commit with one PUT");
+            streamRequests[index].Kind.Should().Be(RequestKind.DocumentGet, $"event {index / 2 + 1} must start with a GET");
+            streamRequests[index + 1].Kind.Should().Be(RequestKind.DocumentPut, $"event {index / 2 + 1} must commit with one PUT");
         }
 
         graphWriter.UpsertCount.Should().Be(eventCount);
@@ -182,6 +199,7 @@ public sealed class WorkflowReportArtifactWriteCostElasticsearchIntegrationTests
         return new ReplayResult(
             shape,
             lifecycleRequests.Length,
+            indexPreparationElapsed,
             bytesRead,
             bytesWritten,
             putBodyBytes,
@@ -230,11 +248,12 @@ public sealed class WorkflowReportArtifactWriteCostElasticsearchIntegrationTests
             $"== #3477 report-artifact write cost vs real Elasticsearch: {eventCount} committed events, {scenario.StepCount} steps, {scenario.LargeParameterSteps.Count} large parameters ==",
             $"{"endpoint / alias",-46} | {new Uri(endpoint.Contains("://", StringComparison.Ordinal) ? endpoint : "http://" + endpoint).Host} / {aliasName}",
             $"{"applied events (1 GET + 1 conditional PUT each)",-46} | {eventCount}",
-            $"{"index lifecycle requests (before first doc)",-46} | {result.IndexLifecycleRequestCount}",
+            $"{"index lifecycle requests / preparation wall ms",-46} | {result.IndexLifecycleRequestCount} / {Ms(result.IndexPreparationElapsed.TotalMilliseconds)}",
             $"{"bytes read (GET bodies) / written (PUT bodies)",-46} | {Bytes(result.BytesRead)} / {Bytes(result.BytesWritten)}",
             $"{"final doc protobuf bytes / JSON bytes (last PUT)",-46} | {Bytes(shape.TotalBytes)} / {Bytes(result.PutBodyBytes[^1])}",
             $"{"steps-only / timeline-only bytes (share)",-46} | {Bytes(shape.StepsBytes)} ({Pct(shape.StepsBytes, shape.TotalBytes)}) / {Bytes(shape.TimelineBytes)} ({Pct(shape.TimelineBytes, shape.TotalBytes)})",
-            $"{"large parameter source bytes / stored copies",-46} | {Bytes(shape.LargeParameterBytes)} / {shape.LargeParameterOccurrences} copies ({Bytes(shape.LargeParameterBytes * 2)} bytes duplicated)",
+            $"{"request evidence bytes (share)",-46} | {Bytes(shape.EvidenceBytes)} ({Pct(shape.EvidenceBytes, shape.TotalBytes)})",
+            $"{"large parameter source bytes / stored copies",-46} | {Bytes(shape.LargeParameterBytes)} / {shape.LargeParameterOccurrences} copies (retained once)",
             $"{"ES GET ms p50 / p95 / max",-46} | {Row(result.GetMilliseconds, getPercentiles)}",
             $"{"ES PUT ms p50 / p95 / max",-46} | {Row(result.PutMilliseconds, putPercentiles)}",
             $"{"ES GET / PUT ms total",-46} | {Ms(getTotal)} / {Ms(putTotal)} ({Pct(getTotal + putTotal, eventTotal)} of per-event total)",
@@ -270,6 +289,16 @@ public sealed class WorkflowReportArtifactWriteCostElasticsearchIntegrationTests
 
         foreach (var line in lines)
             _output.WriteLine(line);
+
+        var reportPath = Environment.GetEnvironmentVariable(BenchmarkReportPathVariable)?.Trim() ?? string.Empty;
+        if (reportPath.Length == 0)
+            return;
+
+        var fullReportPath = Path.GetFullPath(reportPath);
+        var reportDirectory = Path.GetDirectoryName(fullReportPath);
+        if (!string.IsNullOrWhiteSpace(reportDirectory))
+            Directory.CreateDirectory(reportDirectory);
+        File.WriteAllLines(fullReportPath, lines);
     }
 
     private static (double P50, double P95, double Max) Percentiles(IReadOnlyList<double> samples)
@@ -357,6 +386,7 @@ public sealed class WorkflowReportArtifactWriteCostElasticsearchIntegrationTests
     private sealed record ReplayResult(
         FinalDocumentShape Shape,
         int IndexLifecycleRequestCount,
+        TimeSpan IndexPreparationElapsed,
         long BytesRead,
         long BytesWritten,
         IReadOnlyList<long> PutBodyBytes,
@@ -435,6 +465,12 @@ public sealed class WorkflowReportArtifactWriteCostElasticsearchIntegrationTests
         public List<RecordedRequest> Requests { get; } = [];
 
         public byte[]? LastDocumentPutBody { get; private set; }
+
+        public void ResetRecording()
+        {
+            Requests.Clear();
+            LastDocumentPutBody = null;
+        }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,

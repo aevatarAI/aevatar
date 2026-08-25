@@ -15,6 +15,7 @@ public sealed class WorkflowRunInsightReportArtifactProjector
     private readonly IProjectionGraphWriter<WorkflowRunInsightReportDocument> _graphWriter;
     private readonly IVersionedProjectionGraphStore? _versionedGraphStore;
     private readonly WorkflowRunIncrementalGraphMaterializer? _incrementalGraphMaterializer;
+    private readonly ProjectionGraphProviderStatus? _graphProviderStatus;
 
     // Refactor (iter29/cluster-029-workflow-history-artifact):
     //   Old pattern: workflow history / report / graph are treated as current-state readmodels (current-state query path enriches actor snapshots by reading report artifacts; duplicate WorkflowRunTimelineDocument and WorkflowRunGraphArtifactDocument shells copy WorkflowRunInsightReportDocument; public application/query/tool/HTTP surfaces expose them as actor current-state queries instead of workflow-run artifacts)
@@ -31,12 +32,14 @@ public sealed class WorkflowRunInsightReportArtifactProjector
         IProjectionDocumentMutator<WorkflowRunInsightReportDocument, string> reportMutator,
         IProjectionGraphWriter<WorkflowRunInsightReportDocument> graphWriter,
         IVersionedProjectionGraphStore? versionedGraphStore,
-        WorkflowRunIncrementalGraphMaterializer? incrementalGraphMaterializer)
+        WorkflowRunIncrementalGraphMaterializer? incrementalGraphMaterializer,
+        ProjectionGraphProviderStatus? graphProviderStatus = null)
     {
         _reportMutator = reportMutator ?? throw new ArgumentNullException(nameof(reportMutator));
         _graphWriter = graphWriter ?? throw new ArgumentNullException(nameof(graphWriter));
         _versionedGraphStore = versionedGraphStore;
         _incrementalGraphMaterializer = incrementalGraphMaterializer;
+        _graphProviderStatus = graphProviderStatus;
     }
 
     public async ValueTask ProjectAsync(
@@ -87,6 +90,9 @@ public sealed class WorkflowRunInsightReportArtifactProjector
                 $"Workflow report version {stateEvent.Version} was not committed for event '{stateEvent.EventId}'.");
         }
 
+        if (_graphProviderStatus is { Enabled: false })
+            return;
+
         if (!WorkflowRunIncrementalGraphMaterializer.IsIncrementalRoute(context.MaterializationRoute))
         {
             await _graphWriter.UpsertAsync(readModel, context.ProjectionKind, ct);
@@ -110,15 +116,41 @@ public sealed class WorkflowRunInsightReportArtifactProjector
                 context.ProjectionKind,
                 context.MaterializationRoute!);
         var result = await _versionedGraphStore.ApplyDeltaAsync(delta, ct);
-        if (result.Disposition is ProjectionGraphDeltaApplyDisposition.Applied or
-            ProjectionGraphDeltaApplyDisposition.ExactDuplicate)
+        if (IsCommitted(result))
         {
             return;
+        }
+
+        // A committed state snapshot is authoritative at its source version, but the actor may
+        // publish one snapshot after a batch advances that version by more than one. The normal
+        // incremental delta cannot safely bridge that gap because intermediate payload-specific
+        // mutations may be absent. Repair from the complete report instead. EventIdConflict is
+        // included for the crash window where that repair committed but the projection scope
+        // watermark did not: replay first rebuilds the normal delta, then proves the same full
+        // candidate is already present through ExactDuplicate.
+        if (result.Disposition is ProjectionGraphDeltaApplyDisposition.Gap or
+            ProjectionGraphDeltaApplyDisposition.EventIdConflict)
+        {
+            var repairDelta = _incrementalGraphMaterializer.BuildFullCandidateDelta(
+                readModel,
+                context.ProjectionKind,
+                context.MaterializationRoute!);
+            var repairResult = await _versionedGraphStore.ApplyDeltaAsync(repairDelta, ct);
+            if (IsCommitted(repairResult))
+                return;
+
+            throw new InvalidOperationException(
+                $"Workflow graph delta was rejected with {result.Disposition}: {result.Detail} " +
+                $"The full-owner repair was rejected with {repairResult.Disposition}: {repairResult.Detail}");
         }
 
         throw new InvalidOperationException(
             $"Workflow graph delta was rejected with {result.Disposition}: {result.Detail}");
     }
+
+    private static bool IsCommitted(ProjectionGraphDeltaApplyResult result) =>
+        result.Disposition is ProjectionGraphDeltaApplyDisposition.Applied or
+            ProjectionGraphDeltaApplyDisposition.ExactDuplicate;
 
     private static WorkflowRunInsightReportDocument ReduceReport(
         WorkflowRunInsightReportDocument? existing,

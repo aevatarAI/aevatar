@@ -2200,6 +2200,28 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task UpsertAsync_AfterExplicitReconcile_ShouldNotRepeatIndexLifecycleProbe()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        EnqueueGreenfieldLifecycleResponses(handler);
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"created"}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        await store.ReconcileIndexAsync();
+        await store.UpsertAsync(new TestStoreReadModel { Id = "actor-1", ActorId = "actor-1" });
+
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "HEAD", "PUT", "GET", "PUT");
+        handler.CapturedRequests.Should().ContainSingle(request =>
+            request.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void AddElasticsearchDocumentProjectionStore_ForMultipleReadModels_ShouldEnumerateDistinctReconcileTargets()
     {
         var services = new ServiceCollection();

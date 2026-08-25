@@ -81,6 +81,11 @@ public sealed class AgentTurnToolCatalogException : InvalidOperationException
     public AgentTurnToolCatalogFailure Failure { get; }
 }
 
+/// <summary>
+/// Typed catalog optimization targets plus hard schema and connected-operation safety limits.
+/// <see cref="MaximumToolCount"/> is retained in the durable proof as the reviewed optimization
+/// target; exceeding it must never reject or truncate an otherwise valid exact catalog.
+/// </summary>
 public sealed record AgentTurnToolCatalogBudget(
     int MaximumToolCount,
     int MaximumSchemaBytes,
@@ -335,14 +340,13 @@ public sealed class AgentTurnToolCatalogProof
         var connectedReadCount = connected.Count(static item => IsConnectedReadTool(item.Selection.Tool));
         var connectedWriteCount = connected.Length - connectedReadCount;
         var schemaBytes = descriptors.Sum(static descriptor => descriptor.SchemaBytes);
-        if (descriptors.Length > budget.MaximumToolCount ||
-            schemaBytes > budget.MaximumSchemaBytes ||
+        if (schemaBytes > budget.MaximumSchemaBytes ||
             connectedReadCount > budget.MaximumConnectedReadToolCount ||
             connectedWriteCount > budget.MaximumConnectedWriteToolCount)
         {
             throw new AgentTurnToolCatalogException(new AgentTurnToolCatalogFailure(
                 AgentTurnToolCatalogFailureCode.CatalogOverBudget,
-                $"Final tool catalog exceeds its typed budget (tools={descriptors.Length}/{budget.MaximumToolCount}, schema_bytes={schemaBytes}/{budget.MaximumSchemaBytes}, connected_reads={connectedReadCount}/{budget.MaximumConnectedReadToolCount}, connected_writes={connectedWriteCount}/{budget.MaximumConnectedWriteToolCount})."));
+                $"Final tool catalog exceeds its typed safety budget (schema_bytes={schemaBytes}/{budget.MaximumSchemaBytes}, connected_reads={connectedReadCount}/{budget.MaximumConnectedReadToolCount}, connected_writes={connectedWriteCount}/{budget.MaximumConnectedWriteToolCount})."));
         }
 
         var exactToolsByName = materialized.ToDictionary(

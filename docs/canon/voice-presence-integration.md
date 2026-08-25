@@ -151,8 +151,9 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   queue is part of this contract.
 - **Tool catalog proof** — Voice uses the shared request-scoped discovery path
   and persists one `AgentTurnToolCatalogProof` snapshot for the lease/session.
-  The allowlist is limited to 6 tools and 32 KiB canonical schema; an empty
-  allowlist is restricted empty, never unrestricted. Readiness, provider schema
+  The allowlist has a 6-tool optimization target and a hard 32 KiB canonical
+  schema limit; exceeding the count target neither rejects nor truncates an exact
+  catalog. An empty allowlist is restricted empty, never unrestricted. Readiness, provider schema
   injection and `IVoiceToolInvoker` validate the same names/schema/digest, and
   any re-materialization mismatch fails before tool execution. Voice does not
   inherit the whole `workspace.default` ceiling. See

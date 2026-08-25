@@ -374,6 +374,12 @@ message WorkflowReleasedValueTombstone
   WorkflowValueDigest digest = 1;
   string released_after_step_id = 2;
   string released_after_execution_id = 3;
+  // Canonical value id that was released. A later step may re-bind the same
+  // variable name to a new value (per-iteration release); the tombstone then
+  // covers only this value id and the re-bound value stays readable and
+  // releasable. Empty for tombstones written before value identity was
+  // recorded; those names have no live binding by construction.
+  string value_id = 4;
 }
 
 enum WorkflowValueLifecycleFailureKind

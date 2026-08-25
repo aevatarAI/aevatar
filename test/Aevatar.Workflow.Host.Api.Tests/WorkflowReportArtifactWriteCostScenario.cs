@@ -112,15 +112,15 @@ internal sealed class WorkflowReportArtifactWriteCostScenario
     }
 
     /// <summary>
-    /// Asserts the fully materialized report shape and the two-copies-per-large-parameter invariant:
-    /// every large value is stored in the step trace request parameters and again in the step.request
-    /// timeline entry data.
+    /// Asserts the fully materialized report shape and the store-once invariant: every large value is
+    /// retained in one immutable execution evidence record while the step and timeline share its reference.
     /// </summary>
     public FinalDocumentShape MeasureFinalDocument(WorkflowRunInsightReportDocument document)
     {
         document.StateVersion.Should().Be(CommittedEventCount);
         document.LastEventId.Should().Be(HeadEvent.EventId);
         document.Steps.Should().HaveCount(StepCount);
+        document.RequestEvidenceById.Should().HaveCount(StepCount);
         // 1 workflow.start + N step.request + N step.completed + 1 workflow.completed
         document.Timeline.Should().HaveCount(1 + StepCount * 2 + 1);
         document.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
@@ -130,8 +130,11 @@ internal sealed class WorkflowReportArtifactWriteCostScenario
         stepsOnly.StepEntries.AddRange(document.StepEntries);
         var timelineOnly = new WorkflowRunInsightReportDocument();
         timelineOnly.TimelineEntries.AddRange(document.TimelineEntries);
+        var evidenceOnly = new WorkflowRunInsightReportDocument();
+        evidenceOnly.RequestEvidenceById.Add(document.RequestEvidenceById);
         var stepsBytes = stepsOnly.CalculateSize();
         var timelineBytes = timelineOnly.CalculateSize();
+        var evidenceBytes = evidenceOnly.CalculateSize();
 
         long largeParameterBytes = 0;
         var largeOccurrences = 0;
@@ -140,22 +143,50 @@ internal sealed class WorkflowReportArtifactWriteCostScenario
             var (key, value) = committed.LargeParameter!;
             largeParameterBytes += value.Length;
             var step = document.Steps.Single(x => x.StepId == committed.StepId);
-            step.RequestParameters.Should().ContainKey(key);
-            step.RequestParameters[key].Should().Be(value);
-            var timelineHits = document.Timeline.Count(entry =>
-                entry.StepId == committed.StepId &&
-                entry.Stage == "step.request" &&
-                entry.Data.TryGetValue(key, out var stored) &&
-                stored == value);
-            timelineHits.Should().Be(1, $"step {committed.StepId} must carry its large parameter once in the step.request timeline entry");
-            largeOccurrences += 1 + timelineHits;
+            step.RequestParameters.Should().BeEmpty();
+            step.RequestEvidenceReference.Should().NotBeNull();
+            step.RequestEvidenceReference.ExecutionId.Should().Be($"exec-{committed.StepId}");
+
+            document.RequestEvidenceById.TryGetValue(
+                    step.RequestEvidenceReference.EvidenceId,
+                    out var evidence)
+                .Should().BeTrue();
+            evidence!.StepId.Should().Be(committed.StepId);
+            evidence.ExecutionId.Should().Be($"exec-{committed.StepId}");
+            evidence.SourceEventId.Should().Be(committed.EventId);
+            evidence.ParametersMap.Should().ContainKey(key).WhoseValue.Should().Be(value);
+            evidence.SourceParameterUtf8Bytes.Should().BeGreaterThanOrEqualTo(value.Length);
+            evidence.RetainedParameterUtf8Bytes.Should().BeGreaterThanOrEqualTo(value.Length);
+            evidence.RetainedParameterSha256.Should().MatchRegex("^[0-9a-f]{64}$");
+
+            var timelineEntry = document.Timeline.Should().ContainSingle(entry =>
+                entry.StepId == committed.StepId && entry.Stage == "step.request").Subject;
+            timelineEntry.Data.Should().NotContainKey(key);
+            timelineEntry.RequestEvidenceReference.Should().NotBeNull();
+            timelineEntry.RequestEvidenceReference.Should().Be(step.RequestEvidenceReference);
+
+            var evidenceHits = document.RequestEvidenceById.Values.Count(item =>
+                item.ParametersMap.TryGetValue(key, out var stored) && stored == value);
+            var stepHits = document.Steps.Count(item =>
+                item.RequestParameters.TryGetValue(key, out var stored) && stored == value);
+            var timelineHits = document.Timeline.Count(item =>
+                item.Data.TryGetValue(key, out var stored) && stored == value);
+            evidenceHits.Should().Be(1);
+            stepHits.Should().Be(0);
+            timelineHits.Should().Be(0);
+            largeOccurrences += evidenceHits + stepHits + timelineHits;
         }
 
-        largeOccurrences.Should().Be(2 * LargeParameterSteps.Count);
-        ((double)stepsBytes / totalBytes).Should().BeGreaterThan(0.40);
-        ((double)timelineBytes / totalBytes).Should().BeGreaterThan(0.40);
+        largeOccurrences.Should().Be(LargeParameterSteps.Count);
+        ((long)evidenceBytes).Should().BeGreaterThan(largeParameterBytes);
 
-        return new FinalDocumentShape(totalBytes, stepsBytes, timelineBytes, largeParameterBytes, largeOccurrences);
+        return new FinalDocumentShape(
+            totalBytes,
+            stepsBytes,
+            timelineBytes,
+            evidenceBytes,
+            largeParameterBytes,
+            largeOccurrences);
     }
 
     public static void AssertDocumentUnchanged(
@@ -419,6 +450,7 @@ internal sealed class WorkflowReportArtifactWriteCostScenario
         long TotalBytes,
         long StepsBytes,
         long TimelineBytes,
+        long EvidenceBytes,
         long LargeParameterBytes,
         int LargeParameterOccurrences);
 

@@ -97,7 +97,7 @@ public sealed class NyxIdDurableCodeExecutionPortTests
     }
 
     [Fact]
-    public async Task SubmitAsync_AgentKeyUsesApiKeyHeaderOnPublicEndpoint()
+    public async Task SubmitAsync_AgentKeyUsesBearerOnPublicEndpoint()
     {
         var handler = new SequenceHandler(_ => Response(
             HttpStatusCode.Accepted,
@@ -124,8 +124,8 @@ public sealed class NyxIdDurableCodeExecutionPortTests
 
         outcome.Failure.Should().BeNull();
         handler.Requests.Should().ContainSingle();
-        handler.Requests[0].Headers.Should().NotContainKey("Authorization");
-        handler.Requests[0].Headers["X-API-Key"].Should().Equal("scheduled-agent-key");
+        handler.Requests[0].Headers["Authorization"].Should().Equal("Bearer scheduled-agent-key");
+        handler.Requests[0].Headers.Should().NotContainKey("X-API-Key");
         handler.Requests[0].Headers["Idempotency-Key"].Should().Equal(IdempotencyKey);
     }
 
@@ -187,7 +187,7 @@ public sealed class NyxIdDurableCodeExecutionPortTests
     }
 
     [Fact]
-    public async Task GetStatusAsync_AgentKeyUsesApiKeyHeaderOnPublicEndpoint()
+    public async Task GetStatusAsync_AgentKeyUsesBearerOnPublicEndpoint()
     {
         var handler = new SequenceHandler(_ => Response(
             HttpStatusCode.NotModified,
@@ -206,8 +206,8 @@ public sealed class NyxIdDurableCodeExecutionPortTests
 
         outcome.Failure.Should().BeNull();
         handler.Requests.Should().ContainSingle();
-        handler.Requests[0].Headers.Should().NotContainKey("Authorization");
-        handler.Requests[0].Headers["X-API-Key"].Should().Equal("scheduled-agent-key");
+        handler.Requests[0].Headers["Authorization"].Should().Equal("Bearer scheduled-agent-key");
+        handler.Requests[0].Headers.Should().NotContainKey("X-API-Key");
         handler.Requests[0].Headers["If-None-Match"].Should().Equal("\"v6\"");
     }
 

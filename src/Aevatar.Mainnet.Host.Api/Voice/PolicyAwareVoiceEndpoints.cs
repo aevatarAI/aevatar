@@ -253,12 +253,6 @@ public static class PolicyAwareVoiceEndpoints
     private static async Task<VoiceToolContextAdmission> TryBuildToolContextAsync(HttpContext http)
     {
         var allowedToolNames = ResolveVoiceToolAllowlist();
-        if (allowedToolNames.Count > VoiceToolCatalogSnapshotValidator.MaximumToolCount)
-        {
-            await WriteToolCatalogUnavailableAsync(http);
-            return new VoiceToolContextAdmission(false, null);
-        }
-
         var callerBearer = ExtractCallerBearer(http);
         VoiceToolCredentialIssueResult? issued = null;
         if (!string.IsNullOrWhiteSpace(callerBearer))

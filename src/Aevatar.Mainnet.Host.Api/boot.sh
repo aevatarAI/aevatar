@@ -29,7 +29,8 @@ Modes:
                     after a backend restart.
   persistent-local  Orleans + Garnet + in-memory projections. keeps actor state
                     across restarts, but read models are still ephemeral.
-  distributed       Orleans + Kafka + Elasticsearch/Neo4j profile.
+  distributed       Orleans + Kafka + Elasticsearch profile. Graph projection
+                    is disabled unless a graph provider is explicitly enabled.
 
 Environment:
   AEVATAR_APP_CONFIGURATION   dotnet configuration, default: Debug
@@ -292,14 +293,14 @@ case "${APP_MODE}" in
     ;;
   persistent-local)
     effective_environment_name="PersistentLocal"
-    effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-false}"
+    effective_neo4j_enabled="${Projection__Graph__Providers__Neo4j__Enabled:-${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-false}}"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=PersistentLocal"
     )
     ;;
   distributed)
     effective_environment_name="Distributed"
-    effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-true}"
+    effective_neo4j_enabled="${Projection__Graph__Providers__Neo4j__Enabled:-${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-false}}"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=Distributed"
     )

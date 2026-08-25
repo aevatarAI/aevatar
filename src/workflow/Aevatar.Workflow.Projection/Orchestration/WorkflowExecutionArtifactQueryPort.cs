@@ -17,6 +17,7 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
     private readonly WorkflowRunIncrementalGraphMaterializer? _incrementalGraphMaterializer;
     private readonly IProjectionGraphStore? _legacyGraphStore;
     private readonly bool _workflowArtifactQueryEnabled;
+    private readonly bool _workflowGraphExportEnabled;
 
     public WorkflowExecutionArtifactQueryPort(
         IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
@@ -25,7 +26,8 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         IProjectionDocumentReader<ProjectionScopeStatusDocument, string>? scopeStatusReader = null,
         IVersionedProjectionGraphStore? versionedGraphStore = null,
         WorkflowRunIncrementalGraphMaterializer? incrementalGraphMaterializer = null,
-        IProjectionGraphStore? legacyGraphStore = null)
+        IProjectionGraphStore? legacyGraphStore = null,
+        ProjectionGraphProviderStatus? graphProviderStatus = null)
     {
         _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
@@ -34,9 +36,13 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         _incrementalGraphMaterializer = incrementalGraphMaterializer;
         _legacyGraphStore = legacyGraphStore;
         _workflowArtifactQueryEnabled = options == null || (options.Enabled && options.WorkflowArtifactQueryEnabled);
+        _workflowGraphExportEnabled =
+            _workflowArtifactQueryEnabled && graphProviderStatus is not { Enabled: false };
     }
 
     public bool WorkflowArtifactQueryEnabled => _workflowArtifactQueryEnabled;
+
+    public bool WorkflowGraphExportEnabled => _workflowGraphExportEnabled;
 
     public async Task<WorkflowRunReport?> GetWorkflowRunReportArtifactAsync(
         string workflowRunId,
@@ -65,7 +71,7 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         return report.Timeline
             .OrderByDescending(x => x.Timestamp)
             .Take(boundedTake)
-            .Select(_mapper.ToWorkflowRunTimelineExportItem)
+            .Select(item => _mapper.ToWorkflowRunTimelineExportItem(item, report))
             .ToList();
     }
 
@@ -75,7 +81,7 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         WorkflowRunGraphExportQueryOptions? options = null,
         CancellationToken ct = default)
     {
-        if (!_workflowArtifactQueryEnabled)
+        if (!_workflowGraphExportEnabled)
             return [];
 
         var ownerId = workflowRunId?.Trim() ?? string.Empty;
@@ -120,7 +126,7 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
         CancellationToken ct = default)
     {
         var ownerId = workflowRunId?.Trim() ?? string.Empty;
-        if (!_workflowArtifactQueryEnabled || ownerId.Length == 0)
+        if (!_workflowGraphExportEnabled || ownerId.Length == 0)
             return Unavailable(ownerId);
 
         var boundedDepth = Math.Clamp(depth, 1, 8);

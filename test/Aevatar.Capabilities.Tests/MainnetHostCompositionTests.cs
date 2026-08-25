@@ -954,6 +954,8 @@ public sealed class MainnetHostCompositionTests
         }
         var workflowToolNames = workflowTools.Select(static tool => tool.Name).ToArray();
         workflowToolNames.Should().ContainSingle(name => name == "code_execute");
+        workflowToolNames.Should().ContainSingle(name => name == "nyxid_proxy");
+        workflowToolNames.Should().NotContain(name => name == "nyxid_account");
         workflowToolNames.Should().ContainSingle(name => name == "workflow_connected_service_resource_fetch");
         workflowToolNames.Should().NotContain(StudioLocalWorkflowToolNames);
         var agentWorkflowSource = workflowToolSources

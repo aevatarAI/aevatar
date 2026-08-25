@@ -4129,7 +4129,6 @@ public sealed partial class WorkflowRunGAgent
                    MaximumToolCount: WorkflowToolCatalogPolicies.MaximumWorkflowToolCount,
                    MaximumSchemaBytes: WorkflowToolCatalogPolicies.MaximumWorkflowSchemaBytes,
                } &&
-               proof.ToolCount <= WorkflowToolCatalogPolicies.MaximumWorkflowToolCount &&
                proof.SchemaBytes <= WorkflowToolCatalogPolicies.MaximumWorkflowSchemaBytes;
     }
 

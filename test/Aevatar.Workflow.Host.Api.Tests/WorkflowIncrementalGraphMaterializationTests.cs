@@ -29,6 +29,38 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
     }
 
     [Fact]
+    public async Task Projector_WhenGraphProviderIsDisabled_ShouldSkipIncrementalGraphMaterialization()
+    {
+        var reportStore = new RecordingDocumentStore();
+        var graphWriter = new RecordingGraphWriter();
+        var graphStore = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var projector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            graphWriter,
+            graphStore,
+            materializer,
+            new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+        var envelope = BuildCommittedEnvelope(1, "evt-disabled", new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "step-1",
+            StepType = "tool_call",
+        });
+
+        await projector.ProjectAsync(Context(), envelope);
+
+        reportStore.UpsertCount.Should().Be(1);
+        graphWriter.UpsertCount.Should().Be(0);
+        var route = materializer.ResolveStoreRoute(
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            "actor-1",
+            IncrementalRoute());
+        (await graphStore.ReadOwnerSnapshotAsync(route)).Disposition
+            .Should().Be(ProjectionGraphOwnerSnapshotReadDisposition.NotFound);
+    }
+
+    [Fact]
     public void IncrementalMaterializer_ForHundredStepReport_ShouldBuildBoundedPerEventDeltas()
     {
         var materializer = CreateMaterializer();
@@ -214,6 +246,7 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         var graphWriter = new RecordingGraphWriter();
         var versionedStore = new SequencedVersionedGraphStore(
             ProjectionGraphDeltaApplyDisposition.Gap,
+            ProjectionGraphDeltaApplyDisposition.InvalidDelta,
             ProjectionGraphDeltaApplyDisposition.Applied);
         var projector = new WorkflowRunInsightReportArtifactProjector(
             reportStore,
@@ -230,11 +263,11 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
 
         var first = () => projector.ProjectAsync(context, envelope).AsTask();
         await first.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Graph delta was rejected with Gap*");
+            .WithMessage("*full-owner repair was rejected with InvalidDelta*");
         await projector.ProjectAsync(context, envelope.Clone());
 
         reportStore.UpsertCount.Should().Be(1);
-        versionedStore.ApplyCount.Should().Be(2);
+        versionedStore.ApplyCount.Should().Be(3);
         graphWriter.UpsertCount.Should().Be(0);
     }
 
@@ -274,6 +307,58 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
             StateVersion = 1,
             EventId = "evt-1",
         });
+    }
+
+    [Fact]
+    public async Task Projector_WhenSourceVersionJumps_ShouldRepairFromAuthoritativeReport_AndReplayExactly()
+    {
+        var reportStore = new RecordingDocumentStore();
+        var graphWriter = new RecordingGraphWriter();
+        var store = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var projector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            graphWriter,
+            store,
+            materializer);
+        var context = Context();
+        var route = materializer.ResolveStoreRoute(
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            "actor-1",
+            IncrementalRoute());
+
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(1, "evt-1", new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "step-1",
+            StepType = "tool_call",
+        }));
+        var jumped = BuildCommittedEnvelope(6, "evt-6", new StepRequestEvent
+        {
+            RunId = "run-1",
+            StepId = "step-2",
+            StepType = "tool_call",
+        });
+
+        var first = () => projector.ProjectAsync(context, jumped).AsTask();
+        await first.Should().NotThrowAsync(
+            "a committed actor state may advance by more than one version in one published state snapshot");
+        var repaired = (await store.ReadOwnerSnapshotAsync(route)).Snapshot;
+        repaired.Source.Should().BeEquivalentTo(new ProjectionGraphSourceCoordinate
+        {
+            ActorId = "actor-1",
+            StateVersion = 6,
+            EventId = "evt-6",
+        });
+        repaired.Nodes.Select(static node => node.NodeId).Should().Contain(
+            "step:actor-1:cmd-1:step-1",
+            "step:actor-1:cmd-1:step-2");
+
+        var replay = () => projector.ProjectAsync(context, jumped.Clone()).AsTask();
+        await replay.Should().NotThrowAsync(
+            "recovery after the repair committed must recognize the same full candidate as an exact duplicate");
+        (await store.ReadOwnerSnapshotAsync(route)).Snapshot.Should().BeEquivalentTo(repaired);
+        graphWriter.UpsertCount.Should().Be(0);
     }
 
     [Fact]
@@ -425,9 +510,24 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
 
         reportStore.Document!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
         reportStore.Document.LastEventId.Should().Be(maintenanceEventId);
+        reportStore.Document.Timeline.Count(static entry => entry.Stage == "workflow.completed")
+            .Should().Be(1, "the repair appends the terminal entry the document was missing");
+        var repairedEndedAt = reportStore.Document.EndedAt;
         var repaired = await graphStore.ReadOwnerSnapshotAsync(route);
         repaired.Snapshot.Source.EventId.Should().Be(maintenanceEventId);
         repaired.Snapshot.Source.StateVersion.Should().Be(1);
+
+        // A repeated republish against the now-healthy document must not append the terminal
+        // outcome a second time nor move EndedAt to the duplicate's observation time.
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            1,
+            maintenanceEventId,
+            new WorkflowCompletedEvent { RunId = "run-1", Success = true },
+            status: "completed"));
+
+        reportStore.Document!.Timeline.Count(static entry => entry.Stage == "workflow.completed")
+            .Should().Be(1);
+        reportStore.Document.EndedAt.Should().Be(repairedEndedAt);
 
         await projector.ProjectAsync(context, BuildCommittedEnvelope(
             1,
@@ -438,6 +538,46 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         reportStore.Document.LastEventId.Should().Be(maintenanceEventId);
         (await graphStore.ReadOwnerSnapshotAsync(route)).Snapshot.Should()
             .BeEquivalentTo(repaired.Snapshot);
+    }
+
+    [Fact]
+    public async Task Projector_WhenMaintenanceRepublishFollowsHealthyTerminalDocument_ShouldNotDuplicateTerminalTimelineEntry()
+    {
+        var reportStore = new RecordingDocumentStore();
+        var graphStore = new InMemoryProjectionGraphStore();
+        var materializer = CreateMaterializer();
+        var projector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            new RecordingGraphWriter(),
+            graphStore,
+            materializer);
+        var context = Context();
+
+        // The report scope observed the ordinary terminal event: one terminal timeline entry.
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            1,
+            "evt-completed",
+            new WorkflowCompletedEvent { RunId = "run-1", Success = true },
+            status: "completed",
+            observedAt: DateTimeOffset.Parse("2026-08-18T08:00:00Z")));
+        reportStore.Document!.Timeline.Count(static entry => entry.Stage == "workflow.completed")
+            .Should().Be(1);
+        var endedAt = reportStore.Document.EndedAt;
+
+        // A maintenance republish of the same terminal outcome at the same version repairs the
+        // graph but must not append the terminal timeline entry again.
+        var maintenanceEventId = CommittedStateRepublish.BuildEventId("actor-1", 1);
+        await projector.ProjectAsync(context, BuildCommittedEnvelope(
+            1,
+            maintenanceEventId,
+            new WorkflowCompletedEvent { RunId = "run-1", Success = true },
+            status: "completed",
+            observedAt: DateTimeOffset.Parse("2026-08-18T09:30:00Z")));
+
+        reportStore.Document!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Completed);
+        reportStore.Document.Timeline.Count(static entry => entry.Stage == "workflow.completed")
+            .Should().Be(1);
+        reportStore.Document.EndedAt.Should().Be(endedAt);
     }
 
     [Fact]
@@ -492,6 +632,40 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
                 rebuilt.Source,
                 rebuilt.Fingerprint))
             .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CutoverOrchestrator_WhenGraphProjectionDisabled_ShouldSkipBuildAndVerifyDependencies()
+    {
+        var report = BuildReport(4, "evt-4");
+        var reader = new MutableReportReader(report);
+        var store = new SequencedVersionedGraphStore(ProjectionGraphDeltaApplyDisposition.Applied);
+        var orchestrator = new WorkflowProjectionGraphCutoverOrchestrator(
+            reader,
+            store,
+            CreateMaterializer(),
+            new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+
+        var candidate = await orchestrator.BuildCandidateAsync(
+            report.RootActorId,
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            IncrementalRoute());
+        var verified = await orchestrator.VerifyCandidateAsync(
+            report.RootActorId,
+            WorkflowProjectionKinds.ExecutionMaterialization,
+            IncrementalRoute(),
+            new ProjectionSourceCoordinate
+            {
+                ActorId = report.RootActorId,
+                StateVersion = report.StateVersion,
+                EventId = report.LastEventId,
+            },
+            candidateFingerprint: "unused");
+
+        candidate.Should().BeNull();
+        verified.Should().BeFalse();
+        reader.GetCount.Should().Be(0);
+        store.ApplyCount.Should().Be(0);
     }
 
     [Fact]
@@ -904,9 +1078,10 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         string eventId,
         IMessage payload,
         string commandId = "cmd-1",
-        string status = "running")
+        string status = "running",
+        DateTimeOffset? observedAt = null)
     {
-        var timestamp = DateTimeOffset.Parse("2026-08-18T08:00:00Z");
+        var timestamp = observedAt ?? DateTimeOffset.Parse("2026-08-18T08:00:00Z");
         return new EventEnvelope
         {
             Id = $"outer-{version}",
@@ -990,12 +1165,14 @@ public sealed class WorkflowIncrementalGraphMaterializationTests
         : IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>
     {
         public WorkflowRunInsightReportDocument Document { get; } = document;
+        public int GetCount { get; private set; }
 
         public Task<WorkflowRunInsightReportDocument?> GetAsync(
             string key,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            GetCount++;
             return Task.FromResult<WorkflowRunInsightReportDocument?>(Document.Clone());
         }
 

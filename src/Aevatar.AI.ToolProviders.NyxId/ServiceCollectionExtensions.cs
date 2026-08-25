@@ -78,6 +78,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddTransient<NyxIdAgentToolSource>();
         services.TryAddTransient<NyxIdExecutionAgentToolSource>();
+        services.TryAddTransient<NyxIdWorkflowAgentToolSource>();
         services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
         services.TryAddTransient<INyxIdAdmittedOperationToolFactory,
             NyxIdAdmittedOperationToolFactory>();

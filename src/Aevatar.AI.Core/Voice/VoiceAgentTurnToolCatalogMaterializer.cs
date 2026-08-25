@@ -53,17 +53,6 @@ public sealed class VoiceAgentTurnToolCatalogMaterializer
             return new VoiceAgentTurnToolCatalogMaterialization(empty, RestrictedEmptyExecutionContext());
         }
 
-        if (voiceContext.AllowedToolNames
-                .Where(static name => !string.IsNullOrWhiteSpace(name))
-                .Select(static name => name.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count() > budget.MaximumToolCount)
-        {
-            throw new AgentTurnToolCatalogException(new AgentTurnToolCatalogFailure(
-                AgentTurnToolCatalogFailureCode.CatalogOverBudget,
-                $"Voice tool policy exceeds its typed budget ({voiceContext.AllowedToolNames.Count}/{budget.MaximumToolCount})."));
-        }
-
         var agentToolContext = await ResolveToolContextAsync(voiceContext, ct).ConfigureAwait(false);
         if (agentToolContext is null)
         {
