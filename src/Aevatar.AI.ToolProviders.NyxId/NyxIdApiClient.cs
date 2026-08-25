@@ -279,6 +279,11 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetServiceAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", ct);
 
+    // Secret-free authorization evidence projection (NyxID#1464); the only
+    // route assistant-action postconditions may read for a user service.
+    public Task<string> GetServiceAuthorizationAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}/authorization", ct);
+
     public Task<string> DeleteServiceAsync(string token, string id, CancellationToken ct) =>
         DeleteAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", ct);
 
@@ -1338,6 +1343,11 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     public Task<string> GetApiKeyAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}", ct);
+
+    // Secret-free authorization evidence projection (NyxID#1464); the only
+    // route assistant-action postconditions may read for an agent API key.
+    public Task<string> GetApiKeyAuthorizationAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}/authorization", ct);
 
     public Task<string> ListDurableGrantsAsync(
         string token,

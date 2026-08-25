@@ -1,5 +1,11 @@
 namespace Aevatar.AI.ToolProviders.NyxId;
 
+/// <summary>
+/// Assistant-action postcondition evidence reads. Evidence comes only from
+/// NyxID's secret-free authorization projections (identity, lifecycle, and a
+/// monotonic state_version) — never from the full detail routes, whose
+/// user-controlled display text is not evidence.
+/// </summary>
 public interface INyxIdActionEvidenceReadPort
 {
     Task<NyxIdApiAccessResult<NyxIdUserServiceAuthorizationEvidence>>
@@ -50,7 +56,8 @@ public sealed class NyxIdActionEvidenceReadPort : INyxIdActionEvidenceReadPort
         try
         {
             using var client = _clientFactory.CreateClient();
-            var response = await client.GetServiceAsync(bearerToken, userServiceId, ct)
+            var response = await client
+                .GetServiceAuthorizationAsync(bearerToken, userServiceId, ct)
                 .ConfigureAwait(false);
             return NyxIdApiAccessResponseParser.ParseUserServiceAuthorization(response);
         }
@@ -147,7 +154,7 @@ public sealed class NyxIdActionEvidenceReadPort : INyxIdActionEvidenceReadPort
         try
         {
             using var client = _clientFactory.CreateClient();
-            var response = await client.GetApiKeyAsync(bearerToken, keyId, ct)
+            var response = await client.GetApiKeyAuthorizationAsync(bearerToken, keyId, ct)
                 .ConfigureAwait(false);
             return NyxIdApiAccessResponseParser.ParseAgentApiKey(response);
         }

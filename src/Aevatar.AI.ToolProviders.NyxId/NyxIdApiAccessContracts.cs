@@ -129,7 +129,8 @@ public sealed record NyxIdUserServiceAuthorizationEvidence(
     NyxIdUserServiceCredentialStatus CredentialStatus,
     NyxIdOAuthConnectionStatus OAuthConnectionStatus,
     IReadOnlyList<string>? GrantedScopes,
-    DateTimeOffset? LastAuthorizedAtUtc);
+    DateTimeOffset? LastAuthorizedAtUtc,
+    long? StateVersion);
 
 public sealed record NyxIdServiceAccessEvidence(
     string UserServiceId,
@@ -138,11 +139,10 @@ public sealed record NyxIdServiceAccessEvidence(
 public sealed record NyxIdApiKeyVersionEvidence(
     string? RotationPredecessorId,
     long StateVersion,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset? UpdatedAtUtc);
 
 public sealed record NyxIdAgentApiKeyEvidence(
     string Id,
-    string Name,
     IReadOnlyList<string> Scopes,
     string? Platform,
     bool IsActive,
@@ -442,20 +442,24 @@ public static class NyxIdApiAccessResponseParser
             ParseCredentialStatus(RequireNormalizedString(root, "status")),
             ParseRequiredOAuthConnectionStatus(root),
             ReadRequiredNullableNormalizedStringArray(root, "granted_scopes"),
-            ReadRequiredNullableTimestamp(root, "last_authorized_at"));
+            ReadRequiredNullableTimestamp(root, "last_authorized_at"),
+            ReadOptionalPositiveStateVersion(root));
     }
 
     private static NyxIdAgentApiKeyEvidence ParseAgentApiKeyDocument(JsonElement root)
     {
-        RejectSecretBearingRead(root);
+        // The api-key authorization projection intentionally retains the
+        // display `name` (the irreducible remainder NyxID cannot close by
+        // projection); it is not evidence, is never compared, and only its
+        // value is exempt from the secret-shape scan.
+        RejectSecretBearingRead(root, exemptTopLevelValueField: "name");
         var createdAt = ParseRfc3339(RequireNormalizedString(root, "created_at"));
         var versionEvidence = ParseOptionalVersionEvidence(root);
-        if (versionEvidence is not null && versionEvidence.UpdatedAtUtc < createdAt)
+        if (versionEvidence is { UpdatedAtUtc: { } updatedAt } && updatedAt < createdAt)
             throw new NyxIdContractException();
 
         return new NyxIdAgentApiKeyEvidence(
             RequireNormalizedString(root, "id"),
-            RequireNormalizedString(root, "name"),
             ParseSpaceSeparatedValues(RequireNormalizedString(root, "scopes")),
             ReadOptionalNormalizedString(root, "platform"),
             RequireBoolean(root, "is_active"),
@@ -467,11 +471,25 @@ public static class NyxIdApiAccessResponseParser
             versionEvidence);
     }
 
+    private static long? ReadOptionalPositiveStateVersion(JsonElement root)
+    {
+        if (!root.TryGetProperty("state_version", out var property))
+            return null;
+        if (property.ValueKind != JsonValueKind.Number ||
+            !property.TryGetInt64(out var stateVersion) ||
+            stateVersion <= 0)
+        {
+            throw new NyxIdContractException();
+        }
+
+        return stateVersion;
+    }
+
     private static NyxIdApiKeyVersionEvidence? ParseOptionalVersionEvidence(JsonElement root)
     {
         var hasPrevious = root.TryGetProperty("rotation_predecessor_id", out _);
         var hasVersion = root.TryGetProperty("state_version", out _);
-        var hasUpdatedAt = root.TryGetProperty("updated_at", out _);
+        var hasUpdatedAt = root.TryGetProperty("updated_at", out var updatedAtElement);
         if (!hasPrevious && !hasVersion && !hasUpdatedAt)
             return null;
         if (!hasPrevious || !hasVersion || !hasUpdatedAt)
@@ -490,10 +508,20 @@ public static class NyxIdApiAccessResponseParser
             _ => throw new NyxIdContractException(),
         };
 
+        // A lineage row whose backing record predates authoritative update
+        // timestamps serializes an explicit null; the monotonic state_version
+        // and the predecessor identity remain the authoritative signals.
+        var updatedAt = updatedAtElement.ValueKind switch
+        {
+            JsonValueKind.Null => (DateTimeOffset?)null,
+            JsonValueKind.String => ParseRfc3339(RequireNormalizedString(root, "updated_at")),
+            _ => throw new NyxIdContractException(),
+        };
+
         return new NyxIdApiKeyVersionEvidence(
             predecessorId,
             stateVersion,
-            ParseRfc3339(RequireNormalizedString(root, "updated_at")));
+            updatedAt);
     }
 
     private static IReadOnlyList<string> ParseSpaceSeparatedValues(string value)
@@ -564,7 +592,9 @@ public static class NyxIdApiAccessResponseParser
         string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
         !value.Any(char.IsControl);
 
-    private static void RejectSecretBearingRead(JsonElement root)
+    private static void RejectSecretBearingRead(
+        JsonElement root,
+        string? exemptTopLevelValueField = null)
     {
         switch (root.ValueKind)
         {
@@ -574,6 +604,13 @@ public static class NyxIdApiAccessResponseParser
                     if (SecretBearingReadFieldNames.Contains(
                             NormalizeReadFieldName(property.Name)))
                         throw new NyxIdContractException();
+                    if (exemptTopLevelValueField is not null &&
+                        property.Value.ValueKind == JsonValueKind.String &&
+                        string.Equals(property.Name, exemptTopLevelValueField, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
                     RejectSecretBearingRead(property.Value);
                 }
                 break;

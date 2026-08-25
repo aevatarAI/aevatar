@@ -422,7 +422,39 @@ public sealed class NyxIdApiAccessContractTests
             NyxIdUserServiceCredentialStatus.Active,
             NyxIdOAuthConnectionStatus.Active,
             ["read:user", "repo"],
-            DateTimeOffset.Parse("2026-08-10T07:00:00Z")));
+            DateTimeOffset.Parse("2026-08-10T07:00:00Z"),
+            null));
+    }
+
+    [Fact]
+    public void ParseUserServiceAuthorization_ProjectionContract_ShouldPreserveMonotonicStateVersion()
+    {
+        const string response = """
+            {
+              "id": "service-alpha",
+              "api_key_id": "credential-alpha",
+              "status": "active",
+              "is_active": true,
+              "connection_status": "active",
+              "granted_scopes": ["repo"],
+              "last_authorized_at": "2026-08-10T07:00:00Z",
+              "node_id": null,
+              "rotation_predecessor_id": null,
+              "state_version": 7,
+              "updated_at": "2026-08-10T07:00:05Z"
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseUserServiceAuthorization(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.StateVersion.Should().Be(7);
+
+        var zeroVersion = NyxIdApiAccessResponseParser.ParseUserServiceAuthorization(
+            response.Replace("\"state_version\": 7", "\"state_version\": 0"));
+        zeroVersion.Succeeded.Should().BeFalse();
+        zeroVersion.Failure!.Code.Should().Be(
+            "nyxid_user_service_authorization_response_malformed");
     }
 
     [Theory]
@@ -504,7 +536,6 @@ public sealed class NyxIdApiAccessContractTests
         result.Succeeded.Should().BeTrue();
         result.Value.Should().BeEquivalentTo(new NyxIdAgentApiKeyEvidence(
             "key-alpha",
-            "Codex Key",
             ["proxy", "account:read"],
             "codex",
             true,
@@ -513,6 +544,68 @@ public sealed class NyxIdApiAccessContractTests
             [],
             false,
             DateTimeOffset.Parse("2026-08-10T07:00:00Z"),
+            null));
+    }
+
+    [Fact]
+    public void ParseAgentApiKey_ProjectionDisplayName_ShouldBeExemptFromScanAndNeverRead()
+    {
+        // The authorization projection intentionally retains the display name;
+        // a user naming their key "Bearer Bot" must not fail the evidence read,
+        // and the name never appears in the typed evidence.
+        const string response = """
+            {
+              "id": "key-alpha",
+              "name": "Bearer Bot",
+              "scopes": "proxy",
+              "platform": "codex",
+              "is_active": true,
+              "allowed_service_ids": ["service-alpha"],
+              "allow_all_services": false,
+              "allowed_node_ids": [],
+              "allow_all_nodes": false,
+              "created_at": "2026-08-10T07:00:00Z"
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseAgentApiKey(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.Id.Should().Be("key-alpha");
+        typeof(NyxIdAgentApiKeyEvidence).GetProperties()
+            .Select(static property => property.Name)
+            .Should().NotContain("Name");
+    }
+
+    [Fact]
+    public void ParseAgentApiKey_LineageWithNullUpdatedAt_ShouldKeepStateVersionAuthoritative()
+    {
+        // The api-key projection wraps updated_at as an inner-nullable; a
+        // lineage row without an update timestamp keeps its monotonic version.
+        const string response = """
+            {
+              "id": "key-beta",
+              "name": "Codex Key",
+              "scopes": "proxy",
+              "platform": "codex",
+              "is_active": true,
+              "allowed_service_ids": [],
+              "allow_all_services": false,
+              "allowed_node_ids": [],
+              "allow_all_nodes": false,
+              "created_at": "2026-08-10T07:00:00Z",
+              "rotation_predecessor_id": "key-alpha",
+              "state_version": 2,
+              "updated_at": null
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseAgentApiKey(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.VersionEvidence.Should().Be(new NyxIdApiKeyVersionEvidence(
+            "key-alpha",
+            2,
             null));
     }
 
@@ -584,6 +677,7 @@ public sealed class NyxIdApiAccessContractTests
     [InlineData("\"note\":\"Bearer secret-in-innocuous-field\",")]
     [InlineData("\"note\":\"nyxid_ag_1234567890abcdef\",")]
     [InlineData("\"ignored\":{\"note\":\"Bearer nested-secret-value\"},")]
+    [InlineData("\"ignored\":{\"name\":\"Bearer nested-name-value\"},")]
     [InlineData("\"ignored\":[\"safe\",\"nyxid_ag_1234567890abcdef\"],")]
     [InlineData("\"api_key\":\"nested-secret\",")]
     [InlineData("\"token\":\"nested-secret\",")]
@@ -616,7 +710,7 @@ public sealed class NyxIdApiAccessContractTests
     }
 
     [Fact]
-    public async Task Client_ExactActionEvidenceReads_ShouldUseResourceSpecificGetRoutes()
+    public async Task Client_ExactActionEvidenceReads_ShouldUseAuthorizationProjectionRoutes()
     {
         var handler = new RecordingHandler();
         using var client = new NyxIdApiClient(
@@ -624,14 +718,69 @@ public sealed class NyxIdApiAccessContractTests
             new HttpClient(handler),
             NullLogger<NyxIdApiClient>.Instance);
 
-        await client.GetServiceAsync("bearer-secret", "service-alpha", CancellationToken.None);
-        await client.GetApiKeyAsync("bearer-secret", "key-alpha", CancellationToken.None);
+        await client.GetServiceAuthorizationAsync("bearer-secret", "service-alpha", CancellationToken.None);
+        await client.GetApiKeyAuthorizationAsync("bearer-secret", "key-alpha", CancellationToken.None);
 
         handler.Requests.Select(static request => (request.Method, request.Uri)).Should().Equal(
-            (HttpMethod.Get, "https://nyx.example/api/v1/keys/service-alpha"),
-            (HttpMethod.Get, "https://nyx.example/api/v1/api-keys/key-alpha"));
+            (HttpMethod.Get, "https://nyx.example/api/v1/keys/service-alpha/authorization"),
+            (HttpMethod.Get, "https://nyx.example/api/v1/api-keys/key-alpha/authorization"));
         handler.Requests.Should().OnlyContain(static request =>
             request.Authorization == "Bearer bearer-secret" && request.Body == null);
+    }
+
+    [Fact]
+    public async Task EvidenceReadPort_ShouldReadOnlySecretFreeAuthorizationProjections()
+    {
+        var handler = new RoutedRecordingHandler(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["/api/v1/keys/service-alpha/authorization"] = """
+                {
+                  "id": "service-alpha",
+                  "api_key_id": "credential-alpha",
+                  "status": "active",
+                  "is_active": true,
+                  "connection_status": "active",
+                  "granted_scopes": ["repo"],
+                  "last_authorized_at": "2026-08-10T07:00:00Z",
+                  "node_id": null,
+                  "rotation_predecessor_id": null,
+                  "state_version": 7,
+                  "updated_at": "2026-08-10T07:00:05Z"
+                }
+                """,
+            ["/api/v1/api-keys/key-alpha/authorization"] = """
+                {
+                  "id": "key-alpha",
+                  "name": "Bearer Bot",
+                  "scopes": "proxy",
+                  "platform": "codex",
+                  "is_active": true,
+                  "allowed_service_ids": ["service-alpha"],
+                  "allow_all_services": false,
+                  "allowed_node_ids": [],
+                  "allow_all_nodes": false,
+                  "created_at": "2026-08-10T07:00:00Z"
+                }
+                """,
+        });
+        var port = new NyxIdActionEvidenceReadPort(new StaticApiClientFactory(handler));
+
+        var service = await port.GetUserServiceAuthorizationAsync(
+            "bearer-secret",
+            "service-alpha",
+            CancellationToken.None);
+        var key = await port.GetAgentApiKeyAsync(
+            "bearer-secret",
+            "key-alpha",
+            CancellationToken.None);
+
+        service.Succeeded.Should().BeTrue();
+        service.Value!.StateVersion.Should().Be(7);
+        key.Succeeded.Should().BeTrue();
+        key.Value!.Id.Should().Be("key-alpha");
+        handler.RequestPaths.Should().Equal(
+            "/api/v1/keys/service-alpha/authorization",
+            "/api/v1/api-keys/key-alpha/authorization");
     }
 
     [Theory]
@@ -1302,6 +1451,27 @@ public sealed class NyxIdApiAccessContractTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.example/" },
             new HttpClient(handler, disposeHandler: false),
             NullLogger<NyxIdApiClient>.Instance);
+    }
+
+    private sealed class RoutedRecordingHandler(IReadOnlyDictionary<string, string> responsesByPath)
+        : HttpMessageHandler
+    {
+        public List<string> RequestPaths { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = request.RequestUri!.AbsolutePath;
+            RequestPaths.Add(path);
+            return Task.FromResult(responsesByPath.TryGetValue(path, out var body)
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                }
+                : new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
     }
 
     private sealed class StaticResponseHandler(string response) : HttpMessageHandler

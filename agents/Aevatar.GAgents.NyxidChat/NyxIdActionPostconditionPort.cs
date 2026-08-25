@@ -361,10 +361,12 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
         if (!read.Succeeded)
             return ProviderReadFailure(input, read.Failure);
 
+        // The display name is not compared: it is user-controlled text, not
+        // evidence. Identity, platform, scopes, and the exact service set are
+        // the typed postcondition.
         var evidence = read.Value!;
         if (!evidence.IsActive ||
             !string.Equals(evidence.Id, keyId, StringComparison.Ordinal) ||
-            !string.Equals(evidence.Name, input.Params.KeyCreate.Name, StringComparison.Ordinal) ||
             !string.Equals(evidence.Platform, input.Params.KeyCreate.Platform, StringComparison.Ordinal) ||
             !SetEquals(evidence.Scopes, ["proxy"]) ||
             evidence.AllowAllServices ||
@@ -457,11 +459,14 @@ public sealed class NyxIdActionPostconditionPort : INyxIdActionPostconditionPort
                 "The NyxID key rotation lineage did not match the requested key.");
         }
 
+        // The monotonic state_version and predecessor lineage above are the
+        // authoritative rotation evidence; the update timestamp is a freshness
+        // fence applied only when the projection serializes one.
         var now = _timeProvider.GetUtcNow();
         if (evidence.CreatedAtUtc < requestedAt ||
             evidence.CreatedAtUtc > now ||
-            versionEvidence.UpdatedAtUtc < requestedAt ||
-            versionEvidence.UpdatedAtUtc > now)
+            versionEvidence.UpdatedAtUtc is { } versionUpdatedAt &&
+            (versionUpdatedAt < requestedAt || versionUpdatedAt > now))
         {
             return Unverified(input, StaleCode, "The NyxID key rotation version was stale.");
         }

@@ -513,6 +513,29 @@ public sealed class NyxIdActionPostconditionPortTests
         result.Resource.Key.KeyId.Should().Be("key-beta");
     }
 
+    [Fact]
+    public async Task VerifyAsync_KeyRotateLineageWithoutUpdateTimestamp_ShouldVerify()
+    {
+        // A projection row may serialize updated_at as null; the monotonic
+        // state_version plus the exact predecessor identity stay authoritative.
+        var evidence = new StubActionEvidenceReadPort
+        {
+            AgentApiKey = AgentKey("key-beta") with
+            {
+                VersionEvidence = new NyxIdApiKeyVersionEvidence(
+                    "key-alpha",
+                    2,
+                    null),
+            },
+        };
+        var port = CreatePort(new StubCatalogQueryPort(ReadySnapshot()), evidence);
+
+        var result = await port.VerifyAsync(KeyRotateInput(), ReadContext());
+
+        result.Verified.Should().BeTrue();
+        result.Resource.Key.KeyId.Should().Be("key-beta");
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
@@ -780,11 +803,11 @@ public sealed class NyxIdActionPostconditionPortTests
         NyxIdUserServiceCredentialStatus.Active,
         NyxIdOAuthConnectionStatus.Active,
         ["read:user", "repo"],
-        Now.AddMinutes(-1));
+        Now.AddMinutes(-1),
+        null);
 
     private static NyxIdAgentApiKeyEvidence AgentKey(string keyId = "key-alpha") => new(
         keyId,
-        "Key Alpha",
         ["proxy"],
         "codex",
         true,
