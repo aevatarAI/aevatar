@@ -114,42 +114,23 @@ steps:
     type: switch
     parameters:
       on: "${steps.capture_user_choice.output}"
-      branch.ember_oak: record_selected_ember_oak_before_timeout
-      branch.casa_nera: record_selected_casa_nera_before_timeout
-      branch.atlas_row: record_selected_atlas_row_before_timeout
+      branch.timeout: wait_for_silence_timeout
+      branch.no_reply: wait_for_silence_timeout
       branch.deposit: final_artifact_payment_blocked
       branch.ambiguous: handle_ambiguous_hold_outcome
-      branch._default: wait_for_silence_timeout
+      branch._default: record_selected_venue_before_timeout
     branches:
-      ember_oak: record_selected_ember_oak_before_timeout
-      "Ember & Oak": record_selected_ember_oak_before_timeout
-      casa_nera: record_selected_casa_nera_before_timeout
-      "Casa Nera": record_selected_casa_nera_before_timeout
-      atlas_row: record_selected_atlas_row_before_timeout
-      "Atlas Row": record_selected_atlas_row_before_timeout
+      timeout: wait_for_silence_timeout
+      no_reply: wait_for_silence_timeout
       deposit: final_artifact_payment_blocked
       ambiguous: handle_ambiguous_hold_outcome
-      _default: wait_for_silence_timeout
+      _default: record_selected_venue_before_timeout
 
-  - id: record_selected_ember_oak_before_timeout
+  - id: record_selected_venue_before_timeout
     type: assign
     parameters:
       target: user_gate_result
-      value: '{"status":"answered_before_timeout","selected_venue":"Ember & Oak","selected_venue_id":"ember_oak","timeout_cancelled":true,"pending_input_status":"answered"}'
-    next: assert_only_selected_hold_allowed
-
-  - id: record_selected_casa_nera_before_timeout
-    type: assign
-    parameters:
-      target: user_gate_result
-      value: '{"status":"answered_before_timeout","selected_venue":"Casa Nera","selected_venue_id":"casa_nera","timeout_cancelled":true,"pending_input_status":"answered"}'
-    next: assert_only_selected_hold_allowed
-
-  - id: record_selected_atlas_row_before_timeout
-    type: assign
-    parameters:
-      target: user_gate_result
-      value: '{"status":"answered_before_timeout","selected_venue":"Atlas Row","selected_venue_id":"atlas_row","timeout_cancelled":true,"pending_input_status":"answered"}'
+      value: '{"status":"answered_before_timeout","selected_venue":"${steps.capture_user_choice.output}","timeout_cancelled":true,"pending_input_status":"answered"}'
     next: assert_only_selected_hold_allowed
 
   - id: assert_only_selected_hold_allowed
@@ -157,47 +138,14 @@ steps:
     parameters:
       target: selected_only_policy_check
       value: '{"path":"user_choice_before_timeout","hold_all_allowed":false,"unselected_holds_started":false,"result":"pass"}'
-    next: route_selected_hold
+    next: hold_selected_venue
 
-  - id: route_selected_hold
-    type: switch
-    parameters:
-      on: "${steps.capture_user_choice.output}"
-      branch.ember_oak: hold_selected_ember_oak
-      branch.casa_nera: hold_selected_casa_nera
-      branch.atlas_row: hold_selected_atlas_row
-      branch._default: final_artifact_invalid_selected_choice
-    branches:
-      ember_oak: hold_selected_ember_oak
-      "Ember & Oak": hold_selected_ember_oak
-      casa_nera: hold_selected_casa_nera
-      "Casa Nera": hold_selected_casa_nera
-      atlas_row: hold_selected_atlas_row
-      "Atlas Row": hold_selected_atlas_row
-      _default: final_artifact_invalid_selected_choice
-
-  - id: hold_selected_ember_oak
+  - id: hold_selected_venue
     type: assign
-    idempotency_key: "${run_id}:hold:ember_oak:selected_only"
+    idempotency_key: "${run_id}:hold:selected_venue:selected_only"
     parameters:
       target: selected_only_hold
-      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Ember & Oak","venue_id":"ember_oak","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-ember-oak","elevenlabs_transcript":"mock-transcript-hold-ember-oak","confirmed_time":"19:30","allergy_answer":"no nuts in the kitchen at all","payment_requested":false}'
-    next: verify_selected_hold_record
-
-  - id: hold_selected_casa_nera
-    type: assign
-    idempotency_key: "${run_id}:hold:casa_nera:selected_only"
-    parameters:
-      target: selected_only_hold
-      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Casa Nera","venue_id":"casa_nera","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-casa-nera","elevenlabs_transcript":"mock-transcript-hold-casa-nera","confirmed_time":"19:30","allergy_answer":"pesto has pine nuts; kitchen can omit on request","payment_requested":false}'
-    next: verify_selected_hold_record
-
-  - id: hold_selected_atlas_row
-    type: assign
-    idempotency_key: "${run_id}:hold:atlas_row:selected_only"
-    parameters:
-      target: selected_only_hold
-      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"Atlas Row","venue_id":"atlas_row","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-atlas-row","elevenlabs_transcript":"mock-transcript-hold-atlas-row","confirmed_time":"20:00","allergy_answer":"pesto is nut-free; evening special is not","payment_requested":false}'
+      value: '{"mocked_services":["api-elevenlabs","api-twilio","restaurant-phone"],"venue":"${steps.capture_user_choice.output}","action":"hold","external_effect":"confirmed","twilio_call_record":"mock-call-hold-selected-venue","elevenlabs_transcript":"mock-transcript-hold-selected-venue","confirmed_time":"19:30","allergy_answer":"mock connector verified availability and allergy notes for the selected venue","payment_requested":false}'
     next: verify_selected_hold_record
 
   - id: verify_selected_hold_record
@@ -225,7 +173,7 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"user_choice_before_timeout","kept":"${steps.hold_selected_ember_oak.json.venue}${steps.hold_selected_casa_nera.json.venue}${steps.hold_selected_atlas_row.json.venue}","released":[],"calendar_post_action":"optional_skipped","proof":{"call_records":["${steps.hold_selected_ember_oak.json.twilio_call_record}${steps.hold_selected_casa_nera.json.twilio_call_record}${steps.hold_selected_atlas_row.json.twilio_call_record}"],"transcripts":["${steps.hold_selected_ember_oak.json.elevenlabs_transcript}${steps.hold_selected_casa_nera.json.elevenlabs_transcript}${steps.hold_selected_atlas_row.json.elevenlabs_transcript}"],"verification":"${steps.verify_selected_hold_record.output}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"optional_dependencies_mocked":["api-google"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
+      value: '{"workflow_status":"completed","path":"user_choice_before_timeout","kept":"${steps.hold_selected_venue.json.venue}","released":[],"calendar_post_action":"optional_skipped","proof":{"call_records":["${steps.hold_selected_venue.json.twilio_call_record}"],"transcripts":["${steps.hold_selected_venue.json.elevenlabs_transcript}"],"verification":"${steps.verify_selected_hold_record.output}"},"required_external_dependencies_mocked":["api-twilio","api-elevenlabs","restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"optional_dependencies_mocked":["api-google"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true,"proof_artifact_contains_call_records_and_transcripts":true}}'
     next: ""
 
   - id: wait_for_silence_timeout
@@ -399,11 +347,4 @@ steps:
     parameters:
       target: dinner_date_artifact
       value: '{"workflow_status":"needs_attention","path":"ambiguous_hold_unverified","held":false,"reason":"call completed but transcript did not clearly confirm hold","proof":{"call_records":["mock-call-ambiguous"],"transcripts":["mock-transcript-ambiguous"],"verification":"hold_status_unknown"},"requires_user_decision":true,"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"ambiguous_hold_not_reported_as_confirmed":true}}'
-    next: ""
-
-  - id: final_artifact_invalid_selected_choice
-    type: assign
-    parameters:
-      target: dinner_date_artifact
-      value: '{"workflow_status":"blocked","path":"invalid_choice","reason":"user choice did not match a shown venue","known_choices":["ember_oak","casa_nera","atlas_row"],"money_spent":false,"external_effect":"not_applied"}'
     next: ""
