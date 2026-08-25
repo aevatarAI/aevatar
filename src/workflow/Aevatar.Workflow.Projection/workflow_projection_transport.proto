@@ -428,6 +428,7 @@ message WorkflowCatalogCurrentStateDocument {
   repeated string required_connector_entries = 23;
   repeated string workflow_call_entries = 24;
   aevatar.workflow.WorkflowAuthorizationDependencies authorization_dependencies = 25;
+  string catalog_publication_contract_version = 26;
 }
 
 message WorkflowCatalogRoleReadModel {

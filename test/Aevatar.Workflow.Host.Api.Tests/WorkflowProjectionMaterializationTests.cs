@@ -128,6 +128,7 @@ public sealed class WorkflowProjectionMaterializationTests
                     WorkflowYaml = BuildDefinitionYaml("repo_install"),
                     SourceKind = "repo",
                     Compiled = true,
+                    CatalogPublicationContractVersion = WorkflowCatalogPublicationContracts.CurrentVersion,
                 }));
 
         store.UpsertCount.Should().Be(1);
@@ -138,8 +139,87 @@ public sealed class WorkflowProjectionMaterializationTests
         document.LastEventId.Should().Be("definition-evt-7");
         document.UpdatedAt.Should().Be(DateTimeOffset.Parse("2026-03-17T11:07:00+00:00"));
         document.Source.Should().Be("repo");
+        document.CatalogPublicationContractVersion.Should().Be(WorkflowCatalogPublicationContracts.CurrentVersion);
         document.Primitives.Should().Contain("assign");
         document.Steps.Should().ContainSingle(step => step.Id == "bootstrap");
+    }
+
+    [Fact]
+    public async Task WorkflowCatalogCurrentStateProjector_ShouldFullReplaceDeletedYamlFields()
+    {
+        var store = new RecordingDocumentStore<WorkflowCatalogCurrentStateDocument>(x => x.Id);
+        var projector = new WorkflowCatalogCurrentStateProjector(
+            store,
+            new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
+        var context = new WorkflowBindingProjectionContext
+        {
+            RootActorId = "workflow-definition:delete_field",
+            ProjectionKind = "workflow-binding",
+        };
+        const string withDescriptionYaml = """
+            name: delete_field
+            description: Remove this on next startup.
+            roles:
+              - id: operator
+                name: Operator
+                system_prompt: ""
+            steps:
+              - id: bootstrap
+                type: assign
+                parameters:
+                  target: result
+                  value: "ok"
+            """;
+        const string withoutDescriptionYaml = """
+            name: delete_field
+            roles:
+              - id: operator
+                name: Operator
+                system_prompt: ""
+            steps:
+              - id: bootstrap
+                type: assign
+                parameters:
+                  target: result
+                  value: "ok"
+            """;
+
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                13,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "delete_field",
+                    WorkflowYaml = withDescriptionYaml,
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "delete_field",
+                    WorkflowYaml = withDescriptionYaml,
+                    Compiled = true,
+                }));
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                14,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "delete_field",
+                    WorkflowYaml = withoutDescriptionYaml,
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "delete_field",
+                    WorkflowYaml = withoutDescriptionYaml,
+                    Compiled = true,
+                }));
+
+        store.UpsertCount.Should().Be(2);
+        var document = store.Stored["delete_field"];
+        document.StateVersion.Should().Be(14);
+        document.Description.Should().BeEmpty();
+        document.WorkflowYaml.Should().Be(withoutDescriptionYaml);
     }
 
     [Fact]

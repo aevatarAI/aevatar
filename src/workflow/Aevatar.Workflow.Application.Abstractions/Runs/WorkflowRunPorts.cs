@@ -119,7 +119,8 @@ public sealed record WorkflowActorBinding(
     WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
     string WorkflowId = "",
     string RevisionId = "",
-    string ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion)
+    string ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+    string CatalogPublicationContractVersion = WorkflowCatalogPublicationContracts.LegacyV0)
 {
     public static WorkflowActorBinding Unsupported(string actorId) =>
         new(
@@ -131,7 +132,8 @@ public sealed record WorkflowActorBinding(
             string.Empty,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
             ExternalCapabilityExecutionMode.Unspecified,
-            ToolCatalogPolicyVersion: WorkflowToolCatalogPolicies.LegacyV0);
+            ToolCatalogPolicyVersion: WorkflowToolCatalogPolicies.LegacyV0,
+            CatalogPublicationContractVersion: WorkflowCatalogPublicationContracts.LegacyV0);
 
     public bool IsWorkflowCapable => ActorKind != WorkflowActorKind.Unsupported;
 
