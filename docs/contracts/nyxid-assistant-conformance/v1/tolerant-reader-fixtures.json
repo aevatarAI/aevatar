@@ -234,6 +234,9 @@
                 },
                 "allowedServiceIds": {
                   "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
                   "items": {
                     "type": "string"
                   }
@@ -402,6 +405,9 @@
                 },
                 "allowedServiceIds": {
                   "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
                   "items": {
                     "type": "string"
                   }
@@ -582,6 +588,9 @@
                 },
                 "allowedServiceIds": {
                   "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
                   "items": {
                     "type": "string"
                   }
@@ -613,9 +622,10 @@
           }
         ]
       },
-      "expected": "rejected",
+      "expected": "degraded",
       "known_action_present": false,
-      "error_code": "NYXID_ACTION_REGISTRY_INVALID"
+      "error_code": "NYXID_ACTION_REGISTRY_INVALID",
+      "skipped_action": "service.connect"
     },
     {
       "id": "unknown-tier-enum",
@@ -751,6 +761,9 @@
                 },
                 "allowedServiceIds": {
                   "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
                   "items": {
                     "type": "string"
                   }
@@ -782,9 +795,10 @@
           }
         ]
       },
-      "expected": "rejected",
+      "expected": "degraded",
       "known_action_present": false,
-      "error_code": "NYXID_ACTION_TIER_UNSUPPORTED"
+      "error_code": "NYXID_ACTION_TIER_UNSUPPORTED",
+      "skipped_action": "service.connect"
     },
     {
       "id": "open-object-schema",
@@ -920,6 +934,9 @@
                 },
                 "allowedServiceIds": {
                   "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
                   "items": {
                     "type": "string"
                   }
@@ -951,9 +968,10 @@
           }
         ]
       },
-      "expected": "rejected",
+      "expected": "degraded",
       "known_action_present": false,
-      "error_code": "NYXID_ACTION_REGISTRY_INVALID"
+      "error_code": "NYXID_ACTION_REGISTRY_INVALID",
+      "skipped_action": "service.connect"
     },
     {
       "id": "forbidden-secret-schema-member",
@@ -1092,6 +1110,9 @@
                 },
                 "allowedServiceIds": {
                   "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
                   "items": {
                     "type": "string"
                   }
@@ -1123,9 +1144,10 @@
           }
         ]
       },
-      "expected": "rejected",
+      "expected": "degraded",
       "known_action_present": false,
-      "error_code": "NYXID_ACTION_SECRET_FIELD_FORBIDDEN"
+      "error_code": "NYXID_ACTION_SECRET_FIELD_FORBIDDEN",
+      "skipped_action": "service.connect"
     },
     {
       "id": "destructive-remember-policy",
@@ -1261,6 +1283,9 @@
                 },
                 "allowedServiceIds": {
                   "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
                   "items": {
                     "type": "string"
                   }
@@ -1292,9 +1317,10 @@
           }
         ]
       },
-      "expected": "rejected",
+      "expected": "degraded",
       "known_action_present": false,
-      "error_code": "NYXID_ACTION_REGISTRY_INVALID"
+      "error_code": "NYXID_ACTION_REGISTRY_INVALID",
+      "skipped_action": "service.connect"
     },
     {
       "id": "malformed-json",

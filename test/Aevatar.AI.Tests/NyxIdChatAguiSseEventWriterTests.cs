@@ -558,7 +558,7 @@ public class NyxIdChatAguiSseEventWriterTests
             Request = new NyxIdChatActionRequestState
             {
                 SchemaVersion = 4,
-                RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision,
+                RegistryRevision = "nyxid-assistant-actions.v8",
                 ConversationActorId = "conversation-alpha",
                 OriginTurnId = "turn-alpha",
                 TaskId = "task-alpha",
@@ -648,7 +648,7 @@ public class NyxIdChatAguiSseEventWriterTests
             Request = new NyxIdChatActionRequestState
             {
                 SchemaVersion = 4,
-                RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision,
+                RegistryRevision = "nyxid-assistant-actions.v8",
                 ConversationActorId = "conversation-alpha",
                 OriginTurnId = "turn-alpha",
                 TaskId = "task-alpha",

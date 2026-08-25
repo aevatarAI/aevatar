@@ -76,7 +76,10 @@ public static class ServiceCollectionExtensions
             services.TryAddSingleton<NyxIdAssistantActionRegistrySnapshot>();
             services.TryAddSingleton<INyxIdAssistantActionRegistrySource,
                 NyxIdAssistantActionRegistryHttpSource>();
-            services.TryAddSingleton<NyxIdAssistantActionRegistry>(sp =>
+            // Transient on purpose: a failed startup pins a disabled fallback
+            // that background recovery may upgrade, so consumers must observe
+            // the snapshot's current registry instead of a captured instance.
+            services.TryAddTransient<NyxIdAssistantActionRegistry>(sp =>
                 sp.GetRequiredService<NyxIdAssistantActionRegistrySnapshot>().GetRequired());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService,
                 NyxIdAssistantActionRegistryStartupService>());

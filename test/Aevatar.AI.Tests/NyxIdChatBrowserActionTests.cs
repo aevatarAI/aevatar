@@ -129,7 +129,7 @@ public sealed class NyxIdChatBrowserActionTests
         decision.ShouldCommit.Should().BeTrue();
         decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
         decision.Request.RegistryRevision.Should().Be(
-            NyxIdAssistantActionRegistry.LeastScopeRegistryRevision);
+            "nyxid-assistant-actions.v6");
         decision.Request.Action.Should().Be(NyxIdAssistantActionKind.KeyCreate);
         decision.Request.Params.ParamsCase.Should().Be(
             NyxIdAssistantActionParams.ParamsOneofCase.KeyCreate);
@@ -168,7 +168,7 @@ public sealed class NyxIdChatBrowserActionTests
         decision.ShouldCommit.Should().BeTrue();
         decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
         decision.Request.RegistryRevision.Should().Be(
-            NyxIdAssistantActionRegistry.KeyRotationRegistryRevision);
+            "nyxid-assistant-actions.v7");
         decision.Request.Action.Should().Be(NyxIdAssistantActionKind.KeyRotate);
         decision.Request.Params.ParamsCase.Should().Be(
             NyxIdAssistantActionParams.ParamsOneofCase.KeyRotate);
@@ -260,7 +260,7 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void CommitRequest_ShouldRejectUnsupportedRevisionActionOrParams()
+    public void CommitRequest_ShouldRejectNonExecutableActionOrMismatchedParams()
     {
         var sourceState = AuthorizationWaitingState();
         var valid = NyxIdChatBrowserActions.RequestAuthorization(
@@ -270,7 +270,18 @@ public sealed class NyxIdChatBrowserActionTests
             Now).Request;
         var invalidRequests = new[]
         {
-            Mutate(valid, request => request.RegistryRevision = "nyxid-assistant-actions.future"),
+            Mutate(valid, request =>
+            {
+                request.Action = NyxIdAssistantActionKind.ServiceReauthorize;
+                request.Params = new NyxIdAssistantActionParams
+                {
+                    ServiceReauthorize = new NyxIdServiceReauthorizeParams
+                    {
+                        UserServiceId = "us-github-alpha",
+                        RequestedScopes = { "repo" },
+                    },
+                };
+            }),
             Mutate(valid, request =>
             {
                 request.Action = NyxIdAssistantActionKind.KeyCreate;
@@ -310,27 +321,33 @@ public sealed class NyxIdChatBrowserActionTests
     }
 
     [Fact]
-    public void CommitRequest_ShouldAcceptLegacyRevisionDuringRegistryTransition()
+    public void CommitRequest_ShouldAcceptAnyRevisionLabelForExecutableActions()
     {
         var state = AuthorizationWaitingState();
-        var request = NyxIdChatBrowserActions.RequestAuthorization(
-            state,
-            AuthorizationRequiredSignal(state),
-            Registry(),
-            Now).Request;
-        request.RegistryRevision = NyxIdAssistantActionRegistry.LegacyRegistryRevision;
+        foreach (var revision in new[]
+                 {
+                     "nyxid-assistant-actions.v4",
+                     "nyxid-assistant-actions.future",
+                 })
+        {
+            var request = NyxIdChatBrowserActions.RequestAuthorization(
+                state,
+                AuthorizationRequiredSignal(state),
+                Registry(),
+                Now).Request;
+            request.RegistryRevision = revision;
 
-        var decision = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+            var decision = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
 
-        decision.ShouldCommit.Should().BeTrue();
-        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
-        decision.Request.RegistryRevision.Should().Be(
-            NyxIdAssistantActionRegistry.LegacyRegistryRevision);
-        decision.Request.Action.Should().Be(NyxIdAssistantActionKind.ServiceConnect);
+            decision.ShouldCommit.Should().BeTrue();
+            decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+            decision.Request.RegistryRevision.Should().Be(revision);
+            decision.Request.Action.Should().Be(NyxIdAssistantActionKind.ServiceConnect);
+        }
     }
 
     [Fact]
-    public void CommitRequest_ShouldAcceptLeastScopeKeyCreateOnlyOnV6()
+    public void CommitRequest_ShouldAcceptKeyActionsRegardlessOfRevisionLabel()
     {
         var state = AuthorizationWaitingState();
         var request = NyxIdChatBrowserActions.RequestAuthorization(
@@ -338,7 +355,6 @@ public sealed class NyxIdChatBrowserActionTests
             AuthorizationRequiredSignal(state),
             Registry(),
             Now).Request;
-        request.RegistryRevision = NyxIdAssistantActionRegistry.LeastScopeRegistryRevision;
         request.Action = NyxIdAssistantActionKind.KeyCreate;
         request.Params = new NyxIdAssistantActionParams
         {
@@ -349,50 +365,38 @@ public sealed class NyxIdChatBrowserActionTests
                 AllowedServiceIds = { "us-github-alpha" },
             },
         };
+        foreach (var revision in new[]
+                 {
+                     "nyxid-assistant-actions.v5",
+                     "nyxid-assistant-actions.v6",
+                     "nyxid-assistant-actions.v8",
+                 })
+        {
+            request.RegistryRevision = revision;
+            var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+            accepted.ShouldCommit.Should().BeTrue();
+            accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+            accepted.Request.Params.KeyCreate.AllowedServiceIds.Should().Equal("us-github-alpha");
+        }
 
-        var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
-
-        accepted.ShouldCommit.Should().BeTrue();
-        accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
-        accepted.Request.Params.KeyCreate.AllowedServiceIds.Should().Equal("us-github-alpha");
-
-        request.RegistryRevision = "nyxid-assistant-actions.v5";
-        var rejectedLegacy = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
-        rejectedLegacy.ShouldCommit.Should().BeFalse();
-        rejectedLegacy.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
-    }
-
-    [Fact]
-    public void CommitRequest_ShouldAcceptKeyRotateOnlyOnV7()
-    {
-        var state = AuthorizationWaitingState();
-        var request = NyxIdChatBrowserActions.RequestAuthorization(
-            state,
-            AuthorizationRequiredSignal(state),
-            Registry(),
-            Now).Request;
-        request.RegistryRevision = NyxIdAssistantActionRegistry.KeyRotationRegistryRevision;
         request.Action = NyxIdAssistantActionKind.KeyRotate;
         request.Params = new NyxIdAssistantActionParams
         {
             KeyRotate = new NyxIdKeyRotateParams { KeyId = "key-alpha" },
         };
-
-        var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
-
-        accepted.ShouldCommit.Should().BeTrue();
-        accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
-        accepted.Request.Params.KeyRotate.KeyId.Should().Be("key-alpha");
-
-        request.RegistryRevision = NyxIdAssistantActionRegistry.SupportedRegistryRevision;
-        var acceptedV8 = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
-        acceptedV8.ShouldCommit.Should().BeTrue();
-        acceptedV8.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
-
-        request.RegistryRevision = NyxIdAssistantActionRegistry.LeastScopeRegistryRevision;
-        var rejectedV6 = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
-        rejectedV6.ShouldCommit.Should().BeFalse();
-        rejectedV6.ReasonCode.Should().Be(NyxIdChatBrowserActions.ActionRequestInvalid);
+        foreach (var revision in new[]
+                 {
+                     "nyxid-assistant-actions.v6",
+                     "nyxid-assistant-actions.v7",
+                     "nyxid-assistant-actions.v8",
+                 })
+        {
+            request.RegistryRevision = revision;
+            var accepted = NyxIdChatBrowserActions.CommitRequest(state, request, Now);
+            accepted.ShouldCommit.Should().BeTrue();
+            accepted.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+            accepted.Request.Params.KeyRotate.KeyId.Should().Be("key-alpha");
+        }
     }
 
     [Fact]
@@ -1653,7 +1657,7 @@ public sealed class NyxIdChatBrowserActionTests
     private static NyxIdAssistantActionRegistry RotationRegistry()
     {
         var manifest = JsonNode.Parse(LeastScopeRegistryJson)!.AsObject();
-        manifest["revision"] = NyxIdAssistantActionRegistry.KeyRotationRegistryRevision;
+        manifest["revision"] = "nyxid-assistant-actions.v7";
         manifest["actions"]!.AsArray().Add(JsonNode.Parse("""
             {
               "action": "key.rotate",

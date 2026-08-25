@@ -284,7 +284,7 @@ public sealed partial class NyxIdChatConversationGAgentTests
         action.Params.KeyCreate.Name.Should().Be("agent-alpha");
         action.Params.KeyCreate.Platform.Should().Be("codex");
         action.Params.KeyCreate.AllowedServiceIds.Should().Equal("m-github", "m-lark");
-        action.RegistryRevision.Should().Be(NyxIdAssistantActionRegistry.LeastScopeRegistryRevision);
+        action.RegistryRevision.Should().Be("nyxid-assistant-actions.v6");
     }
 
     private static WorkflowInteractiveActionHandoffCommand KeyCreateHandoff(string actorId) =>

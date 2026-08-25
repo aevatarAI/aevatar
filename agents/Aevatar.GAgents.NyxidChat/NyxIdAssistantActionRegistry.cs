@@ -20,26 +20,27 @@ public sealed record NyxIdAssistantActionValidation(
     NyxIdAssistantActionDefinitionSnapshot Definition,
     NyxIdAssistantActionParams Params);
 
+public sealed record NyxIdAssistantActionRegistrySkip(string WireAction, string Code);
+
 /// <summary>
 /// Immutable, startup-pinned view of the NyxID action manifest. External JSON
 /// schema stays at this adapter boundary; validated requests are converted to
 /// closed protobuf action definitions and params before actor dispatch.
+/// The served manifest is additive and deploys independently of Aevatar:
+/// schema_version is the only registry-wide compatibility gate, the revision
+/// string is an observability label, and a descriptor that is unknown,
+/// malformed, or divergent from its pinned contract is skipped on its own
+/// without disabling the remaining actions.
 /// </summary>
 public sealed class NyxIdAssistantActionRegistry
 {
     public const int SupportedSchemaVersion = 4;
-    public const string LegacyRegistryRevision = "nyxid-assistant-actions.v4";
-    public const string WaveOneDraftRegistryRevision = "nyxid-assistant-actions.v5";
-    public const string LeastScopeRegistryRevision = "nyxid-assistant-actions.v6";
-    public const string KeyRotationRegistryRevision = "nyxid-assistant-actions.v7";
-    public const string SupportedRegistryRevision = "nyxid-assistant-actions.v8";
     public const string ServiceAccessReviewRegistryRevision =
         "aevatar-nyxid-actions.v1";
 
     private const string ServiceAccessReviewWireAction = "service.access_review";
 
     private const string SchemaUnsupported = "NYXID_ACTION_SCHEMA_UNSUPPORTED";
-    private const string RevisionUnsupported = "NYXID_ACTION_REGISTRY_REVISION_UNSUPPORTED";
     private const string ActionUnsupported = "NYXID_ACTION_UNSUPPORTED";
     private const string TierUnsupported = "NYXID_ACTION_TIER_UNSUPPORTED";
     private const string ParamsInvalid = "NYXID_ACTION_PARAMS_INVALID";
@@ -104,19 +105,6 @@ public sealed class NyxIdAssistantActionRegistry
         """;
 
     private const string KeyCreateParamsSchema = """
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["name", "platform", "allowedServiceIds"],
-          "properties": {
-            "name": {"type": "string"},
-            "platform": {"type": "string"},
-            "allowedServiceIds": {"type": "array", "items": {"type": "string"}}
-          }
-        }
-        """;
-
-    private const string LeastScopeKeyCreateParamsSchema = """
         {
           "type": "object",
           "additionalProperties": false,
@@ -205,59 +193,16 @@ public sealed class NyxIdAssistantActionRegistry
                 ParseDeviceOnboard),
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
-    private static readonly FrozenDictionary<string, FrozenSet<string>> PinnedActionsByRevision =
-        new Dictionary<string, FrozenSet<string>>(StringComparer.Ordinal)
-        {
-            [LegacyRegistryRevision] = new[]
-            {
-                "service.connect",
-            }.ToFrozenSet(StringComparer.Ordinal),
-            [WaveOneDraftRegistryRevision] = new[]
-            {
-                "service.connect",
-                "service.reauthorize",
-                "key.create",
-                "key.rotate",
-            }.ToFrozenSet(StringComparer.Ordinal),
-            [LeastScopeRegistryRevision] = new[]
-            {
-                "service.connect",
-                "key.create",
-            }.ToFrozenSet(StringComparer.Ordinal),
-            [KeyRotationRegistryRevision] = new[]
-            {
-                "service.connect",
-                "key.create",
-                "key.rotate",
-            }.ToFrozenSet(StringComparer.Ordinal),
-            [SupportedRegistryRevision] = new[]
-            {
-                "service.connect",
-                "service.reauthorize",
-                "key.create",
-                "key.rotate",
-            }.ToFrozenSet(StringComparer.Ordinal),
-        }.ToFrozenDictionary(StringComparer.Ordinal);
-
     // A manifest contract can be known without being executable by Aevatar.
-    // Each revision exposes only actions that have a typed producer, wire
-    // mapper, and typed postcondition reader on the canonical actor path.
-    // Revision v8 pins service.reauthorize so the manifest loads, but the
-    // action stays closed until that path exists.
-    private static readonly FrozenDictionary<string, FrozenSet<string>> ExecutableActionsByRevision =
-        new Dictionary<string, FrozenSet<string>>(StringComparer.Ordinal)
-        {
-            [LegacyRegistryRevision] = new[] { "service.connect" }
-                .ToFrozenSet(StringComparer.Ordinal),
-            [WaveOneDraftRegistryRevision] = new[] { "service.connect" }
-                .ToFrozenSet(StringComparer.Ordinal),
-            [LeastScopeRegistryRevision] = new[] { "service.connect", "key.create" }
-                .ToFrozenSet(StringComparer.Ordinal),
-            [KeyRotationRegistryRevision] = new[] { "service.connect", "key.create", "key.rotate" }
-                .ToFrozenSet(StringComparer.Ordinal),
-            [SupportedRegistryRevision] = new[] { "service.connect", "key.create", "key.rotate" }
-                .ToFrozenSet(StringComparer.Ordinal),
-        }.ToFrozenDictionary(StringComparer.Ordinal);
+    // Only actions with a typed producer, wire mapper, and typed postcondition
+    // reader on the canonical actor path may be emitted; the served manifest is
+    // an additive superset and never widens this set.
+    private static readonly FrozenSet<string> ExecutableWireActions = new[]
+    {
+        "service.connect",
+        "key.create",
+        "key.rotate",
+    }.ToFrozenSet(StringComparer.Ordinal);
 
     private static readonly NyxIdAssistantActionDefinitionSnapshot ServiceAccessReviewDefinition =
         new()
@@ -279,30 +224,41 @@ public sealed class NyxIdAssistantActionRegistry
         int schemaVersion,
         string registryRevision,
         IReadOnlyDictionary<string, RegistryEntry> entries,
-        FrozenSet<string> executableActions)
+        IReadOnlyList<NyxIdAssistantActionRegistrySkip> skippedActions,
+        bool isStartupFallback = false)
     {
         SchemaVersion = schemaVersion;
         RegistryRevision = registryRevision;
         _entries = entries.ToFrozenDictionary(StringComparer.Ordinal);
-        _executableActions = executableActions;
+        _executableActions = ExecutableWireActions
+            .Where(_entries.ContainsKey)
+            .ToFrozenSet(StringComparer.Ordinal);
+        SkippedActions = skippedActions;
+        IsStartupFallback = isStartupFallback;
     }
 
     public int SchemaVersion { get; }
     public string RegistryRevision { get; }
 
+    /// <summary>
+    /// Known actions whose served descriptor failed contract validation and
+    /// were degraded individually instead of failing the whole registry.
+    /// </summary>
+    public IReadOnlyList<NyxIdAssistantActionRegistrySkip> SkippedActions { get; }
+
+    /// <summary>
+    /// True only for the disabled placeholder pinned when startup could not
+    /// obtain a served registry; recovery may replace exactly such a registry.
+    /// </summary>
+    internal bool IsStartupFallback { get; }
+
     internal static NyxIdAssistantActionRegistry CreateDisabled() =>
         new(
             SupportedSchemaVersion,
-            SupportedRegistryRevision,
+            string.Empty,
             new Dictionary<string, RegistryEntry>(StringComparer.Ordinal),
-            Array.Empty<string>().ToFrozenSet(StringComparer.Ordinal));
-
-    internal static bool IsSupportedRegistryRevision(string revision) =>
-        string.Equals(
-            revision,
-            ServiceAccessReviewRegistryRevision,
-            StringComparison.Ordinal) ||
-        PinnedActionsByRevision.ContainsKey(revision);
+            [],
+            isStartupFallback: true);
 
     internal static bool IsActionExecutable(
         string revision,
@@ -323,9 +279,7 @@ public sealed class NyxIdAssistantActionRegistry
             NyxIdAssistantActionKind.KeyRotate => "key.rotate",
             _ => null,
         };
-        return wireAction is not null &&
-               ExecutableActionsByRevision.TryGetValue(revision, out var executableActions) &&
-               executableActions.Contains(wireAction);
+        return wireAction is not null && ExecutableWireActions.Contains(wireAction);
     }
 
     public static NyxIdAssistantActionRegistry Load(string registryJson)
@@ -338,95 +292,106 @@ public sealed class NyxIdAssistantActionRegistry
             if (schemaVersion != SupportedSchemaVersion)
                 throw Error(SchemaUnsupported, "The NyxID action schema version is not supported.");
 
-            var revision = ReadRequiredString(root, "revision", 128);
-            if (!PinnedActionsByRevision.TryGetValue(revision, out var pinnedActions) ||
-                !ExecutableActionsByRevision.TryGetValue(revision, out var executableActions))
-            {
-                throw Error(RevisionUnsupported, "The NyxID action registry revision is not supported.");
-            }
-
+            var revision = ReadRevisionLabel(root);
             var actions = RequireProperty(root, "actions");
             if (actions.ValueKind != JsonValueKind.Array)
                 throw Error(RegistryInvalid, "The NyxID action registry actions field must be an array.");
 
             var entries = new Dictionary<string, RegistryEntry>(StringComparer.Ordinal);
+            var skippedActions = new List<NyxIdAssistantActionRegistrySkip>();
             foreach (var item in actions.EnumerateArray())
             {
-                var descriptor = RequireObject(item);
-                var wireAction = ReadRequiredString(descriptor, "action", 128);
-                if (!SupportedActions.TryGetValue(wireAction, out var contract) ||
-                    !pinnedActions.Contains(wireAction))
+                string? wireAction = null;
+                try
                 {
-                    continue;
+                    var descriptor = RequireObject(item);
+                    var candidateAction = ReadRequiredString(descriptor, "action", 128);
+                    if (!SupportedActions.TryGetValue(candidateAction, out var contract))
+                        continue;
+
+                    wireAction = candidateAction;
+                    var tier = ParseTier(ReadRequiredString(descriptor, "tier", 32));
+                    if (tier != NyxIdAssistantActionTier.V1)
+                        throw Error(TierUnsupported, "Only NyxID Assistant v1 actions are supported.");
+
+                    var risk = ParseRisk(ReadRequiredString(descriptor, "risk", 32));
+                    var rememberEligible = RequireBoolean(descriptor, "remember_eligible");
+                    if (risk == NyxIdAssistantActionRisk.Destructive && rememberEligible)
+                        throw Error(RegistryInvalid, "Destructive actions cannot be remember eligible.");
+
+                    var paramsSchema = RequireProperty(descriptor, "params_schema").Clone();
+                    ValidateSchema(paramsSchema);
+                    ValidatePinnedContract(
+                        contract,
+                        paramsSchema,
+                        risk,
+                        rememberEligible);
+                    var definition = new NyxIdAssistantActionDefinitionSnapshot
+                    {
+                        SchemaVersion = schemaVersion,
+                        RegistryRevision = revision,
+                        Action = contract.Action,
+                        WireAction = wireAction,
+                        Description = ReadRequiredString(descriptor, "description", 2048),
+                        AdvisoryRisk = risk,
+                        Tier = tier,
+                        RememberEligible = rememberEligible,
+                    };
+                    if (!entries.TryAdd(
+                            wireAction,
+                            new RegistryEntry(definition, paramsSchema, contract.Parser)))
+                    {
+                        throw Error(RegistryInvalid, "The NyxID action registry contains a duplicate action.");
+                    }
                 }
-
-                var tier = ParseTier(ReadRequiredString(descriptor, "tier", 32));
-                if (tier != NyxIdAssistantActionTier.V1)
-                    throw Error(TierUnsupported, "Only NyxID Assistant v1 actions are supported.");
-
-                var risk = ParseRisk(ReadRequiredString(descriptor, "risk", 32));
-                var rememberEligible = RequireBoolean(descriptor, "remember_eligible");
-                if (risk == NyxIdAssistantActionRisk.Destructive && rememberEligible)
-                    throw Error(RegistryInvalid, "Destructive actions cannot be remember eligible.");
-
-                var paramsSchema = RequireProperty(descriptor, "params_schema").Clone();
-                ValidateSchema(paramsSchema);
-                ValidatePinnedContract(
-                    contract,
-                    revision,
-                    paramsSchema,
-                    risk,
-                    rememberEligible);
-                var definition = new NyxIdAssistantActionDefinitionSnapshot
+                catch (NyxIdAssistantActionRegistryException exception)
                 {
-                    SchemaVersion = schemaVersion,
-                    RegistryRevision = revision,
-                    Action = contract.Action,
-                    WireAction = wireAction,
-                    Description = ReadRequiredString(descriptor, "description", 2048),
-                    AdvisoryRisk = risk,
-                    Tier = tier,
-                    RememberEligible = rememberEligible,
-                };
-                if (!entries.TryAdd(
-                        wireAction,
-                        new RegistryEntry(definition, paramsSchema, contract.Parser)))
-                {
-                    throw Error(RegistryInvalid, "The NyxID action registry contains a duplicate action.");
+                    RecordSkip(skippedActions, wireAction, exception.Code);
                 }
-            }
-
-            if (!pinnedActions.All(entries.ContainsKey))
-            {
-                throw Error(
-                    RegistryInvalid,
-                    "The NyxID action registry is missing an action required by its pinned revision.");
-            }
-
-            if (!executableActions.All(entries.ContainsKey))
-            {
-                throw Error(
-                    ActionUnsupported,
-                    "The NyxID action registry is missing an action required by this Aevatar version.");
+                catch (NyxIdActionSecretPolicyException exception)
+                {
+                    RecordSkip(skippedActions, wireAction, exception.Code);
+                }
             }
 
             return new NyxIdAssistantActionRegistry(
                 schemaVersion,
                 revision,
                 entries,
-                executableActions);
-        }
-        catch (NyxIdAssistantActionRegistryException)
-        {
-            throw;
-        }
-        catch (NyxIdActionSecretPolicyException)
-        {
-            throw;
+                skippedActions);
         }
         catch (JsonException)
         {
             throw Error(RegistryInvalid, "The NyxID action registry must be valid JSON.");
+        }
+    }
+
+    private static void RecordSkip(
+        List<NyxIdAssistantActionRegistrySkip> skippedActions,
+        string? wireAction,
+        string code)
+    {
+        // Descriptors whose action name could not even be read stay anonymous;
+        // unknown action names are additive manifest noise and are not recorded.
+        if (wireAction is not null)
+            skippedActions.Add(new NyxIdAssistantActionRegistrySkip(wireAction, code));
+    }
+
+    private static string ReadRevisionLabel(JsonElement root)
+    {
+        if (!root.TryGetProperty("revision", out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return NormalizeString(property.GetString(), 128, required: false);
+        }
+        catch (NyxIdAssistantActionRegistryException)
+        {
+            return string.Empty;
         }
     }
 
@@ -890,17 +855,11 @@ public sealed class NyxIdAssistantActionRegistry
 
     private static void ValidatePinnedContract(
         ActionContract contract,
-        string revision,
         JsonElement paramsSchema,
         NyxIdAssistantActionRisk risk,
         bool rememberEligible)
     {
-        var pinnedParamsSchema = revision is LeastScopeRegistryRevision
-                                     or KeyRotationRegistryRevision
-                                     or SupportedRegistryRevision &&
-                                 contract.Action == NyxIdAssistantActionKind.KeyCreate
-            ? LeastScopeKeyCreateParamsSchema
-            : contract.PinnedParamsSchema;
+        var pinnedParamsSchema = contract.PinnedParamsSchema;
         if (pinnedParamsSchema is null)
             return;
 
