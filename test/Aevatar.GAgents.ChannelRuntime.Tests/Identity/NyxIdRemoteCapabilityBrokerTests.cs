@@ -136,6 +136,38 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
+    public async Task ExchangeAuthorizationCodeAsync_WithResourceUris_AppendsResourceIndicators()
+    {
+        var handler = StubHandler.Text(HttpStatusCode.OK,
+            """
+            {
+              "binding_id": "bnd-user",
+              "access_token": "access-token",
+              "id_token": "id-token",
+              "token_type": "Bearer"
+            }
+            """);
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: handler);
+
+        await broker.ExchangeAuthorizationCodeAsync(
+            "auth-code",
+            "verifier",
+            "http://localhost/auth/callback",
+            [
+                " https://api.example.test/api/v1/proxy/s/tavily ",
+                "https://api.example.test/api/v1/proxy/s/tavily",
+                "https://api.example.test/api/v1/proxy/s/aevatar",
+            ]);
+
+        var form = QueryHelpers.ParseQuery($"?{handler.LastRequestBody}");
+        form["resource"].Should().Equal(
+            "https://api.example.test/api/v1/proxy/s/tavily",
+            "https://api.example.test/api/v1/proxy/s/aevatar");
+    }
+
+    [Fact]
     public async Task StartExternalBindingAsync_EmitsAuthorizeUrlOnlyWhenRedirectUriMatches()
     {
         var expectedRedirectUri = NyxIdRedirectUriResolver.Resolve();

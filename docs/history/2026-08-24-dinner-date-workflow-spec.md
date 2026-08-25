@@ -13,36 +13,31 @@ This document is a non-authoritative implementation note for the UC5 dinner-date
 ```mermaid
 %%{init: {"flowchart": {"curve": "basis"}}}%%
 flowchart TD
-    A["Start: user request"] --> B["Prepare context"]
-    B --> C["Load participant context"]
-    C --> D["Load optional calendar context"]
-    D --> E["Discover restaurant candidates"]
-    E --> F["Build shortlist from candidates"]
-    F --> G["Show options"]
-    G --> H["Emit options_shown"]
-    H --> I["Persist wait state"]
-    I --> J{"Input outcome"}
+    A["Start: user request"] --> B["Prepare request context"]
+    B --> C["Discover restaurant candidates"]
+    C --> D["Build shortlist from candidates"]
+    D --> E["Show options"]
+    E --> F["Emit options_shown"]
+    F --> G{"Input outcome"}
 
-    J -->|"selected venue"| K["Record selected venue"]
-    K --> L["Assert selected-only hold policy"]
-    L --> M["Hold selected venue"]
-    M --> N["Verify selected hold proof"]
-    N --> O["Optional calendar post-action"]
-    O --> P["Emit completed"]
-    P --> Q["Final artifact: completed"]
+    G -->|"selected venue"| H["Record selected venue"]
+    H --> I["Assert selected-only hold policy"]
+    I --> J["Hold selected venue"]
+    J --> K["Verify selected hold proof"]
+    K --> L["Emit completed"]
+    L --> M["Final artifact: completed"]
 
-    J -->|"timeout / no_reply"| R["Wait silence timeout"]
-    R --> S["Hold all candidate venues<br/>tell restaurants decision comes tonight"]
-    S --> T["Verify hold proofs"]
-    T --> U["Wait for user choice after holds"]
-    U --> V["Release unselected venues"]
-    V --> W["Verify release proofs"]
-    W --> X["Optional calendar post-action"]
-    X --> Y["Emit completed"]
-    Y --> Z["Final artifact: completed"]
+    G -->|"timeout / no_reply"| N["Mark silence timeout"]
+    N --> O["Hold all candidate venues<br/>tell restaurants decision comes tonight"]
+    O --> P["Verify hold proofs"]
+    P --> Q["Wait for user choice after holds"]
+    Q --> R["Release unselected venues"]
+    R --> S["Verify release proofs"]
+    S --> T["Emit completed"]
+    T --> U["Final artifact: completed"]
 
-    J -->|"deposit required"| AA["Final artifact: failed"]
-    J -->|"ambiguous phone outcome"| AB["Final artifact: needs_attention"]
+    G -->|"deposit required"| V["Final artifact: failed"]
+    G -->|"ambiguous phone outcome"| W["Final artifact: needs_attention"]
 ```
 
 ## Current Template Nodes
@@ -51,16 +46,12 @@ The executable template is `workflows/dinner_date_mock.yaml`. These nodes are in
 
 | Boundary node | Current implementation | Replace with real connector? | Notes |
 |---|---|---:|---|
-| `load_participant_context` | `assign` mock | Optional | Can read Gmail, user memory, or profile data. Not required for core success. |
-| `load_optional_calendar_context` | `assign` mock | Optional | Calendar read only. Must not block the core workflow. |
 | `discover_restaurant_candidates` | `assign` mock | Recommended | Replace with search and page-fetch connectors. |
 | `build_shortlist_from_candidates` | `assign` mock | Maybe | Can remain LLM/internal planner if candidate discovery returns structured data. |
 | `hold_selected_venue` | `assign` mock | Required | Replace with one phone hold connector for the venue selected before timeout. |
 | `hold_candidate_*` | `assign` mock | Required | Replace with phone hold connectors for timeout hold-all path; each call should say the user decision comes tonight and unselected holds will be released. |
 | `release_unselected_*` | `assign` mock | Required | Replace with phone release connector. |
 | `handle_ambiguous_hold_outcome` | `assign` mock | Required behavior | Can become an output branch of the real phone connector rather than a separate tool. |
-| `decide_optional_calendar_selected_only` | `assign` skip | Optional | Replace with Calendar create/readback only after selected hold succeeds. |
-| `decide_optional_calendar_after_holds` | `assign` skip | Optional | Replace with Calendar create/readback only after final hold/release proof succeeds. |
 
 ## External Dependencies
 
@@ -111,24 +102,6 @@ venues:
     hold_status: not_started
 ```
 
-### Optional Google Context And Post-Action
-
-| Dependency | NyxID service | Used by template node(s) | Core success dependency? |
-|---|---|---|---:|
-| Gmail/history read | `api-google` | `load_participant_context` | No |
-| Calendar read | `api-google` | `load_optional_calendar_context` | No |
-| Calendar write/readback | `api-google` | `decide_optional_calendar_selected_only`, `decide_optional_calendar_after_holds` | No |
-
-Observed `api-google` default scopes were only:
-
-```text
-openid
-email
-profile
-```
-
-Those scopes are not enough for Gmail or Calendar. Enabling Google context requires explicit Gmail read and/or Calendar read/write scopes. Calendar write must remain an optional post-action: failure to create or verify a calendar event must not change a completed reservation flow into a failed workflow.
-
 ## Non-Connector Workflow Rules
 
 These nodes represent orchestration or policy and should generally stay stable when replacing mocks:
@@ -138,7 +111,7 @@ These nodes represent orchestration or policy and should generally stay stable w
 | `validate_no_external_effect_before_options` | No restaurant call, hold, release, or payment before visible options. |
 | `mark_options_shown` / `emit_options_shown` | Establish the boundary after which no-cost phone holds are allowed. |
 | `route_user_choice_before_timeout` | Route selected, timeout, deposit-required, and ambiguous outcomes. |
-| `assert_only_selected_hold_allowed` | If the user chooses before timeout, only the selected venue may be held. |
+| `assert_selected_hold_policy` | If the user chooses before timeout, only the selected venue may be held. |
 | `assert_hold_all_policy_after_timeout` | If the user is silent until timeout, no-cost holds may be attempted for all candidates. |
 | `verify_*` | Confirm that effect-capable connector outputs include proof and do not imply payment. |
 | `final_artifact_*` | Report completed, failed, or needs-attention outcomes without hiding uncertainty. |
@@ -153,12 +126,9 @@ Observed during local testing:
 | `tavily-search-chrono-ai` | Connected/available. |
 | `api-twilio` | Catalog exists, not observed connected in the current service list. |
 | `api-elevenlabs` | Catalog exists, not observed connected in the current service list. |
-| `api-google` | Catalog exists; observed default scopes are insufficient for Gmail/Calendar. |
 
 ## Open Questions
 
 1. Should candidate discovery require connected search/Firecrawl, or allow user-provided candidate restaurants as a fallback?
 2. Should timeout `hold_candidate_*` remain per-venue nodes, or collapse into one connector node once workflow support for array outputs and iteration is sufficient?
 3. Should ambiguous phone outcomes be represented as a separate workflow branch or only as `external_effect: unverified` from the phone connector?
-4. What exact Google OAuth scopes should be requested if optional Gmail/Calendar features are enabled?
-5. Should calendar creation be user-triggered after the final artifact, or automatic when Calendar write is connected?

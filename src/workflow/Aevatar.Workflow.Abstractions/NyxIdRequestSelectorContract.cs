@@ -152,7 +152,8 @@ public static class NyxIdRequestSelectorContract
         NyxIdOperationRisk risk) => risk switch
         {
             NyxIdOperationRisk.ReadOnly =>
-                method is NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options,
+                method is NyxIdRequestMethod.Get or NyxIdRequestMethod.Head or NyxIdRequestMethod.Options or
+                    NyxIdRequestMethod.Post,
             NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive => true,
             _ => false,
         };

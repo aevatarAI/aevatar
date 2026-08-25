@@ -461,6 +461,11 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(
             23,
             services: [CatalogService("user-service-local-aevatar")]));
+        var accessToken = CreateAccessToken(new
+        {
+            allowed_service_ids = new[] { "user-service-local-aevatar" },
+            allow_all_services = false,
+        });
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest
             {
@@ -472,7 +477,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
                 "binding-alpha",
                 CreateIdToken(new { uid = "nyx-owner-alpha" }),
-                "bearer-alpha")),
+                accessToken)),
             new UsableCapabilityBroker(),
             new FakeExternalIdentityBindingQueryPort(),
             new RecordingBindingDispatch(),
@@ -493,10 +498,46 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             OwnerKind = AuthorizationOwnerKind.Personal,
             OwnerSubject = "nyx-owner-alpha",
         });
-        targeted.BearerToken.Should().Be("bearer-alpha");
+        targeted.BearerToken.Should().Be(accessToken);
         targeted.Request.RequiredServices.Should().ContainSingle()
             .Which.UserServiceId.Should().Be("user-service-local-aevatar");
         targeted.Request.LLMTarget.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Finalize_WithRequiredUserServiceIds_ShouldRejectBindingWhenAccessTokenGrantIsMissingService()
+    {
+        var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+            "binding-alpha",
+            CreateIdToken(new { uid = "nyx-owner-alpha" }),
+            CreateAccessToken(new
+            {
+                allowed_service_ids = new[] { "user-service-other" },
+                allow_all_services = false,
+            })));
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest
+            {
+                Code = "auth-code",
+                CodeVerifier = "pkce-verifier",
+                RedirectUri = "http://localhost/auth/callback",
+                RequiredUserServiceIds = ["user-service-local-aevatar"],
+            },
+            broker,
+            new UsableCapabilityBroker(),
+            new FakeExternalIdentityBindingQueryPort(),
+            new RecordingBindingDispatch(),
+            new RecordingBindingReplaceDispatch(),
+            NullLoggerFactory.Instance);
+
+        var (statusCode, payload) = await ExecuteJsonAsync<LoginErrorResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status409Conflict);
+        payload.Should().Be(new LoginErrorResponse(
+            "required_service_access_missing",
+            "Return to NyxID and keep every service marked as required by Aevatar selected."));
+        broker.RevokedBindingIds.Should().Equal("binding-alpha");
     }
 
     [Fact]
@@ -724,7 +765,11 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
 
-        broker.Exchanges.Should().ContainSingle().Which.Should().Be(("auth-code", "pkce-verifier", "http://localhost/auth/callback"));
+        var exchange = broker.Exchanges.Should().ContainSingle().Which;
+        exchange.Code.Should().Be("auth-code");
+        exchange.CodeVerifier.Should().Be("pkce-verifier");
+        exchange.RedirectUri.Should().Be("http://localhost/auth/callback");
+        exchange.ResourceUris.Should().BeEmpty();
         statusCode.Should().Be(StatusCodes.Status200OK);
         payload.Should().NotBeNull();
         payload!.BindingDispatchAccepted.Should().BeTrue();
@@ -744,6 +789,50 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             BindingId = "bnd-owner-1",
             OwnerScopeId = "owner-user-1",
         });
+    }
+
+    [Fact]
+    public async Task Finalize_WithServiceAccessReview_ShouldForwardRequestedResources()
+    {
+        var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+            BindingId: "bnd-owner-1",
+            IdToken: CreateIdToken(new { uid = "owner-user-1" }),
+            AccessToken: CreateAccessToken(new
+            {
+                allowed_service_ids = new[] { "svc-tavily" },
+                allow_all_services = false,
+            })));
+        var queryPort = new FakeExternalIdentityBindingQueryPort();
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest
+            {
+                Code = "auth-code",
+                CodeVerifier = "pkce-verifier",
+                RedirectUri = "http://localhost/auth/callback",
+                ServiceAccessReview = true,
+                ResourceUris =
+                [
+                    " https://nyx.example/api/v1/proxy/s/tavily ",
+                    "https://nyx.example/api/v1/proxy/s/tavily",
+                    "https://nyx.example/api/v1/proxy/s/aevatar",
+                ],
+                RequiredUserServiceIds = ["svc-tavily"],
+            },
+            broker,
+            new UsableCapabilityBroker(),
+            queryPort,
+            new RecordingBindingDispatch(),
+            new RecordingBindingReplaceDispatch(),
+            NullLoggerFactory.Instance);
+
+        var (statusCode, _) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        var exchange = broker.Exchanges.Should().ContainSingle().Which;
+        exchange.ResourceUris.Should().Equal(
+            "https://nyx.example/api/v1/proxy/s/tavily",
+            "https://nyx.example/api/v1/proxy/s/aevatar");
     }
 
     [Fact]
@@ -1323,6 +1412,13 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         return $"{header}.{body}.";
     }
 
+    private static string CreateAccessToken(object payload)
+    {
+        var header = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new { alg = "none" }));
+        var body = Base64Url(JsonSerializer.SerializeToUtf8Bytes(payload));
+        return $"{header}.{body}.";
+    }
+
     private static string Base64Url(byte[] bytes) =>
         Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
@@ -1516,7 +1612,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     {
         public Exception? ExchangeError { get; init; }
         public List<string> RevokedBindingIds { get; } = [];
-        public List<(string Code, string CodeVerifier, string RedirectUri)> Exchanges { get; } = [];
+        public List<(string Code, string CodeVerifier, string RedirectUri, IReadOnlyList<string>? ResourceUris)> Exchanges { get; } = [];
 
         public Task<CallbackStateDecode> TryDecodeStateTokenAsync(string stateToken, CancellationToken ct = default) =>
             Task.FromResult(CallbackStateDecode.Failed("not_supported"));
@@ -1531,9 +1627,17 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             string authorizationCode,
             string codeVerifier,
             string redirectUri,
+            CancellationToken ct = default) =>
+            ExchangeAuthorizationCodeAsync(authorizationCode, codeVerifier, redirectUri, null, ct);
+
+        public Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
+            string authorizationCode,
+            string codeVerifier,
+            string redirectUri,
+            IReadOnlyList<string>? resourceUris,
             CancellationToken ct = default)
         {
-            Exchanges.Add((authorizationCode, codeVerifier, redirectUri));
+            Exchanges.Add((authorizationCode, codeVerifier, redirectUri, resourceUris));
             if (ExchangeError is not null)
                 return Task.FromException<BrokerAuthorizationCodeResult>(ExchangeError);
             return Task.FromResult(result);
