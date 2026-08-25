@@ -1313,6 +1313,9 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                     'Completed time',
                   )}
                 </th>
+                <th scope="col">
+                  {t('workflowActivityVNext.schedule.action', 'Action')}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -1396,32 +1399,28 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                       </div>
                     </td>
                     <td>
+                      <time
+                        className="wa-vnext__schedule-history-completed"
+                        dateTime={fire.completedAt}
+                      >
+                        {formatScheduleDate(
+                          fire.completedAt,
+                          scheduleDetail.data.schedule.timezone,
+                        )}
+                      </time>
+                    </td>
+                    <td className="wa-vnext__schedule-history-action">
                       {attemptHref && attemptLabel ? (
                         <a
                           aria-label={attemptLabel}
-                          className="wa-vnext__schedule-history-attempt-link wa-vnext__schedule-history-completed"
+                          className="wa-vnext__schedule-history-attempt-link"
                           href={attemptHref}
                           rel="noopener noreferrer"
                           target="_blank"
                         >
-                          <time dateTime={fire.completedAt}>
-                            {formatScheduleDate(
-                              fire.completedAt,
-                              scheduleDetail.data.schedule.timezone,
-                            )}
-                          </time>
                           <ArrowRightOutlined aria-hidden="true" />
                         </a>
-                      ) : (
-                        <span className="wa-vnext__schedule-history-completed">
-                          <time dateTime={fire.completedAt}>
-                            {formatScheduleDate(
-                              fire.completedAt,
-                              scheduleDetail.data.schedule.timezone,
-                            )}
-                          </time>
-                        </span>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 );

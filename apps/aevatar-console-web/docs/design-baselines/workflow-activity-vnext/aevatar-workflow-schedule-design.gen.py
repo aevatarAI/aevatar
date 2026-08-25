@@ -606,31 +606,36 @@ def frame_schedule_history(index: int) -> None:
          MUTED, width=470)
 
     table_y = cy + 278
-    widths = [178, 86, 96, 132]
+    widths = [133, 69, 93, 143, 54]
     rect(cx + 776, table_y, sum(widths), 42, bg=SUBTLE, stroke=LINE, radius=False)
     cursor = cx + 776
-    for width, label in zip(widths, ("SCHEDULED", "SOURCE", "RESULT", "COMPLETED")):
-        text(cursor + 8, table_y + 13, label, FS_SMALL, MUTED,
-             font=FONT_MONO, width=width - 16)
+    for width, label in zip(widths, ("SCHEDULED", "SOURCE", "RESULT", "COMPLETED", "ACTION")):
+        padding = 4 if label == "ACTION" else 8
+        size = 12 if label == "ACTION" else FS_SMALL
+        text(cursor + padding, table_y + 13, label, size, MUTED,
+             font=FONT_MONO, width=width - 2 * padding)
         cursor += width
 
     rows = [
-        ("Mon 24 Aug · 09:00", "Scheduled", "Failed", "09:00", "fail"),
-        ("Fri 21 Aug · 09:00", "Scheduled", "Succeeded", "09:01", "ok"),
-        ("Thu 20 Aug · 15:42", "Manual", "Succeeded", "15:43", "ok"),
+        ("24 Aug · 09:00", "Scheduled", "Failed", "09:00", False),
+        ("21 Aug · 09:00", "Scheduled", "Run started", "09:01", True),
+        ("20 Aug · 15:42", "Manual", "Run started", "15:43", True),
     ]
     row_offsets = [42, 194, 270]
-    for row_index, (scheduled, source, result, completed, kind) in enumerate(rows):
+    for row_index, (scheduled, source, result, completed, has_action) in enumerate(rows):
         row_y = table_y + row_offsets[row_index]
         row_h = 152 if row_index == 0 else 76
         rect(cx + 776, row_y, sum(widths), row_h, bg=SURFACE, stroke=LINE,
              radius=False)
         cursor = cx + 776
-        for width, value in zip(widths, (scheduled, source, result, completed)):
-            color = RED if value == "Failed" else GREEN if value == "Succeeded" else INK
-            text(cursor + 8, row_y + 18, value, FS_SMALL, color,
-                 width=width - 16)
+        for width, value in zip(widths[:4], (scheduled, source, result, completed)):
+            color = RED if value == "Failed" else GREEN if value == "Run started" else INK
+            text(cursor + 4, row_y + 18, value, 12, color,
+                 width=width - 8)
             cursor += width
+        if has_action:
+            text(cursor, row_y + 16, "→", FS_BODY, BLUE,
+                 width=widths[-1], align="center")
         if row_index == 0:
             text(cx + 784, row_y + 54,
                  "The scheduled attempt could not start the Workflow.", FS_SMALL,

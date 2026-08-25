@@ -120,18 +120,21 @@ describe('WorkflowScheduleSurface', () => {
     });
   });
 
-  it('sizes Schedule history columns for timestamps instead of empty result space', () => {
+  it('allocates a separate Schedule history Action column', () => {
     expect(workflowActivityVNextCss).toContain(
-      '.wa-vnext__schedule-history-table th:nth-child(1), .wa-vnext__schedule-history-table td:nth-child(1) { width: 29%; }',
+      '.wa-vnext__schedule-history-table th:nth-child(1), .wa-vnext__schedule-history-table td:nth-child(1) { width: 27%; }',
     );
     expect(workflowActivityVNextCss).toContain(
-      '.wa-vnext__schedule-history-table th:nth-child(2), .wa-vnext__schedule-history-table td:nth-child(2) { width: 15%; }',
+      '.wa-vnext__schedule-history-table th:nth-child(2), .wa-vnext__schedule-history-table td:nth-child(2) { width: 14%; }',
     );
     expect(workflowActivityVNextCss).toContain(
-      '.wa-vnext__schedule-history-table th:nth-child(3), .wa-vnext__schedule-history-table td:nth-child(3) { width: 22%; }',
+      '.wa-vnext__schedule-history-table th:nth-child(3), .wa-vnext__schedule-history-table td:nth-child(3) { width: 19%; }',
     );
     expect(workflowActivityVNextCss).toContain(
-      '.wa-vnext__schedule-history-table th:nth-child(4), .wa-vnext__schedule-history-table td:nth-child(4) { width: 34%; }',
+      '.wa-vnext__schedule-history-table th:nth-child(4), .wa-vnext__schedule-history-table td:nth-child(4) { width: 29%; }',
+    );
+    expect(workflowActivityVNextCss).toContain(
+      '.wa-vnext__schedule-history-table th:nth-child(5), .wa-vnext__schedule-history-table td:nth-child(5) { width: 11%; }',
     );
   });
 
@@ -803,6 +806,7 @@ describe('WorkflowScheduleSurface', () => {
     expect(
       screen.getByRole('columnheader', { name: 'Completed time' }),
     ).toBeVisible();
+    expect(screen.getByRole('columnheader', { name: 'Action' })).toBeVisible();
     expect(screen.getByText('Scheduled')).toBeVisible();
     expect(screen.getByText('Manual')).toBeVisible();
     expect(screen.getByText('Failed')).toBeVisible();
@@ -818,12 +822,22 @@ describe('WorkflowScheduleSurface', () => {
     ).not.toBeVisible();
     expect(screen.getByText('Technical details')).toBeInTheDocument();
     expect(screen.queryByText('schedule-alpha:fire:1')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Open Run from/ })).toBeVisible();
-    expect(
-      screen
-        .getByText('The scheduled attempt could not start the Workflow.')
-        .closest('tr'),
-    ).not.toHaveAttribute('role', 'link');
+    const runLink = screen.getByRole('link', { name: /Open Run from/ });
+    expect(runLink).toBeVisible();
+    expect(runLink.closest('td')?.cellIndex).toBe(4);
+    const completedTime = dialog.querySelector<HTMLTimeElement>(
+      'time[datetime="2026-08-19T03:01:00Z"]',
+    );
+    expect(completedTime).toBeInTheDocument();
+    expect(completedTime?.closest('td')?.cellIndex).toBe(3);
+    expect(completedTime?.closest('td')).not.toContainElement(runLink);
+    const failedRow = screen
+      .getByText('The scheduled attempt could not start the Workflow.')
+      .closest('tr');
+    expect(failedRow).not.toHaveAttribute('role', 'link');
+    const failedCells = failedRow?.querySelectorAll('td');
+    expect(failedCells).toHaveLength(5);
+    expect(failedCells?.[4]?.querySelector('a')).toBeNull();
 
     fireEvent.click(screen.getByText('Technical details'));
     expect(

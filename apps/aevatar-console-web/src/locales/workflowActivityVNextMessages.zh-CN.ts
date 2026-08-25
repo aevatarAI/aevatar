@@ -627,6 +627,7 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.source': '来源',
     'workflowActivityVNext.schedule.result': '结果',
     'workflowActivityVNext.schedule.completedTime': '完成时间',
+    'workflowActivityVNext.schedule.action': '操作',
     'workflowActivityVNext.schedule.technicalDetails': '技术详情',
     'workflowActivityVNext.schedule.noAttempts': '暂无尝试记录',
     'workflowActivityVNext.schedule.scheduledAttemptFailed':

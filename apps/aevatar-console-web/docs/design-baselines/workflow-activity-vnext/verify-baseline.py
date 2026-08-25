@@ -23,13 +23,13 @@ SCHEDULE_RENDERER_NAME = "render-schedule-png.py"
 PROTOTYPE_NAME = "prototype.html"
 SCHEDULE_PROTOTYPE_NAME = "prototype-schedule.html"
 SCHEDULE_PNG_SHA256 = {
-    "schedule-workflows-list-modal.png": "0a8c66b34ce4474242af84b9466604afa194f6d86299a19168bae6accf4d78d9",
-    "schedule-workflow-editor-panel.png": "32131c4b2d94fb09fc514130430f31068ebb14fdc60c003c6504dea486eb0ce3",
-    "schedule-review.png": "c876eade010bf8bab714b9d6db1b32321ef30460a06943e1e0c70eb6122c8784",
-    "schedule-creation-pending.png": "a7c48476d48ff1f64df86ba4f111c928df7438cc947f7a23d96a592e2acc3d73",
-    "schedule-detail.png": "f8bbb253f3297370e4c587c6bc37445b31ebce40f8e63a6e182c43bae90faa3c",
-    "schedule-history.png": "4da899d681e707a9cbaf0b48adf1c88e0d616abbe0793ad4c95648b7f1efcfd5",
-    "schedule-edit.png": "fdef675ed1996c27e7d144fa3f602ef2c5468884b29ef2027a00dc77510baaac",
+    "schedule-workflows-list-modal.png": "d505b83ca15afb55e68b244a123cc48771c41b96d29a29a8954b1deef11cb0a1",
+    "schedule-workflow-editor-panel.png": "73f22d45077b3849243e7c91185eee461d1ed6c900f1bc9987a8c3392818617c",
+    "schedule-review.png": "129beba83372ef775c1a171ec7475251332c3833bb121729c79dec1843ff7433",
+    "schedule-creation-pending.png": "5d32507eab30c31db7f91f8511ef51e4ccba5003482c3ba32577ab8001e71b70",
+    "schedule-detail.png": "4c4f5a06ca4ca15325e6692209783310800f48f8cc487edc246b5ac0fcde4041",
+    "schedule-history.png": "f3d871691e5f34648b2e00023ea8a471c81af9383f024900b988c3d2e982663d",
+    "schedule-edit.png": "29db6035c476649e8fc5a5548bcdca4bd9b2c4b82cdc9fd4ea36f6bbceb10796",
 }
 OBSOLETE_SCHEDULE_PNGS = (
     "prototype-schedule.png",
@@ -37,7 +37,7 @@ OBSOLETE_SCHEDULE_PNGS = (
     "schedule-authorization-review.png",
 )
 EXPECTED_SHA256 = "30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de"
-EXPECTED_SCHEDULE_SHA256 = "10f956173c9ae30dd641151fd36d1ac613c7f699dd07b6a9c56fa3a4edaf13ba"
+EXPECTED_SCHEDULE_SHA256 = "688d5b14a2e1047739f3cf950a1714e256523430cf6966b1441e4b1e4344b3e0"
 EXPECTED_FRAMES = (
     "01 Workflows - catalogue",
     "02 New workflow - direct creation",
@@ -379,8 +379,9 @@ def main() -> None:
         "recent attempts",
         "scheduled",
         "manual",
-        "succeeded",
+        "run started",
         "failed",
+        "action",
         "technical details",
         "the scheduled attempt could not start the workflow",
         "view related runs in activity",

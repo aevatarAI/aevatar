@@ -670,6 +670,7 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.source': 'Source',
   'workflowActivityVNext.schedule.result': 'Result',
   'workflowActivityVNext.schedule.completedTime': 'Completed time',
+  'workflowActivityVNext.schedule.action': 'Action',
   'workflowActivityVNext.schedule.technicalDetails': 'Technical details',
   'workflowActivityVNext.schedule.noAttempts': 'No attempts yet',
   'workflowActivityVNext.schedule.scheduledAttemptFailed':
