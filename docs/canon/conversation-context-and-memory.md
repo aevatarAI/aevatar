@@ -33,7 +33,7 @@ route helper 和测试不得假设它们相等，也不得从 actor ID 前缀推
 | Execution state | 从 typed admission/start 到 terminal/reconciled；只覆盖该 turn、session 或 run | 只保留恢复、幂等和终态查询所需的 actor-owned waterline；例如 `RoleGAgent` 只跟踪有界的已完成 session，NyxID turn actor 只保留有界 delivery evidence | 执行 owner 在 terminal/delivery 已安全后按自己的 typed policy 清理；不得把 checkpoint 复制到 transcript 或 user memory |
 | Prompt context | 单次 LLM call 或当前执行 turn | 受 message/token/character budget 限制；调用结束即可丢弃 | 构建它的执行模块；截断只改变下一次调用输入，不删除任何权威事实 |
 | Conversation transcript | conversation 初始化后持续存在，并可继续 append | 按 #3141：所有 committed turns 在显式删除整个 conversation 前可查询；无 per-turn TTL、silent rolling eviction 或隐式 archive | `ChatConversationGAgent` 通过 typed whole-conversation deletion fact 清理；projection 只物化该事实 |
-| User memory | 用户 scope 存续期间跨 conversation 存在 | 当前 actor 上限为 50 条；新增超限时优先淘汰同 category 最旧项，再淘汰全局最旧项；也可显式 remove/clear | `UserMemoryGAgent` 在 command handler 内决定 eviction/remove/clear 并提交 event；prompt builder 和 query adapter不得清理 |
+| User memory | 用户 scope 存续期间跨 conversation 存在 | actor 保持 50 条全局硬上限；未配置 retention policy 时沿用“同 category 最旧、再全局最旧”，配置后先执行新增 category 的 `max_entries` cap，再按 `eviction_rank` 从高到低执行全局 eviction，rank 相同时回退旧顺序；cap 不预留空位 | `UserMemoryGAgent` 通过带 revision、CAS 与 mutation 幂等的 typed policy command/event 持有 retention policy，并在状态转换内决定 eviction/remove/clear；prompt builder 和 query adapter 不得清理 |
 
 如果未来需要 transcript archive、user-memory 向量检索或不同 retention，必须先定义新的
 owner、typed lifecycle 和正式 query contract；不得在 prompt 截断或 query adapter 中静默实现。
@@ -59,9 +59,11 @@ read is redacted, tombstoned, expired, over budget, or temporarily unavailable.
    `InitializeChatConversationCommand`、`AppendChatTurnCommand` 及其 domain events。
 3. User memory 使用 `UserMemoryState`、typed `UserMemoryCategory`、typed
    `UserMemorySource`，以及 `AddUserMemoryEntryCommand`、
-   `RemoveUserMemoryEntryCommand`、`ClearUserMemoryEntriesCommand`。actor 校验 command，
-   再提交 `MemoryEntryAddedEvent`、`MemoryEntryRemovedEvent` 或
-   `MemoryEntriesClearedEvent`；domain event 不再冒充 command。
+   `RemoveUserMemoryEntryCommand`、`ClearUserMemoryEntriesCommand` 与
+   `ReplaceUserMemoryRetentionPolicyCommand`。actor 校验 command，再提交
+   `MemoryEntryAddedEvent`、`MemoryEntryRemovedEvent`、`MemoryEntriesClearedEvent` 或
+   `UserMemoryRetentionPolicyReplacedEvent`；domain event 不再冒充 command，retention
+   policy 不从 conversation profile 或 query path 注入。
 4. Prompt context 通过 typed LLM request/control 字段传递；`user_memory_prompt` 是已经
    派生、受限长控制的 prompt 输入，不是 user-memory persistence contract。只有最终文本
    拼装可以是字符串；category、source、identity、control 和 recovery policy 不得降级到

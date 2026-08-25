@@ -26,8 +26,21 @@ message UserMemoryEntryProto {
   int64 updated_at_ms = 6;
 }
 
+message UserMemoryCategoryRetentionRule {
+  UserMemoryCategory category = 1;
+  int32 max_entries = 2;
+  int32 eviction_rank = 3;
+}
+
+message UserMemoryRetentionPolicy {
+  repeated UserMemoryCategoryRetentionRule rules = 1;
+  int64 policy_revision = 2;
+}
+
 message UserMemoryState {
   repeated UserMemoryEntryProto entries = 1;
+  UserMemoryRetentionPolicy retention_policy = 2;
+  string last_retention_policy_mutation_id = 3;
 }
 
 // ─── Commands ───
@@ -43,6 +56,12 @@ message RemoveUserMemoryEntryCommand {
 message ClearUserMemoryEntriesCommand {
 }
 
+message ReplaceUserMemoryRetentionPolicyCommand {
+  repeated UserMemoryCategoryRetentionRule rules = 1;
+  int64 expected_state_version = 2;
+  string mutation_id = 3;
+}
+
 // ─── Events ───
 
 message MemoryEntryAddedEvent {
@@ -54,4 +73,9 @@ message MemoryEntryRemovedEvent {
 }
 
 message MemoryEntriesClearedEvent {
+}
+
+message UserMemoryRetentionPolicyReplacedEvent {
+  UserMemoryRetentionPolicy policy = 1;
+  string mutation_id = 2;
 }

@@ -22,6 +22,19 @@ public sealed class ProjectionUserMemoryQueryPortTests
         var owner = UserMemoryOwnerKey.ForScope("user-gamma");
         var state = new ActorUserMemoryState
         {
+            RetentionPolicy = new Aevatar.GAgents.UserMemory.UserMemoryRetentionPolicy
+            {
+                PolicyRevision = 4,
+                Rules =
+                {
+                    new Aevatar.GAgents.UserMemory.UserMemoryCategoryRetentionRule
+                    {
+                        Category = ActorUserMemoryCategory.Preference,
+                        MaxEntries = 8,
+                        EvictionRank = 20,
+                    },
+                },
+            },
             Entries =
             {
                 new ActorUserMemoryEntry
@@ -59,6 +72,9 @@ public sealed class ProjectionUserMemoryQueryPortTests
         entry.Category.Should().Be(UserMemoryCategory.Preference);
         entry.Source.Should().Be(UserMemorySource.Explicit);
         entry.CreatedAt.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1_750_000_000_000));
+        snapshot.PolicyRevision.Should().Be(4);
+        snapshot.RetentionPolicy!.Rules.Should().ContainSingle().Which.Should().Be(
+            new UserMemoryCategoryRetentionRule(UserMemoryCategory.Preference, 8, 20));
     }
 
     [Fact]
