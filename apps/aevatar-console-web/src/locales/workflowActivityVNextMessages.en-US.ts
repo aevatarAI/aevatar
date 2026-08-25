@@ -491,6 +491,10 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.run.promptTokens': 'Prompt tokens',
   'workflowActivityVNext.run.requestedSteps': 'Requested steps',
   'workflowActivityVNext.run.requestParameters': 'Request parameters',
+  'workflowActivityVNext.run.refreshFailed':
+    "Some run details couldn't be refreshed",
+  'workflowActivityVNext.run.refreshing': 'Refreshing…',
+  'workflowActivityVNext.run.refreshSucceeded': 'Run details refreshed',
   'workflowActivityVNext.run.relatedRuns': 'Related runs',
   'workflowActivityVNext.run.lineageUnavailable':
     'Related run history is unavailable.',
@@ -650,6 +654,8 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.schedule.historyLoadFailed':
     "History couldn't be loaded",
   'workflowActivityVNext.schedule.historyTitle': 'Schedule history',
+  'workflowActivityVNext.schedule.historyContextAria':
+    'Schedule history for schedule {scheduleName} in workflow {workflowName}',
   'workflowActivityVNext.schedule.scheduleContext': 'Schedule: {name}',
   'workflowActivityVNext.schedule.workflowContext': 'Workflow: {name}',
   'workflowActivityVNext.schedule.overview': 'Overview',

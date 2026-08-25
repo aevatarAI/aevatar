@@ -647,12 +647,48 @@ const RunDetailPage: React.FC<{
     readonly stepId: string;
   } | null>(null);
   const [selectedStepId, setSelectedStepId] = React.useState('');
+  const [refreshing, setRefreshing] = React.useState(false);
   const shownFailureKeys = React.useRef(new Set<string>());
 
+  const refreshRunDetail = React.useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const results = await Promise.allSettled([
+        detail.refetch(),
+        graph.refetch(),
+        historyRuns.refetch(),
+      ]);
+      const failed = results.some(
+        (result) => result.status === 'rejected' || result.value.isError,
+      );
+      if (failed) {
+        toast.error(
+          t(
+            'workflowActivityVNext.run.refreshFailed',
+            "Some run details couldn't be refreshed",
+          ),
+          { key: 'run-detail-refresh' },
+        );
+        return;
+      }
+      toast.success(
+        t(
+          'workflowActivityVNext.run.refreshSucceeded',
+          'Run details refreshed',
+        ),
+        { key: 'run-detail-refresh' },
+      );
+    } finally {
+      setRefreshing(false);
+    }
+  }, [detail, graph, historyRuns, refreshing, toast]);
+
   const failurePresentation = React.useMemo(() => {
-    const evidence = detail.error
-      ? readApiFailure(detail.error)
-      : readCommittedRunFailure(detail.data);
+    const evidence =
+      detail.error && !detail.data
+        ? readApiFailure(detail.error)
+        : readCommittedRunFailure(detail.data);
     return evidence ? classifyRunFailure(evidence) : null;
   }, [detail.data, detail.error]);
 
@@ -681,15 +717,13 @@ const RunDetailPage: React.FC<{
           return;
         case 'reload':
         case 'retry':
-          void detail.refetch();
-          void graph.refetch();
-          void historyRuns.refetch();
+          void refreshRunDetail();
           return;
         case 'review_input':
           return;
       }
     },
-    [detail, graph, historyRuns, routeRunQuery, runId, scopeId],
+    [refreshRunDetail, routeRunQuery, runId, scopeId],
   );
 
   React.useEffect(() => {
@@ -895,7 +929,7 @@ const RunDetailPage: React.FC<{
     );
   }
 
-  if (detail.isError || !detail.data) {
+  if (!detail.data) {
     if (fallbackHistoryRun) {
       return (
         <WorkflowActivityVNextShell
@@ -907,14 +941,15 @@ const RunDetailPage: React.FC<{
           )}
           headerActions={
             <Button
+              className="wa-vnext__run-detail-refresh"
+              disabled={refreshing}
               icon={<ReloadOutlined />}
-              onClick={() => {
-                void detail.refetch();
-                void graph.refetch();
-                void historyRuns.refetch();
-              }}
+              loading={refreshing}
+              onClick={() => void refreshRunDetail()}
             >
-              {t('workflowActivityVNext.common.refresh', 'Refresh')}
+              {refreshing
+                ? t('workflowActivityVNext.run.refreshing', 'Refreshing…')
+                : t('workflowActivityVNext.common.refresh', 'Refresh')}
             </Button>
           }
           scopeId={scopeId}
@@ -1062,7 +1097,7 @@ const RunDetailPage: React.FC<{
   const selectedStepDuration = formatDurationMs(selectedStep?.durationMs);
 
   const renderGraph = () => {
-    if (graph.isError) {
+    if (graph.isError && !graph.data) {
       return (
         <Alert
           action={
@@ -1140,14 +1175,15 @@ const RunDetailPage: React.FC<{
             }
           />
           <Button
+            className="wa-vnext__run-detail-refresh"
+            disabled={refreshing}
             icon={<ReloadOutlined />}
-            onClick={() => {
-              void detail.refetch();
-              void graph.refetch();
-              void historyRuns.refetch();
-            }}
+            loading={refreshing}
+            onClick={() => void refreshRunDetail()}
           >
-            {t('workflowActivityVNext.common.refresh', 'Refresh')}
+            {refreshing
+              ? t('workflowActivityVNext.run.refreshing', 'Refreshing…')
+              : t('workflowActivityVNext.common.refresh', 'Refresh')}
           </Button>
         </>
       }

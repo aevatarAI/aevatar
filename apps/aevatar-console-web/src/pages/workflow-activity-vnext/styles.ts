@@ -110,6 +110,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__header h1 { font-size: 28px; font-weight: 700; line-height: 28px; margin: 0; text-wrap: balance; }
 .wa-vnext__header p { color: var(--wa-muted); font-size: 12px; line-height: 17px; margin: 7px 0 0; max-width: 760px; text-wrap: pretty; }
 .wa-vnext__header-actions { align-items: center; display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.wa-vnext__run-detail-refresh { min-width: 132px; }
 .wa-vnext__content { min-width: 0; padding: 18px 40px 48px; }
 .wa-vnext__content--run-detail { display: flex; min-height: 0; overflow: hidden; padding-bottom: 40px; }
 .wa-vnext__toolbar { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; min-height: 32px; }

@@ -464,6 +464,9 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.run.promptTokens': '输入 Token',
     'workflowActivityVNext.run.requestedSteps': '已请求步骤',
     'workflowActivityVNext.run.requestParameters': '请求参数',
+    'workflowActivityVNext.run.refreshFailed': '部分运行详情刷新失败',
+    'workflowActivityVNext.run.refreshing': '正在刷新…',
+    'workflowActivityVNext.run.refreshSucceeded': '运行详情已刷新',
     'workflowActivityVNext.run.relatedRuns': '关联运行',
     'workflowActivityVNext.run.lineageUnavailable': '关联运行历史不可用。',
     'workflowActivityVNext.run.detailFallbackDescription':
@@ -608,6 +611,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.schedule.historyLoading': '正在加载历史记录…',
     'workflowActivityVNext.schedule.historyLoadFailed': '无法加载历史记录',
     'workflowActivityVNext.schedule.historyTitle': '计划任务历史',
+    'workflowActivityVNext.schedule.historyContextAria':
+      '工作流 {workflowName} 中计划任务 {scheduleName} 的历史记录',
     'workflowActivityVNext.schedule.scheduleContext': '计划任务：{name}',
     'workflowActivityVNext.schedule.workflowContext': '工作流：{name}',
     'workflowActivityVNext.schedule.overview': '概览',

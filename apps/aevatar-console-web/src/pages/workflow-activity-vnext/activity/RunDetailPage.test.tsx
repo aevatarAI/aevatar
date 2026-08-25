@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
@@ -11,6 +11,8 @@ type WorkflowActivityRunDetailFixture =
   import('@/shared/models/workflowActivity').WorkflowActivityRunDetail;
 type WorkflowActivityRunFeedRowFixture =
   import('@/shared/models/workflowActivity').WorkflowActivityRunFeedRow;
+type WorkflowActivityRunGraphFixture =
+  import('@/shared/models/workflowActivity').WorkflowActivityRunGraph;
 type WorkflowRunLineageFixture =
   import('@/shared/models/workflowActivity').WorkflowRunLineage;
 type WorkflowRunRecoveryCapabilityFixture =
@@ -104,6 +106,16 @@ const mockWorkflowActivityApi = jest.requireMock(
   listRuns: jest.Mock;
   listActivityRuns: jest.Mock;
 };
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
 
 function buildRecoveryCapability(): WorkflowRunRecoveryCapabilityFixture {
   return {
@@ -457,6 +469,113 @@ describe('Workflow Activity vNext run detail console', () => {
       screen.queryByRole('heading', { name: 'Loading run…' }),
     ).not.toBeInTheDocument();
     expect(document.querySelector('.wa-vnext__state')).not.toBeInTheDocument();
+  });
+
+  it('acknowledges a grouped refresh and confirms when every source succeeds', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    const refreshButton = await screen.findByRole('button', {
+      name: 'Refresh',
+    });
+    const detailRefresh = createDeferred<WorkflowActivityRunDetailFixture>();
+    const graphRefresh = createDeferred<WorkflowActivityRunGraphFixture>();
+    const historyRefresh =
+      createDeferred<WorkflowActivityRunDetailFixture['summary'][]>();
+    mockWorkflowActivityApi.getRun.mockReturnValueOnce(detailRefresh.promise);
+    mockWorkflowActivityApi.getRunGraph.mockReturnValueOnce(
+      graphRefresh.promise,
+    );
+    mockWorkflowActivityApi.listRuns.mockReturnValueOnce(
+      historyRefresh.promise,
+    );
+
+    fireEvent.click(refreshButton);
+
+    const refreshingLabel = screen.queryByText('Refreshing…');
+    expect(refreshingLabel).toBeInTheDocument();
+    const refreshingButton = refreshingLabel?.closest('button');
+    expect(refreshingButton).toBeInstanceOf(HTMLButtonElement);
+    expect(refreshingButton).toBeDisabled();
+    expect(
+      screen.getByRole('heading', { name: 'Incident review' }),
+    ).toBeInTheDocument();
+    expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledTimes(2);
+    expect(mockWorkflowActivityApi.getRunGraph).toHaveBeenCalledTimes(2);
+    expect(mockWorkflowActivityApi.listRuns).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(refreshingButton as HTMLButtonElement);
+    expect(mockWorkflowActivityApi.getRun).toHaveBeenCalledTimes(2);
+    expect(mockWorkflowActivityApi.getRunGraph).toHaveBeenCalledTimes(2);
+    expect(mockWorkflowActivityApi.listRuns).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      detailRefresh.resolve(buildRunDetail());
+      graphRefresh.resolve({
+        rootNodeId: 'node-root',
+        nodes: [
+          { nodeId: 'node-root', nodeType: 'step', stepId: 'step-root' },
+          {
+            nodeId: 'node-failed',
+            nodeType: 'step',
+            stepId: 'step-failed',
+          },
+        ],
+        edges: [
+          {
+            edgeId: 'edge-root-failed',
+            fromNodeId: 'node-root',
+            toNodeId: 'node-failed',
+            edgeType: 'next',
+            branchKey: '',
+          },
+        ],
+      });
+      historyRefresh.resolve([buildRunDetail().summary]);
+      await Promise.all([
+        detailRefresh.promise,
+        graphRefresh.promise,
+        historyRefresh.promise,
+      ]);
+    });
+
+    await waitFor(() =>
+      expect(mockConsoleToast.success).toHaveBeenCalledWith(
+        'Run details refreshed',
+        { key: 'run-detail-refresh' },
+      ),
+    );
+    expect(mockConsoleToast.error).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+  });
+
+  it('reports a partial refresh failure without claiming success', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+
+    const refreshButton = await screen.findByRole('button', {
+      name: 'Refresh',
+    });
+    mockWorkflowActivityApi.getRunGraph.mockRejectedValueOnce(
+      new Error('Run graph refresh failed'),
+    );
+
+    fireEvent.click(refreshButton);
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Some run details couldn't be refreshed",
+        { key: 'run-detail-refresh' },
+      ),
+    );
+    expect(mockConsoleToast.success).not.toHaveBeenCalled();
+    expect(screen.queryByText('Run graph unavailable')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'Incident review' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
   });
 
   it('renders a published-runs style console for the current run and preserves workflow context when switching history', async () => {
