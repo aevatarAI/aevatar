@@ -35,6 +35,17 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isWorkflowCreateResultUnknown(error: unknown): boolean {
+  return (
+    isStudioApiStatus(error, 408) ||
+    isStudioApiStatus(error, 504) ||
+    error instanceof TypeError ||
+    (typeof DOMException !== 'undefined' &&
+      error instanceof DOMException &&
+      error.name === 'AbortError')
+  );
+}
+
 const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   scopeId,
 }) => {
@@ -151,8 +162,9 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       );
       return;
     }
-    await finishSave(
-      await studioApi.createWorkflowDraft({
+    let result: StudioWorkflowSaveResult;
+    try {
+      result = await studioApi.createWorkflowDraft({
         directoryId,
         fileName: resolveAvailableWorkflowFileName(
           workflowName,
@@ -162,8 +174,19 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
         scopeId,
         workflowName,
         yaml: nextYaml,
-      }),
-    );
+      });
+    } catch (error) {
+      if (!isWorkflowCreateResultUnknown(error)) throw error;
+      toast.warning(
+        t(
+          'workflowActivityVNext.new.createUnconfirmed',
+          "Workflow creation couldn't be confirmed. Check Workflows before trying again.",
+        ),
+      );
+      void existingWorkflows.refetch();
+      return;
+    }
+    await finishSave(result);
   };
 
   const createBlank = async () => {

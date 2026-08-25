@@ -433,6 +433,51 @@ describe('New workflow save-target recovery', () => {
     );
   });
 
+  it('treats a draft-create timeout as unconfirmed without resubmitting or guessing an identity', async () => {
+    const importedYaml = 'name: imported_review\nroles: []\nsteps: []\n';
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.listWorkflowDrafts
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          directoryId: 'directory-alpha',
+          fileName: 'imported-review.yaml',
+          name: 'imported_review',
+          workflowId: 'wf-created-after-timeout',
+        },
+      ]);
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: { name: 'imported_review', roles: [], steps: [] },
+      findings: [],
+    });
+    mockStudioApi.createWorkflowDraft.mockRejectedValue({
+      message: 'POST workflow-drafts returned 504',
+      status: 504,
+    });
+
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Import YAML' }));
+    const yamlInput = screen.getByLabelText('Workflow YAML');
+    fireEvent.change(yamlInput, { target: { value: importedYaml } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import and open' }));
+
+    expect(
+      await screen.findByText(
+        "Workflow creation couldn't be confirmed. Check Workflows before trying again.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("Workflow couldn't be created"),
+    ).not.toBeInTheDocument();
+    expect(yamlInput).toHaveValue(importedYaml);
+    expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(mockStudioApi.listWorkflowDrafts).toHaveBeenCalledTimes(2),
+    );
+    expect(history.push).not.toHaveBeenCalled();
+  });
+
   it('navigates to the template browser from the creation chooser', async () => {
     mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
 

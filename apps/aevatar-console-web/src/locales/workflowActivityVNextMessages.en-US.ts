@@ -312,6 +312,8 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.new.chooserAria': 'Workflow creation methods',
   'workflowActivityVNext.new.createBlank': 'Create and open',
   'workflowActivityVNext.new.createFailed': "Workflow couldn't be created",
+  'workflowActivityVNext.new.createUnconfirmed':
+    "Workflow creation couldn't be confirmed. Check Workflows before trying again.",
   'workflowActivityVNext.new.creatingDescription':
     'This usually takes only a moment.',
   'workflowActivityVNext.new.description': 'Choose how you want to start.',

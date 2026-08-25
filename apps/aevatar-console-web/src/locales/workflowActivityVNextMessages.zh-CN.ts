@@ -293,6 +293,8 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.new.chooserAria': '工作流创建方式',
     'workflowActivityVNext.new.createBlank': '创建并打开',
     'workflowActivityVNext.new.createFailed': '无法创建工作流',
+    'workflowActivityVNext.new.createUnconfirmed':
+      '无法确认工作流是否已创建，请先返回工作流列表检查，再决定是否重试。',
     'workflowActivityVNext.new.creatingDescription': '通常只需要片刻时间。',
     'workflowActivityVNext.new.description': '选择一种开始方式。',
     'workflowActivityVNext.new.defaultWorkspace': '默认工作区',
