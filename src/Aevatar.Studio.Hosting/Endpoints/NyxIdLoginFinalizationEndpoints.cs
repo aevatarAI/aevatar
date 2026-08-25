@@ -227,11 +227,19 @@ public static class NyxIdLoginFinalizationEndpoints
         if (string.IsNullOrWhiteSpace(request.RedirectUri))
             return LoginFinalizationProblem(StatusCodes.Status400BadRequest, "redirect_uri_missing", "The login redirect URI is required.");
 
+        var resourceUris = request.ServiceAccessReview
+            ? NormalizeResourceUris(request.ResourceUris)
+            : Array.Empty<string>();
         BrokerAuthorizationCodeResult exchange;
         try
         {
             exchange = await brokerCallback
-                .ExchangeAuthorizationCodeAsync(request.Code.Trim(), request.CodeVerifier.Trim(), request.RedirectUri.Trim(), ct)
+                .ExchangeAuthorizationCodeAsync(
+                    request.Code.Trim(),
+                    request.CodeVerifier.Trim(),
+                    request.RedirectUri.Trim(),
+                    resourceUris,
+                    ct)
                 .ConfigureAwait(false);
         }
         catch (NyxIdRequiredServiceAccessException ex)
@@ -307,6 +315,15 @@ public static class NyxIdLoginFinalizationEndpoints
             ExternalUserId = user.Sub.Trim(),
         };
         var ownerScopeId = user.Sub.Trim();
+
+        if (!AccessTokenGrantsRequiredUserServices(exchange.AccessToken!, request.RequiredUserServiceIds))
+        {
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return LoginFinalizationProblem(
+                StatusCodes.Status409Conflict,
+                "required_service_access_missing",
+                "Return to NyxID and keep every service marked as required by Aevatar selected.");
+        }
 
         var existingBinding = await bindingQueryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
         if (existingBinding != null)
@@ -807,6 +824,76 @@ public static class NyxIdLoginFinalizationEndpoints
         return serviceIds.Length == 0 ? null : serviceIds;
     }
 
+    private static string[] NormalizeResourceUris(IReadOnlyList<string>? resourceUris) =>
+        (resourceUris ?? [])
+            .Select(static resourceUri => resourceUri?.Trim() ?? string.Empty)
+            .Where(static resourceUri => !string.IsNullOrWhiteSpace(resourceUri))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool AccessTokenGrantsRequiredUserServices(
+        string accessToken,
+        IReadOnlyList<string>? requiredUserServiceIds)
+    {
+        var required = (requiredUserServiceIds ?? [])
+            .Select(static serviceId => serviceId?.Trim() ?? string.Empty)
+            .Where(static serviceId => !string.IsNullOrWhiteSpace(serviceId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (required.Length == 0)
+            return true;
+
+        var parts = accessToken.Split('.');
+        if (parts.Length != 3)
+            return false;
+
+        try
+        {
+            var payload = parts[1]
+                .Replace('-', '+')
+                .Replace('_', '/');
+            payload = payload.PadRight(payload.Length + ((4 - payload.Length % 4) % 4), '=');
+            using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("allow_all_services", out var allowAllServices) &&
+                allowAllServices.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+                allowAllServices.GetBoolean())
+            {
+                return true;
+            }
+
+            var allowedServiceIds = ReadStringSet(root, "allowed_service_ids", out var hasAllowedServiceIds);
+            if (hasAllowedServiceIds)
+                return required.All(allowedServiceIds.Contains);
+
+            ReadStringSet(root, "resources", out var hasResourceRestriction);
+            return !hasResourceRestriction;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static HashSet<string> ReadStringSet(JsonElement owner, string propertyName, out bool present)
+    {
+        present = owner.TryGetProperty(propertyName, out var values)
+                  && values.ValueKind == JsonValueKind.Array;
+        return present
+            ? values.EnumerateArray()
+                .Where(static item => item.ValueKind == JsonValueKind.String)
+                .Select(static item => item.GetString()!)
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Select(static value => value.Trim())
+                .ToHashSet(StringComparer.Ordinal)
+            : [];
+    }
+
     private static string ToCatalogRefreshStatus(NyxIdAuthorizationCatalogRefreshStatus status) => status switch
     {
         NyxIdAuthorizationCatalogRefreshStatus.Observed => "observed",
@@ -963,6 +1050,7 @@ public sealed record NyxIdLoginFinalizationRequest
     public string? CodeVerifier { get; init; }
     public string? RedirectUri { get; init; }
     public bool ServiceAccessReview { get; init; }
+    public IReadOnlyList<string>? ResourceUris { get; init; }
     public IReadOnlyList<string>? RequiredUserServiceIds { get; init; }
 }
 

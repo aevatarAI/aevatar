@@ -606,7 +606,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
-    public void Create_ShouldRejectDurableExplicitReadOnlyPostGrant()
+    public void Create_ShouldAcceptDurableExplicitReadOnlyPostGrant()
     {
         var admission = ExplicitAdmissionFor(
             NyxIdRequestMethod.Post,
@@ -614,7 +614,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             ExternalCapabilityExecutionMode.Interactive,
             ExternalCapabilityExecutionMode.Durable);
 
-        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             "name: explicit-workflow\nsteps: []\n",
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Durable,
@@ -624,8 +624,9 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             workflowId: ExplicitWorkflowId,
             revisionId: ExplicitRevisionId);
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*durable*");
+        plan.InvocationAdmissions.Should().ContainSingle().Which
+            .Capability.NyxIdUserRequest.ExecutionPolicy.AllowedExecutionModes.Should()
+            .Contain(ExternalCapabilityExecutionMode.Durable);
     }
 
     [Theory]
