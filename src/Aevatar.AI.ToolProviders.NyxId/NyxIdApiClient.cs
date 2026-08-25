@@ -285,6 +285,12 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> CreateServiceAsync(string token, string body, CancellationToken ct) =>
         PostAsync(token, "/api/v1/keys", body, ct);
 
+    internal Task<NyxIdProxyTextResponse> CreateServiceResponseAsync(
+        string token,
+        string body,
+        CancellationToken ct) =>
+        PostTextResponseAsync(token, "/api/v1/keys", body, ct);
+
     // ─── Session Refresh ───
 
     public async Task<NyxIdSessionRefreshResult> RefreshSessionAsync(string refreshToken, CancellationToken ct)
@@ -1309,6 +1315,17 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> UpdateServiceRouteAsync(string token, string id, string body, CancellationToken ct) =>
         PutAsync(token, $"/api/v1/user-services/{Uri.EscapeDataString(id)}", body, ct);
 
+    internal Task<NyxIdProxyTextResponse> UpdateServiceRouteResponseAsync(
+        string token,
+        string id,
+        string body,
+        CancellationToken ct) =>
+        PutTextResponseAsync(
+            token,
+            $"/api/v1/user-services/{Uri.EscapeDataString(id)}",
+            body,
+            ct);
+
     // ─── Proxy (additions) ───
 
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
@@ -1886,12 +1903,19 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     }
 
     internal async Task<string> PostAsync(string token, string path, string body, CancellationToken ct)
+        => (await PostTextResponseAsync(token, path, body, ct)).Content;
+
+    private async Task<NyxIdProxyTextResponse> PostTextResponseAsync(
+        string token,
+        string path,
+        string body,
+        CancellationToken ct)
     {
         var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-        return await SendAsync(request, ct);
+        return await SendTextResponseAsync(request, ct);
     }
 
     internal async Task<string> PostWithoutAuthAsync(string path, string body, CancellationToken ct)
@@ -1912,12 +1936,19 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     }
 
     internal async Task<string> PutAsync(string token, string path, string body, CancellationToken ct)
+        => (await PutTextResponseAsync(token, path, body, ct)).Content;
+
+    private async Task<NyxIdProxyTextResponse> PutTextResponseAsync(
+        string token,
+        string path,
+        string body,
+        CancellationToken ct)
     {
         var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Put, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-        return await SendAsync(request, ct);
+        return await SendTextResponseAsync(request, ct);
     }
 
     internal async Task<string> DeleteAsync(string token, string path, CancellationToken ct)

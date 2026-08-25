@@ -22,7 +22,9 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             AutoConnectedKeysInventory(),
             AutoConnectedInventory(),
             AutoConnectedKeysInventory(),
-            """{"error":true,"status":409,"body":"concurrent create"}""",
+            new SequenceResponse(
+                HttpStatusCode.Conflict,
+                """{"error":"concurrent create"}"""),
             PersonalExecutionInventory(),
             PersonalExecutionKeysInventory(),
             PersonalExecutionInventory(),
@@ -79,6 +81,8 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         {
             body.RootElement.GetProperty("service_slug").GetString().Should().Be("chrono-sandbox");
             body.RootElement.GetProperty("slug").GetString().Should().Be("chrono-sandbox-aevatar");
+            body.RootElement.GetProperty("label").GetString().Should()
+                .Be("Aevatar Code Execution");
             body.RootElement.GetProperty("forward_access_token").GetBoolean().Should().BeTrue();
             body.RootElement.GetProperty("inject_delegation_token").GetBoolean().Should().BeTrue();
             body.RootElement.GetProperty("delegation_token_scope").GetString().Should()
@@ -88,6 +92,91 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         proof.UserServiceId.Should().Be("us-code-aevatar");
         proof.ServiceSlugSnapshot.Should().Be("chrono-sandbox-aevatar");
         proof.CatalogServiceId.Should().Be("catalog-chrono-sandbox");
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_PersonalRouteCreationRejected_PreservesMutationFailure()
+    {
+        var handler = new SequenceHandler(
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory(),
+            new SequenceResponse(
+                HttpStatusCode.UnprocessableEntity,
+                """{"error":"missing field `label`"}"""),
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory());
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var reconciler = new NyxIdCodeExecutionRoutePolicyReconciler(
+            new TestClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+        NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                NyxIdCallerCredentialSelection.DirectUserBearer("source-readable-alpha"),
+                out var mutationAuthority)
+            .Should().BeTrue();
+
+        var result = await reconciler.ReconcileAsync(mutationAuthority!);
+
+        result.Attempted.Should().BeTrue();
+        result.Verified.Should().BeFalse();
+        result.FailureKind.Should().Be(NyxIdCodeExecutionRouteRepairFailureKind.MutationRejected);
+        handler.Requests.Select(static request => request.Method).Should().Equal(
+            HttpMethod.Get,
+            HttpMethod.Get,
+            HttpMethod.Post,
+            HttpMethod.Get,
+            HttpMethod.Get);
+    }
+
+    [Fact]
+    public async Task ConvergeAsync_RouteMutationRejected_PreservesMutationFailure()
+    {
+        var handler = new SequenceHandler(
+            Inventory("personal", false, true, "proxy:*"),
+            KeysInventory("personal"),
+            new SequenceResponse(HttpStatusCode.Forbidden, """{"error":"forbidden"}"""),
+            Inventory("personal", false, true, "proxy:*"),
+            KeysInventory("personal"));
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var converger = new NyxIdUserServiceRouteConverger(
+            new TestClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+        NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                NyxIdCallerCredentialSelection.DirectUserBearer("source-readable-alpha"),
+                out var mutationAuthority)
+            .Should().BeTrue();
+
+        var result = await converger.ConvergeAsync(
+            mutationAuthority!,
+            "us-code-alpha",
+            new NyxIdUserServiceRouteContract(
+                NyxIdUserServiceBooleanRequirement.Enabled,
+                NyxIdUserServiceBooleanRequirement.Enabled,
+                ["proxy:*", "sandbox:execute"]));
+
+        result.Attempted.Should().BeTrue();
+        result.Verified.Should().BeFalse();
+        result.FailureKind.Should().Be(
+            NyxIdUserServiceRouteConvergenceFailureKind.MutationRejected);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_KeysOmitAutoConnected_DoesNotGuessWritable()
+    {
+        var handler = new SequenceHandler(
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventoryOmittingAutoConnected());
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var reconciler = new NyxIdCodeExecutionRoutePolicyReconciler(
+            new TestClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+        NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                NyxIdCallerCredentialSelection.DirectUserBearer("source-readable-alpha"),
+                out var mutationAuthority)
+            .Should().BeTrue();
+
+        var result = await reconciler.ReconcileAsync(mutationAuthority!);
+
+        result.Attempted.Should().BeFalse();
+        result.Verified.Should().BeFalse();
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().OnlyContain(static request => request.Method == HttpMethod.Get);
     }
 
     [Fact]
@@ -443,6 +532,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                 "is_active": true,
                 "status": "expired",
                 "connected": true,
+                "auto_connected": false,
                 "credential_source": { "type": "personal" }
               }]
             }
@@ -653,6 +743,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     is_active = true,
                     status = "active",
                     connected = true,
+                    auto_connected = false,
                     credential_source = credentialSource,
                 },
             },
@@ -670,7 +761,6 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     slug = "chrono-sandbox",
                     catalog_service_id = "catalog-chrono-sandbox",
                     is_active = true,
-                    auto_connected = true,
                     forward_access_token = true,
                     inject_delegation_token = true,
                     delegation_token_scope = "proxy:*",
@@ -680,6 +770,26 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         });
 
     private static string AutoConnectedKeysInventory() =>
+        JsonSerializer.Serialize(new
+        {
+            keys = new[]
+            {
+                new
+                {
+                    id = "us-code-platform",
+                    slug = "chrono-sandbox",
+                    catalog_service_id = "catalog-chrono-sandbox",
+                    catalog_service_slug = "chrono-sandbox",
+                    is_active = true,
+                    status = "active",
+                    connected = true,
+                    auto_connected = true,
+                    credential_source = new { type = "personal" },
+                },
+            },
+        });
+
+    private static string AutoConnectedKeysInventoryOmittingAutoConnected() =>
         JsonSerializer.Serialize(new
         {
             keys = new[]
@@ -709,7 +819,6 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     slug = "chrono-sandbox",
                     catalog_service_id = "catalog-chrono-sandbox",
                     is_active = true,
-                    auto_connected = true,
                     forward_access_token = true,
                     inject_delegation_token = true,
                     delegation_token_scope = "proxy:*",
@@ -721,7 +830,6 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     slug = "chrono-sandbox-aevatar",
                     catalog_service_id = "catalog-chrono-sandbox",
                     is_active = true,
-                    auto_connected = false,
                     forward_access_token = true,
                     inject_delegation_token = true,
                     delegation_token_scope = "proxy:* sandbox:execute",
@@ -744,6 +852,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     is_active = true,
                     status = "active",
                     connected = true,
+                    auto_connected = true,
                     credential_source = new { type = "personal" },
                 },
                 new
@@ -755,6 +864,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     is_active = true,
                     status = "active",
                     connected = true,
+                    auto_connected = false,
                     credential_source = new { type = "personal" },
                 },
             },
@@ -813,6 +923,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     is_active = true,
                     status = "active",
                     connected = true,
+                    auto_connected = false,
                     credential_source = new { type = "personal" },
                 },
                 new
@@ -824,6 +935,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     is_active = true,
                     status = "active",
                     connected = true,
+                    auto_connected = false,
                     credential_source = new
                     {
                         type = "org",
@@ -850,6 +962,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     is_active = true,
                     status = "active",
                     connected = true,
+                    auto_connected = false,
                     credential_source = new { type = "personal" },
                 },
                 new
@@ -861,6 +974,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
                     is_active = true,
                     status = "active",
                     connected = true,
+                    auto_connected = false,
                     credential_source = new { type = "personal" },
                 },
             },
@@ -914,9 +1028,15 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             CancellationToken ct = default) => throw new InvalidOperationException("Unexpected inline bundle parse.");
     }
 
-    private sealed class SequenceHandler(params string[] responses) : HttpMessageHandler
+    private sealed class SequenceHandler(params object[] responses) : HttpMessageHandler
     {
-        private readonly Queue<string> _responses = new(responses);
+        private readonly Queue<SequenceResponse> _responses = new(responses.Select(static response =>
+            response switch
+            {
+                string body => new SequenceResponse(HttpStatusCode.OK, body),
+                SequenceResponse typed => typed,
+                _ => throw new ArgumentException("Unsupported response fixture.", nameof(responses)),
+            }));
 
         public List<RecordedRequest> Requests { get; } = [];
 
@@ -935,15 +1055,18 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             if (_responses.Count == 0)
                 throw new InvalidOperationException("Unexpected NyxID request.");
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            var response = _responses.Dequeue();
+            return new HttpResponseMessage(response.StatusCode)
             {
                 Content = new StringContent(
-                    _responses.Dequeue(),
+                    response.Body,
                     Encoding.UTF8,
                     "application/json"),
             };
         }
     }
+
+    private sealed record SequenceResponse(HttpStatusCode StatusCode, string Body);
 
     private sealed record RecordedRequest(
         HttpMethod Method,

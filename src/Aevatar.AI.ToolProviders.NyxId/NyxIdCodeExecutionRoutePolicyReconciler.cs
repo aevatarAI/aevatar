@@ -1,4 +1,6 @@
+using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.CodeExecution;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
@@ -8,6 +10,7 @@ public enum NyxIdCodeExecutionRouteRepairFailureKind
     None = 0,
     UpdateException = 1,
     PostconditionMismatch = 2,
+    MutationRejected = 3,
 }
 
 public sealed record NyxIdCodeExecutionRouteReconciliation(
@@ -74,10 +77,14 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
                 Verified: postconditionSatisfied,
                 FailureKind: postconditionSatisfied
                     ? NyxIdCodeExecutionRouteRepairFailureKind.None
-                    : convergence.FailureKind ==
-                      NyxIdUserServiceRouteConvergenceFailureKind.UpdateException
-                        ? NyxIdCodeExecutionRouteRepairFailureKind.UpdateException
-                        : NyxIdCodeExecutionRouteRepairFailureKind.PostconditionMismatch);
+                    : convergence.FailureKind switch
+                    {
+                        NyxIdUserServiceRouteConvergenceFailureKind.UpdateException =>
+                            NyxIdCodeExecutionRouteRepairFailureKind.UpdateException,
+                        NyxIdUserServiceRouteConvergenceFailureKind.MutationRejected =>
+                            NyxIdCodeExecutionRouteRepairFailureKind.MutationRejected,
+                        _ => NyxIdCodeExecutionRouteRepairFailureKind.PostconditionMismatch,
+                    });
         }
 
         if (!CanCreatePersonalRoute(before, resolution, exactUserServiceId))
@@ -137,14 +144,13 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
             .Where(service =>
                 CodeExecutionContract.IsSupportedServiceSlug(service.Slug) &&
                 snapshot.TryGetExact(service.Id, out var authority) &&
-                authority is { IsExecutionReady: true } &&
+                authority is { IsExecutionReady: true, Execution.AutoConnected: true } &&
                 string.Equals(
                     authority.Execution.CatalogServiceSlug,
                     CodeExecutionContract.ServiceSlug,
                     StringComparison.Ordinal))
             .ToArray();
         return canonical.Length == 1 &&
-               canonical[0].AutoConnected &&
                string.Equals(
                    canonical[0].Slug,
                    CodeExecutionContract.ServiceSlug,
@@ -156,23 +162,24 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
         NyxIdUserServiceRouteMutationAuthority mutationAuthority,
         CancellationToken cancellationToken)
     {
-        var createFailed = false;
+        var createFailure = NyxIdCodeExecutionRouteRepairFailureKind.None;
         try
         {
-            var body = JsonSerializer.Serialize(new
-            {
-                service_slug = CodeExecutionContract.ServiceSlug,
-                slug = CodeExecutionContract.PersonalServiceSlug,
-                forward_access_token = true,
-                inject_delegation_token = true,
-                delegation_token_scope = "proxy:* sandbox:execute",
-            });
-            _ = await _clientFactory.CreateClient()
-                .CreateServiceAsync(
+            var body = JsonSerializer.Serialize(new CreatePersonalRouteRequest(
+                CodeExecutionContract.ServiceSlug,
+                CodeExecutionContract.PersonalServiceSlug,
+                "Aevatar Code Execution",
+                true,
+                true,
+                "proxy:* sandbox:execute"));
+            var response = await _clientFactory.CreateClient()
+                .CreateServiceResponseAsync(
                     mutationAuthority.BearerToken,
                     body,
                     cancellationToken)
                 .ConfigureAwait(false);
+            if (!response.Succeeded && response.HttpStatus != (int)HttpStatusCode.Conflict)
+                createFailure = NyxIdCodeExecutionRouteRepairFailureKind.MutationRejected;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -180,7 +187,7 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
         }
         catch
         {
-            createFailed = true;
+            createFailure = NyxIdCodeExecutionRouteRepairFailureKind.UpdateException;
         }
 
         var after = await _converger.ReadAsync(mutationAuthority, cancellationToken)
@@ -196,9 +203,9 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
             Verified: verified,
             FailureKind: verified
                 ? NyxIdCodeExecutionRouteRepairFailureKind.None
-                : createFailed
-                    ? NyxIdCodeExecutionRouteRepairFailureKind.UpdateException
-                    : NyxIdCodeExecutionRouteRepairFailureKind.PostconditionMismatch);
+                : createFailure == NyxIdCodeExecutionRouteRepairFailureKind.None
+                    ? NyxIdCodeExecutionRouteRepairFailureKind.PostconditionMismatch
+                    : createFailure);
     }
 
     private static NyxIdUserService? SelectVerifiedPersonalRoute(
@@ -213,10 +220,9 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
                     service.Slug,
                     CodeExecutionContract.PersonalServiceSlug,
                     StringComparison.Ordinal) &&
-                !service.AutoConnected &&
                 service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Personal &&
                 snapshot.TryGetExact(service.Id, out var authority) &&
-                authority is { IsExecutionReady: true } &&
+                authority is { IsExecutionReady: true, Execution.AutoConnected: false } &&
                 string.Equals(
                     authority.Execution.CatalogServiceSlug,
                     CodeExecutionContract.ServiceSlug,
@@ -225,4 +231,12 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
             .ToArray();
         return candidates.Length == 1 ? candidates[0] : null;
     }
+
+    private sealed record CreatePersonalRouteRequest(
+        [property: JsonPropertyName("service_slug")] string ServiceSlug,
+        [property: JsonPropertyName("slug")] string Slug,
+        [property: JsonPropertyName("label")] string Label,
+        [property: JsonPropertyName("forward_access_token")] bool ForwardAccessToken,
+        [property: JsonPropertyName("inject_delegation_token")] bool InjectDelegationToken,
+        [property: JsonPropertyName("delegation_token_scope")] string DelegationTokenScope);
 }
