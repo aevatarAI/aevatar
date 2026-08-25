@@ -47,7 +47,10 @@ dotnet test aevatar.slnx \
   -p:UseSharedCompilation=false \
   -p:NuGetAudit=false \
   --collect:"XPlat Code Coverage" \
-  --results-directory "${raw_dir}"
+  --results-directory "${raw_dir}" \
+  --blame-hang \
+  --blame-hang-timeout 2m \
+  --blame-hang-dump-type none
 test_exit=$?
 set -e
 
