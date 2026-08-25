@@ -17,6 +17,27 @@ Plan a dinner date with Priya this week while preserving these guarantees:
 - After the user chooses one restaurant, release every unchosen hold.
 - Produce a final artifact with the selected venue, released venues, and key assumptions.
 
+## Flow Summary
+
+The simplified workflow is:
+
+1. Capture the user's plain-text choice if one is already present.
+2. Initialize dinner context from the request, not from email or calendar history.
+3. Build a three-venue shortlist from restaurant research.
+4. Show the shortlist before any restaurant phone action.
+5. If the user chooses in time, hold only the selected venue.
+6. If the user is silent for ten minutes, hold all three venues, then wait for the later choice.
+7. Release every held venue that was not selected.
+8. Produce a final artifact with the kept venue, released venues, and assumptions.
+
+External dependency count:
+
+| Category | Count | Dependencies |
+|---|---:|---|
+| Required core dependency | 1 | `restaurant-phone` / equivalent phone service |
+| Recommended shortlist dependencies | 2 | `api-firecrawl`, `tavily-search` |
+| Removed dependencies | 1 | `api-google` for Gmail, Calendar read, and Calendar write |
+
 ## Core Workflow
 
 ### 1. Intake
@@ -52,7 +73,7 @@ Steps:
 
 | Step | Source | External effect | Required for core workflow |
 |---|---|---:|---:|
-| Research relevant date/city context | web search or internal search skill | No | Recommended |
+| Research relevant date/city context | `tavily-search` NyxID service | No | Recommended |
 | Fetch venue pages/photos/menu details | `api-firecrawl` | No | Recommended |
 | Build three-venue shortlist | LLM/internal planner | No | Yes |
 | Show options card | UI/workflow output | No | Yes |
@@ -168,17 +189,16 @@ artifact:
 
 ### Required For Core Workflow
 
-| Dependency | NyxID service | Why it is needed | Current availability observed |
-|---|---|---|---|
-| Outbound restaurant calls | `api-twilio` or equivalent phone service | Place hold and release calls | Catalog exists; not observed as connected in current service list |
-| Restaurant phone endpoint | Not a NyxID service | Actual human-side hold/release happens by telephone | External real-world dependency |
+| Dependency | Service | Why it is needed | Required count |
+|---|---|---|---:|
+| Restaurant phone action | `restaurant-phone` / equivalent phone service | Place hold and release calls | 1 |
 
 ### Recommended For Better Shortlist
 
 | Dependency | NyxID service | Why it is useful | Current availability observed |
 |---|---|---|---|
 | Venue page scrape/photos/menu hints | `api-firecrawl` | Fetch venue-owned pages, images, allergy/menu evidence | Connected via ChronoAI org, allowed |
-| Search | custom/search service such as `tavily-search-chrono-ai` or internal search skill | Find candidate venues and date-specific city context | `tavily-search-chrono-ai` connected via ChronoAI org, allowed |
+| Search | `tavily-search` NyxID service | Find candidate venues and date-specific city context | Production `web_search` is bound to `tavily-search` |
 
 ## Policy And Approval Rules
 

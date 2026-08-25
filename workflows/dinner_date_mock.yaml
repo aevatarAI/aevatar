@@ -23,7 +23,7 @@ steps:
     type: assign
     parameters:
       target: venue_research_context
-      value: '{"mocked_services":["web-search","api-firecrawl"],"required_for_core_workflow":false,"facts":{"candidate_count":3,"area":"central","seating":"indoors"}}'
+      value: '{"mocked_services":["tavily-search","api-firecrawl"],"required_for_core_workflow":false,"facts":{"candidate_count":3,"area":"central","seating":"indoors"}}'
     next: build_mock_shortlist
 
   - id: build_mock_shortlist
@@ -141,11 +141,11 @@ steps:
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"user_choice_before_timeout","kept":"${steps.mock_hold_selected_ember_oak.json.venue}${steps.mock_hold_selected_casa_nera.json.venue}${steps.mock_hold_selected_atlas_row.json.venue}","released":[],"required_external_dependencies_mocked":["restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true}}'
+      value: '{"workflow_status":"completed","path":"user_choice_before_timeout","kept":"${steps.mock_hold_selected_ember_oak.json.venue}${steps.mock_hold_selected_casa_nera.json.venue}${steps.mock_hold_selected_atlas_row.json.venue}","released":[],"required_external_dependencies_mocked":["restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","tavily-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true}}'
     next: ""
 
   - id: final_artifact_after_holds
     type: assign
     parameters:
       target: dinner_date_artifact
-      value: '{"workflow_status":"completed","path":"silence_timeout_hold_all_then_choose","kept":"Ember & Oak","released":["Casa Nera","Atlas Row"],"why":"no pine nuts in the Ember & Oak kitchen","required_external_dependencies_mocked":["restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","web-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true}}'
+      value: '{"workflow_status":"completed","path":"silence_timeout_hold_all_then_choose","kept":"Ember & Oak","released":["Casa Nera","Atlas Row"],"why":"no pine nuts in the Ember & Oak kitchen","required_external_dependencies_mocked":["restaurant-phone"],"recommended_dependencies_mocked":["api-firecrawl","tavily-search"],"success_contract":{"options_shown_before_any_call":true,"money_spent":false,"selected_venue_confirmed":true,"unselected_holds_released":true}}'
