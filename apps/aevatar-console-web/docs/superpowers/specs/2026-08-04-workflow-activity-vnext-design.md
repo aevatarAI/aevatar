@@ -707,6 +707,11 @@ hierarchy and density while using production tokens and real data states.
   trustworthy association; name matching is insufficient.
 - Browser back closes modal/detail layers before leaving the owning workbench
   when those layers are URL-addressable.
+- Manual Run detail refresh preserves the currently committed history, graph,
+  logs, and inspector while revalidating all three sources. The Refresh action
+  changes to a disabled `Refreshing…` state immediately, then reports complete
+  success or any partial failure through one toast; unchanged data is still a
+  successful refresh and never causes a blank-state flash.
 - Copy actions report success or failure without changing layout. Export uses
   structured serialization where available rather than string concatenation.
 
