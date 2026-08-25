@@ -87,6 +87,8 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             body.RootElement.GetProperty("inject_delegation_token").GetBoolean().Should().BeTrue();
             body.RootElement.GetProperty("delegation_token_scope").GetString().Should()
                 .Be("proxy:* sandbox:execute");
+            body.RootElement.TryGetProperty("node_id", out _).Should().BeFalse();
+            body.RootElement.TryGetProperty("credential", out _).Should().BeFalse();
         }
         var proof = plan.InvocationAdmissions.Should().ContainSingle().Which.Capability.CodeExecution;
         proof.UserServiceId.Should().Be("us-code-aevatar");
@@ -118,12 +120,70 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         result.Attempted.Should().BeTrue();
         result.Verified.Should().BeFalse();
         result.FailureKind.Should().Be(NyxIdCodeExecutionRouteRepairFailureKind.MutationRejected);
+        result.HttpStatus.Should().Be(422);
         handler.Requests.Select(static request => request.Method).Should().Equal(
             HttpMethod.Get,
             HttpMethod.Get,
             HttpMethod.Post,
             HttpMethod.Get,
             HttpMethod.Get);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_AutoConnectedPlatformRouteWithNode_CreatesPersonalRouteUsingNode()
+    {
+        const string yaml = "name: code-workflow\nsteps: []\n";
+        var handler = new SequenceHandler(
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory(nodeId: "node-sandbox"),
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory(nodeId: "node-sandbox"),
+            """{"id":"us-code-aevatar"}""",
+            PersonalExecutionInventory(),
+            PersonalExecutionKeysInventory(),
+            PersonalExecutionInventory(),
+            PersonalExecutionKeysInventory());
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var client = new NyxIdApiClient(options, new HttpClient(handler));
+        var factory = new TestClientFactory(client);
+        var source = new NyxIdCodeExecutionWorkflowCapabilitySource(
+            factory,
+            options,
+            logger: NullLogger<NyxIdCodeExecutionWorkflowCapabilitySource>.Instance);
+        var preparer = new NyxIdCodeExecutionRouteAdmissionPreparer(
+            new NyxIdCodeExecutionRoutePolicyReconciler(factory),
+            options,
+            NullLogger<NyxIdCodeExecutionRouteAdmissionPreparer>.Instance);
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "code-workflow/run-code",
+            ToolName = "code_execute",
+            Selector = Selector(),
+        });
+        var admission = new WorkflowExternalCapabilityAdmissionService(
+            new StaticParser(WorkflowYamlParseResult.Success("code-workflow", dependencies)),
+            new ExternalWorkflowCapabilityReadinessService([source]),
+            preparers: [preparer]);
+
+        var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
+            Access(),
+            yaml,
+            new Dictionary<string, string>(),
+            "test",
+            ExternalCapabilityExecutionMode.Interactive,
+            workflowId: "wf-alpha",
+            revisionId: "rev-alpha"));
+
+        handler.Requests.Should().NotContain(static request => request.Method == HttpMethod.Put);
+        using var body = JsonDocument.Parse(handler.Requests[4].Body!);
+        body.RootElement.GetProperty("label").GetString().Should().Be("Aevatar Code Execution");
+        body.RootElement.GetProperty("node_id").GetString().Should().Be("node-sandbox");
+        plan.InvocationAdmissions.Should().ContainSingle().Which.Capability.CodeExecution
+            .UserServiceId.Should().Be("us-code-aevatar");
     }
 
     [Fact]
@@ -155,6 +215,87 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
         result.Verified.Should().BeFalse();
         result.FailureKind.Should().Be(
             NyxIdUserServiceRouteConvergenceFailureKind.MutationRejected);
+        result.HttpStatus.Should().Be(403);
+    }
+
+    [Fact]
+    public async Task PrepareAsync_PersonalRouteCreationRejected_SurfacesFailureKindAndHttpStatus()
+    {
+        var handler = new SequenceHandler(
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory(),
+            new SequenceResponse(
+                HttpStatusCode.BadRequest,
+                """{"error":"Credential is required for direct routing (or select a node)"}"""),
+            AutoConnectedInventory(),
+            AutoConnectedKeysInventory());
+        var preparer = CreatePreparer(handler);
+
+        var act = () => preparer.PrepareAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        var exception = await act.Should()
+            .ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        var blocker = exception.Which.Readiness.Blockers.Should().ContainSingle().Which;
+        blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED");
+        blocker.SafeMessage.Should().Be(
+            "The platform code execution route repair could not be verified. failureKind=MutationRejected httpStatus=400");
+    }
+
+    [Fact]
+    public async Task PrepareAsync_RouteMutationRejected_SurfacesFailureKindAndHttpStatus()
+    {
+        var handler = new SequenceHandler(
+            Inventory("personal", false, true, "proxy:*"),
+            KeysInventory("personal"),
+            new SequenceResponse(HttpStatusCode.Forbidden, """{"error":"forbidden"}"""),
+            Inventory("personal", false, true, "proxy:*"),
+            KeysInventory("personal"));
+        var preparer = CreatePreparer(handler);
+
+        var act = () => preparer.PrepareAsync(
+            Access(),
+            Selector(),
+            ExternalCapabilityExecutionMode.Interactive);
+
+        var exception = await act.Should()
+            .ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        var blocker = exception.Which.Readiness.Blockers.Should().ContainSingle().Which;
+        blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED");
+        blocker.SafeMessage.Should().Be(
+            "The platform code execution route repair could not be verified. failureKind=MutationRejected httpStatus=403");
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_PhantomUserServiceAutoConnected_DoesNotCreateAndRepairsWritableRoute()
+    {
+        var handler = new SequenceHandler(
+            PhantomAutoConnectedInventory(),
+            KeysInventory("personal"),
+            "{}",
+            Inventory("personal", true, true, "proxy:* sandbox:execute"),
+            KeysInventory("personal"));
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        var reconciler = new NyxIdCodeExecutionRoutePolicyReconciler(
+            new TestClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+        NyxIdUserServiceRouteMutationAuthority.TryCreate(
+                NyxIdCallerCredentialSelection.DirectUserBearer("source-readable-alpha"),
+                out var mutationAuthority)
+            .Should().BeTrue();
+
+        var result = await reconciler.ReconcileAsync(mutationAuthority!);
+
+        result.Attempted.Should().BeTrue();
+        result.Verified.Should().BeTrue();
+        handler.Requests.Select(static request => request.Method).Should().Equal(
+            HttpMethod.Get,
+            HttpMethod.Get,
+            HttpMethod.Put,
+            HttpMethod.Get,
+            HttpMethod.Get);
+        handler.Requests.Should().NotContain(static request => request.Method == HttpMethod.Post);
     }
 
     [Fact]
@@ -332,8 +473,10 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
 
         var exception = await act.Should()
             .ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
-        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED");
+        var blocker = exception.Which.Readiness.Blockers.Should().ContainSingle().Which;
+        blocker.Code.Should().Be("CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED");
+        blocker.SafeMessage.Should().Be(
+            "The platform code execution route repair could not be verified. failureKind=PostconditionMismatch");
         handler.Requests.Select(static request => request.Method)
             .Should().Equal(
                 HttpMethod.Get,
@@ -769,25 +912,66 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparerTests
             },
         });
 
-    private static string AutoConnectedKeysInventory() =>
+    private static string PhantomAutoConnectedInventory() =>
         JsonSerializer.Serialize(new
         {
-            keys = new[]
+            services = new[]
             {
                 new
                 {
-                    id = "us-code-platform",
+                    id = "us-code-alpha",
                     slug = "chrono-sandbox",
                     catalog_service_id = "catalog-chrono-sandbox",
-                    catalog_service_slug = "chrono-sandbox",
                     is_active = true,
-                    status = "active",
-                    connected = true,
                     auto_connected = true,
+                    forward_access_token = false,
+                    inject_delegation_token = true,
+                    delegation_token_scope = "proxy:*",
                     credential_source = new { type = "personal" },
                 },
             },
         });
+
+    private static string AutoConnectedKeysInventory(string? nodeId = null) =>
+        nodeId is null
+            ? JsonSerializer.Serialize(new
+            {
+                keys = new[]
+                {
+                    new
+                    {
+                        id = "us-code-platform",
+                        slug = "chrono-sandbox",
+                        catalog_service_id = "catalog-chrono-sandbox",
+                        catalog_service_slug = "chrono-sandbox",
+                        is_active = true,
+                        status = "active",
+                        connected = true,
+                        auto_connected = true,
+                        credential_source = new { type = "personal" },
+                    },
+                },
+            })
+            : JsonSerializer.Serialize(new
+            {
+                keys = new[]
+                {
+                    new
+                    {
+                        id = "us-code-platform",
+                        slug = "chrono-sandbox",
+                        catalog_service_id = "catalog-chrono-sandbox",
+                        catalog_service_slug = "chrono-sandbox",
+                        is_active = true,
+                        status = "active",
+                        connected = true,
+                        auto_connected = true,
+                        node_id = nodeId,
+                        node_status = "online",
+                        credential_source = new { type = "personal" },
+                    },
+                },
+            });
 
     private static string AutoConnectedKeysInventoryOmittingAutoConnected() =>
         JsonSerializer.Serialize(new

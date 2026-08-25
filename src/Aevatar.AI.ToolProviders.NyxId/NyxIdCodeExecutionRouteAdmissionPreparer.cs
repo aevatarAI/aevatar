@@ -61,10 +61,11 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
             if (result.Attempted && !result.Verified)
             {
                 logger.LogWarning(
-                    "Code execution route repair was not verified. failureKind={FailureKind}",
-                    result.FailureKind);
+                    "Code execution route repair was not verified. failureKind={FailureKind} httpStatus={HttpStatus}",
+                    result.FailureKind,
+                    result.HttpStatus);
                 throw new WorkflowExternalCapabilityAdmissionException(
-                    RepairUnverified(selector, executionMode));
+                    RepairUnverified(selector, executionMode, result.FailureKind, result.HttpStatus));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -85,7 +86,9 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
 
     private static ExternalCapabilityReadiness RepairUnverified(
         ExternalWorkflowCapabilitySelector selector,
-        ExternalCapabilityExecutionMode executionMode)
+        ExternalCapabilityExecutionMode executionMode,
+        NyxIdCodeExecutionRouteRepairFailureKind failureKind,
+        int httpStatus)
     {
         var readiness = new ExternalCapabilityReadiness
         {
@@ -97,7 +100,7 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
         {
             Status = readiness.Status,
             Code = "CODE_EXECUTION_ROUTE_REPAIR_UNVERIFIED",
-            SafeMessage = "The platform code execution route repair could not be verified.",
+            SafeMessage = FormatRepairUnverifiedMessage(failureKind, httpStatus),
         });
         readiness.Remediations.Add(new ExternalCapabilityRemediation
         {
@@ -106,4 +109,11 @@ public sealed class NyxIdCodeExecutionRouteAdmissionPreparer(
         });
         return readiness;
     }
+
+    internal static string FormatRepairUnverifiedMessage(
+        NyxIdCodeExecutionRouteRepairFailureKind failureKind,
+        int httpStatus) =>
+        httpStatus > 0
+            ? $"The platform code execution route repair could not be verified. failureKind={failureKind} httpStatus={httpStatus}"
+            : $"The platform code execution route repair could not be verified. failureKind={failureKind}";
 }

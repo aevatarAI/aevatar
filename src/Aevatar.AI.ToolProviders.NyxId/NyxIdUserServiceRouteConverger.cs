@@ -336,7 +336,8 @@ public sealed record NyxIdUserServiceRouteConvergence(
     bool Attempted,
     bool Verified,
     NyxIdUserServiceRouteConvergenceFailureKind FailureKind =
-        NyxIdUserServiceRouteConvergenceFailureKind.None);
+        NyxIdUserServiceRouteConvergenceFailureKind.None,
+    int HttpStatus = 0);
 
 /// <summary>
 /// Converges one exact caller-visible UserService route and verifies the postcondition against
@@ -400,6 +401,7 @@ public sealed class NyxIdUserServiceRouteConverger(INyxIdApiClientFactory client
 
         var plan = contract.Plan(current.Route);
         var updateFailure = NyxIdUserServiceRouteConvergenceFailureKind.None;
+        var updateHttpStatus = 0;
         try
         {
             var body = NyxIdUserServiceRouteUpdateAdapter.Serialize(plan.Patch);
@@ -411,7 +413,10 @@ public sealed class NyxIdUserServiceRouteConverger(INyxIdApiClientFactory client
                     cancellationToken)
                 .ConfigureAwait(false);
             if (!response.Succeeded)
+            {
                 updateFailure = NyxIdUserServiceRouteConvergenceFailureKind.MutationRejected;
+                updateHttpStatus = response.HttpStatus;
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -437,7 +442,8 @@ public sealed class NyxIdUserServiceRouteConverger(INyxIdApiClientFactory client
                 ? NyxIdUserServiceRouteConvergenceFailureKind.None
                 : updateFailure == NyxIdUserServiceRouteConvergenceFailureKind.None
                     ? NyxIdUserServiceRouteConvergenceFailureKind.PostconditionMismatch
-                    : updateFailure);
+                    : updateFailure,
+            HttpStatus: verified ? 0 : updateHttpStatus);
     }
 
     private static NyxIdUserServiceRouteConvergence Failure(

@@ -390,9 +390,7 @@ public static class NyxIdApiAccessResponseParser
                     : null,
                 includeCodeExecutionRouteFields
                     ? ReadOptionalNormalizedString(serviceElement, "delegation_token_scope")
-                    : null,
-                includeCodeExecutionRouteFields &&
-                ReadOptionalBoolean(serviceElement, "auto_connected") == true));
+                    : null));
         }
 
         return new NyxIdUserServices(services);

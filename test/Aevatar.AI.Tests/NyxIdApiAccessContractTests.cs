@@ -224,7 +224,58 @@ public sealed class NyxIdApiAccessContractTests
             ForwardAccessToken = (bool?)false,
             InjectDelegationToken = (bool?)true,
             DelegationTokenScope = "sandbox:execute",
+            AutoConnected = false,
         });
+    }
+
+    [Fact]
+    public void ParseUserServiceRoutes_ShouldIgnorePhantomAutoConnected()
+    {
+        const string response = """
+            {
+              "services": [{
+                "id": "service-code",
+                "slug": "chrono-sandbox",
+                "catalog_service_id": "catalog-chrono-sandbox",
+                "is_active": true,
+                "auto_connected": true,
+                "forward_access_token": true,
+                "inject_delegation_token": true,
+                "delegation_token_scope": "proxy:*",
+                "credential_source": { "type": "personal" }
+              }]
+            }
+            """;
+
+        var routes = NyxIdApiAccessResponseParser.ParseUserServiceRoutes(response);
+
+        routes.Succeeded.Should().BeTrue();
+        routes.Value!.Services.Single().AutoConnected.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ParseUserServiceKeys_ShouldMapAutoConnectedOwnership()
+    {
+        const string response = """
+            {
+              "keys": [{
+                "id": "service-code",
+                "slug": "chrono-sandbox",
+                "catalog_service_id": "catalog-chrono-sandbox",
+                "catalog_service_slug": "chrono-sandbox",
+                "status": "active",
+                "is_active": true,
+                "connected": true,
+                "auto_connected": true,
+                "credential_source": { "type": "personal" }
+              }]
+            }
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseUserServiceKeys(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.Services.Single().AutoConnected.Should().BeTrue();
     }
 
     [Fact]

@@ -18,7 +18,8 @@ public sealed record NyxIdCodeExecutionRouteReconciliation(
     bool Attempted,
     bool Verified,
     NyxIdCodeExecutionRouteRepairFailureKind FailureKind =
-        NyxIdCodeExecutionRouteRepairFailureKind.None);
+        NyxIdCodeExecutionRouteRepairFailureKind.None,
+    int HttpStatus = 0);
 
 /// <summary>
 /// Declares the platform code route contract and selects its exact caller-owned UserService. The
@@ -84,10 +85,15 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
                         NyxIdUserServiceRouteConvergenceFailureKind.MutationRejected =>
                             NyxIdCodeExecutionRouteRepairFailureKind.MutationRejected,
                         _ => NyxIdCodeExecutionRouteRepairFailureKind.PostconditionMismatch,
-                    });
+                    },
+                HttpStatus: postconditionSatisfied ? 0 : convergence.HttpStatus);
         }
 
-        if (!CanCreatePersonalRoute(before, resolution, exactUserServiceId))
+        if (!TryGetPersonalRouteCreateTarget(
+                before,
+                resolution,
+                exactUserServiceId,
+                out var createNodeId))
         {
             return new NyxIdCodeExecutionRouteReconciliation(
                 resolution,
@@ -97,6 +103,7 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
 
         return await CreateAndVerifyPersonalRouteAsync(
                 mutationAuthority,
+                createNodeId,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -128,11 +135,13 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
         return repairCandidates.Length == 1 ? repairCandidates[0] : null;
     }
 
-    private static bool CanCreatePersonalRoute(
+    private static bool TryGetPersonalRouteCreateTarget(
         NyxIdUserServiceAuthoritySnapshot snapshot,
         NyxIdCodeExecutionRouteResolution resolution,
-        string? exactUserServiceId)
+        string? exactUserServiceId,
+        out string? nodeId)
     {
+        nodeId = null;
         if (!snapshot.Succeeded ||
             !string.IsNullOrWhiteSpace(exactUserServiceId) ||
             resolution.Kind != NyxIdCodeExecutionRouteResolutionKind.PolicyMismatch)
@@ -150,19 +159,29 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
                     CodeExecutionContract.ServiceSlug,
                     StringComparison.Ordinal))
             .ToArray();
-        return canonical.Length == 1 &&
-               string.Equals(
-                   canonical[0].Slug,
-                   CodeExecutionContract.ServiceSlug,
-                   StringComparison.Ordinal) &&
-               !RouteContract.IsSatisfiedBy(canonical[0]);
+        if (canonical.Length != 1 ||
+            !string.Equals(
+                canonical[0].Slug,
+                CodeExecutionContract.ServiceSlug,
+                StringComparison.Ordinal) ||
+            RouteContract.IsSatisfiedBy(canonical[0]) ||
+            !snapshot.TryGetExact(canonical[0].Id, out var createAuthority) ||
+            createAuthority is null)
+        {
+            return false;
+        }
+
+        nodeId = createAuthority.Execution.NodeId;
+        return true;
     }
 
     private async Task<NyxIdCodeExecutionRouteReconciliation> CreateAndVerifyPersonalRouteAsync(
         NyxIdUserServiceRouteMutationAuthority mutationAuthority,
+        string? nodeId,
         CancellationToken cancellationToken)
     {
         var createFailure = NyxIdCodeExecutionRouteRepairFailureKind.None;
+        var createHttpStatus = 0;
         try
         {
             var body = JsonSerializer.Serialize(new CreatePersonalRouteRequest(
@@ -171,7 +190,8 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
                 "Aevatar Code Execution",
                 true,
                 true,
-                "proxy:* sandbox:execute"));
+                "proxy:* sandbox:execute",
+                nodeId));
             var response = await _clientFactory.CreateClient()
                 .CreateServiceResponseAsync(
                     mutationAuthority.BearerToken,
@@ -179,7 +199,10 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
                     cancellationToken)
                 .ConfigureAwait(false);
             if (!response.Succeeded && response.HttpStatus != (int)HttpStatusCode.Conflict)
+            {
                 createFailure = NyxIdCodeExecutionRouteRepairFailureKind.MutationRejected;
+                createHttpStatus = response.HttpStatus;
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -205,7 +228,8 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
                 ? NyxIdCodeExecutionRouteRepairFailureKind.None
                 : createFailure == NyxIdCodeExecutionRouteRepairFailureKind.None
                     ? NyxIdCodeExecutionRouteRepairFailureKind.PostconditionMismatch
-                    : createFailure);
+                    : createFailure,
+            HttpStatus: verified ? 0 : createHttpStatus);
     }
 
     private static NyxIdUserService? SelectVerifiedPersonalRoute(
@@ -238,5 +262,8 @@ public sealed class NyxIdCodeExecutionRoutePolicyReconciler
         [property: JsonPropertyName("label")] string Label,
         [property: JsonPropertyName("forward_access_token")] bool ForwardAccessToken,
         [property: JsonPropertyName("inject_delegation_token")] bool InjectDelegationToken,
-        [property: JsonPropertyName("delegation_token_scope")] string DelegationTokenScope);
+        [property: JsonPropertyName("delegation_token_scope")] string DelegationTokenScope,
+        [property: JsonPropertyName("node_id")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? NodeId);
 }
